@@ -226,10 +226,17 @@ pub fn stub_getrandom(_dest: &mut [u8]) -> Result<(), getrandom::Error> {
 }
 
 /// Get context for smart contract `main()` entrypoint.
+///
+/// # Safety
+///
+/// It's safe to call this function as long as it's safe to construct, from the given
+/// pointer, byte array of prefix length and `Box<[u8]>` containing the encoded object
 #[cfg(not(test))]
-pub fn get_smart_contract_context() -> data_model::smart_contract::payloads::SmartContractContext {
+pub unsafe fn decode_smart_contract_context(
+    context: *const u8,
+) -> data_model::smart_contract::payloads::SmartContractContext {
     // Safety: ownership of the returned result is transferred into `_decode_from_raw`
-    unsafe { decode_with_length_prefix_from_raw(host::get_smart_contract_context()) }
+    decode_with_length_prefix_from_raw(context)
 }
 
 #[cfg(not(test))]
@@ -253,12 +260,6 @@ mod host {
         /// This function doesn't take ownership of the provided allocation
         /// but it does transfer ownership of the result to the caller
         pub(super) fn execute_instruction(ptr: *const u8, len: usize) -> *const u8;
-
-        /// Get context for smart contract `main()` entrypoint.
-        /// # Warning
-        ///
-        /// This function transfers ownership of the result to the caller
-        pub(super) fn get_smart_contract_context() -> *const u8;
     }
 }
 

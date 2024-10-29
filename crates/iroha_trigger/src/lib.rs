@@ -12,26 +12,18 @@ pub mod log {
     pub use iroha_smart_contract_utils::{debug, error, event, info, log::*, trace, warn};
 }
 
+/// Get context for smart contract `main()` entrypoint.
+///
+/// # Safety
+///
+/// It's safe to call this function as long as it's safe to construct, from the given
+/// pointer, byte array of prefix length and `Box<[u8]>` containing the encoded object
 #[cfg(not(test))]
-mod host {
-    #[link(wasm_import_module = "iroha")]
-    extern "C" {
-        /// Get context for trigger `main()` entrypoint.
-        ///
-        /// # Warning
-        ///
-        /// This function does transfer ownership of the result to the caller
-        pub(super) fn get_trigger_context() -> *const u8;
-    }
-}
-
-/// Get context for trigger `main()` entrypoint.
-#[cfg(not(test))]
-pub fn get_trigger_context() -> data_model::smart_contract::payloads::TriggerContext {
+pub unsafe fn decode_trigger_context(
+    context: *const u8,
+) -> data_model::smart_contract::payloads::TriggerContext {
     // Safety: ownership of the returned result is transferred into `_decode_from_raw`
-    unsafe {
-        iroha_smart_contract_utils::decode_with_length_prefix_from_raw(host::get_trigger_context())
-    }
+    iroha_smart_contract_utils::decode_with_length_prefix_from_raw(context)
 }
 
 pub mod prelude {
