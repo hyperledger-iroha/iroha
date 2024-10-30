@@ -47,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build wasm libs
-        run: mold --run cargo run --bin iroha_wasm_builder -- build ./wasm/libs/default_executor --optimize --out-file ${{ env.DEFAULTS_DIR }}/executor.wasm
+        run: mold --run cargo run --package iroha_wasm_builder --bin iroha_wasm_builder -- build ./wasm/libs/default_executor --optimize --out-file ${{ env.DEFAULTS_DIR }}/executor.wasm
       - name: Upload executor to reuse in other jobs
         uses: actions/upload-artifact@v4
         with:
@@ -71,4 +71,4 @@ jobs:
         run: which iroha_wasm_test_runner || cargo install --path crates/iroha_wasm_test_runner
       - name: Run smart contract tests on WebAssembly VM
         working-directory: crates/iroha_smart_contract
-        run: mold --run cargo test -p iroha_smart_contract -p iroha_smart_contract_utils --release --tests --target wasm32-unknown-unknown --no-fail-fast --quiet
+        run: mold --run cargo test --package iroha_smart_contract --package iroha_smart_contract_utils --tests --target wasm32-unknown-unknown --no-fail-fast --quiet

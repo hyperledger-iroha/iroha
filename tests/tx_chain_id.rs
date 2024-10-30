@@ -1,5 +1,4 @@
 use iroha::data_model::prelude::*;
-use iroha_primitives::numeric::numeric;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 
