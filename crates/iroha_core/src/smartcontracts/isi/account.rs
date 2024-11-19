@@ -23,108 +23,13 @@ impl Registrable for iroha_data_model::account::NewAccount {
 /// - grant permissions and roles
 /// - Revoke permissions or roles
 pub mod isi {
-    use iroha_data_model::{
-        asset::{AssetType, AssetValue},
-        isi::{
-            error::{MintabilityError, RepetitionError},
-            InstructionType,
-        },
-        query::error::QueryExecutionFail,
+    use iroha_data_model::isi::{
+        error::{MintabilityError, RepetitionError},
+        InstructionType,
     };
-    use iroha_primitives::numeric::Numeric;
 
-    use self::asset::isi::assert_numeric_spec;
     use super::*;
     use crate::{role::RoleIdWithOwner, state::StateTransaction};
-
-    impl Execute for Register<Asset> {
-        #[metrics(+"register_asset")]
-        fn execute(
-            self,
-            _authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let asset_id = self.object.id;
-
-            match state_transaction.world.asset(&asset_id) {
-                Err(err) => match err {
-                    QueryExecutionFail::Find(FindError::Asset(_)) => {
-                        assert_can_register(
-                            &asset_id.definition,
-                            state_transaction,
-                            &self.object.value,
-                        )?;
-                        let asset = state_transaction
-                            .world
-                            .asset_or_insert(&asset_id, self.object.value)
-                            .expect("Account exists");
-
-                        match asset.value {
-                            AssetValue::Numeric(increment) => {
-                                state_transaction
-                                    .world
-                                    .increase_asset_total_amount(&asset_id.definition, increment)?;
-                            }
-                            AssetValue::Store(_) => {
-                                state_transaction.world.increase_asset_total_amount(
-                                    &asset_id.definition,
-                                    Numeric::ONE,
-                                )?;
-                            }
-                        }
-                        Ok(())
-                    }
-                    _ => Err(err.into()),
-                },
-                Ok(_) => Err(RepetitionError {
-                    instruction: InstructionType::Register,
-                    id: IdBox::AssetId(asset_id.clone()),
-                }
-                .into()),
-            }
-        }
-    }
-
-    impl Execute for Unregister<Asset> {
-        #[metrics(+"unregister_asset")]
-        fn execute(
-            self,
-            _authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let asset_id = self.object;
-
-            let asset = state_transaction
-                .world
-                .assets
-                .remove(asset_id.clone())
-                .ok_or_else(|| FindError::Asset(asset_id))?;
-
-            match asset.value {
-                AssetValue::Numeric(increment) => {
-                    state_transaction
-                        .world
-                        .decrease_asset_total_amount(&asset.id.definition, increment)?;
-                }
-                AssetValue::Store(_) => {
-                    state_transaction
-                        .world
-                        .decrease_asset_total_amount(&asset.id.definition, Numeric::ONE)?;
-                }
-            }
-
-            state_transaction
-                .world
-                .emit_events(Some(AccountEvent::Asset(AssetEvent::Removed(
-                    AssetChanged {
-                        asset: asset.id,
-                        amount: asset.value,
-                    },
-                ))));
-
-            Ok(())
-        }
-    }
 
     impl Execute for Transfer<Account, AssetDefinitionId, Account> {
         fn execute(
@@ -367,40 +272,6 @@ pub mod isi {
                 })));
 
             Ok(())
-        }
-    }
-
-    /// Assert that this asset can be registered to an account.
-    fn assert_can_register(
-        definition_id: &AssetDefinitionId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-        value: &AssetValue,
-    ) -> Result<(), Error> {
-        let expected_asset_type = match value.type_() {
-            AssetType::Numeric(_) => asset::isi::expected_asset_type_numeric,
-            AssetType::Store => asset::isi::expected_asset_type_store,
-        };
-        let definition =
-            asset::isi::assert_asset_type(definition_id, state_transaction, expected_asset_type)?;
-        if let AssetValue::Numeric(numeric) = value {
-            assert_numeric_spec(numeric, &definition)?;
-        }
-
-        match definition.mintable {
-            Mintable::Infinitely => Ok(()),
-            Mintable::Not => Err(Error::Mintability(MintabilityError::MintUnmintable)),
-            Mintable::Once => {
-                if !value.is_zero_value() {
-                    let asset_definition = state_transaction
-                        .world
-                        .asset_definition_mut(definition_id)?;
-                    forbid_minting(asset_definition)?;
-                    state_transaction.world.emit_events(Some(
-                        AssetDefinitionEvent::MintabilityChanged(definition_id.clone()),
-                    ));
-                }
-                Ok(())
-            }
         }
     }
 

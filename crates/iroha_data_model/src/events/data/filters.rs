@@ -43,6 +43,8 @@ mod model {
         Asset(AssetEventFilter),
         /// Matches [`AssetDefinitionEvent`]s
         AssetDefinition(AssetDefinitionEventFilter),
+        /// Matches [`NftEvent`]s
+        Nft(NftEventFilter),
         /// Matches [`TriggerEvent`]s
         Trigger(TriggerEventFilter),
         /// Matches [`RoleEvent`]s
@@ -161,6 +163,28 @@ mod model {
         pub(super) id_matcher: Option<super::AssetDefinitionId>,
         /// Matches only event from this set
         pub(super) event_set: AssetDefinitionEventSet,
+    }
+
+    /// An event filter for [`NftEvent`]s
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    pub struct NftEventFilter {
+        /// If specified matches only events originating from this NFT
+        pub(super) id_matcher: Option<NftId>,
+        /// Matches only event from this set
+        pub(super) event_set: NftEventSet,
     }
 
     /// An event filter for [`TriggerEvent`]s
@@ -494,6 +518,55 @@ impl super::EventFilter for AssetDefinitionEventFilter {
     }
 }
 
+impl NftEventFilter {
+    /// Creates a new [`NftEventFilter`] accepting all [`NftEvent`]s.
+    pub const fn new() -> Self {
+        Self {
+            id_matcher: None,
+            event_set: NftEventSet::all(),
+        }
+    }
+
+    /// Modifies a [`NftEventFilter`] to accept only [`NftEvent`]s originating from ids matching `id_matcher`.
+    #[must_use]
+    pub fn for_nft(mut self, id_matcher: NftId) -> Self {
+        self.id_matcher = Some(id_matcher);
+        self
+    }
+
+    /// Modifies a [`NftEventFilter`] to accept only [`NftEvent`]s of types contained in `event_set`.
+    #[must_use]
+    pub const fn for_events(mut self, event_set: NftEventSet) -> Self {
+        self.event_set = event_set;
+        self
+    }
+}
+
+impl Default for NftEventFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "transparent_api")]
+impl EventFilter for NftEventFilter {
+    type Event = NftEvent;
+
+    fn matches(&self, event: &Self::Event) -> bool {
+        if let Some(id_matcher) = &self.id_matcher {
+            if id_matcher != event.origin() {
+                return false;
+            }
+        }
+
+        if !self.event_set.matches(event) {
+            return false;
+        }
+
+        true
+    }
+}
+
 impl TriggerEventFilter {
     /// Creates a new [`TriggerEventFilter`] accepting all [`TriggerEvent`]s.
     pub const fn new() -> Self {
@@ -714,8 +787,8 @@ impl EventFilter for DataEventFilter {
 pub mod prelude {
     pub use super::{
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, ConfigurationEventFilter,
-        DataEventFilter, DomainEventFilter, ExecutorEventFilter, PeerEventFilter, RoleEventFilter,
-        TriggerEventFilter,
+        DataEventFilter, DomainEventFilter, ExecutorEventFilter, NftEventFilter, PeerEventFilter,
+        RoleEventFilter, TriggerEventFilter,
     };
 }
 #[cfg(test)]

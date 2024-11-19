@@ -49,7 +49,7 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount_on_a
         .into_iter()
         .find(|asset| *asset.id().definition() == asset_definition_id)
         .expect("should be");
-    assert_eq!(*asset.value(), AssetValue::Numeric(quantity));
+    assert_eq!(*asset.value(), quantity);
 
     Ok(())
 }

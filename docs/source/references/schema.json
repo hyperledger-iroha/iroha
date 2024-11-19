@@ -341,7 +341,7 @@
       },
       {
         "name": "value",
-        "type": "AssetValue"
+        "type": "Numeric"
       }
     ]
   },
@@ -353,7 +353,7 @@
       },
       {
         "name": "amount",
-        "type": "AssetValue"
+        "type": "Numeric"
       }
     ]
   },
@@ -364,8 +364,8 @@
         "type": "AssetDefinitionId"
       },
       {
-        "name": "type",
-        "type": "AssetType"
+        "name": "spec",
+        "type": "NumericSpec"
       },
       {
         "name": "mintable",
@@ -753,7 +753,7 @@
       {
         "tag": "Value",
         "discriminant": 2,
-        "type": "AssetValueProjection<PredicateMarker>"
+        "type": "NumericProjection<PredicateMarker>"
       }
     ]
   },
@@ -772,98 +772,7 @@
       {
         "tag": "Value",
         "discriminant": 2,
-        "type": "AssetValueProjection<SelectorMarker>"
-      }
-    ]
-  },
-  "AssetTransferBox": {
-    "Enum": [
-      {
-        "tag": "Numeric",
-        "discriminant": 0,
-        "type": "Transfer<Asset, Numeric, Account>"
-      },
-      {
-        "tag": "Store",
-        "discriminant": 1,
-        "type": "Transfer<Asset, Metadata, Account>"
-      }
-    ]
-  },
-  "AssetType": {
-    "Enum": [
-      {
-        "tag": "Numeric",
-        "discriminant": 0,
-        "type": "NumericSpec"
-      },
-      {
-        "tag": "Store",
-        "discriminant": 1
-      }
-    ]
-  },
-  "AssetValue": {
-    "Enum": [
-      {
-        "tag": "Numeric",
-        "discriminant": 0,
-        "type": "Numeric"
-      },
-      {
-        "tag": "Store",
-        "discriminant": 1,
-        "type": "Metadata"
-      }
-    ]
-  },
-  "AssetValuePredicateAtom": {
-    "Enum": [
-      {
-        "tag": "IsNumeric",
-        "discriminant": 0
-      },
-      {
-        "tag": "IsStore",
-        "discriminant": 1
-      }
-    ]
-  },
-  "AssetValueProjection<PredicateMarker>": {
-    "Enum": [
-      {
-        "tag": "Atom",
-        "discriminant": 0,
-        "type": "AssetValuePredicateAtom"
-      },
-      {
-        "tag": "Numeric",
-        "discriminant": 1,
-        "type": "NumericProjection<PredicateMarker>"
-      },
-      {
-        "tag": "Store",
-        "discriminant": 2,
-        "type": "MetadataProjection<PredicateMarker>"
-      }
-    ]
-  },
-  "AssetValueProjection<SelectorMarker>": {
-    "Enum": [
-      {
-        "tag": "Atom",
-        "discriminant": 0,
-        "type": "()"
-      },
-      {
-        "tag": "Numeric",
-        "discriminant": 1,
         "type": "NumericProjection<SelectorMarker>"
-      },
-      {
-        "tag": "Store",
-        "discriminant": 2,
-        "type": "MetadataProjection<SelectorMarker>"
       }
     ]
   },
@@ -1139,19 +1048,19 @@
       }
     ]
   },
-  "CanModifyAssetMetadata": {
-    "Struct": [
-      {
-        "name": "asset",
-        "type": "AssetId"
-      }
-    ]
-  },
   "CanModifyDomainMetadata": {
     "Struct": [
       {
         "name": "domain",
         "type": "DomainId"
+      }
+    ]
+  },
+  "CanModifyNftMetadata": {
+    "Struct": [
+      {
+        "name": "nft",
+        "type": "NftId"
       }
     ]
   },
@@ -1179,14 +1088,6 @@
       }
     ]
   },
-  "CanRegisterAsset": {
-    "Struct": [
-      {
-        "name": "owner",
-        "type": "AccountId"
-      }
-    ]
-  },
   "CanRegisterAssetDefinition": {
     "Struct": [
       {
@@ -1204,6 +1105,14 @@
     ]
   },
   "CanRegisterDomain": null,
+  "CanRegisterNft": {
+    "Struct": [
+      {
+        "name": "domain",
+        "type": "DomainId"
+      }
+    ]
+  },
   "CanRegisterTrigger": {
     "Struct": [
       {
@@ -1229,19 +1138,19 @@
       }
     ]
   },
+  "CanTransferNft": {
+    "Struct": [
+      {
+        "name": "nft",
+        "type": "NftId"
+      }
+    ]
+  },
   "CanUnregisterAccount": {
     "Struct": [
       {
         "name": "account",
         "type": "AccountId"
-      }
-    ]
-  },
-  "CanUnregisterAsset": {
-    "Struct": [
-      {
-        "name": "asset",
-        "type": "AssetId"
       }
     ]
   },
@@ -1266,6 +1175,14 @@
       {
         "name": "domain",
         "type": "DomainId"
+      }
+    ]
+  },
+  "CanUnregisterNft": {
+    "Struct": [
+      {
+        "name": "nft",
+        "type": "NftId"
       }
     ]
   },
@@ -1493,6 +1410,30 @@
         "tag": "Or",
         "discriminant": 3,
         "type": "Vec<CompoundPredicate<Domain>>"
+      }
+    ]
+  },
+  "CompoundPredicate<Nft>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "NftProjection<PredicateMarker>"
+      },
+      {
+        "tag": "Not",
+        "discriminant": 1,
+        "type": "CompoundPredicate<Nft>"
+      },
+      {
+        "tag": "And",
+        "discriminant": 2,
+        "type": "Vec<CompoundPredicate<Nft>>"
+      },
+      {
+        "tag": "Or",
+        "discriminant": 3,
+        "type": "Vec<CompoundPredicate<Nft>>"
       }
     ]
   },
@@ -1779,23 +1720,28 @@
         "type": "AssetDefinitionEventFilter"
       },
       {
-        "tag": "Trigger",
+        "tag": "Nft",
         "discriminant": 6,
+        "type": "NftEventFilter"
+      },
+      {
+        "tag": "Trigger",
+        "discriminant": 7,
         "type": "TriggerEventFilter"
       },
       {
         "tag": "Role",
-        "discriminant": 7,
+        "discriminant": 8,
         "type": "RoleEventFilter"
       },
       {
         "tag": "Configuration",
-        "discriminant": 8,
+        "discriminant": 9,
         "type": "ConfigurationEventFilter"
       },
       {
         "tag": "Executor",
-        "discriminant": 9,
+        "discriminant": 10,
         "type": "ExecutorEventFilter"
       }
     ]
@@ -1838,23 +1784,28 @@
         "type": "AssetDefinitionEvent"
       },
       {
-        "tag": "Account",
+        "tag": "Nft",
         "discriminant": 3,
+        "type": "NftEvent"
+      },
+      {
+        "tag": "Account",
+        "discriminant": 4,
         "type": "AccountEvent"
       },
       {
         "tag": "MetadataInserted",
-        "discriminant": 4,
-        "type": "MetadataChanged<DomainId>"
-      },
-      {
-        "tag": "MetadataRemoved",
         "discriminant": 5,
         "type": "MetadataChanged<DomainId>"
       },
       {
-        "tag": "OwnerChanged",
+        "tag": "MetadataRemoved",
         "discriminant": 6,
+        "type": "MetadataChanged<DomainId>"
+      },
+      {
+        "tag": "OwnerChanged",
+        "discriminant": 7,
         "type": "DomainOwnerChanged"
       }
     ]
@@ -1888,20 +1839,24 @@
           "mask": 4
         },
         {
-          "name": "AnyAccount",
+          "name": "AnyNft",
           "mask": 8
         },
         {
-          "name": "MetadataInserted",
+          "name": "AnyAccount",
           "mask": 16
         },
         {
-          "name": "MetadataRemoved",
+          "name": "MetadataInserted",
           "mask": 32
         },
         {
-          "name": "OwnerChanged",
+          "name": "MetadataRemoved",
           "mask": 64
+        },
+        {
+          "name": "OwnerChanged",
+          "mask": 128
         }
       ]
     }
@@ -2231,58 +2186,64 @@
         "type": "AssetDefinitionId"
       },
       {
-        "tag": "Account",
+        "tag": "Nft",
         "discriminant": 2,
+        "type": "NftId"
+      },
+      {
+        "tag": "Account",
+        "discriminant": 3,
         "type": "AccountId"
       },
       {
         "tag": "Domain",
-        "discriminant": 3,
+        "discriminant": 4,
         "type": "DomainId"
       },
       {
         "tag": "MetadataKey",
-        "discriminant": 4,
+        "discriminant": 5,
         "type": "Name"
       },
       {
         "tag": "Block",
-        "discriminant": 5,
+        "discriminant": 6,
         "type": "HashOf<BlockHeader>"
       },
       {
         "tag": "Transaction",
-        "discriminant": 6,
+        "discriminant": 7,
         "type": "HashOf<SignedTransaction>"
       },
       {
         "tag": "Peer",
-        "discriminant": 7,
+        "discriminant": 8,
         "type": "PeerId"
       },
       {
         "tag": "Trigger",
-        "discriminant": 8,
+        "discriminant": 9,
         "type": "TriggerId"
       },
       {
         "tag": "Role",
-        "discriminant": 9,
+        "discriminant": 10,
         "type": "RoleId"
       },
       {
         "tag": "Permission",
-        "discriminant": 10,
+        "discriminant": 11,
         "type": "Permission"
       },
       {
         "tag": "PublicKey",
-        "discriminant": 11,
+        "discriminant": 12,
         "type": "PublicKey"
       }
     ]
   },
   "FindExecutorDataModel": null,
+  "FindNfts": null,
   "FindParameters": null,
   "FindPeers": null,
   "FindPermissionsByAccountId": {
@@ -2432,28 +2393,33 @@
         "type": "AssetId"
       },
       {
-        "tag": "PeerId",
+        "tag": "NftId",
         "discriminant": 4,
+        "type": "NftId"
+      },
+      {
+        "tag": "PeerId",
+        "discriminant": 5,
         "type": "PeerId"
       },
       {
         "tag": "TriggerId",
-        "discriminant": 5,
+        "discriminant": 6,
         "type": "TriggerId"
       },
       {
         "tag": "RoleId",
-        "discriminant": 6,
+        "discriminant": 7,
         "type": "RoleId"
       },
       {
         "tag": "Permission",
-        "discriminant": 7,
+        "discriminant": 8,
         "type": "Permission"
       },
       {
         "tag": "CustomParameterId",
-        "discriminant": 8,
+        "discriminant": 9,
         "type": "CustomParameterId"
       }
     ]
@@ -2853,6 +2819,22 @@
       }
     ]
   },
+  "MetadataChanged<NftId>": {
+    "Struct": [
+      {
+        "name": "target",
+        "type": "NftId"
+      },
+      {
+        "name": "key",
+        "type": "Name"
+      },
+      {
+        "name": "value",
+        "type": "Json"
+      }
+    ]
+  },
   "MetadataChanged<TriggerId>": {
     "Struct": [
       {
@@ -2990,15 +2972,15 @@
       }
     ]
   },
-  "Mismatch<AssetType>": {
+  "Mismatch<NumericSpec>": {
     "Struct": [
       {
         "name": "expected",
-        "type": "AssetType"
+        "type": "NumericSpec"
       },
       {
         "name": "actual",
-        "type": "AssetType"
+        "type": "NumericSpec"
       }
     ]
   },
@@ -3139,8 +3121,8 @@
         "type": "AssetDefinitionId"
       },
       {
-        "name": "type",
-        "type": "AssetType"
+        "name": "spec",
+        "type": "NumericSpec"
       },
       {
         "name": "mintable",
@@ -3172,6 +3154,18 @@
       }
     ]
   },
+  "NewNft": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "NftId"
+      },
+      {
+        "name": "metadata",
+        "type": "Metadata"
+      }
+    ]
+  },
   "NewRole": {
     "Struct": [
       {
@@ -3181,6 +3175,212 @@
       {
         "name": "grant_to",
         "type": "AccountId"
+      }
+    ]
+  },
+  "Nft": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "NftId"
+      },
+      {
+        "name": "metadata",
+        "type": "Metadata"
+      },
+      {
+        "name": "owned_by",
+        "type": "AccountId"
+      }
+    ]
+  },
+  "NftEvent": {
+    "Enum": [
+      {
+        "tag": "Created",
+        "discriminant": 0,
+        "type": "Nft"
+      },
+      {
+        "tag": "Deleted",
+        "discriminant": 1,
+        "type": "NftId"
+      },
+      {
+        "tag": "MetadataInserted",
+        "discriminant": 2,
+        "type": "MetadataChanged<NftId>"
+      },
+      {
+        "tag": "MetadataRemoved",
+        "discriminant": 3,
+        "type": "MetadataChanged<NftId>"
+      },
+      {
+        "tag": "OwnerChanged",
+        "discriminant": 4,
+        "type": "NftOwnerChanged"
+      }
+    ]
+  },
+  "NftEventFilter": {
+    "Struct": [
+      {
+        "name": "id_matcher",
+        "type": "Option<NftId>"
+      },
+      {
+        "name": "event_set",
+        "type": "NftEventSet"
+      }
+    ]
+  },
+  "NftEventSet": {
+    "Bitmap": {
+      "repr": "u32",
+      "masks": [
+        {
+          "name": "Created",
+          "mask": 1
+        },
+        {
+          "name": "Deleted",
+          "mask": 2
+        },
+        {
+          "name": "MetadataInserted",
+          "mask": 4
+        },
+        {
+          "name": "MetadataRemoved",
+          "mask": 8
+        },
+        {
+          "name": "OwnerChanged",
+          "mask": 16
+        }
+      ]
+    }
+  },
+  "NftId": {
+    "Struct": [
+      {
+        "name": "domain",
+        "type": "DomainId"
+      },
+      {
+        "name": "name",
+        "type": "Name"
+      }
+    ]
+  },
+  "NftIdPredicateAtom": {
+    "Enum": [
+      {
+        "tag": "Equals",
+        "discriminant": 0,
+        "type": "NftId"
+      }
+    ]
+  },
+  "NftIdProjection<PredicateMarker>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "NftIdPredicateAtom"
+      },
+      {
+        "tag": "Domain",
+        "discriminant": 1,
+        "type": "DomainIdProjection<PredicateMarker>"
+      },
+      {
+        "tag": "Name",
+        "discriminant": 2,
+        "type": "NameProjection<PredicateMarker>"
+      }
+    ]
+  },
+  "NftIdProjection<SelectorMarker>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "()"
+      },
+      {
+        "tag": "Domain",
+        "discriminant": 1,
+        "type": "DomainIdProjection<SelectorMarker>"
+      },
+      {
+        "tag": "Name",
+        "discriminant": 2,
+        "type": "NameProjection<SelectorMarker>"
+      }
+    ]
+  },
+  "NftOwnerChanged": {
+    "Struct": [
+      {
+        "name": "nft",
+        "type": "NftId"
+      },
+      {
+        "name": "new_owner",
+        "type": "AccountId"
+      }
+    ]
+  },
+  "NftPredicateAtom": {
+    "Enum": []
+  },
+  "NftProjection<PredicateMarker>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "NftPredicateAtom"
+      },
+      {
+        "tag": "Id",
+        "discriminant": 1,
+        "type": "NftIdProjection<PredicateMarker>"
+      },
+      {
+        "tag": "Metadata",
+        "discriminant": 2,
+        "type": "MetadataProjection<PredicateMarker>"
+      },
+      {
+        "tag": "AccountId",
+        "discriminant": 3,
+        "type": "AccountIdProjection<PredicateMarker>"
+      }
+    ]
+  },
+  "NftProjection<SelectorMarker>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "()"
+      },
+      {
+        "tag": "Id",
+        "discriminant": 1,
+        "type": "NftIdProjection<SelectorMarker>"
+      },
+      {
+        "tag": "Metadata",
+        "discriminant": 2,
+        "type": "MetadataProjection<SelectorMarker>"
+      },
+      {
+        "tag": "AccountId",
+        "discriminant": 3,
+        "type": "AccountIdProjection<SelectorMarker>"
       }
     ]
   },
@@ -3257,6 +3457,9 @@
   },
   "Option<Name>": {
     "Option": "Name"
+  },
+  "Option<NftId>": {
+    "Option": "NftId"
   },
   "Option<NonZero<u32>>": {
     "Option": "NonZero<u32>"
@@ -3598,58 +3801,63 @@
         "type": "QueryWithFilter<FindAssetsDefinitions>"
       },
       {
-        "tag": "FindRoles",
+        "tag": "FindNfts",
         "discriminant": 4,
+        "type": "QueryWithFilter<FindNfts>"
+      },
+      {
+        "tag": "FindRoles",
+        "discriminant": 5,
         "type": "QueryWithFilter<FindRoles>"
       },
       {
         "tag": "FindRoleIds",
-        "discriminant": 5,
+        "discriminant": 6,
         "type": "QueryWithFilter<FindRoleIds>"
       },
       {
         "tag": "FindPermissionsByAccountId",
-        "discriminant": 6,
+        "discriminant": 7,
         "type": "QueryWithFilter<FindPermissionsByAccountId>"
       },
       {
         "tag": "FindRolesByAccountId",
-        "discriminant": 7,
+        "discriminant": 8,
         "type": "QueryWithFilter<FindRolesByAccountId>"
       },
       {
         "tag": "FindAccountsWithAsset",
-        "discriminant": 8,
+        "discriminant": 9,
         "type": "QueryWithFilter<FindAccountsWithAsset>"
       },
       {
         "tag": "FindPeers",
-        "discriminant": 9,
+        "discriminant": 10,
         "type": "QueryWithFilter<FindPeers>"
       },
       {
         "tag": "FindActiveTriggerIds",
-        "discriminant": 10,
+        "discriminant": 11,
         "type": "QueryWithFilter<FindActiveTriggerIds>"
       },
       {
         "tag": "FindTriggers",
-        "discriminant": 11,
+        "discriminant": 12,
         "type": "QueryWithFilter<FindTriggers>"
       },
       {
         "tag": "FindTransactions",
-        "discriminant": 12,
+        "discriminant": 13,
         "type": "QueryWithFilter<FindTransactions>"
       },
       {
         "tag": "FindBlocks",
-        "discriminant": 13,
+        "discriminant": 14,
         "type": "QueryWithFilter<FindBlocks>"
       },
       {
         "tag": "FindBlockHeaders",
-        "discriminant": 14,
+        "discriminant": 15,
         "type": "QueryWithFilter<FindBlockHeaders>"
       }
     ]
@@ -3771,93 +3979,98 @@
         "type": "Vec<Asset>"
       },
       {
-        "tag": "AssetValue",
-        "discriminant": 12,
-        "type": "Vec<AssetValue>"
-      },
-      {
         "tag": "AssetDefinitionId",
-        "discriminant": 13,
+        "discriminant": 12,
         "type": "Vec<AssetDefinitionId>"
       },
       {
         "tag": "AssetDefinition",
-        "discriminant": 14,
+        "discriminant": 13,
         "type": "Vec<AssetDefinition>"
       },
       {
-        "tag": "Role",
+        "tag": "NftId",
+        "discriminant": 14,
+        "type": "Vec<NftId>"
+      },
+      {
+        "tag": "Nft",
         "discriminant": 15,
+        "type": "Vec<Nft>"
+      },
+      {
+        "tag": "Role",
+        "discriminant": 16,
         "type": "Vec<Role>"
       },
       {
         "tag": "Parameter",
-        "discriminant": 16,
+        "discriminant": 17,
         "type": "Vec<Parameter>"
       },
       {
         "tag": "Permission",
-        "discriminant": 17,
+        "discriminant": 18,
         "type": "Vec<Permission>"
       },
       {
         "tag": "CommittedTransaction",
-        "discriminant": 18,
+        "discriminant": 19,
         "type": "Vec<CommittedTransaction>"
       },
       {
         "tag": "SignedTransaction",
-        "discriminant": 19,
+        "discriminant": 20,
         "type": "Vec<SignedTransaction>"
       },
       {
         "tag": "TransactionHash",
-        "discriminant": 20,
+        "discriminant": 21,
         "type": "Vec<HashOf<SignedTransaction>>"
       },
       {
         "tag": "TransactionRejectionReason",
-        "discriminant": 21,
+        "discriminant": 22,
         "type": "Vec<Option<TransactionRejectionReason>>"
       },
       {
         "tag": "Peer",
-        "discriminant": 22,
+        "discriminant": 23,
         "type": "Vec<PeerId>"
       },
       {
         "tag": "RoleId",
-        "discriminant": 23,
+        "discriminant": 24,
         "type": "Vec<RoleId>"
       },
       {
         "tag": "TriggerId",
-        "discriminant": 24,
+        "discriminant": 25,
         "type": "Vec<TriggerId>"
       },
       {
         "tag": "Trigger",
-        "discriminant": 25,
+        "discriminant": 26,
         "type": "Vec<Trigger>"
       },
       {
         "tag": "Action",
-        "discriminant": 26,
+        "discriminant": 27,
         "type": "Vec<Action>"
       },
       {
         "tag": "Block",
-        "discriminant": 27,
+        "discriminant": 28,
         "type": "Vec<SignedBlock>"
       },
       {
         "tag": "BlockHeader",
-        "discriminant": 28,
+        "discriminant": 29,
         "type": "Vec<BlockHeader>"
       },
       {
         "tag": "BlockHeaderHash",
-        "discriminant": 29,
+        "discriminant": 30,
         "type": "Vec<HashOf<BlockHeader>>"
       }
     ]
@@ -4060,6 +4273,22 @@
       }
     ]
   },
+  "QueryWithFilter<FindNfts>": {
+    "Struct": [
+      {
+        "name": "query",
+        "type": "FindNfts"
+      },
+      {
+        "name": "predicate",
+        "type": "CompoundPredicate<Nft>"
+      },
+      {
+        "name": "selector",
+        "type": "SelectorTuple<Nft>"
+      }
+    ]
+  },
   "QueryWithFilter<FindPeers>": {
     "Struct": [
       {
@@ -4224,14 +4453,6 @@
       }
     ]
   },
-  "Register<Asset>": {
-    "Struct": [
-      {
-        "name": "object",
-        "type": "Asset"
-      }
-    ]
-  },
   "Register<AssetDefinition>": {
     "Struct": [
       {
@@ -4245,6 +4466,14 @@
       {
         "name": "object",
         "type": "NewDomain"
+      }
+    ]
+  },
+  "Register<Nft>": {
+    "Struct": [
+      {
+        "name": "object",
+        "type": "NewNft"
       }
     ]
   },
@@ -4295,9 +4524,9 @@
         "type": "Register<AssetDefinition>"
       },
       {
-        "tag": "Asset",
+        "tag": "Nft",
         "discriminant": 4,
-        "type": "Register<Asset>"
+        "type": "Register<Nft>"
       },
       {
         "tag": "Role",
@@ -4323,18 +4552,6 @@
       }
     ]
   },
-  "RemoveKeyValue<Asset>": {
-    "Struct": [
-      {
-        "name": "object",
-        "type": "AssetId"
-      },
-      {
-        "name": "key",
-        "type": "Name"
-      }
-    ]
-  },
   "RemoveKeyValue<AssetDefinition>": {
     "Struct": [
       {
@@ -4352,6 +4569,18 @@
       {
         "name": "object",
         "type": "DomainId"
+      },
+      {
+        "name": "key",
+        "type": "Name"
+      }
+    ]
+  },
+  "RemoveKeyValue<Nft>": {
+    "Struct": [
+      {
+        "name": "object",
+        "type": "NftId"
       },
       {
         "name": "key",
@@ -4389,9 +4618,9 @@
         "type": "RemoveKeyValue<AssetDefinition>"
       },
       {
-        "tag": "Asset",
+        "tag": "Nft",
         "discriminant": 3,
-        "type": "RemoveKeyValue<Asset>"
+        "type": "RemoveKeyValue<Nft>"
       },
       {
         "tag": "Trigger",
@@ -4657,6 +4886,7 @@
   "SelectorTuple<BlockHeader>": "Vec<BlockHeaderProjection<SelectorMarker>>",
   "SelectorTuple<CommittedTransaction>": "Vec<CommittedTransactionProjection<SelectorMarker>>",
   "SelectorTuple<Domain>": "Vec<DomainProjection<SelectorMarker>>",
+  "SelectorTuple<Nft>": "Vec<NftProjection<SelectorMarker>>",
   "SelectorTuple<PeerId>": "Vec<PeerIdProjection<SelectorMarker>>",
   "SelectorTuple<Permission>": "Vec<PermissionProjection<SelectorMarker>>",
   "SelectorTuple<Role>": "Vec<RoleProjection<SelectorMarker>>",
@@ -4669,22 +4899,6 @@
       {
         "name": "object",
         "type": "AccountId"
-      },
-      {
-        "name": "key",
-        "type": "Name"
-      },
-      {
-        "name": "value",
-        "type": "Json"
-      }
-    ]
-  },
-  "SetKeyValue<Asset>": {
-    "Struct": [
-      {
-        "name": "object",
-        "type": "AssetId"
       },
       {
         "name": "key",
@@ -4717,6 +4931,22 @@
       {
         "name": "object",
         "type": "DomainId"
+      },
+      {
+        "name": "key",
+        "type": "Name"
+      },
+      {
+        "name": "value",
+        "type": "Json"
+      }
+    ]
+  },
+  "SetKeyValue<Nft>": {
+    "Struct": [
+      {
+        "name": "object",
+        "type": "NftId"
       },
       {
         "name": "key",
@@ -4762,9 +4992,9 @@
         "type": "SetKeyValue<AssetDefinition>"
       },
       {
-        "tag": "Asset",
+        "tag": "Nft",
         "discriminant": 3,
-        "type": "SetKeyValue<Asset>"
+        "type": "SetKeyValue<Nft>"
       },
       {
         "tag": "Trigger",
@@ -5389,15 +5619,15 @@
       }
     ]
   },
-  "Transfer<Asset, Metadata, Account>": {
+  "Transfer<Account, NftId, Account>": {
     "Struct": [
       {
         "name": "source",
-        "type": "AssetId"
+        "type": "AccountId"
       },
       {
         "name": "object",
-        "type": "Metadata"
+        "type": "NftId"
       },
       {
         "name": "destination",
@@ -5436,7 +5666,12 @@
       {
         "tag": "Asset",
         "discriminant": 2,
-        "type": "AssetTransferBox"
+        "type": "Transfer<Asset, Numeric, Account>"
+      },
+      {
+        "tag": "Nft",
+        "discriminant": 3,
+        "type": "Transfer<Account, NftId, Account>"
       }
     ]
   },
@@ -5679,14 +5914,9 @@
   "TypeError": {
     "Enum": [
       {
-        "tag": "AssetType",
+        "tag": "AssetNumericSpec",
         "discriminant": 0,
-        "type": "Mismatch<AssetType>"
-      },
-      {
-        "tag": "NumericAssetTypeExpected",
-        "discriminant": 1,
-        "type": "AssetType"
+        "type": "Mismatch<NumericSpec>"
       }
     ]
   },
@@ -5695,14 +5925,6 @@
       {
         "name": "object",
         "type": "AccountId"
-      }
-    ]
-  },
-  "Unregister<Asset>": {
-    "Struct": [
-      {
-        "name": "object",
-        "type": "AssetId"
       }
     ]
   },
@@ -5719,6 +5941,14 @@
       {
         "name": "object",
         "type": "DomainId"
+      }
+    ]
+  },
+  "Unregister<Nft>": {
+    "Struct": [
+      {
+        "name": "object",
+        "type": "NftId"
       }
     ]
   },
@@ -5769,9 +5999,9 @@
         "type": "Unregister<AssetDefinition>"
       },
       {
-        "tag": "Asset",
+        "tag": "Nft",
         "discriminant": 4,
-        "type": "Unregister<Asset>"
+        "type": "Unregister<Nft>"
       },
       {
         "tag": "Role",
@@ -5850,9 +6080,6 @@
   "Vec<AssetProjection<SelectorMarker>>": {
     "Vec": "AssetProjection<SelectorMarker>"
   },
-  "Vec<AssetValue>": {
-    "Vec": "AssetValue"
-  },
   "Vec<BlockHeader>": {
     "Vec": "BlockHeader"
   },
@@ -5885,6 +6112,9 @@
   },
   "Vec<CompoundPredicate<Domain>>": {
     "Vec": "CompoundPredicate<Domain>"
+  },
+  "Vec<CompoundPredicate<Nft>>": {
+    "Vec": "CompoundPredicate<Nft>"
   },
   "Vec<CompoundPredicate<PeerId>>": {
     "Vec": "CompoundPredicate<PeerId>"
@@ -5939,6 +6169,15 @@
   },
   "Vec<Name>": {
     "Vec": "Name"
+  },
+  "Vec<Nft>": {
+    "Vec": "Nft"
+  },
+  "Vec<NftId>": {
+    "Vec": "NftId"
+  },
+  "Vec<NftProjection<SelectorMarker>>": {
+    "Vec": "NftProjection<SelectorMarker>"
   },
   "Vec<Numeric>": {
     "Vec": "Numeric"
