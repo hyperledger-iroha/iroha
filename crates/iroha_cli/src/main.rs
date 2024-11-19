@@ -61,6 +61,9 @@ enum Command {
     /// Read and write assets
     #[command(subcommand)]
     Asset(asset::Command),
+    /// Read and write NFTs
+    #[command(subcommand)]
+    Nft(nft::Command),
     /// Read and write peers
     #[command(subcommand)]
     Peer(peer::Command),
@@ -230,7 +233,7 @@ macro_rules! match_all {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use Command::*;
-        match_all!((self, context), { Domain, Account, Asset, Peer, Events, Blocks, Multisig, Query, Transaction, Role, Parameter, Trigger, Executor, MarkdownHelp })
+        match_all!((self, context), { Domain, Account, Asset, Nft, Peer, Events, Blocks, Multisig, Query, Transaction, Role, Parameter, Trigger, Executor, MarkdownHelp })
     }
 }
 
@@ -345,6 +348,13 @@ mod filter {
         /// Filtering condition specified as a JSON5 string
         #[arg(value_parser = parse_json5::<CompoundPredicate<AssetDefinition>>)]
         pub predicate: CompoundPredicate<AssetDefinition>,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct NftFilter {
+        /// Filtering condition specified as a JSON5 string
+        #[arg(value_parser = parse_json5::<CompoundPredicate<Nft>>)]
+        pub predicate: CompoundPredicate<Nft>,
     }
 }
 
@@ -764,8 +774,6 @@ mod account {
 }
 
 mod asset {
-    use iroha::data_model::name::Name;
-
     use super::*;
 
     #[derive(clap::Subcommand, Debug)]
@@ -783,20 +791,7 @@ mod asset {
         /// Decrease the quantity of an asset
         Burn(IdQuantity),
         /// Transfer an asset between accounts
-        #[command(name = "transfer")]
-        TransferNumeric(TransferNumeric),
-        /// Transfer a key-value store between accounts
-        #[command(name = "transferkvs")]
-        TransferStore(TransferStore),
-        /// Retrieve a value from the key-value store
-        #[command(name = "getkv")]
-        GetKeyValue(IdKey),
-        /// Create or update a key-value entry using JSON5 input from stdin
-        #[command(name = "setkv")]
-        SetKeyValue(IdKey),
-        /// Delete an entry from the key-value store
-        #[command(name = "removekv")]
-        RemoveKeyValue(IdKey),
+        Transfer(Transfer),
     }
 
     impl Run for Command {
@@ -828,7 +823,7 @@ mod asset {
                         .finish([instruction])
                         .wrap_err("Failed to burn numeric asset")
                 }
-                TransferNumeric(args) => {
+                Transfer(args) => {
                     let instruction = iroha::data_model::isi::Transfer::asset_numeric(
                         args.id,
                         args.quantity,
@@ -838,40 +833,12 @@ mod asset {
                         .finish([instruction])
                         .wrap_err("Failed to transfer numeric asset")
                 }
-                TransferStore(args) => {
-                    let instruction =
-                        iroha::data_model::isi::Transfer::asset_store(args.id, args.to);
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to transfer key-value store")
-                }
-                GetKeyValue(args) => {
-                    let client = context.client_from_config();
-                    let value = client
-                        .query(FindAssets)
-                        .filter_with(|asset| asset.id.eq(args.id))
-                        .select_with(|asset| asset.value.store.key(args.key))
-                        .execute_single()
-                        .wrap_err("Failed to get value")?;
-                    context.print_data(&value)
-                }
-                SetKeyValue(args) => {
-                    let value: Json = parse_json5_stdin(context)?;
-                    let instruction =
-                        iroha::data_model::isi::SetKeyValue::asset(args.id, args.key, value);
-                    context.finish([instruction])
-                }
-                RemoveKeyValue(args) => {
-                    let instruction =
-                        iroha::data_model::isi::RemoveKeyValue::asset(args.id, args.key);
-                    context.finish([instruction])
-                }
             }
         }
     }
 
     mod definition {
-        use iroha::data_model::asset::{AssetDefinition, AssetDefinitionId, AssetType};
+        use iroha::data_model::asset::{AssetDefinition, AssetDefinitionId};
 
         use super::*;
 
@@ -908,7 +875,7 @@ mod asset {
                         context.print_data(&entry)
                     }
                     Register(args) => {
-                        let mut entry = AssetDefinition::new(args.id, args.r#type);
+                        let mut entry = AssetDefinition::new(args.id, args.spec);
                         if args.mint_once {
                             entry = entry.mintable_once();
                         }
@@ -945,9 +912,9 @@ mod asset {
             /// Disables minting after the first instance
             #[arg(short, long)]
             pub mint_once: bool,
-            /// Data type stored in the asset
+            /// Numeric spec of the asset
             #[arg(short, long)]
-            pub r#type: AssetType,
+            pub spec: NumericSpec,
         }
 
         #[derive(clap::Args, Debug)]
@@ -974,7 +941,7 @@ mod asset {
     }
 
     #[derive(clap::Args, Debug)]
-    pub struct TransferNumeric {
+    pub struct Transfer {
         /// Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
         #[arg(short, long)]
         pub id: AssetId,
@@ -984,16 +951,6 @@ mod asset {
         /// Transfer amount (integer or decimal)
         #[arg(short, long)]
         pub quantity: Numeric,
-    }
-
-    #[derive(clap::Args, Debug)]
-    pub struct TransferStore {
-        /// Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
-        #[arg(short, long)]
-        pub id: AssetId,
-        /// Destination account, in the format "multihash@domain"
-        #[arg(short, long)]
-        pub to: AccountId,
     }
 
     #[derive(clap::Args, Debug)]
@@ -1013,17 +970,126 @@ mod asset {
         pub quantity: Numeric,
     }
 
+    impl_list!(filter::AssetFilter, FindAssets);
+}
+
+mod nft {
+    use super::*;
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Command {
+        /// Retrieve details of a specific NFT
+        Get(Id),
+        /// List NFTs
+        #[clap(subcommand)]
+        List(List),
+        /// Register NFT with content provided from stdin in JSON5 format
+        Register(Id),
+        /// Unregister NFT
+        Unregister(Id),
+        /// Transfer ownership of NFT
+        Transfer(Transfer),
+        /// Get a value from NFT
+        #[command(name = "getkv")]
+        GetKeyValue(IdKey),
+        /// Create or update a key-value entry of NFT using JSON5 input from stdin
+        #[command(name = "setkv")]
+        SetKeyValue(IdKey),
+        /// Remove a key-value entry from NFT
+        #[command(name = "removekv")]
+        RemoveKeyValue(IdKey),
+    }
+
+    impl Run for Command {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            use self::Command::*;
+            match self {
+                Get(args) => {
+                    let client = context.client_from_config();
+                    let entry = client
+                        .query(FindNfts)
+                        .filter_with(|entry| entry.id.eq(args.id))
+                        .execute_single()
+                        .wrap_err("Failed to get NFT")?;
+                    context.print_data(&entry)
+                }
+                List(cmd) => cmd.run(context),
+                Register(args) => {
+                    let metadata: Metadata = parse_json5_stdin(context)?;
+                    let instruction =
+                        iroha::data_model::isi::Register::nft(Nft::new(args.id, metadata));
+                    context
+                        .finish([instruction])
+                        .wrap_err("Failed to register NFT")
+                }
+                Unregister(args) => {
+                    let instruction = iroha::data_model::isi::Unregister::nft(args.id);
+                    context
+                        .finish([instruction])
+                        .wrap_err("Failed to unregister NFT")
+                }
+                Transfer(args) => {
+                    let instruction =
+                        iroha::data_model::isi::Transfer::nft(args.from, args.id, args.to);
+                    context
+                        .finish([instruction])
+                        .wrap_err("Failed to transfer NFT")
+                }
+                GetKeyValue(args) => {
+                    let client = context.client_from_config();
+                    let value = client
+                        .query(FindNfts)
+                        .filter_with(|nft| nft.id.eq(args.id))
+                        .select_with(|nft| nft.metadata.key(args.key))
+                        .execute_single()
+                        .wrap_err("Failed to get value")?;
+                    context.print_data(&value)
+                }
+                SetKeyValue(args) => {
+                    let value: Json = parse_json5_stdin(context)?;
+                    let instruction =
+                        iroha::data_model::isi::SetKeyValue::nft(args.id, args.key, value);
+                    context.finish([instruction])
+                }
+                RemoveKeyValue(args) => {
+                    let instruction =
+                        iroha::data_model::isi::RemoveKeyValue::nft(args.id, args.key);
+                    context.finish([instruction])
+                }
+            }
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Transfer {
+        /// NFT in the format "name$domain"
+        #[arg(short, long)]
+        pub id: NftId,
+        /// Source account, in the format "multihash@domain"
+        #[arg(short, long)]
+        pub from: AccountId,
+        /// Destination account, in the format "multihash@domain"
+        #[arg(short, long)]
+        pub to: AccountId,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Id {
+        /// NFT in the format "name$domain"
+        #[arg(short, long)]
+        pub id: NftId,
+    }
+
     #[derive(clap::Args, Debug)]
     pub struct IdKey {
-        /// Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
+        /// NFT in the format "name$domain"
         #[arg(short, long)]
-        pub id: AssetId,
-        /// Key for retrieving the corresponding value
+        pub id: NftId,
         #[arg(short, long)]
         pub key: Name,
     }
 
-    impl_list!(filter::AssetFilter, FindAssets);
+    impl_list!(filter::NftFilter, FindNfts);
 }
 
 mod peer {
