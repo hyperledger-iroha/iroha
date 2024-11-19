@@ -48,11 +48,14 @@ impl SortableQueryOutput for AssetDefinition {
 }
 
 impl SortableQueryOutput for Asset {
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<Json> {
+        None
+    }
+}
+
+impl SortableQueryOutput for Nft {
     fn get_metadata_sorting_key(&self, key: &Name) -> Option<Json> {
-        match &self.value {
-            AssetValue::Numeric(_) => None,
-            AssetValue::Store(metadata) => metadata.get(key).cloned(),
-        }
+        self.metadata.get(key).cloned()
     }
 }
 
@@ -265,6 +268,11 @@ impl ValidQueryRequest {
                         &iter_query.params,
                     )?,
                     QueryBox::FindAssetsDefinitions(q) => apply_query_postprocessing(
+                        ValidQuery::execute(q.query, q.predicate, state)?,
+                        q.selector,
+                        &iter_query.params,
+                    )?,
+                    QueryBox::FindNfts(q) => apply_query_postprocessing(
                         ValidQuery::execute(q.query, q.predicate, state)?,
                         q.selector,
                         &iter_query.params,

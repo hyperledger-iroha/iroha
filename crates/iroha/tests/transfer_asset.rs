@@ -21,50 +21,6 @@ fn simulate_transfer_numeric() {
     )
 }
 
-#[test]
-fn simulate_transfer_store_asset() {
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
-    let iroha = network.client();
-
-    let (alice_id, mouse_id) = generate_two_ids();
-    let create_mouse = create_mouse(mouse_id.clone());
-    let asset_definition_id: AssetDefinitionId = "camomile#wonderland".parse().unwrap();
-    let create_asset =
-        Register::asset_definition(AssetDefinition::store(asset_definition_id.clone()));
-    let set_key_value = SetKeyValue::asset(
-        AssetId::new(asset_definition_id.clone(), alice_id.clone()),
-        "alicek".parse().unwrap(),
-        true,
-    );
-
-    iroha
-        .submit_all_blocking::<InstructionBox>([
-            // create_alice.into(), We don't need to register Alice, because she is created in genesis
-            create_mouse.into(),
-            create_asset.into(),
-            set_key_value.into(),
-        ])
-        .expect("Failed to prepare state.");
-
-    let transfer_asset = Transfer::asset_store(
-        AssetId::new(asset_definition_id.clone(), alice_id.clone()),
-        mouse_id.clone(),
-    );
-
-    iroha
-        .submit_blocking(transfer_asset)
-        .expect("Failed to transfer asset.");
-    assert!(iroha
-        .query(FindAssets::new())
-        .filter_with(|asset| asset.id.account.eq(mouse_id.clone()))
-        .execute_all()
-        .unwrap()
-        .into_iter()
-        .any(|asset| {
-            *asset.id().definition() == asset_definition_id && *asset.id().account() == mouse_id
-        }));
-}
-
 fn simulate_transfer<T>(
     starting_amount: T,
     amount_to_transfer: &T,
@@ -72,7 +28,7 @@ fn simulate_transfer<T>(
     mint_ctr: impl FnOnce(T, AssetId) -> Mint<T, Asset>,
     transfer_ctr: impl FnOnce(AssetId, T, AccountId) -> Transfer<Asset, T, Account>,
 ) where
-    T: std::fmt::Debug + Clone + Into<AssetValue>,
+    T: std::fmt::Debug + Clone + Into<Numeric>,
     Mint<T, Asset>: Instruction,
     Transfer<Asset, T, Account>: Instruction,
 {

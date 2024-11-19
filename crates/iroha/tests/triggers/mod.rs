@@ -1,8 +1,7 @@
-use assert_matches::assert_matches;
 use iroha::{
     client::Client,
     data_model::{
-        asset::{AssetId, AssetValue},
+        asset::AssetId,
         prelude::{FindAssets, Numeric, QueryBuilderExt},
     },
 };
@@ -22,5 +21,5 @@ fn get_asset_value(client: &Client, asset_id: AssetId) -> Numeric {
         .execute_single()
         .unwrap();
 
-    assert_matches!(*asset.value(), AssetValue::Numeric(val) => val)
+    *asset.value()
 }

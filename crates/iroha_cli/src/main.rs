@@ -288,6 +288,14 @@ mod filter {
         pub predicate: CompoundPredicate<AssetDefinition>,
     }
 
+    /// Filter for NFT queries
+    #[derive(Clone, Debug, clap::Parser)]
+    pub struct NftFilter {
+        /// Predicate for filtering given as JSON5 string
+        #[clap(value_parser = parse_json5::<CompoundPredicate<Nft>>)]
+        pub predicate: CompoundPredicate<Nft>,
+    }
+
     fn parse_json5<T>(s: &str) -> Result<T, String>
     where
         T: for<'a> Deserialize<'a>,
@@ -743,8 +751,6 @@ mod account {
 }
 
 mod asset {
-    use iroha::data_model::name::Name;
-
     use super::*;
 
     /// Subcommand for dealing with asset
@@ -764,25 +770,19 @@ mod asset {
         /// List assets
         #[clap(subcommand)]
         List(List),
-        /// Get a value from a Store asset
-        GetKeyValue(GetKeyValue),
-        /// Set a key-value entry in a Store asset
-        SetKeyValue(SetKeyValue),
-        /// Remove a key-value entry from a Store asset
-        RemoveKeyValue(RemoveKeyValue),
     }
 
     impl RunArgs for Args {
         fn run(self, context: &mut dyn RunContext) -> Result<()> {
             match_all!(
                 (self, context),
-                { Args::Definition, Args::Mint, Args::Burn, Args::Transfer, Args::Get, Args::List, Args::SetKeyValue, Args::RemoveKeyValue, Args::GetKeyValue}
+                { Args::Definition, Args::Mint, Args::Burn, Args::Transfer, Args::Get, Args::List }
             )
         }
     }
 
     mod definition {
-        use iroha::data_model::asset::{AssetDefinition, AssetDefinitionId, AssetType};
+        use iroha::data_model::asset::{AssetDefinition, AssetDefinitionId};
 
         use super::*;
 
@@ -814,9 +814,9 @@ mod asset {
             /// Mintability of asset
             #[arg(short, long)]
             pub unmintable: bool,
-            /// Value type stored in asset
+            /// Numeric spec of asset
             #[arg(short, long)]
-            pub r#type: AssetType,
+            pub spec: NumericSpec,
             #[command(flatten)]
             pub metadata: MetadataArgs,
         }
@@ -825,11 +825,11 @@ mod asset {
             fn run(self, context: &mut dyn RunContext) -> Result<()> {
                 let Self {
                     id: asset_id,
-                    r#type,
+                    spec,
                     unmintable,
                     metadata,
                 } = self;
-                let mut asset_definition = AssetDefinition::new(asset_id, r#type);
+                let mut asset_definition = AssetDefinition::new(asset_id, spec);
                 if unmintable {
                     asset_definition = asset_definition.mintable_once();
                 }
@@ -1000,13 +1000,160 @@ mod asset {
             Ok(())
         }
     }
+}
+
+mod nft {
+    use super::*;
+
+    /// Subcommand for dealing with NFT
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Args {
+        /// Register NFT
+        Register(Register),
+        /// Unregister NFT
+        Unregister(Unregister),
+        /// Transfer NFT between accounts
+        Transfer(Transfer),
+        /// Get info of NFT
+        Get(Get),
+        /// List NFTs
+        #[clap(subcommand)]
+        List(List),
+        /// Get a value from NFT
+        GetKeyValue(GetKeyValue),
+        /// Set a key-value entry in NFT
+        SetKeyValue(SetKeyValue),
+        /// Remove a key-value entry from NFT
+        RemoveKeyValue(RemoveKeyValue),
+    }
+
+    impl RunArgs for Args {
+        fn run(self, context: &mut dyn RunContext) -> Result<()> {
+            use self::Args::*;
+            match_all!(
+                (self, context),
+                { Register, Unregister, Transfer, Get, List, GetKeyValue, SetKeyValue, RemoveKeyValue }
+            )
+        }
+    }
+
+    /// Register subcommand for NFT
+    #[derive(Debug, clap::Args)]
+    pub struct Register {
+        /// NFT id (in form `name$domain_name`)
+        #[arg(long)]
+        pub id: NftId,
+        #[command(flatten)]
+        pub metadata: MetadataArgs,
+    }
+
+    impl RunArgs for Register {
+        fn run(self, context: &mut dyn RunContext) -> Result<()> {
+            let Self { id, metadata } = self;
+            let create_nft = iroha::data_model::isi::Register::nft(Nft::new(id, metadata.load()?));
+            submit([create_nft], Metadata::default(), context).wrap_err("Failed to register NFT")
+        }
+    }
+
+    /// Unregister subcommand for NFT
+    #[derive(Debug, clap::Args)]
+    pub struct Unregister {
+        /// NFT id (in form `name$domain_name`)
+        #[arg(long)]
+        pub id: NftId,
+    }
+
+    impl RunArgs for Unregister {
+        fn run(self, context: &mut dyn RunContext) -> Result<()> {
+            let unregister_nft = iroha::data_model::isi::Unregister::nft(self.id);
+            submit([unregister_nft], Metadata::default(), context)
+                .wrap_err("Failed to unregister NFT")
+        }
+    }
+
+    /// Transfer NFT between accounts
+    #[derive(clap::Args, Debug)]
+    pub struct Transfer {
+        /// NFT id to transfer (in form `name$domain_name`)
+        #[arg(long)]
+        pub id: NftId,
+        /// Account from which to transfer (in form `name@domain_name`)
+        #[arg(short, long)]
+        pub from: AccountId,
+        /// Account to which to transfer (in form `name@domain_name`)
+        #[arg(short, long)]
+        pub to: AccountId,
+        #[command(flatten)]
+        pub metadata: MetadataArgs,
+    }
+
+    impl RunArgs for Transfer {
+        fn run(self, context: &mut dyn RunContext) -> Result<()> {
+            let Self {
+                id,
+                from,
+                to,
+                metadata,
+            } = self;
+            let isi = iroha::data_model::isi::Transfer::nft(from, id, to);
+            submit([isi], metadata.load()?, context).wrap_err("Failed to transfer NFT")
+        }
+    }
+
+    /// Get info of NFT
+    #[derive(clap::Args, Debug)]
+    pub struct Get {
+        /// NFT id (in form `name$domain_name`)
+        #[arg(long)]
+        pub id: NftId,
+    }
+
+    impl RunArgs for Get {
+        fn run(self, context: &mut dyn RunContext) -> Result<()> {
+            let Self { id: nft_id } = self;
+            let client = context.client_from_config();
+            let nft = client
+                .query(FindNfts::new())
+                .filter_with(|nft| nft.id.eq(nft_id))
+                .execute_single()
+                .wrap_err("Failed to get NFT.")?;
+            context.print_data(&nft)?;
+            Ok(())
+        }
+    }
+
+    /// List NFTs with this command
+    #[derive(clap::Subcommand, Debug, Clone)]
+    pub enum List {
+        /// All NFTs
+        All,
+        /// Filter NFTs by given predicate
+        Filter(filter::NftFilter),
+    }
+
+    impl RunArgs for List {
+        fn run(self, context: &mut dyn RunContext) -> Result<()> {
+            let client = context.client_from_config();
+
+            let query = client.query(FindNfts::new());
+
+            let query = match self {
+                List::All => query,
+                List::Filter(filter) => query.filter(filter.predicate),
+            };
+
+            let result = query.execute_all().wrap_err("Failed to get all NFTs")?;
+            context.print_data(&result)?;
+
+            Ok(())
+        }
+    }
 
     #[derive(clap::Args, Debug)]
     pub struct SetKeyValue {
-        /// Asset id for the Store asset (in form of `asset##account@domain_name`)
+        /// NFT id (in form `name$domain_name`)
         #[clap(long)]
-        pub id: AssetId,
-        /// The key for the store value
+        pub id: NftId,
         #[clap(long)]
         pub key: Name,
         #[command(flatten)]
@@ -1016,30 +1163,29 @@ mod asset {
     impl RunArgs for SetKeyValue {
         fn run(self, context: &mut dyn RunContext) -> Result<()> {
             let Self {
-                id: asset_id,
+                id: nft_id,
                 key,
                 value: MetadataValueArg { value },
             } = self;
 
-            let set = iroha::data_model::isi::SetKeyValue::asset(asset_id, key, value);
+            let set = iroha::data_model::isi::SetKeyValue::nft(nft_id, key, value);
             submit([set], Metadata::default(), context)?;
             Ok(())
         }
     }
     #[derive(clap::Args, Debug)]
     pub struct RemoveKeyValue {
-        /// Asset id for the Store asset (in form of `asset##account@domain_name`)
+        /// NFT id (in form `name$domain_name`)
         #[clap(long)]
-        pub id: AssetId,
-        /// The key for the store value
+        pub id: NftId,
         #[clap(long)]
         pub key: Name,
     }
 
     impl RunArgs for RemoveKeyValue {
         fn run(self, context: &mut dyn RunContext) -> Result<()> {
-            let Self { id: asset_id, key } = self;
-            let remove = iroha::data_model::isi::RemoveKeyValue::asset(asset_id, key);
+            let Self { id: nft_id, key } = self;
+            let remove = iroha::data_model::isi::RemoveKeyValue::nft(nft_id, key);
             submit([remove], Metadata::default(), context)?;
             Ok(())
         }
@@ -1047,26 +1193,25 @@ mod asset {
 
     #[derive(clap::Args, Debug)]
     pub struct GetKeyValue {
-        /// Asset id for the Store asset (in form of `asset##account@domain_name`)
+        /// NFT id (in form `name$domain_name`)
         #[clap(long)]
-        pub id: AssetId,
-        /// The key for the store value
+        pub id: NftId,
         #[clap(long)]
         pub key: Name,
     }
 
     impl RunArgs for GetKeyValue {
         fn run(self, context: &mut dyn RunContext) -> Result<()> {
-            let Self { id: asset_id, key } = self;
+            let Self { id: nft_id, key } = self;
             let client = context.client_from_config();
-            let asset = client
-                .query(FindAssets)
-                .filter_with(|asset| asset.id.eq(asset_id))
-                .select_with(|asset| asset.value.store.key(key))
+            let value = client
+                .query(FindNfts)
+                .filter_with(|nft| nft.id.eq(nft_id))
+                .select_with(|nft| nft.metadata.key(key))
                 .execute_single()
                 .wrap_err("Failed to get key-value")?;
 
-            context.print_data(&asset)?;
+            context.print_data(&value)?;
             Ok(())
         }
     }
