@@ -29,6 +29,14 @@ path = "src/main.rs"
 [dependencies]
 iroha = { workspace = true }
 iroha_primitives = { workspace = true }
+iroha_schema = { workspace = true }
+iroha_schema_gen = { workspace = true }
+iroha_genesis = { workspace = true }
+iroha_data_model = { workspace = true }
+iroha_wasm_builder = { workspace = true }
+spinoff = { workspace = true, features = ["binary"] }
+owo-colors = { workspace = true, features = ["supports-colors"] }
+wasmtime = { workspace = true }
 
 thiserror = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
@@ -44,7 +52,13 @@ supports-color = { workspace = true }
 derive_more = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 futures = { workspace = true }
+parity-scale-codec = { workspace = true }
+colored = "2.1.0"
 
 [build-dependencies]
 vergen = { version = "8.3.1", default-features = false }
 color-eyre = "0.6.3"
+parity-scale-codec = { workspace = true }
+iroha_data_model = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
