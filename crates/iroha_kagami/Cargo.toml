@@ -20,6 +20,7 @@ iroha_schema_gen.workspace = true
 iroha_primitives.workspace = true
 iroha_genesis.workspace = true
 iroha_test_samples.workspace = true
+iroha_schema.workspace = true
 
 clap = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
@@ -27,6 +28,14 @@ color-eyre.workspace = true
 serde_json.workspace = true
 derive_more.workspace = true
 parity-scale-codec.workspace = true
+
+[build-dependencies]
+iroha_data_model = { workspace = true }
+
+parity-scale-codec = { workspace = true }
+serde_json = { workspace = true, features = ["std"]}
+serde = { workspace = true }
+color-eyre = { workspace = true }
 
 [[bin]]
 name = "kagami"

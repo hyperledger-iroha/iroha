@@ -14,4 +14,3 @@ In this repository you can find documentation for Iroha 2 tools:
 
 - [Kagami](../crates/iroha_kagami/README.md)
 - [Kura Inspector](../crates/kura_inspector/README.md)
-- [Parity Scale Decoder Tool](../crates/iroha_codec/README.md)

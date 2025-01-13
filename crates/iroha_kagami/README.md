@@ -14,7 +14,15 @@ This will place `kagami` inside the `target/debug/` directory (from the root of 
 
 ## Usage
 
-As it is an internal tool with no stable API, we decided to move all the documentation into the CLI help messages and keep it up to date in a single place.
+### Subcommands
+
+| Command                                             | Description                                                                                                                        |
+|-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| `crypto`                         | Generate cryptographic key pairs using the given algorithm and either private key or seed                                                                                                      |
+| `schema` | Generate the schema used for code generation in Iroha SDKs                                                                                           |
+| [`genesis`](src/genesis/README.md) | Commands related to genesis                                                                                            |
+| [`codec`](src/codec/README.md)                  | Commands related to codec |
+| `help`                                              | Print the help message for the tool or a subcommand   
 
 Run:
 

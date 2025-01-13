@@ -7,6 +7,7 @@ use clap::{Args as ClapArgs, Parser};
 use color_eyre::eyre::WrapErr as _;
 use iroha_data_model::prelude::*;
 
+mod codec;
 mod crypto;
 mod genesis;
 mod schema;
@@ -42,6 +43,8 @@ enum Args {
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
+    /// Commands related to codec
+    Codec(codec::Args),
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -52,6 +55,7 @@ impl<T: Write> RunArgs<T> for Args {
             Crypto(args) => args.run(writer),
             Schema(args) => args.run(writer),
             Genesis(args) => args.run(writer),
+            Codec(args) => args.run(writer),
         }
     }
 }

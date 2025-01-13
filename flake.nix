@@ -49,7 +49,6 @@
         "iroha"
         "kagami"
         "kura_inspector"
-        "iroha_codec"
       ];
 
       # HACK: A hook to filter out darwin-specific flags when cross-compiling.

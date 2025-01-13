@@ -1,4 +1,3 @@
-//! Parity Scale decoder tool for Iroha data types. For usage run with `--help`
 use core::num::{NonZeroU32, NonZeroU64};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -11,12 +10,16 @@ use std::{
     path::PathBuf,
 };
 
-use clap::Parser;
-use colored::*;
-use eyre::{eyre, Result};
+use clap::{Args as ClapArgs, Subcommand};
+use color_eyre::{
+    eyre::{eyre, Result},
+    owo_colors::OwoColorize,
+};
 use iroha_schema_gen::complete_data_model::*;
 use parity_scale_codec::{DecodeAll, Encode};
 use serde::{de::DeserializeOwned, Serialize};
+
+use crate::{Outcome, RunArgs};
 
 /// Generate map with types and converter trait object
 fn generate_map() -> ConverterMap {
@@ -75,31 +78,14 @@ where
     }
 }
 
-/// Parity Scale decoder tool for Iroha data types
-#[derive(Debug, Parser)]
-#[clap(version, about, author)]
-struct Args {
+/// Parity Scale decoder for Iroha data types
+#[derive(Debug, ClapArgs, Clone)]
+pub struct Args {
     #[clap(subcommand)]
     command: Command,
-
-    /// Whether to enable ANSI colored output or not
-    ///
-    /// By default, Iroha determines whether the terminal supports colors or not.
-    ///
-    /// In order to disable this flag explicitly, pass `--terminal-colors=false`.
-    #[arg(
-        long,
-        env,
-        default_missing_value("true"),
-        default_value(default_terminal_colors_str()),
-        action(clap::ArgAction::Set),
-        require_equals(true),
-        num_args(0..=1),
-    )]
-    pub terminal_colors: bool,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Clone, Subcommand)]
 enum Command {
     /// Show all available types
     ListTypes,
@@ -111,7 +97,7 @@ enum Command {
     JsonToScale(ScaleJsonArgs),
 }
 
-#[derive(Debug, clap::Args)]
+#[derive(Debug, ClapArgs, Clone)]
 struct ScaleToRustArgs {
     /// Path to the binary with encoded Iroha structure
     binary: PathBuf,
@@ -121,7 +107,7 @@ struct ScaleToRustArgs {
     type_name: Option<String>,
 }
 
-#[derive(Debug, clap::Args)]
+#[derive(Debug, ClapArgs, Clone)]
 struct ScaleJsonArgs {
     /// Path to the input file
     #[clap(short, long)]
@@ -134,36 +120,40 @@ struct ScaleJsonArgs {
     type_name: String,
 }
 
-fn is_coloring_supported() -> bool {
-    supports_color::on(supports_color::Stream::Stdout).is_some()
-}
+impl<T: Write> RunArgs<T> for Args {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let map = generate_map();
 
-fn default_terminal_colors_str() -> clap::builder::OsStr {
-    is_coloring_supported().to_string().into()
-}
+        match self.command {
+            Command::ScaleToRust(decode_args) => {
+                let decoder = ScaleToRustDecoder::new(decode_args, &map);
+                decoder.decode(writer)
+            }
+            Command::ScaleToJson(args) => {
+                let mut file_writer = match args.output.clone() {
+                    None => None,
+                    Some(path) => Some(BufWriter::new(File::create(path)?)),
+                };
 
-fn main() -> Result<()> {
-    let args = Args::parse();
+                let writer: &mut dyn Write = file_writer
+                    .as_mut()
+                    .map_or(writer, |file_writer| file_writer);
+                let decoder = ScaleJsonDecoder::new(args, &map, writer)?;
+                decoder.scale_to_json()
+            }
+            Command::JsonToScale(args) => {
+                let mut file_writer = match args.output.clone() {
+                    None => None,
+                    Some(path) => Some(BufWriter::new(File::create(path)?)),
+                };
 
-    let map = generate_map();
-
-    match args.command {
-        Command::ScaleToRust(decode_args) => {
-            let mut writer = BufWriter::new(io::stdout().lock());
-            let decoder = ScaleToRustDecoder::new(decode_args, &map);
-            decoder.decode(&mut writer)
-        }
-        Command::ScaleToJson(args) => {
-            let decoder = ScaleJsonDecoder::new(args, &map)?;
-            decoder.scale_to_json()
-        }
-        Command::JsonToScale(args) => {
-            let decoder = ScaleJsonDecoder::new(args, &map)?;
-            decoder.json_to_scale()
-        }
-        Command::ListTypes => {
-            let mut writer = BufWriter::new(io::stdout().lock());
-            list_types(&map, &mut writer)
+                let writer: &mut dyn Write = file_writer
+                    .as_mut()
+                    .map_or(writer, |file_writer| file_writer);
+                let decoder = ScaleJsonDecoder::new(args, &map, writer)?;
+                decoder.json_to_scale()
+            }
+            Command::ListTypes => list_types(&map, writer),
         }
     }
 }
@@ -231,21 +221,21 @@ impl<'map> ScaleToRustDecoder<'map> {
     }
 }
 
-struct ScaleJsonDecoder<'map> {
+struct ScaleJsonDecoder<'map, 'w> {
     reader: Box<dyn BufRead>,
-    writer: Box<dyn Write>,
+    writer: &'w mut dyn Write,
     converter: &'map dyn Converter,
 }
 
-impl<'map> ScaleJsonDecoder<'map> {
-    fn new(args: ScaleJsonArgs, map: &'map ConverterMap) -> Result<Self> {
+impl<'map, 'w> ScaleJsonDecoder<'map, 'w> {
+    fn new(
+        args: ScaleJsonArgs,
+        map: &'map ConverterMap,
+        writer: &'w mut dyn Write,
+    ) -> Result<Self> {
         let reader: Box<dyn BufRead> = match args.input {
             None => Box::new(io::stdin().lock()),
             Some(path) => Box::new(BufReader::new(File::open(path)?)),
-        };
-        let writer: Box<dyn Write> = match args.output {
-            None => Box::new(BufWriter::new(io::stdout().lock())),
-            Some(path) => Box::new(BufWriter::new(File::create(path)?)),
         };
         let Some(converter) = map.get(&args.type_name) else {
             return Err(eyre!("Unknown type: `{}`", args.type_name));
@@ -260,7 +250,7 @@ impl<'map> ScaleJsonDecoder<'map> {
     fn scale_to_json(self) -> Result<()> {
         let Self {
             mut reader,
-            mut writer,
+            writer,
             converter,
         } = self;
         let mut input = Vec::new();
@@ -273,7 +263,7 @@ impl<'map> ScaleJsonDecoder<'map> {
     fn json_to_scale(self) -> Result<()> {
         let Self {
             mut reader,
-            mut writer,
+            writer,
             converter,
         } = self;
         let mut input = String::new();
@@ -412,22 +402,22 @@ mod tests {
         assert_eq!(scale_actual, scale_expected);
     }
 
-    #[test]
-    fn terminal_colors_works_as_expected() -> eyre::Result<()> {
-        fn try_with(arg: &str) -> eyre::Result<bool> {
-            // Since arg contains enum Command and we must provide something for it, we use "list-types"
-            Ok(Args::try_parse_from(["test", arg, "list-types"])?.terminal_colors)
-        }
+    // #[test]
+    // fn terminal_colors_works_as_expected() -> eyre::Result<()> {
+    //     fn try_with(arg: &str) -> eyre::Result<bool> {
+    //         // Since arg contains enum Command and we must provide something for it, we use "list-types"
+    //         Ok(Args::try_parse_from(["test", arg, "list-types"])?.terminal_colors)
+    //     }
 
-        assert_eq!(
-            Args::try_parse_from(["test", "list-types"])?.terminal_colors,
-            is_coloring_supported()
-        );
-        assert!(try_with("--terminal-colors")?);
-        assert!(!try_with("--terminal-colors=false")?);
-        assert!(try_with("--terminal-colors=true")?);
-        assert!(try_with("--terminal-colors=random").is_err());
+    //     assert_eq!(
+    //         Args::try_parse_from(["test", "list-types"])?.terminal_colors,
+    //         is_coloring_supported()
+    //     );
+    //     assert!(try_with("--terminal-colors")?);
+    //     assert!(!try_with("--terminal-colors=false")?);
+    //     assert!(try_with("--terminal-colors=true")?);
+    //     assert!(try_with("--terminal-colors=random").is_err());
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 }
