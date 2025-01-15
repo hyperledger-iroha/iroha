@@ -20,5 +20,4 @@ wasm-opt = "0.116.1"
 
 clap = { workspace = true, features = ["derive"] }
 color-eyre.workspace = true
-spinoff = { workspace = true, features = ["binary"] }
 owo-colors = { workspace = true, features = ["supports-colors"] }

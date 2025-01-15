@@ -844,12 +844,12 @@ checksum = "d3fd119d74b830634cea2a0f58bbd0d54540518a14397557951e79340abc28c0"
 
 [[package]]
 name = "colored"
-version = "2.1.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbf2150cce219b664a8a70df7a1f933836724b503f8a413af9365b4dcc4d90b8"
+checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3325,10 +3325,12 @@ dependencies = [
  "iroha_swarm",
  "iroha_test_samples",
  "iroha_version",
+ "iroha_wasm_builder",
  "owo-colors 4.1.0",
  "parity-scale-codec",
  "serde",
  "serde_json",
+ "spinoff",
 ]
 
 [[package]]
@@ -3723,7 +3725,6 @@ dependencies = [
  "path-absolutize",
  "serde_json",
  "sha256",
- "spinoff",
  "wasm-opt",
 ]
 

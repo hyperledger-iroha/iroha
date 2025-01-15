@@ -24,16 +24,17 @@ iroha_schema.workspace = true
 iroha_core.workspace = true
 iroha_version.workspace = true
 iroha_swarm.workspace = true
+iroha_wasm_builder.workspace = true
 
 clap = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
+spinoff = { workspace = true, features = ["binary"] }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 color-eyre.workspace = true
 serde_json.workspace = true
 derive_more.workspace = true
 parity-scale-codec.workspace = true
-
-inquire = "0.6.2"
+inquire.workspace = true
 
 [build-dependencies]
 iroha_data_model = { workspace = true }

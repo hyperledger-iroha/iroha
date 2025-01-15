@@ -24,6 +24,7 @@ This will place `kagami` inside the `target/debug/` directory (from the root of 
 | [`codec`](docs/codec.md)                  | Commands related to codec |
 | [`kura`](docs/kura.md)                  | Commands related to block inspection |
 | [`swarm`](docs/swarm.md)                  | Commands related to Docker Compose configuration generation |
+| [`wasm`](docs/wasm.md)                  | Commands related to building smartcontracts |
 | `help`                                              | Print the help message for the tool or a subcommand   
 
 Run:

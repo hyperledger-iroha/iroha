@@ -13,6 +13,7 @@ mod genesis;
 mod kura;
 mod schema;
 mod swarm;
+mod wasm;
 
 /// Outcome shorthand used throughout this crate
 pub(crate) type Outcome = color_eyre::Result<()>;
@@ -51,6 +52,9 @@ enum Args {
     Kura(kura::Args),
     /// Commands related to Docker Compose configuration generation
     Swarm(swarm::Args),
+    /// Commands related to building wasm smartcontracts
+    #[clap(subcommand)]
+    Wasm(wasm::Args),
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -64,6 +68,7 @@ impl<T: Write> RunArgs<T> for Args {
             Codec(args) => args.run(writer),
             Kura(args) => args.run(writer),
             Swarm(args) => args.run(writer),
+            Wasm(args) => args.run(writer),
         }
     }
 }
