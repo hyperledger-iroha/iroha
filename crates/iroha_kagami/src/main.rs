@@ -10,6 +10,7 @@ use iroha_data_model::prelude::*;
 mod codec;
 mod crypto;
 mod genesis;
+mod kura;
 mod schema;
 
 /// Outcome shorthand used throughout this crate
@@ -45,6 +46,8 @@ enum Args {
     Genesis(genesis::Args),
     /// Commands related to codec
     Codec(codec::Args),
+    /// Commands related to block inspection
+    Kura(kura::Args),
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -56,6 +59,7 @@ impl<T: Write> RunArgs<T> for Args {
             Schema(args) => args.run(writer),
             Genesis(args) => args.run(writer),
             Codec(args) => args.run(writer),
+            Kura(args) => args.run(writer),
         }
     }
 }

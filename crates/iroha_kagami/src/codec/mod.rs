@@ -353,7 +353,7 @@ mod tests {
 
     fn decode_sample<T: Debug>(sample_path: &str, type_id: String, expected: &T) {
         let mut binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        binary.push("samples/");
+        binary.push("src/codec/samples/");
         binary.push(sample_path);
         let args = ScaleToRustArgs {
             binary,
@@ -387,7 +387,7 @@ mod tests {
 
     fn test_decode_encode(sample_path: &str, type_id: &str) {
         let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("samples/")
+            .join("src/codec/samples/")
             .join(sample_path);
         let scale_expected = fs::read(binary).expect("Couldn't read file");
 
@@ -401,23 +401,4 @@ mod tests {
             .expect("Couldn't convert to SCALE");
         assert_eq!(scale_actual, scale_expected);
     }
-
-    // #[test]
-    // fn terminal_colors_works_as_expected() -> eyre::Result<()> {
-    //     fn try_with(arg: &str) -> eyre::Result<bool> {
-    //         // Since arg contains enum Command and we must provide something for it, we use "list-types"
-    //         Ok(Args::try_parse_from(["test", arg, "list-types"])?.terminal_colors)
-    //     }
-
-    //     assert_eq!(
-    //         Args::try_parse_from(["test", "list-types"])?.terminal_colors,
-    //         is_coloring_supported()
-    //     );
-    //     assert!(try_with("--terminal-colors")?);
-    //     assert!(!try_with("--terminal-colors=false")?);
-    //     assert!(try_with("--terminal-colors=true")?);
-    //     assert!(try_with("--terminal-colors=random").is_err());
-
-    //     Ok(())
-    // }
 }

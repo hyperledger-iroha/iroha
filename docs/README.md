@@ -13,4 +13,3 @@ You can also check out [Iroha 2 Whitepaper](./source/iroha_2_whitepaper.md) for 
 In this repository you can find documentation for Iroha 2 tools:
 
 - [Kagami](../crates/iroha_kagami/README.md)
-- [Kura Inspector](../crates/kura_inspector/README.md)

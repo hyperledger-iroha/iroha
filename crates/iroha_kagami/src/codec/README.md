@@ -17,7 +17,7 @@ These commands help you decode **Iroha 2** data types from binaries using [Parit
 To list all supported data types, run from the project main directory:
 
 ```bash
-./target/debug/kagami codec list-types
+kagami codec list-types
 ```
 
 <details> <summary> Expand to see expected output</summary>
@@ -50,7 +50,7 @@ These commands require `--type` argument. If data type is not known, [`scale-to-
 * Decode the specified data type from a binary:
 
   ```bash
-  ./target/debug/kagami codec scale-to-json --input <path_to_binary> --type <type>
+  kagami codec scale-to-json --input <path_to_binary> --type <type>
   ```
 
 ### `scale-to-json` and `json-to-scale` usage examples
@@ -58,13 +58,13 @@ These commands require `--type` argument. If data type is not known, [`scale-to-
 * Decode the `NewAccount` data type from the `samples/account.bin` binary:
 
   ```bash
-  ./target/debug/kagami codec scale-to-json --input crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
+  kagami codec scale-to-json --input crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
   ```
 
 * Encode the `NewAccount` data type from the `samples/account.json`:
 
   ```bash
-  ./target/debug/kagami codec json-to-scale --input crates/iroha_kagami/src/codec/samples/account.json --output result.bin --type NewAccount
+  kagami codec json-to-scale --input crates/iroha_kagami/src/codec/samples/account.json --output result.bin --type NewAccount
   ```
 
 ## `scale-to-rust`
@@ -79,13 +79,13 @@ Decode the data type from a given binary.
 * Decode the specified data type from a binary:
 
   ```bash
-  ./target/debug/kagami codec scale-to-rust <path_to_binary> --type <type>
+  kagami codec scale-to-rust <path_to_binary> --type <type>
   ```
 
 * If you are not sure which data type is encoded in the binary, run the tool without the `--type` option:
 
   ```bash
-    ./target/debug/kagami codec scale-to-rust <path_to_binary>
+    kagami codec scale-to-rust <path_to_binary>
   ```
 
 ### `scale-to-rust` usage examples
@@ -93,11 +93,11 @@ Decode the data type from a given binary.
 * Decode the `NewAccount` data type from the `samples/account.bin` binary:
 
   ```bash
-  ./target/debug/kagami codec scale-to-rust crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
+  kagami codec scale-to-rust crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
   ```
 
 * Decode the `NewDomain` data type from the `samples/domain.bin` binary:
 
   ```bash
-  ./target/debug/kagami codec scale-to-rust crates/iroha_kagami/src/codec/samples/domain.bin --type NewDomain
+  kagami codec scale-to-rust crates/iroha_kagami/src/codec/samples/domain.bin --type NewDomain
   ```

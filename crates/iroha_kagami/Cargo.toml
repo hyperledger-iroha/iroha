@@ -21,6 +21,8 @@ iroha_primitives.workspace = true
 iroha_genesis.workspace = true
 iroha_test_samples.workspace = true
 iroha_schema.workspace = true
+iroha_core.workspace = true
+iroha_version.workspace = true
 
 clap = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
