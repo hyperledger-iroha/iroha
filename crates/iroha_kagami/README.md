@@ -20,7 +20,7 @@ This will place `kagami` inside the `target/debug/` directory (from the root of 
 |-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
 | `crypto`                         | Generate cryptographic key pairs using the given algorithm and either private key or seed                                                                                                      |
 | `schema` | Generate the schema used for code generation in Iroha SDKs                                                                                           |
-| [`genesis`](src/genesis/README.md) | Commands related to genesis                                                                                            |
+| [`genesis`](docs/genesis.md) | Commands related to genesis                                                                                            |
 | [`codec`](docs/codec.md)                  | Commands related to codec |
 | [`kura`](docs/kura.md)                  | Commands related to block inspection |
 | [`swarm`](docs/swarm.md)                  | Commands related to Docker Compose configuration generation |
