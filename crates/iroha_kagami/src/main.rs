@@ -12,6 +12,7 @@ mod crypto;
 mod genesis;
 mod kura;
 mod schema;
+mod swarm;
 
 /// Outcome shorthand used throughout this crate
 pub(crate) type Outcome = color_eyre::Result<()>;
@@ -48,6 +49,8 @@ enum Args {
     Codec(codec::Args),
     /// Commands related to block inspection
     Kura(kura::Args),
+    /// Commands related to Docker Compose configuration generation
+    Swarm(swarm::Args),
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -60,6 +63,80 @@ impl<T: Write> RunArgs<T> for Args {
             Genesis(args) => args.run(writer),
             Codec(args) => args.run(writer),
             Kura(args) => args.run(writer),
+            Swarm(args) => args.run(writer),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Error;
+
+    use super::Args;
+
+    fn parse(args: &str) -> Result<Args, Error> {
+        <Args as clap::Parser>::try_parse_from(args.split(' '))
+    }
+
+    #[test]
+    fn ok_with_flags() {
+        assert!(parse(
+            "kagami swarm \
+            -p 20 \
+            -c ./config \
+            -i hyperledger/iroha \
+            -o sample.yml\
+            -HF",
+        )
+        .is_ok())
+    }
+
+    #[test]
+    fn cannot_mix_print_and_force() {
+        assert!(parse(
+            "kagami swarm \
+            -p 20 \
+            -c ./config \
+            -i hyperledger/iroha \
+            -o sample.yml \
+            -PF",
+        )
+        .is_err())
+    }
+
+    #[test]
+    fn ok_when_pull_image() {
+        assert!(parse(
+            "kagami swarm \
+            -p 20 \
+            -c ./config \
+            -i hyperledger/iroha \
+            -o sample.yml",
+        )
+        .is_ok())
+    }
+
+    #[test]
+    fn ok_when_build_image() {
+        assert!(parse(
+            "kagami swarm \
+            -p 20 \
+            -i hyperledger/iroha \
+            -b . \
+            -c ./config \
+            -o sample.yml",
+        )
+        .is_ok())
+    }
+
+    #[test]
+    fn fails_when_image_is_omitted() {
+        assert!(parse(
+            "kagami swarm \
+            -p 1 \
+            -c ./ \
+            -o test.yml",
+        )
+        .is_err())
     }
 }

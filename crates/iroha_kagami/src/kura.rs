@@ -111,10 +111,7 @@ fn print_blockchain(
     let block_indices = block_indices;
 
     // Now for the actual printing
-    writeln!(
-        writer,
-        "Index file says there are {index_count} blocks.",
-    )?;
+    writeln!(writer, "Index file says there are {index_count} blocks.",)?;
     writeln!(
         writer,
         "Printing blocks {}-{}...",

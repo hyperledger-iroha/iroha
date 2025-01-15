@@ -23,6 +23,7 @@ This will place `kagami` inside the `target/debug/` directory (from the root of 
 | [`genesis`](src/genesis/README.md) | Commands related to genesis                                                                                            |
 | [`codec`](docs/codec.md)                  | Commands related to codec |
 | [`kura`](docs/kura.md)                  | Commands related to block inspection |
+| [`swarm`](docs/swarm.md)                  | Commands related to Docker Compose configuration generation |
 | `help`                                              | Print the help message for the tool or a subcommand   
 
 Run:
