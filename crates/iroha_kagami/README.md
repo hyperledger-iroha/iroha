@@ -21,8 +21,8 @@ This will place `kagami` inside the `target/debug/` directory (from the root of 
 | `crypto`                         | Generate cryptographic key pairs using the given algorithm and either private key or seed                                                                                                      |
 | `schema` | Generate the schema used for code generation in Iroha SDKs                                                                                           |
 | [`genesis`](src/genesis/README.md) | Commands related to genesis                                                                                            |
-| [`codec`](src/codec/README.md)                  | Commands related to codec |
-| [`kura`](src/kura/README.md)                  | Commands related to block inspection |
+| [`codec`](docs/codec.md)                  | Commands related to codec |
+| [`kura`](docs/kura.md)                  | Commands related to block inspection |
 | `help`                                              | Print the help message for the tool or a subcommand   
 
 Run:

@@ -353,7 +353,7 @@ mod tests {
 
     fn decode_sample<T: Debug>(sample_path: &str, type_id: String, expected: &T) {
         let mut binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        binary.push("src/codec/samples/");
+        binary.push("samples/codec");
         binary.push(sample_path);
         let args = ScaleToRustArgs {
             binary,
@@ -387,7 +387,7 @@ mod tests {
 
     fn test_decode_encode(sample_path: &str, type_id: &str) {
         let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src/codec/samples/")
+            .join("samples/codec")
             .join(sample_path);
         let scale_expected = fs::read(binary).expect("Couldn't read file");
 

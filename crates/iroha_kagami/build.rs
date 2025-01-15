@@ -20,7 +20,7 @@ where
     T: Encode + DeserializeOwned,
 {
     let mut path_to = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path_to.push("src/codec/samples/");
+    path_to.push("samples/codec");
     path_to.push(filename);
 
     let path_to_json = path_to.with_extension("json");
