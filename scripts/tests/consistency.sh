@@ -25,15 +25,15 @@ case $1 in
         }
 
         command_base_for_single() {
-            echo "cargo run --release --bin kagami swarm -- -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
+            echo "cargo run --release --bin kagami -- swarm -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
         }
 
         command_base_for_multiple_local() {
-            echo "cargo run --release --bin kagami swarm -- -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
+            echo "cargo run --release --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
         }
 
         command_base_for_default() {
-            echo "cargo run --release --bin kagami swarm -- -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev"
+            echo "cargo run --release --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev"
         }
 
 
