@@ -1,10 +1,12 @@
-use std::path::PathBuf;
+use std::{
+    io::{BufWriter, Write},
+    path::PathBuf,
+};
 
-use clap::{Subcommand, Args as ClapArgs};
+use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{eyre, Context};
 use iroha_wasm_builder::Builder;
 use owo_colors::OwoColorize;
-use std::io::{BufWriter, Write};
 
 use crate::{Outcome, RunArgs};
 

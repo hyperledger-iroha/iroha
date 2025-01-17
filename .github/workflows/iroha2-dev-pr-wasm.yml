@@ -47,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build wasm libs
-        run: mold --run cargo run --bin kagami wasm -- build ./wasm/libs/default_executor --optimize --out-file ${{ env.DEFAULTS_DIR }}/executor.wasm
+        run: mold --run cargo run --bin kagami -- wasm build ./wasm/libs/default_executor --optimize --out-file ${{ env.DEFAULTS_DIR }}/executor.wasm
       - name: Upload executor to reuse in other jobs
         uses: actions/upload-artifact@v4
         with:
