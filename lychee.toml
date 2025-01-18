@@ -12,6 +12,5 @@ exclude_path = [
 exclude = [
     "^http[s]?://127.0.0.1",
     "^http[s]?://localhost",
-    "^http[s]?://iroha",
-    "^https://github.com/hyperledger-iroha/iroha"
+    "^http[s]?://iroha"
 ]
