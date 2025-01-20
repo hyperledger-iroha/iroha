@@ -20,7 +20,6 @@ serde = { workspace = true, features = ["derive"] }
 clap = { workspace = true, features = ["derive"] }
 serde_with = { workspace = true, features = ["json", "macros", "hex"] }
 displaydoc.workspace = true
-inquire.workspace = true
 serde_yaml = "0.9.34"
 pathdiff = "0.2.1"
 

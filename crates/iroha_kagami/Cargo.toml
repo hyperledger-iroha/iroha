@@ -35,7 +35,8 @@ color-eyre.workspace = true
 serde_json.workspace = true
 derive_more.workspace = true
 parity-scale-codec.workspace = true
-inquire.workspace = true
+
+inquire = "0.6.2"
 
 [build-dependencies]
 iroha_data_model = { workspace = true }
