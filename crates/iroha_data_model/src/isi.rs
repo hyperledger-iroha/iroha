@@ -958,7 +958,6 @@ mod transparent {
         #[display(fmt = "LOG({level}): {msg}")]
         pub struct Log {
             /// Message log level
-            #[serde(flatten)]
             pub level: Level,
             #[getset(skip)] // TODO: Fix this by addressing ffi issues
             /// Msg to be logged

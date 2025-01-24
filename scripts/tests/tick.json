@@ -1,7 +1,7 @@
 [
   {
     "Log": {
-      "DEBUG": null,
+      "level": "DEBUG",
       "msg": "Just ticking time"
     }
   }
