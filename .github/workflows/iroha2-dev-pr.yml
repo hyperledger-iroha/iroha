@@ -36,6 +36,9 @@ jobs:
       - name: Check schema.json
         if: always()
         run: ./scripts/tests/consistency.sh schema
+      - name: Check CommandLineHelp.md
+        if: always()
+        run: ./scripts/tests/consistency.sh cli-help
       - name: Check Docker Compose configurations
         if: always()
         run: ./scripts/tests/consistency.sh docker-compose

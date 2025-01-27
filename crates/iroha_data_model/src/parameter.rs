@@ -108,6 +108,7 @@ mod model {
         Deserialize,
         IntoSchema,
     )]
+    #[serde(rename_all = "snake_case")]
     pub enum SumeragiParameter {
         BlockTimeMs(u64),
         CommitTimeMs(u64),
@@ -145,6 +146,7 @@ mod model {
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Serialize, IntoSchema,
     )]
+    #[serde(rename_all = "snake_case")]
     pub enum BlockParameter {
         MaxTransactions(NonZeroU64),
     }
@@ -179,6 +181,7 @@ mod model {
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Serialize, IntoSchema,
     )]
+    #[serde(rename_all = "snake_case")]
     pub enum TransactionParameter {
         MaxInstructions(NonZeroU64),
         SmartContractSize(NonZeroU64),
@@ -214,6 +217,7 @@ mod model {
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Serialize, IntoSchema,
     )]
+    #[serde(rename_all = "snake_case")]
     pub enum SmartContractParameter {
         Fuel(NonZeroU64),
         Memory(NonZeroU64),
@@ -298,6 +302,7 @@ mod model {
         IntoSchema,
     )]
     #[ffi_type(opaque)]
+    #[serde(rename_all = "snake_case")]
     pub enum Parameter {
         Sumeragi(SumeragiParameter),
         Block(BlockParameter),
