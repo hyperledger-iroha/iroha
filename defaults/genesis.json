@@ -151,15 +151,6 @@
       }
     },
     {
-      "SetKeyValue": {
-        "AssetDefinition": {
-          "object": "rose#wonderland",
-          "key": "airdrop",
-          "value": 100
-        }
-      }
-    },
-    {
       "Grant": {
         "Permission": {
           "object": {

@@ -16,9 +16,6 @@ use iroha_test_samples::{gen_account_in, ALICE_ID, BOB_ID, CARPENTER_ID};
 
 use crate::{Outcome, RunArgs};
 
-const AIRDROP_KEY: &str = "airdrop";
-const DEFAULT_AIRDROP: u32 = 100;
-
 /// Generate a genesis configuration and standard-output in JSON format
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
@@ -134,11 +131,6 @@ pub fn generate_default(
         "wonderland".parse()?,
         ALICE_ID.clone(),
     );
-    let set_rose_airdrop = SetKeyValue::asset_definition(
-        "rose#wonderland".parse()?,
-        AIRDROP_KEY.parse()?,
-        DEFAULT_AIRDROP,
-    );
 
     let parameters = Parameters::default();
 
@@ -146,14 +138,13 @@ pub fn generate_default(
         builder = builder.append_parameter(parameter);
     }
 
-    let instructions: [InstructionBox; 7] = [
+    let instructions: [InstructionBox; 6] = [
         mint.into(),
         mint_cabbage.into(),
         transfer_rose_ownership.into(),
         transfer_wonderland_ownership.into(),
         grant_permission_to_set_parameters.into(),
         grant_permission_to_register_domains.into(),
-        set_rose_airdrop.into(),
     ];
 
     for isi in instructions
@@ -164,7 +155,7 @@ pub fn generate_default(
     }
 
     let airdrop = GenesisWasmTrigger::new(
-        AIRDROP_KEY.parse().unwrap(),
+        "airdrop".parse().unwrap(),
         GenesisWasmAction::new(
             "trigger_airdrop.wasm",
             Repeats::Indefinitely,
