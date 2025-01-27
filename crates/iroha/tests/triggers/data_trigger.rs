@@ -1,5 +1,10 @@
+use core::panic;
+
 use eyre::Result;
-use iroha::{client, data_model::prelude::*};
+use iroha::{
+    client,
+    data_model::{prelude::*, Level},
+};
 use iroha_test_network::*;
 use iroha_test_samples::{gen_account_in, ALICE_ID};
 
@@ -61,6 +66,25 @@ fn must_execute_both_triggers() -> Result<()> {
 
     let newer_value = get_asset_value(&test_client, asset_id);
     assert_eq!(newer_value, new_value.checked_add(numeric!(1)).unwrap());
+
+    Ok(())
+}
+
+#[test]
+fn airdrop_on_account_registration() -> Result<()> {
+    const DEFAULT_AIRDROP: u32 = 100;
+
+    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let test_client = network.client();
+
+    let account_id = gen_account_in("wonderland").0;
+    test_client.submit_blocking(Register::account(Account::new(account_id.clone())))?;
+
+    test_client.submit_blocking(Log::new(Level::DEBUG, "Just ticking time".to_string()))?;
+
+    let init_roses =
+        super::get_asset_value(&test_client, format!("rose##{account_id}").parse().unwrap());
+    assert_eq!(init_roses, DEFAULT_AIRDROP.into());
 
     Ok(())
 }
