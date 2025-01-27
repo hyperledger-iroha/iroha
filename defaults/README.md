@@ -10,7 +10,7 @@ This guide explains how to launch your own [peer] and operate your [account].
 
 ## Generate Your Key Pair and Declare the Public Key
 
-To generate a unique key pair, run the utility tool in the Docker image:
+To generate a unique key pair, run the utility tool included in the Docker image:
 
 ```bash
 docker pull hyperledger/iroha:testnet-2.0.0-rc.1
@@ -24,11 +24,12 @@ Public key (multihash): "ed0120CAA7C95F78150097932C3E1C62B89D73007C5F30D5907DD0F
 Private key (multihash): "8026205F4FD09D9F9C390B9E3B0DB7CFA3E8B8D567707227E549519CC0C170D87447B9"
 ```
 
-Share your __public key__ with the administrator to register your [peer] and [account], and ensure your __private key__ is kept confidential.
+Share your __public key__ with the administrator to register your [peer] and [account]. Ensure that your __private key__ remains confidential.
 
 __Notes:__
 
-* For testnet purposes, the same key pair is used for both the peer and account. In production environments, separate key pairs are recommended.
+* For testnet purposes, the same key pair is used for both the peer and the account. In production environments, using separate key pairs is recommended.
+* In production environments, operating your own peer is not necessarily required; you can interact with public endpoints instead.
 * Account registration is planned to be automatic in future releases.
 
 ## Launch Your Own Peer
@@ -39,7 +40,7 @@ Confirm that your machine or server is assigned a static, publicly accessible IP
 
 ### 2. Configure Port Access
 
-Ensure that port `1337` is open on your firewall, or add the necessary rules in your cloud provider’s security group settings to allow inbound traffic.
+Ensure that port `1337` is open in your firewall settings, or configure your cloud provider’s security group to allow inbound traffic.
 
 ### 3. Update Docker Compose Configuration
 
@@ -65,7 +66,7 @@ docker compose -f docker-compose.volunteer.yml up -d
 
 ### 5. Check Peer Status
 
-Once your peer is registered, verify its status using one of these commands:
+Once your peer is registered, verify its status using one of the following commands:
 
 ```bash
 curl <your_host>:8080/status
@@ -89,7 +90,7 @@ In another shell, send a mock transaction:
 
 ```bash
 cd /config
-iroha transaction ping --msg "This is an extraordinary mock transaction"
+iroha transaction ping --msg "This is a mock transaction"
 ```
 
 __Example output:__
@@ -100,7 +101,7 @@ __Example output:__
 
 __Note:__ If the account is not found, your account may not be registered.
 
-If the transaction listener is running, you should see a report of the transaction being approved:
+If the transaction listener is running, you should see a confirmation that the transaction has been approved:
 
 ```json
 {
@@ -132,7 +133,7 @@ __Example result:__
     "version": "1",
     "content": {
       ...
-      "msg": "This is an extraordinary mock transaction"
+      "msg": "This is a mock transaction"
       ...
     }
   },
@@ -142,7 +143,7 @@ __Example result:__
 
 ### 3. Transfer [Assets]
 
-By default, your account should have 100 roses as an airdrop. Verify this with the following query:
+By default, your account receives an initial airdrop of 100 roses. Verify this with the following query:
 
 ```bash
 cd /config
@@ -160,11 +161,11 @@ __Example result:__
 }
 ```
 
-To transfer some roses to a friend, use the following command and confirm the balance update:
+To transfer roses to another account, run the following command and verify the updated balance:
 
 ```bash
 cd /config
-iroha asset transfer --id "rose##<your_public_key>@wonderland" --to "<friend_public_key>@wonderland" --quantity 0.4
+iroha asset transfer --id "rose##<your_public_key>@wonderland" --to "<another_public_key>@wonderland" --quantity 0.4
 iroha asset get --id "rose##<your_public_key>@wonderland"
 ```
 
