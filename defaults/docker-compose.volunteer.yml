@@ -1,8 +1,3 @@
-networks:
-  default:
-    external: true
-    name: sharednet
-
 services:
   irohad:
     image: hyperledger/iroha:testnet-2.0.0-rc.1
