@@ -46,7 +46,7 @@ TRANSACTION_TTL="1y 6M 2w 3d 12h 30m 30s 500ms"
 ./iroha --config "client.toml" multisig register --account $MULTISIG_ACCOUNT --signatories ${SIGNATORIES[*]} --weights ${WEIGHTS[*]} --quorum $QUORUM --transaction-ttl "$TRANSACTION_TTL"
 
 # propose a multisig transaction
-INSTRUCTIONS="../scripts/tests/instructions.json"
+INSTRUCTIONS="../scripts/tests/multisig.instructions.json"
 cat $INSTRUCTIONS | ./iroha --config "client.1.toml" multisig propose --account $MULTISIG_ACCOUNT
 
 get_list_as_signatory() {
