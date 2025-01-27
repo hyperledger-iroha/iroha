@@ -1715,6 +1715,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "trigger_airdrop"
+version = "2.0.0-rc.2.1"
+dependencies = [
+ "dlmalloc",
+ "iroha_trigger",
+ "panic-halt",
+]
+
+[[package]]
 name = "typenum"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

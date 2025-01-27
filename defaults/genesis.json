@@ -215,6 +215,25 @@
     }
   ],
   "wasm_dir": "libs",
-  "wasm_triggers": [],
+  "wasm_triggers": [
+    {
+      "id": "airdrop",
+      "action": {
+        "executable": "trigger_airdrop.wasm",
+        "repeats": "Indefinitely",
+        "authority": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+        "filter": {
+          "Data": {
+            "Account": {
+              "id_matcher": null,
+              "event_set": [
+                "Created"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
   "topology": []
 }

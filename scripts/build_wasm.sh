@@ -65,6 +65,7 @@ build() {
             NAMES=(
                 # order by dependency
                 "default_executor"
+                "trigger_airdrop"
             )
             ;;
         "samples")
