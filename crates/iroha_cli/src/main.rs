@@ -1581,7 +1581,7 @@ mod multisig {
                 proposal_status.instructions = proposal_value.instructions;
                 proposal_status.proposed_at = {
                     let proposed_at = Duration::from_secs(
-                        Duration::from_millis(proposal_value.proposed_at_ms.into()).as_secs(),
+                        Duration::from_millis(proposal_value.proposed_at_ms).as_secs(),
                     );
                     SystemTime::UNIX_EPOCH
                         .checked_add(proposed_at)
@@ -1592,7 +1592,7 @@ mod multisig {
                     let now = SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .unwrap();
-                    let expires_at = Duration::from_millis(proposal_value.expires_at_ms.into());
+                    let expires_at = Duration::from_millis(proposal_value.expires_at_ms);
                     Duration::from_secs(expires_at.saturating_sub(now).as_secs()).into()
                 };
             }
