@@ -16,7 +16,7 @@ These instructions will get you a copy of the project up and running on your loc
 First, use Poetry to install the dependencies:
 
 ```bash
-poetry install
+poetry install --no-root
 ```
 
 This command will create a virtual environment and install all the necessary dependencies.
