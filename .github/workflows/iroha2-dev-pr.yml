@@ -122,7 +122,7 @@ jobs:
           --all-features
           --branch --no-report
       - name: Generate lcov report
-        run: cargo llvm-cov report --doctests --lcov --output-path lcov.info
+        run: cargo llvm-cov report --doctests --ignore-filename-regex 'iroha_cli|iroha_torii' --lcov --output-path lcov.info
       - name: Upload lcov report
         uses: actions/upload-artifact@v4
         with:
