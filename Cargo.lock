@@ -844,12 +844,12 @@ checksum = "d3fd119d74b830634cea2a0f58bbd0d54540518a14397557951e79340abc28c0"
 
 [[package]]
 name = "colored"
-version = "2.1.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbf2150cce219b664a8a70df7a1f933836724b503f8a413af9365b4dcc4d90b8"
+checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2979,23 +2979,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iroha_codec"
-version = "2.0.0-rc.1.0"
-dependencies = [
- "clap",
- "colored",
- "eyre",
- "iroha_data_model",
- "iroha_genesis",
- "iroha_schema",
- "iroha_schema_gen",
- "parity-scale-codec",
- "serde",
- "serde_json",
- "supports-color 2.1.0",
-]
-
-[[package]]
 name = "iroha_config"
 version = "2.0.0-rc.1.0"
 dependencies = [
@@ -3330,16 +3313,24 @@ dependencies = [
  "clap",
  "color-eyre",
  "derive_more",
+ "inquire",
+ "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_genesis",
  "iroha_primitives",
+ "iroha_schema",
  "iroha_schema_gen",
+ "iroha_swarm",
  "iroha_test_samples",
+ "iroha_version",
+ "iroha_wasm_builder",
+ "owo-colors 4.1.0",
  "parity-scale-codec",
  "serde",
  "serde_json",
+ "spinoff",
 ]
 
 [[package]]
@@ -3534,7 +3525,6 @@ dependencies = [
  "color-eyre",
  "displaydoc",
  "expect-test",
- "inquire",
  "iroha_config",
  "iroha_crypto",
  "iroha_data_model",
@@ -3734,7 +3724,6 @@ dependencies = [
  "path-absolutize",
  "serde_json",
  "sha256",
- "spinoff",
  "wasm-opt",
 ]
 
@@ -3917,16 +3906,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ecc2af9a1119c51f12a14607e783cb977bde58bc069ff0c3da1095e635d70654"
 dependencies = [
  "cpufeatures",
-]
-
-[[package]]
-name = "kura_inspector"
-version = "2.0.0-rc.1.0"
-dependencies = [
- "clap",
- "iroha_core",
- "iroha_data_model",
- "iroha_version",
 ]
 
 [[package]]
@@ -6404,9 +6383,9 @@ dependencies = [
 
 [[package]]
 name = "unicode-segmentation"
-version = "1.11.0"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4c87d22b6e3f4a18d4d40ef354e97c90fcb14dd91d7dc0aa9d8a1172ebf7202"
+checksum = "f6ccf251212114b54433ec949fd6a7841275f9ada20dddd2f29e9ceea4501493"
 
 [[package]]
 name = "unicode-width"

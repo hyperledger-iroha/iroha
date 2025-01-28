@@ -22,7 +22,6 @@ serde_with = { workspace = true, features = ["json", "macros", "hex"] }
 displaydoc.workspace = true
 serde_yaml = "0.9.34"
 pathdiff = "0.2.1"
-inquire = "0.6.2"
 
 [dev-dependencies]
 serde_json.workspace = true
