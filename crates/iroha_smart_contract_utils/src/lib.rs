@@ -36,7 +36,7 @@ macro_rules! register_getrandom_err_callback {
         fn stub_getrandom(_dest: &mut [u8]) -> Result<(), $crate::getrandom::Error> {
             const ERROR_MESSAGE: &str =
                 "`getrandom()` is not implemented. To provide your custom function \
-                 see https://docs.rs/getrandom/latest/getrandom/macro.register_custom_getrandom.html. \
+                 see https://docs.rs/getrandom/0.2.0/getrandom/macro.register_custom_getrandom.html. \
                  Be aware that your function must give the same result on different peers at the same execution round,
                  and keep in mind the consequences of purely implemented random function.";
 
