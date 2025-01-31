@@ -235,7 +235,7 @@ jobs:
         run: docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml up --wait || exit 1
       - name: Install Torii pytest dependencies
         working-directory: pytests/iroha_torii_tests
-        run: ${{ env.POETRY_PATH }} install
+        run: ${{ env.POETRY_PATH }} install --no-root
       - name: Run Torii pytests
         working-directory: pytests/iroha_torii_tests
         run: ${{ env.POETRY_PATH }} run pytest
@@ -248,7 +248,7 @@ jobs:
           chmod +x ${{ env.TEST_DIR }}/${{ env.IROHA_BIN }}
       - name: Install client pytest dependencies
         working-directory: pytests/iroha_cli_tests
-        run: ${{ env.POETRY_PATH }} install
+        run: ${{ env.POETRY_PATH }} install --no-root
       - name: Run client pytests
         uses: nick-fields/retry@v3
         env:

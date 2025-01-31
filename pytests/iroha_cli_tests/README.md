@@ -134,7 +134,7 @@ To get started with Poetry, follow these steps:
 3. Install the dependencies and set up a virtual environment using Poetry:
 
    ```bash
-   poetry install
+   poetry install --no-root
    ```
 
 4. Activate the virtual environment:
