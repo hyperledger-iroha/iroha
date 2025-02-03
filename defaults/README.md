@@ -36,21 +36,19 @@ __Notes:__
 
 ### 1. Ensure a Static IP Address
 
-Confirm that your machine or server is assigned a static, publicly accessible IP address. Most cloud providers enable this by default.
+Ensure that your machine or server has a static, publicly accessible IP address. Most cloud providers assign one by default.
 
 ### 2. Configure Port Access
 
-Ensure that port `1337` is open in your firewall settings, or configure your cloud provider’s security group to allow inbound traffic.
+* Open port `1337` to allow inbound traffic from any peers.
+* Open port `8080` to allow inbound traffic from your client.
 
 ### 3. Update Docker Compose Configuration
 
-Edit the `docker-compose.volunteer.yml` file as follows:
+Edit the `docker-compose.volunteer.yml` file and update the following environment variables:
 
 ```yml
-# For the attached client
-ACCOUNT_PUBLIC_KEY: <your_public_key>
-ACCOUNT_PRIVATE_KEY: <your_private_key>
-# For the peer
+# PEER CONFIG
 PUBLIC_KEY: <your_public_key>
 PRIVATE_KEY: <your_private_key>
 P2P_PUBLIC_ADDRESS: <your_advertised_host>:1337
@@ -76,6 +74,24 @@ curl <your_host>:8080/peers
 __Note:__ If the peer list is empty, your peer may not be registered, or there might be network issues.
 
 ## Perform [Transactions] via Your Peer
+
+### 0. Prepare Your Client
+
+To interact with your peer, set up a client.
+Edit the `docker-compose.volunteer.client.yml` file and update the following environment variables:
+
+```yml
+# CLIENT CONFIG OVERRIDE
+TORII_URL: <your_host>:8080
+ACCOUNT_PUBLIC_KEY: <your_public_key>
+ACCOUNT_PRIVATE_KEY: <your_private_key>
+```
+
+Next, run the following command to start a container:
+
+```bash
+docker compose -f docker-compose.volunteer.client.yml up -d
+```
 
 ### 1. Send and Inspect a Mock Transaction
 
