@@ -140,7 +140,7 @@ Iroha CLI Client provides an ability to interact with Iroha Peers Web API withou
 * `-c`, `--config <PATH>` — Path to the configuration file
 
   Default value: `client.toml`
-* `-v`, `--verbose` — More verbose output
+* `-v`, `--verbose` — Print the config to stderr
 * `-m`, `--metadata <PATH>` — Optional path to read a JSON5 file to attach transaction metadata
 * `-a`, `--accumulate` — Whether to accumulate instructions into a single transaction: If specified, loads instructions from stdin, appends some, and returns them to stdout
 
@@ -156,7 +156,7 @@ Read/Write domains
 
 ###### **Subcommands:**
 
-* `list` — List domain ids
+* `list` — List domains
 * `get` — Read a single domain details
 * `register` — Register domain
 * `unregister` — Unregister domain
@@ -167,28 +167,32 @@ Read/Write domains
 
 ## `iroha domain list`
 
-List domain ids
+List domains
 
 **Usage:** `iroha domain list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all domain ids
-* `filter` — Filter domains by given predicate
+* `all` — List all IDs, or entries when `--verbose` specified
+* `filter` — Filter by given predicate
 
 
 
 ## `iroha domain list all`
 
-List all domain ids
+List all IDs, or entries when `--verbose` specified
 
-**Usage:** `iroha domain list all`
+**Usage:** `iroha domain list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Show entry details, not only IDs
 
 
 
 ## `iroha domain list filter`
 
-Filter domains by given predicate
+Filter by given predicate
 
 **Usage:** `iroha domain list filter <PREDICATE>`
 
@@ -311,7 +315,7 @@ Read/Write accounts
 
 * `role` — Read/Write account roles
 * `permission` — Read/Write account permissions
-* `list` — List account ids
+* `list` — List accounts
 * `get` — Read a single account details
 * `register` — Register account
 * `unregister` — Unregister account
@@ -327,7 +331,7 @@ Read/Write account roles
 
 ###### **Subcommands:**
 
-* `list` — List account role ids
+* `list` — List account role IDs
 * `grant` — Grant account role
 * `revoke` — Revoke account role
 
@@ -335,7 +339,7 @@ Read/Write account roles
 
 ## `iroha account role list`
 
-List account role ids
+List account role IDs
 
 **Usage:** `iroha account role list --id <ID>`
 
@@ -423,28 +427,32 @@ Revoke account permission constructed from a JSON5 stdin
 
 ## `iroha account list`
 
-List account ids
+List accounts
 
 **Usage:** `iroha account list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all account ids
-* `filter` — Filter accounts by given predicate
+* `all` — List all IDs, or entries when `--verbose` specified
+* `filter` — Filter by given predicate
 
 
 
 ## `iroha account list all`
 
-List all account ids
+List all IDs, or entries when `--verbose` specified
 
-**Usage:** `iroha account list all`
+**Usage:** `iroha account list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Show entry details, not only IDs
 
 
 
 ## `iroha account list filter`
 
-Filter accounts by given predicate
+Filter by given predicate
 
 **Usage:** `iroha account list filter <PREDICATE>`
 
@@ -553,7 +561,7 @@ Read/Write assets
 
 * `definition` — Read/Write asset definitions
 * `get` — Read a single asset details
-* `list` — List asset ids
+* `list` — List assets
 * `mint` — Increase an amount of asset
 * `burn` — Decrease an amount of asset
 * `transfer` — Transfer an amount of asset between accounts
@@ -572,7 +580,7 @@ Read/Write asset definitions
 
 ###### **Subcommands:**
 
-* `list` — List asset definition ids
+* `list` — List asset definitions
 * `get` — Read a single asset definition details
 * `register` — Register asset definition
 * `unregister` — Unregister asset definition
@@ -583,28 +591,32 @@ Read/Write asset definitions
 
 ## `iroha asset definition list`
 
-List asset definition ids
+List asset definitions
 
 **Usage:** `iroha asset definition list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all asset definition ids
-* `filter` — Filter asset definitions by given predicate
+* `all` — List all IDs, or entries when `--verbose` specified
+* `filter` — Filter by given predicate
 
 
 
 ## `iroha asset definition list all`
 
-List all asset definition ids
+List all IDs, or entries when `--verbose` specified
 
-**Usage:** `iroha asset definition list all`
+**Usage:** `iroha asset definition list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Show entry details, not only IDs
 
 
 
 ## `iroha asset definition list filter`
 
-Filter asset definitions by given predicate
+Filter by given predicate
 
 **Usage:** `iroha asset definition list filter <PREDICATE>`
 
@@ -733,28 +745,32 @@ Read a single asset details
 
 ## `iroha asset list`
 
-List asset ids
+List assets
 
 **Usage:** `iroha asset list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all asset ids
-* `filter` — Filter assets by given predicate
+* `all` — List all IDs, or entries when `--verbose` specified
+* `filter` — Filter by given predicate
 
 
 
 ## `iroha asset list all`
 
-List all asset ids
+List all IDs, or entries when `--verbose` specified
 
-**Usage:** `iroha asset list all`
+**Usage:** `iroha asset list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Show entry details, not only IDs
 
 
 
 ## `iroha asset list filter`
 
-Filter assets by given predicate
+Filter by given predicate
 
 **Usage:** `iroha asset list filter <PREDICATE>`
 
@@ -1160,7 +1176,7 @@ Read/Write roles
 ###### **Subcommands:**
 
 * `permission` — Read/Write role permissions
-* `list` — List role ids
+* `list` — List role IDs
 * `register` — Register role and grant it to you registrant
 * `unregister` — Unregister role
 
@@ -1218,19 +1234,19 @@ Revoke role permission constructed from a JSON5 stdin
 
 ## `iroha role list`
 
-List role ids
+List role IDs
 
 **Usage:** `iroha role list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all role ids
+* `all` — List all role IDs
 
 
 
 ## `iroha role list all`
 
-List all role ids
+List all role IDs
 
 **Usage:** `iroha role list all`
 
@@ -1309,7 +1325,7 @@ TODO Read/Write triggers
 
 ###### **Subcommands:**
 
-* `list` — List trigger ids
+* `list` — List trigger IDs
 * `get` — Read a single trigger details
 * `register` — TODO Register trigger
 * `unregister` — Unregister trigger
@@ -1319,19 +1335,19 @@ TODO Read/Write triggers
 
 ## `iroha trigger list`
 
-List trigger ids
+List trigger IDs
 
 **Usage:** `iroha trigger list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all trigger ids
+* `all` — List all trigger IDs
 
 
 
 ## `iroha trigger list all`
 
-List all trigger ids
+List all trigger IDs
 
 **Usage:** `iroha trigger list all`
 

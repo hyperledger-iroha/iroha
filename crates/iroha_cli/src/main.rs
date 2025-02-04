@@ -25,7 +25,7 @@ struct Args {
     /// Path to the configuration file
     #[arg(short, long, value_name("PATH"), default_value = "client.toml")]
     config: PathBuf,
-    /// More verbose output
+    /// Print the config to stderr
     #[arg(short, long)]
     verbose: bool,
     /// Optional path to read a JSON5 file to attach transaction metadata
@@ -387,7 +387,7 @@ mod events {
                 while let Ok(event) = tokio::time::timeout(timeout, stream.try_next()).await {
                     context.print_data(&event?)?;
                 }
-                eprintln!("Timeout period has expired");
+                eprintln!("Timeout period has expired.");
                 Result::<()>::Ok(())
             })?;
         } else {
@@ -441,7 +441,7 @@ mod blocks {
                 while let Ok(event) = tokio::time::timeout(timeout, stream.try_next()).await {
                     context.print_data(&event?)?;
                 }
-                eprintln!("Timeout period has expired");
+                eprintln!("Timeout period has expired.");
                 Result::<()>::Ok(())
             })?;
         } else {
@@ -455,12 +455,51 @@ mod blocks {
     }
 }
 
+macro_rules! impl_list {
+    ($filter:ty, $query:expr) => {
+        #[derive(clap::Subcommand, Debug)]
+        pub enum List {
+            /// List all IDs, or entries when `--verbose` specified
+            All {
+                /// Show entry details, not only IDs
+                #[arg(short, long)]
+                verbose: bool,
+            },
+            /// Filter by given predicate
+            Filter($filter),
+        }
+
+        impl Run for List {
+            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+                let client = context.client_from_config();
+                let query = client.query($query);
+                match self {
+                    List::All { verbose } => {
+                        if verbose {
+                            let entries = query.execute_all()?;
+                            context.print_data(&entries)?;
+                        } else {
+                            let ids = query.select_with(|entry| entry.id).execute_all()?;
+                            context.print_data(&ids)?;
+                        }
+                    }
+                    List::Filter(filter) => {
+                        let view = query.filter(filter.predicate).execute_all()?;
+                        context.print_data(&view)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
 mod domain {
     use super::*;
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// List domain ids
+        /// List domains
         #[command(subcommand)]
         List(List),
         /// Read a single domain details
@@ -535,26 +574,7 @@ mod domain {
         pub id: DomainId,
     }
 
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all domain ids
-        All,
-        /// Filter domains by given predicate
-        Filter(filter::DomainFilter),
-    }
-
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
-            let query = client.query(FindDomains).select_with(|entry| entry.id);
-            let query = match self {
-                List::All => query,
-                List::Filter(filter) => query.filter(filter.predicate),
-            };
-            let ids = query.execute_all()?;
-            context.print_data(&ids)
-        }
-    }
+    impl_list!(filter::DomainFilter, FindDomains);
 }
 
 mod account {
@@ -570,7 +590,7 @@ mod account {
         /// Read/Write account permissions
         #[command(subcommand)]
         Permission(PermissionCommand),
-        /// List account ids
+        /// List accounts
         #[command(subcommand)]
         List(List),
         /// Read a single account details
@@ -620,7 +640,7 @@ mod account {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum RoleCommand {
-        /// List account role ids
+        /// List account role IDs
         List(Id),
         /// Grant account role
         Grant(IdRole),
@@ -715,26 +735,7 @@ mod account {
         pub role: RoleId,
     }
 
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all account ids
-        All,
-        /// Filter accounts by given predicate
-        Filter(filter::AccountFilter),
-    }
-
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
-            let query = client.query(FindAccounts).select_with(|entry| entry.id);
-            let query = match self {
-                List::All => query,
-                List::Filter(filter) => query.filter(filter.predicate),
-            };
-            let ids = query.execute_all()?;
-            context.print_data(&ids)
-        }
-    }
+    impl_list!(filter::AccountFilter, FindAccounts);
 }
 
 mod asset {
@@ -749,7 +750,7 @@ mod asset {
         Definition(definition::Command),
         /// Read a single asset details
         Get(Id),
-        /// List asset ids
+        /// List assets
         #[command(subcommand)]
         List(List),
         /// Increase an amount of asset
@@ -851,7 +852,7 @@ mod asset {
 
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
-            /// List asset definition ids
+            /// List asset definitions
             #[command(subcommand)]
             List(List),
             /// Read a single asset definition details
@@ -944,28 +945,7 @@ mod asset {
             pub id: AssetDefinitionId,
         }
 
-        #[derive(clap::Subcommand, Debug)]
-        pub enum List {
-            /// List all asset definition ids
-            All,
-            /// Filter asset definitions by given predicate
-            Filter(filter::AssetDefinitionFilter),
-        }
-
-        impl Run for List {
-            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-                let client = context.client_from_config();
-                let query = client
-                    .query(FindAssetsDefinitions)
-                    .select_with(|entry| entry.id);
-                let query = match self {
-                    List::All => query,
-                    List::Filter(filter) => query.filter(filter.predicate),
-                };
-                let ids = query.execute_all()?;
-                context.print_data(&ids)
-            }
-        }
+        impl_list!(filter::AssetDefinitionFilter, FindAssetsDefinitions);
     }
 
     #[derive(clap::Args, Debug)]
@@ -1018,26 +998,7 @@ mod asset {
         pub key: Name,
     }
 
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all asset ids
-        All,
-        /// Filter assets by given predicate
-        Filter(filter::AssetFilter),
-    }
-
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
-            let query = client.query(FindAssets).select_with(|entry| entry.id);
-            let query = match self {
-                List::All => query,
-                List::Filter(filter) => query.filter(filter.predicate),
-            };
-            let ids = query.execute_all()?;
-            context.print_data(&ids)
-        }
-    }
+    impl_list!(filter::AssetFilter, FindAssets);
 }
 
 mod peer {
@@ -1606,7 +1567,7 @@ mod role {
         /// Read/Write role permissions
         #[command(subcommand)]
         Permission(PermissionCommand),
-        /// List role ids
+        /// List role IDs
         #[command(subcommand)]
         List(List),
         /// Register role and grant it to you registrant
@@ -1694,7 +1655,7 @@ mod role {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
-        /// List all role ids
+        /// List all role IDs
         All,
     }
 
@@ -1757,7 +1718,7 @@ mod trigger {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// List trigger ids
+        /// List trigger IDs
         #[command(subcommand)]
         List(List),
         /// Read a single trigger details
@@ -1800,7 +1761,7 @@ mod trigger {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
-        /// List all trigger ids
+        /// List all trigger IDs
         All,
     }
 
