@@ -18,26 +18,33 @@ use iroha::{client::Client, config::Config, data_model::prelude::*};
 use thiserror::Error;
 use tokio::runtime::Runtime;
 
-/// Iroha CLI Client provides an ability to interact with Iroha Peers Web API without direct network usage.
+/// Iroha Client CLI provides a simple way to interact with the Iroha Web API.
 #[derive(clap::Parser, Debug)]
 #[command(name = "iroha", version = concat!("version=", env!("CARGO_PKG_VERSION"), " git_commit_sha=", env!("VERGEN_GIT_SHA")), author)]
 struct Args {
     /// Path to the configuration file
     #[arg(short, long, value_name("PATH"), default_value = "client.toml")]
     config: PathBuf,
-    /// More verbose output
+    /// Print configuration details to stderr
     #[arg(short, long)]
     verbose: bool,
-    /// Optional path to read a JSON5 file to attach transaction metadata
+    /// Path to a JSON5 file for attaching transaction metadata (optional)
     #[arg(short, long, value_name("PATH"))]
     metadata: Option<PathBuf>,
-    /// Whether to accumulate instructions into a single transaction:
-    /// If specified, loads instructions from stdin, appends some, and returns them to stdout
+    /// Reads instructions from stdin and appends new ones.
     ///
-    /// Usage:
-    /// `echo "[]" | iroha -a domain register -i "domain" | iroha -a asset definition register -i "asset#domain" -t Numeric | iroha transaction stdin`
+    /// Example usage:
+    ///
+    /// `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "asset#domain" -t Numeric`
     #[arg(short, long)]
-    accumulate: bool,
+    input: bool,
+    /// Outputs instructions to stdout without submitting them.
+    ///
+    /// Example usage:
+    ///
+    /// `iroha -o domain register --id "domain" | iroha -io asset definition register --id "asset#domain" -t Numeric | iroha transaction stdin`
+    #[arg(short, long)]
+    output: bool,
     /// Commands
     #[command(subcommand)]
     command: Command,
@@ -45,44 +52,46 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
-    /// Read/Write domains
+    /// Read and write domains
     #[command(subcommand)]
     Domain(domain::Command),
-    /// Read/Write accounts
+    /// Read and write accounts
     #[command(subcommand)]
     Account(account::Command),
-    /// Read/Write assets
+    /// Read and write assets
     #[command(subcommand)]
     Asset(asset::Command),
-    /// Read/Write peers
+    /// Read and write peers
     #[command(subcommand)]
     Peer(peer::Command),
-    /// Subscribe events: state changes, status of transactions/blocks/triggers
+    /// Subscribe to events: state changes, transaction/block/trigger progress
     Events(events::Args),
-    /// Subscribe blocks
+    /// Subscribe to blocks
     Blocks(blocks::Args),
-    /// Read/Write multisig accounts and transactions
+    /// Read and write multi-signature accounts and transactions.
+    ///
+    /// See the [usage guide](./docs/multisig.md) for details
     #[command(subcommand)]
     Multisig(multisig::Command),
-    /// Read in general
+    /// Read various data
     #[command(subcommand)]
     Query(query::Command),
-    /// Read transactions, Write in general
+    /// Read transactions and write various data
     #[command(subcommand)]
     Transaction(transaction::Command),
-    /// Read/Write roles
+    /// Read and write roles
     #[command(subcommand)]
     Role(role::Command),
-    /// Read/Write parameters
+    /// Read and write system parameters
     #[command(subcommand)]
     Parameter(parameter::Command),
-    /// TODO Read/Write triggers
+    /// Read and write triggers
     #[command(subcommand)]
     Trigger(trigger::Command),
-    /// Update executor
+    /// Read and write the executor
     #[command(subcommand)]
     Executor(executor::Command),
-    /// Dump a markdown help of this CLI to stdout
+    /// Output CLI documentation in Markdown format
     MarkdownHelp(MarkdownHelp),
 }
 
@@ -92,7 +101,9 @@ trait RunContext {
 
     fn transaction_metadata(&self) -> Option<&Metadata>;
 
-    fn accumulate_instructions(&self) -> bool;
+    fn input_instructions(&self) -> bool;
+
+    fn output_instructions(&self) -> bool;
 
     fn print_data(&mut self, data: &dyn Serialize) -> Result<()>;
 
@@ -104,16 +115,27 @@ trait RunContext {
 
     /// Submit instructions or dump them to stdout depending on the flag
     fn finish(&mut self, instructions: impl Into<Executable>) -> Result<()> {
-        if !self.accumulate_instructions() {
-            return self._submit(instructions);
-        }
-        let instructions = match instructions.into() {
-            Executable::Wasm(wasm) => return self._submit(wasm),
-            Executable::Instructions(instructions) => instructions,
+        let mut instructions = match instructions.into() {
+            Executable::Wasm(wasm) => {
+                if self.input_instructions() || self.output_instructions() {
+                    eyre::bail!(
+                        "Incompatible `--input` `--output` flags with `iroha transaction wasm`"
+                    )
+                }
+                return self._submit(wasm);
+            }
+            Executable::Instructions(instructions) => instructions.into_vec(),
         };
-        let mut acc: Vec<InstructionBox> = parse_json5_stdin()?;
-        acc.append(&mut instructions.into_vec());
-        dump_json5_stdout(&acc)
+        if self.input_instructions() {
+            let mut acc: Vec<InstructionBox> = parse_json5_stdin_unchecked()?;
+            acc.append(&mut instructions);
+            instructions = acc;
+        }
+        if self.output_instructions() {
+            dump_json5_stdout(&instructions)
+        } else {
+            self._submit(instructions)
+        }
     }
 
     /// Combine instructions into a single transaction and submit it
@@ -150,7 +172,8 @@ struct PrintJsonContext<W> {
     write: W,
     config: Config,
     transaction_metadata: Option<Metadata>,
-    accumulate_instructions: bool,
+    input_instructions: bool,
+    output_instructions: bool,
 }
 
 impl<W: std::io::Write> RunContext for PrintJsonContext<W> {
@@ -162,8 +185,12 @@ impl<W: std::io::Write> RunContext for PrintJsonContext<W> {
         self.transaction_metadata.as_ref()
     }
 
-    fn accumulate_instructions(&self) -> bool {
-        self.accumulate_instructions
+    fn input_instructions(&self) -> bool {
+        self.input_instructions
+    }
+
+    fn output_instructions(&self) -> bool {
+        self.output_instructions
     }
 
     /// Serialize and print data
@@ -256,7 +283,8 @@ fn main() -> error_stack::Result<(), MainError> {
         write: io::stdout(),
         config,
         transaction_metadata: None,
-        accumulate_instructions: args.accumulate,
+        input_instructions: args.input,
+        output_instructions: args.output,
     };
     if let Some(path) = args.metadata {
         let str = fs::read_to_string(&path)
@@ -291,34 +319,30 @@ mod filter {
 
     use super::*;
 
-    /// Filter for domain queries
     #[derive(clap::Args, Debug)]
     pub struct DomainFilter {
-        /// Predicate for filtering given as JSON5 string
+        /// Filtering condition specified as a JSON5 string
         #[arg(value_parser = parse_json5::<CompoundPredicate<Domain>>)]
         pub predicate: CompoundPredicate<Domain>,
     }
 
-    /// Filter for account queries
     #[derive(clap::Args, Debug)]
     pub struct AccountFilter {
-        /// Predicate for filtering given as JSON5 string
+        /// Filtering condition specified as a JSON5 string
         #[arg(value_parser = parse_json5::<CompoundPredicate<Account>>)]
         pub predicate: CompoundPredicate<Account>,
     }
 
-    /// Filter for asset queries
     #[derive(clap::Args, Debug)]
     pub struct AssetFilter {
-        /// Predicate for filtering given as JSON5 string
+        /// Filtering condition specified as a JSON5 string
         #[arg(value_parser = parse_json5::<CompoundPredicate<Asset>>)]
         pub predicate: CompoundPredicate<Asset>,
     }
 
-    /// Filter for asset definition queries
     #[derive(clap::Args, Debug)]
     pub struct AssetDefinitionFilter {
-        /// Predicate for filtering given as JSON5 string
+        /// Filtering condition specified as a JSON5 string
         #[arg(value_parser = parse_json5::<CompoundPredicate<AssetDefinition>>)]
         pub predicate: CompoundPredicate<AssetDefinition>,
     }
@@ -332,7 +356,8 @@ mod events {
 
     #[derive(clap::Args, Debug)]
     pub struct Args {
-        /// How long to listen for events ex. "1y 6M 2w 3d 12h 30m 30s 500ms"
+        /// Duration to listen for events.
+        /// Example: "1y 6M 2w 3d 12h 30m 30s"
         #[arg(short, long, global = true)]
         timeout: Option<humantime::Duration>,
         #[command(subcommand)]
@@ -341,15 +366,15 @@ mod events {
 
     #[derive(clap::Subcommand, Debug)]
     enum Command {
-        /// Notify when world state has certain changes
+        /// Notify when the world state undergoes certain changes
         State,
-        /// Notify when transaction passes certain processes
+        /// Notify when a transaction reaches specific stages
         Transaction,
-        /// Notify when block passes certain processes
+        /// Notify when a block reaches specific stages
         Block,
-        /// Notify when trigger execution is ordered
+        /// Notify when a trigger execution is ordered
         TriggerExecute,
-        /// Notify when trigger execution is completed
+        /// Notify when a trigger execution is completed
         TriggerComplete,
     }
 
@@ -387,7 +412,7 @@ mod events {
                 while let Ok(event) = tokio::time::timeout(timeout, stream.try_next()).await {
                     context.print_data(&event?)?;
                 }
-                eprintln!("Timeout period has expired");
+                eprintln!("Timeout period has expired.");
                 Result::<()>::Ok(())
             })?;
         } else {
@@ -410,8 +435,8 @@ mod blocks {
     pub struct Args {
         /// Block height from which to start streaming blocks
         height: NonZeroU64,
-
-        /// How long to listen for blocks ex. "1y 6M 2w 3d 12h 30m 30s 500ms"
+        /// Duration to listen for events.
+        /// Example: "1y 6M 2w 3d 12h 30m 30s"
         #[arg(short, long)]
         timeout: Option<humantime::Duration>,
     }
@@ -441,7 +466,7 @@ mod blocks {
                 while let Ok(event) = tokio::time::timeout(timeout, stream.try_next()).await {
                     context.print_data(&event?)?;
                 }
-                eprintln!("Timeout period has expired");
+                eprintln!("Timeout period has expired.");
                 Result::<()>::Ok(())
             })?;
         } else {
@@ -455,23 +480,62 @@ mod blocks {
     }
 }
 
+macro_rules! impl_list {
+    ($filter:ty, $query:expr) => {
+        #[derive(clap::Subcommand, Debug)]
+        pub enum List {
+            /// List all IDs, or full entries when `--verbose` is specified
+            All {
+                /// Display detailed entry information instead of just IDs
+                #[arg(short, long)]
+                verbose: bool,
+            },
+            /// Filter by a given predicate
+            Filter($filter),
+        }
+
+        impl Run for List {
+            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+                let client = context.client_from_config();
+                let query = client.query($query);
+                match self {
+                    List::All { verbose } => {
+                        if verbose {
+                            let entries = query.execute_all()?;
+                            context.print_data(&entries)?;
+                        } else {
+                            let ids = query.select_with(|entry| entry.id).execute_all()?;
+                            context.print_data(&ids)?;
+                        }
+                    }
+                    List::Filter(filter) => {
+                        let view = query.filter(filter.predicate).execute_all()?;
+                        context.print_data(&view)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
 mod domain {
     use super::*;
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// List domain ids
+        /// List domains
         #[command(subcommand)]
         List(List),
-        /// Read a single domain details
+        /// Retrieve details of a specific domain
         Get(Id),
-        /// Register domain
+        /// Register a domain
         Register(Id),
-        /// Unregister domain
+        /// Unregister a domain
         Unregister(Id),
-        /// Transfer domain
+        /// Transfer ownership of a domain
         Transfer(Transfer),
-        /// Read/Write metadata
+        /// Read and write metadata
         #[command(subcommand)]
         Meta(metadata::domain::Command),
     }
@@ -517,44 +581,25 @@ mod domain {
 
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
-        /// Domain name as double-quoted string
+        /// Domain name
         #[arg(short, long)]
         pub id: DomainId,
-        /// Account from which to transfer, in form "multihash@domain"
+        /// Source account, in the format "multihash@domain"
         #[arg(short, long)]
         pub from: AccountId,
-        /// Account to which to transfer, in form "multihash@domain"
+        /// Destination account, in the format "multihash@domain"
         #[arg(short, long)]
         pub to: AccountId,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Domain name as double-quoted string
+        /// Domain name
         #[arg(short, long)]
         pub id: DomainId,
     }
 
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all domain ids
-        All,
-        /// Filter domains by given predicate
-        Filter(filter::DomainFilter),
-    }
-
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
-            let query = client.query(FindDomains).select_with(|entry| entry.id);
-            let query = match self {
-                List::All => query,
-                List::Filter(filter) => query.filter(filter.predicate),
-            };
-            let ids = query.execute_all()?;
-            context.print_data(&ids)
-        }
-    }
+    impl_list!(filter::DomainFilter, FindDomains);
 }
 
 mod account {
@@ -564,22 +609,22 @@ mod account {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Read/Write account roles
+        /// Read and write account roles
         #[command(subcommand)]
         Role(RoleCommand),
-        /// Read/Write account permissions
+        /// Read and write account permissions
         #[command(subcommand)]
         Permission(PermissionCommand),
-        /// List account ids
+        /// List accounts
         #[command(subcommand)]
         List(List),
-        /// Read a single account details
+        /// Retrieve details of a specific account
         Get(Id),
-        /// Register account
+        /// Register an account
         Register(Id),
-        /// Unregister account
+        /// Unregister an account
         Unregister(Id),
-        /// Read/Write metadata
+        /// Read and write metadata
         #[command(subcommand)]
         Meta(metadata::account::Command),
     }
@@ -620,11 +665,11 @@ mod account {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum RoleCommand {
-        /// List account role ids
+        /// List account role IDs
         List(Id),
-        /// Grant account role
+        /// Grant a role to an account
         Grant(IdRole),
-        /// Revoke account role
+        /// Revoke a role from an account
         Revoke(IdRole),
     }
 
@@ -661,9 +706,9 @@ mod account {
     pub enum PermissionCommand {
         /// List account permissions
         List(Id),
-        /// Grant account permission constructed from a JSON5 stdin
+        /// Grant an account permission using JSON5 input from stdin
         Grant(Id),
-        /// Revoke account permission constructed from a JSON5 stdin
+        /// Revoke an account permission using JSON5 input from stdin
         Revoke(Id),
     }
 
@@ -679,7 +724,7 @@ mod account {
                     context.print_data(&permissions)
                 }
                 Grant(args) => {
-                    let permission: Permission = parse_json5_stdin()?;
+                    let permission: Permission = parse_json5_stdin(context)?;
                     let instruction =
                         iroha::data_model::isi::Grant::account_permission(permission, args.id);
                     context
@@ -687,7 +732,7 @@ mod account {
                         .wrap_err("Failed to grant the permission to the account")
                 }
                 Revoke(args) => {
-                    let permission: Permission = parse_json5_stdin()?;
+                    let permission: Permission = parse_json5_stdin(context)?;
                     let instruction =
                         iroha::data_model::isi::Revoke::account_permission(permission, args.id);
                     context
@@ -700,41 +745,22 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Account in form "multihash@domain"
+        /// Account in the format "multihash@domain"
         #[arg(short, long)]
         id: AccountId,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct IdRole {
-        /// Account in form "multihash@domain"
+        /// Account in the format "multihash@domain"
         #[arg(short, long)]
         pub id: AccountId,
-        /// Role name as double-quoted string
+        /// Role name
         #[arg(short, long)]
         pub role: RoleId,
     }
 
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all account ids
-        All,
-        /// Filter accounts by given predicate
-        Filter(filter::AccountFilter),
-    }
-
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
-            let query = client.query(FindAccounts).select_with(|entry| entry.id);
-            let query = match self {
-                List::All => query,
-                List::Filter(filter) => query.filter(filter.predicate),
-            };
-            let ids = query.execute_all()?;
-            context.print_data(&ids)
-        }
-    }
+    impl_list!(filter::AccountFilter, FindAccounts);
 }
 
 mod asset {
@@ -744,31 +770,31 @@ mod asset {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Read/Write asset definitions
+        /// Read and write asset definitions
         #[command(subcommand)]
         Definition(definition::Command),
-        /// Read a single asset details
+        /// Retrieve details of a specific asset
         Get(Id),
-        /// List asset ids
+        /// List assets
         #[command(subcommand)]
         List(List),
-        /// Increase an amount of asset
+        /// Increase the quantity of an asset
         Mint(IdQuantity),
-        /// Decrease an amount of asset
+        /// Decrease the quantity of an asset
         Burn(IdQuantity),
-        /// Transfer an amount of asset between accounts
+        /// Transfer an asset between accounts
         #[command(name = "transfer")]
         TransferNumeric(TransferNumeric),
         /// Transfer a key-value store between accounts
         #[command(name = "transferkvs")]
         TransferStore(TransferStore),
-        /// Read a value from a key-value store
+        /// Retrieve a value from the key-value store
         #[command(name = "getkv")]
         GetKeyValue(IdKey),
-        /// Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
+        /// Create or update a key-value entry using JSON5 input from stdin
         #[command(name = "setkv")]
         SetKeyValue(IdKey),
-        /// Delete an entry from a key-value store
+        /// Delete an entry from the key-value store
         #[command(name = "removekv")]
         RemoveKeyValue(IdKey),
     }
@@ -830,7 +856,7 @@ mod asset {
                     context.print_data(&value)
                 }
                 SetKeyValue(args) => {
-                    let value: Json = parse_json5_stdin()?;
+                    let value: Json = parse_json5_stdin(context)?;
                     let instruction =
                         iroha::data_model::isi::SetKeyValue::asset(args.id, args.key, value);
                     context.finish([instruction])
@@ -851,18 +877,18 @@ mod asset {
 
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
-            /// List asset definition ids
+            /// List asset definitions
             #[command(subcommand)]
             List(List),
-            /// Read a single asset definition details
+            /// Retrieve details of a specific asset definition
             Get(Id),
-            /// Register asset definition
+            /// Register an asset definition
             Register(Register),
-            /// Unregister asset definition
+            /// Unregister an asset definition
             Unregister(Id),
-            /// Transfer asset definition
+            /// Transfer ownership of an asset definition
             Transfer(Transfer),
-            /// Read/Write metadata
+            /// Read and write metadata
             #[command(subcommand)]
             Meta(metadata::asset_definition::Command),
         }
@@ -883,7 +909,7 @@ mod asset {
                     }
                     Register(args) => {
                         let mut entry = AssetDefinition::new(args.id, args.r#type);
-                        if args.unmintable {
+                        if args.mint_once {
                             entry = entry.mintable_once();
                         }
                         let instruction = iroha::data_model::isi::Register::asset_definition(entry);
@@ -913,131 +939,91 @@ mod asset {
 
         #[derive(clap::Args, Debug)]
         pub struct Register {
-            /// Asset definition in form "asset#domain"
+            /// Asset definition in the format "asset#domain"
             #[arg(short, long)]
             pub id: AssetDefinitionId,
-            /// Mintability of asset
+            /// Disables minting after the first instance
             #[arg(short, long)]
-            pub unmintable: bool,
-            /// Value type stored in asset
+            pub mint_once: bool,
+            /// Data type stored in the asset
             #[arg(short, long)]
             pub r#type: AssetType,
         }
 
         #[derive(clap::Args, Debug)]
         pub struct Transfer {
-            /// Asset definition in form "asset#domain"
+            /// Asset definition in the format "asset#domain"
             #[arg(short, long)]
             pub id: AssetDefinitionId,
-            /// Account from which to transfer, in form "multihash@domain"
+            /// Source account, in the format "multihash@domain"
             #[arg(short, long)]
             pub from: AccountId,
-            /// Account to which to transfer, in form "multihash@domain"
+            /// Destination account, in the format "multihash@domain"
             #[arg(short, long)]
             pub to: AccountId,
         }
 
         #[derive(clap::Args, Debug)]
         pub struct Id {
-            /// Asset definition in form "asset#domain"
+            /// Asset definition in the format "asset#domain"
             #[arg(short, long)]
             pub id: AssetDefinitionId,
         }
 
-        #[derive(clap::Subcommand, Debug)]
-        pub enum List {
-            /// List all asset definition ids
-            All,
-            /// Filter asset definitions by given predicate
-            Filter(filter::AssetDefinitionFilter),
-        }
-
-        impl Run for List {
-            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-                let client = context.client_from_config();
-                let query = client
-                    .query(FindAssetsDefinitions)
-                    .select_with(|entry| entry.id);
-                let query = match self {
-                    List::All => query,
-                    List::Filter(filter) => query.filter(filter.predicate),
-                };
-                let ids = query.execute_all()?;
-                context.print_data(&ids)
-            }
-        }
+        impl_list!(filter::AssetDefinitionFilter, FindAssetsDefinitions);
     }
 
     #[derive(clap::Args, Debug)]
     pub struct TransferNumeric {
-        /// Asset to transfer, in form "asset##account@domain" or "asset#another_domain#account@domain"
+        /// Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
         #[arg(short, long)]
         pub id: AssetId,
-        /// Account to which to transfer, in form "multihash@domain"
+        /// Destination account, in the format "multihash@domain"
         #[arg(short, long)]
         pub to: AccountId,
-        /// Amount to transfer, in an integer or decimal
+        /// Transfer amount (integer or decimal)
         #[arg(short, long)]
         pub quantity: Numeric,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct TransferStore {
-        /// Asset to transfer, in form "asset##account@domain" or "asset#another_domain#account@domain"
+        /// Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
         #[arg(short, long)]
         pub id: AssetId,
-        /// Account to which to transfer, in form "multihash@domain"
+        /// Destination account, in the format "multihash@domain"
         #[arg(short, long)]
         pub to: AccountId,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Asset in form "asset##account@domain" or "asset#another_domain#account@domain"
+        /// Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
         #[arg(short, long)]
         pub id: AssetId,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct IdQuantity {
-        /// Asset in form "asset##account@domain" or "asset#another_domain#account@domain"
+        /// Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
         #[arg(short, long)]
         pub id: AssetId,
-        /// Amount in an integer or decimal
+        /// Amount of change (integer or decimal)
         #[arg(short, long)]
         pub quantity: Numeric,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct IdKey {
-        /// Asset in form "asset##account@domain" or "asset#another_domain#account@domain"
+        /// Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
         #[arg(short, long)]
         pub id: AssetId,
-        /// Key for the value
+        /// Key for retrieving the corresponding value
         #[arg(short, long)]
         pub key: Name,
     }
 
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all asset ids
-        All,
-        /// Filter assets by given predicate
-        Filter(filter::AssetFilter),
-    }
-
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
-            let query = client.query(FindAssets).select_with(|entry| entry.id);
-            let query = match self {
-                List::All => query,
-                List::Filter(filter) => query.filter(filter.predicate),
-            };
-            let ids = query.execute_all()?;
-            context.print_data(&ids)
-        }
-    }
+    impl_list!(filter::AssetFilter, FindAssets);
 }
 
 mod peer {
@@ -1048,9 +1034,9 @@ mod peer {
         /// List registered peers expected to connect with each other
         #[command(subcommand)]
         List(List),
-        /// Register peer
+        /// Register a peer
         Register(Id),
-        /// Unregister peer
+        /// Unregister a peer
         Unregister(Id),
     }
 
@@ -1091,7 +1077,7 @@ mod peer {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Peer's public key in multihash
+        /// Peer's public key in multihash format
         #[arg(short, long)]
         pub key: PublicKey,
     }
@@ -1118,7 +1104,7 @@ mod multisig {
         List(List),
         /// Register a multisig account
         Register(Register),
-        /// Propose a multisig transaction, constructed from instructions as a JSON5 stdin
+        /// Propose a multisig transaction using JSON5 input from stdin
         Propose(Propose),
         /// Approve a multisig transaction
         Approve(Approve),
@@ -1135,16 +1121,17 @@ mod multisig {
         /// ID of the multisig account to be registered
         #[arg(short, long)]
         pub account: AccountId,
-        /// Signatories of the multisig account
+        /// List of signatories for the multisig account
         #[arg(short, long, num_args(2..))]
         pub signatories: Vec<AccountId>,
-        /// Relative weights of responsibility of respective signatories
+        /// Relative weights of signatories' responsibilities
         #[arg(short, long, num_args(2..))]
         pub weights: Vec<u8>,
-        /// Threshold of total weight at which the multisig is considered authenticated
+        /// Threshold of total weight required for authentication
         #[arg(short, long)]
         pub quorum: u16,
-        /// Time-to-live of multisig transactions made by the multisig account ex. "1y 6M 2w 3d 12h 30m 30s 500ms"
+        /// Time-to-live for multisig transactions.
+        /// Example: "1y 6M 2w 3d 12h 30m 30s"
         #[arg(short, long, default_value_t = default_transaction_ttl())]
         pub transaction_ttl: humantime::Duration,
     }
@@ -1180,17 +1167,18 @@ mod multisig {
 
     #[derive(clap::Args, Debug)]
     pub struct Propose {
-        /// Multisig authority of the multisig transaction
+        /// Multisig authority managing the proposed transaction
         #[arg(short, long)]
         pub account: AccountId,
-        /// Time-to-live of multisig transactions that overrides to shorten the account default ex. "1y 6M 2w 3d 12h 30m 30s 500ms"
+        /// Overrides the default time-to-live for this transaction.
+        /// Example: "1y 6M 2w 3d 12h 30m 30s"
         #[arg(short, long)]
         pub transaction_ttl: Option<humantime::Duration>,
     }
 
     impl Run for Propose {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let instructions: Vec<InstructionBox> = parse_json5_stdin()?;
+            let instructions: Vec<InstructionBox> = parse_json5_stdin(context)?;
             let transaction_ttl_ms = self.transaction_ttl.map(|duration| {
                 duration
                     .as_millis()
@@ -1214,10 +1202,10 @@ mod multisig {
 
     #[derive(clap::Args, Debug)]
     pub struct Approve {
-        /// Multisig authority of the multisig transaction
+        /// Multisig authority of the transaction
         #[arg(short, long)]
         pub account: AccountId,
-        /// Instructions to approve
+        /// Hash of the instructions to approve
         #[arg(short, long)]
         pub instructions_hash: ProposalKey,
     }
@@ -1434,7 +1422,7 @@ mod query {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Query constructed from a JSON5 stdin
+        /// Query using JSON5 input from stdin
         Stdin(Stdin),
     }
 
@@ -1451,7 +1439,7 @@ mod query {
     impl Run for Stdin {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = Client::new(context.config().clone());
-            let query: AnyQueryBox = parse_json5_stdin()?;
+            let query: AnyQueryBox = parse_json5_stdin(context)?;
 
             match query {
                 AnyQueryBox::Singular(query) => {
@@ -1512,13 +1500,13 @@ mod transaction {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Read a single transaction details
+        /// Retrieve details of a specific transaction
         Get(Get),
-        /// Empty transaction that just leaves a log message
+        /// Send an empty transaction that logs a message
         Ping(Ping),
-        /// Transaction constructed from a Wasm executable input
+        /// Send a transaction using Wasm input
         Wasm(Wasm),
-        /// Transaction constructed from instructions as a JSON5 stdin
+        /// Send a transaction using JSON5 input from stdin
         Stdin(Stdin),
     }
 
@@ -1531,7 +1519,7 @@ mod transaction {
 
     #[derive(clap::Args, Debug)]
     pub struct Get {
-        /// Transaction hash
+        /// Hash of the transaction to retrieve
         #[arg(short('H'), long)]
         pub hash: HashOf<SignedTransaction>,
     }
@@ -1549,7 +1537,7 @@ mod transaction {
 
     #[derive(clap::Args, Debug)]
     pub struct Ping {
-        /// TRACE, DEBUG, INFO, WARN, ERROR: grows more noticeable in this order
+        /// Log levels: TRACE, DEBUG, INFO, WARN, ERROR (in increasing order of visibility)
         #[arg(short, long, default_value = "INFO")]
         pub log_level: LogLevel,
         /// Log message
@@ -1566,7 +1554,7 @@ mod transaction {
 
     #[derive(clap::Args, Debug)]
     pub struct Wasm {
-        /// Specify a path to the Wasm file or skip this arg to read from stdin
+        /// Path to the Wasm file. If omitted, reads from stdin
         #[arg(short, long)]
         path: Option<PathBuf>,
     }
@@ -1590,7 +1578,7 @@ mod transaction {
 
     impl Run for Stdin {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let instructions: Vec<InstructionBox> = parse_json5_stdin()?;
+            let instructions: Vec<InstructionBox> = parse_json5_stdin(context)?;
             context
                 .finish(instructions)
                 .wrap_err("Failed to submit parsed instructions")
@@ -1603,15 +1591,15 @@ mod role {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Read/Write role permissions
+        /// Read and write role permissions
         #[command(subcommand)]
         Permission(PermissionCommand),
-        /// List role ids
+        /// List role IDs
         #[command(subcommand)]
         List(List),
-        /// Register role and grant it to you registrant
+        /// Register a role and grant it to the registrant
         Register(Id),
-        /// Unregister role
+        /// Unregister a role
         Unregister(Id),
     }
 
@@ -1644,9 +1632,9 @@ mod role {
     pub enum PermissionCommand {
         /// List role permissions
         List(Id),
-        /// Grant role permission constructed from a JSON5 stdin
+        /// Grant role permission using JSON5 input from stdin
         Grant(Id),
-        /// Revoke role permission constructed from a JSON5 stdin
+        /// Revoke role permission using JSON5 input from stdin
         Revoke(Id),
     }
 
@@ -1666,7 +1654,7 @@ mod role {
                     Ok(())
                 }
                 Grant(args) => {
-                    let permission: Permission = parse_json5_stdin()?;
+                    let permission: Permission = parse_json5_stdin(context)?;
                     let instruction =
                         iroha::data_model::isi::Grant::role_permission(permission, args.id);
                     context
@@ -1674,7 +1662,7 @@ mod role {
                         .wrap_err("Failed to grant the permission to the role")
                 }
                 Revoke(args) => {
-                    let permission: Permission = parse_json5_stdin()?;
+                    let permission: Permission = parse_json5_stdin(context)?;
                     let instruction =
                         iroha::data_model::isi::Revoke::role_permission(permission, args.id);
                     context
@@ -1687,14 +1675,14 @@ mod role {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Role name as double-quoted string
+        /// Role name
         #[arg(short, long)]
         id: RoleId,
     }
 
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
-        /// List all role ids
+        /// List all role IDs
         All,
     }
 
@@ -1712,10 +1700,10 @@ mod parameter {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// List parameters
+        /// List system parameters
         #[command(subcommand)]
         List(List),
-        /// Set parameter constructed from a JSON5 stdin
+        /// Set a system parameter using JSON5 input from stdin
         Set(Set),
     }
 
@@ -1728,7 +1716,7 @@ mod parameter {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
-        /// List all parameters
+        /// List all system parameters
         All,
     }
 
@@ -1745,7 +1733,7 @@ mod parameter {
 
     impl Run for Set {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let entry: Parameter = parse_json5_stdin()?;
+            let entry: Parameter = parse_json5_stdin(context)?;
             let instruction = SetParameter::new(entry);
             context.finish([instruction])
         }
@@ -1757,17 +1745,21 @@ mod trigger {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// List trigger ids
+        /// List trigger IDs
         #[command(subcommand)]
         List(List),
-        /// Read a single trigger details
-        // TODO for readability and reusability, trigger should hold a reference to a Wasm executable instead of the blob itself
+        /// Retrieve details of a specific trigger
+        // TODO: For better readability and reusability, triggers should reference a Wasm executable instead of storing the blob itself.
         Get(Id),
-        /// TODO Register trigger
+        /// TODO: Register a trigger
         Register(Register),
-        /// Unregister trigger
+        /// Unregister a trigger
         Unregister(Id),
-        /// Read/Write metadata
+        /// Increase the number of trigger executions
+        Mint(IdInt),
+        /// Decrease the number of trigger executions
+        Burn(IdInt),
+        /// Read and write metadata
         #[command(subcommand)]
         Meta(metadata::trigger::Command),
     }
@@ -1793,6 +1785,24 @@ mod trigger {
                         .finish([instruction])
                         .wrap_err("Failed to unregister trigger")
                 }
+                Mint(args) => {
+                    let instruction = iroha::data_model::isi::Mint::trigger_repetitions(
+                        args.repetitions,
+                        args.id,
+                    );
+                    context
+                        .finish([instruction])
+                        .wrap_err("Failed to mint trigger repetitions")
+                }
+                Burn(args) => {
+                    let instruction = iroha::data_model::isi::Burn::trigger_repetitions(
+                        args.repetitions,
+                        args.id,
+                    );
+                    context
+                        .finish([instruction])
+                        .wrap_err("Failed to burn trigger repetitions")
+                }
                 Meta(cmd) => cmd.run(context),
             }
         }
@@ -1800,7 +1810,7 @@ mod trigger {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
-        /// List all trigger ids
+        /// List all trigger IDs
         All,
     }
 
@@ -1814,9 +1824,19 @@ mod trigger {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Trigger name as double-quoted string
+        /// Trigger name
         #[arg(short, long)]
         pub id: TriggerId,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct IdInt {
+        /// Trigger name
+        #[arg(short, long)]
+        pub id: TriggerId,
+        /// Amount of change (integer)
+        #[arg(short, long)]
+        pub repetitions: u32,
     }
 
     #[derive(clap::Args, Debug)]
@@ -1834,14 +1854,30 @@ mod executor {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Upgrade executor
+        /// Retrieve the executor data model
+        DataModel,
+        /// Upgrade the executor
         Upgrade(Upgrade),
     }
 
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
-            match_all!((self, context), { Upgrade })
+            match self {
+                DataModel => {
+                    let client = context.client_from_config();
+                    let model = client.query_single(FindExecutorDataModel)?;
+                    context.print_data(&model)
+                }
+                Upgrade(args) => {
+                    let instruction = fs::read(args.path)
+                        .map(WasmSmartContract::from_compiled)
+                        .map(Executor::new)
+                        .map(iroha::data_model::isi::Upgrade::new)
+                        .wrap_err("Failed to read a Wasm from the file")?;
+                    context.finish([instruction])
+                }
+            }
         }
     }
 
@@ -1850,17 +1886,6 @@ mod executor {
         /// Path to the compiled Wasm file
         #[arg(short, long)]
         path: PathBuf,
-    }
-
-    impl Run for Upgrade {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let instruction = fs::read(self.path)
-                .map(WasmSmartContract::from_compiled)
-                .map(Executor::new)
-                .map(iroha::data_model::isi::Upgrade::new)
-                .wrap_err("Failed to read a Wasm from the file")?;
-            context.finish([instruction])
-        }
     }
 }
 
@@ -1874,11 +1899,11 @@ mod metadata {
 
                 #[derive(clap::Subcommand, Debug)]
                 pub enum Command {
-                    /// Read a value from a key-value store
+                    /// Retrieve a value from the key-value store
                     Get(IdKey),
-                    /// Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
+                    /// Create or update an entry in the key-value store using JSON5 input from stdin
                     Set(IdKey),
-                    /// Delete an entry from a key-value store
+                    /// Delete an entry from the key-value store
                     Remove(IdKey),
                 }
 
@@ -1905,7 +1930,7 @@ mod metadata {
                                 context.print_data(&value)
                             }
                             Set(args) => {
-                                let value: Json = parse_json5_stdin()?;
+                                let value: Json = parse_json5_stdin(context)?;
                                 let instruction = iroha::data_model::isi::SetKeyValue::$constructor(
                                     args.id, args.key, value,
                                 );
@@ -1935,11 +1960,11 @@ mod metadata {
 
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
-            /// Read a value from a key-value store
+            /// Retrieve a value from the key-value store
             Get(IdKey),
-            /// Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
+            /// Create or update an entry in the key-value store using JSON5 input from stdin
             Set(IdKey),
-            /// Delete an entry from a key-value store
+            /// Delete an entry from the key-value store
             Remove(IdKey),
         }
 
@@ -1966,7 +1991,7 @@ mod metadata {
                         context.print_data(&value)
                     }
                     Set(args) => {
-                        let value: Json = parse_json5_stdin()?;
+                        let value: Json = parse_json5_stdin(context)?;
                         let instruction =
                             iroha::data_model::isi::SetKeyValue::trigger(args.id, args.key, value);
                         context.finish([instruction])
@@ -1991,7 +2016,17 @@ where
     Ok(())
 }
 
-fn parse_json5_stdin<T>() -> Result<T>
+fn parse_json5_stdin<T>(context: &impl RunContext) -> Result<T>
+where
+    T: for<'a> serde::Deserialize<'a>,
+{
+    if context.input_instructions() {
+        eyre::bail!("Incompatible `--input` flag with the command")
+    }
+    parse_json5_stdin_unchecked()
+}
+
+fn parse_json5_stdin_unchecked<T>() -> Result<T>
 where
     T: for<'a> serde::Deserialize<'a>,
 {

@@ -104,167 +104,181 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha trigger get`↴](#iroha-trigger-get)
 * [`iroha trigger register`↴](#iroha-trigger-register)
 * [`iroha trigger unregister`↴](#iroha-trigger-unregister)
+* [`iroha trigger mint`↴](#iroha-trigger-mint)
+* [`iroha trigger burn`↴](#iroha-trigger-burn)
 * [`iroha trigger meta`↴](#iroha-trigger-meta)
 * [`iroha trigger meta get`↴](#iroha-trigger-meta-get)
 * [`iroha trigger meta set`↴](#iroha-trigger-meta-set)
 * [`iroha trigger meta remove`↴](#iroha-trigger-meta-remove)
 * [`iroha executor`↴](#iroha-executor)
+* [`iroha executor data-model`↴](#iroha-executor-data-model)
 * [`iroha executor upgrade`↴](#iroha-executor-upgrade)
 * [`iroha markdown-help`↴](#iroha-markdown-help)
 
 ## `iroha`
 
-Iroha CLI Client provides an ability to interact with Iroha Peers Web API without direct network usage
+Iroha Client CLI provides a simple way to interact with the Iroha Web API
 
 **Usage:** `iroha [OPTIONS] <COMMAND>`
 
 ###### **Subcommands:**
 
-* `domain` — Read/Write domains
-* `account` — Read/Write accounts
-* `asset` — Read/Write assets
-* `peer` — Read/Write peers
-* `events` — Subscribe events: state changes, status of transactions/blocks/triggers
-* `blocks` — Subscribe blocks
-* `multisig` — Read/Write multisig accounts and transactions
-* `query` — Read in general
-* `transaction` — Read transactions, Write in general
-* `role` — Read/Write roles
-* `parameter` — Read/Write parameters
-* `trigger` — TODO Read/Write triggers
-* `executor` — Update executor
-* `markdown-help` — Dump a markdown help of this CLI to stdout
+* `domain` — Read and write domains
+* `account` — Read and write accounts
+* `asset` — Read and write assets
+* `peer` — Read and write peers
+* `events` — Subscribe to events: state changes, transaction/block/trigger progress
+* `blocks` — Subscribe to blocks
+* `multisig` — Read and write multi-signature accounts and transactions
+* `query` — Read various data
+* `transaction` — Read transactions and write various data
+* `role` — Read and write roles
+* `parameter` — Read and write system parameters
+* `trigger` — Read and write triggers
+* `executor` — Read and write the executor
+* `markdown-help` — Output CLI documentation in Markdown format
 
 ###### **Options:**
 
 * `-c`, `--config <PATH>` — Path to the configuration file
 
   Default value: `client.toml`
-* `-v`, `--verbose` — More verbose output
-* `-m`, `--metadata <PATH>` — Optional path to read a JSON5 file to attach transaction metadata
-* `-a`, `--accumulate` — Whether to accumulate instructions into a single transaction: If specified, loads instructions from stdin, appends some, and returns them to stdout
+* `-v`, `--verbose` — Print configuration details to stderr
+* `-m`, `--metadata <PATH>` — Path to a JSON5 file for attaching transaction metadata (optional)
+* `-i`, `--input` — Reads instructions from stdin and appends new ones.
 
-   Usage: `echo "[]" | iroha -a domain register -i "domain" | iroha -a asset definition register -i "asset#domain" -t Numeric | iroha transaction stdin`
+   Example usage:
+
+   `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "asset#domain" -t Numeric`
+* `-o`, `--output` — Outputs instructions to stdout without submitting them.
+
+   Example usage:
+
+   `iroha -o domain register --id "domain" | iroha -io asset definition register --id "asset#domain" -t Numeric | iroha transaction stdin`
 
 
 
 ## `iroha domain`
 
-Read/Write domains
+Read and write domains
 
 **Usage:** `iroha domain <COMMAND>`
 
 ###### **Subcommands:**
 
-* `list` — List domain ids
-* `get` — Read a single domain details
-* `register` — Register domain
-* `unregister` — Unregister domain
-* `transfer` — Transfer domain
-* `meta` — Read/Write metadata
+* `list` — List domains
+* `get` — Retrieve details of a specific domain
+* `register` — Register a domain
+* `unregister` — Unregister a domain
+* `transfer` — Transfer ownership of a domain
+* `meta` — Read and write metadata
 
 
 
 ## `iroha domain list`
 
-List domain ids
+List domains
 
 **Usage:** `iroha domain list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all domain ids
-* `filter` — Filter domains by given predicate
+* `all` — List all IDs, or full entries when `--verbose` is specified
+* `filter` — Filter by a given predicate
 
 
 
 ## `iroha domain list all`
 
-List all domain ids
+List all IDs, or full entries when `--verbose` is specified
 
-**Usage:** `iroha domain list all`
+**Usage:** `iroha domain list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs
 
 
 
 ## `iroha domain list filter`
 
-Filter domains by given predicate
+Filter by a given predicate
 
 **Usage:** `iroha domain list filter <PREDICATE>`
 
 ###### **Arguments:**
 
-* `<PREDICATE>` — Predicate for filtering given as JSON5 string
+* `<PREDICATE>` — Filtering condition specified as a JSON5 string
 
 
 
 ## `iroha domain get`
 
-Read a single domain details
+Retrieve details of a specific domain
 
 **Usage:** `iroha domain get --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Domain name as double-quoted string
+* `-i`, `--id <ID>` — Domain name
 
 
 
 ## `iroha domain register`
 
-Register domain
+Register a domain
 
 **Usage:** `iroha domain register --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Domain name as double-quoted string
+* `-i`, `--id <ID>` — Domain name
 
 
 
 ## `iroha domain unregister`
 
-Unregister domain
+Unregister a domain
 
 **Usage:** `iroha domain unregister --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Domain name as double-quoted string
+* `-i`, `--id <ID>` — Domain name
 
 
 
 ## `iroha domain transfer`
 
-Transfer domain
+Transfer ownership of a domain
 
 **Usage:** `iroha domain transfer --id <ID> --from <FROM> --to <TO>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Domain name as double-quoted string
-* `-f`, `--from <FROM>` — Account from which to transfer, in form "multihash@domain"
-* `-t`, `--to <TO>` — Account to which to transfer, in form "multihash@domain"
+* `-i`, `--id <ID>` — Domain name
+* `-f`, `--from <FROM>` — Source account, in the format "multihash@domain"
+* `-t`, `--to <TO>` — Destination account, in the format "multihash@domain"
 
 
 
 ## `iroha domain meta`
 
-Read/Write metadata
+Read and write metadata
 
 **Usage:** `iroha domain meta <COMMAND>`
 
 ###### **Subcommands:**
 
-* `get` — Read a value from a key-value store
-* `set` — Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
-* `remove` — Delete an entry from a key-value store
+* `get` — Retrieve a value from the key-value store
+* `set` — Create or update an entry in the key-value store using JSON5 input from stdin
+* `remove` — Delete an entry from the key-value store
 
 
 
 ## `iroha domain meta get`
 
-Read a value from a key-value store
+Retrieve a value from the key-value store
 
 **Usage:** `iroha domain meta get --id <ID> --key <KEY>`
 
@@ -277,7 +291,7 @@ Read a value from a key-value store
 
 ## `iroha domain meta set`
 
-Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
+Create or update an entry in the key-value store using JSON5 input from stdin
 
 **Usage:** `iroha domain meta set --id <ID> --key <KEY>`
 
@@ -290,7 +304,7 @@ Create or update an entry in a key-value store, with a value constructed from a 
 
 ## `iroha domain meta remove`
 
-Delete an entry from a key-value store
+Delete an entry from the key-value store
 
 **Usage:** `iroha domain meta remove --id <ID> --key <KEY>`
 
@@ -303,85 +317,85 @@ Delete an entry from a key-value store
 
 ## `iroha account`
 
-Read/Write accounts
+Read and write accounts
 
 **Usage:** `iroha account <COMMAND>`
 
 ###### **Subcommands:**
 
-* `role` — Read/Write account roles
-* `permission` — Read/Write account permissions
-* `list` — List account ids
-* `get` — Read a single account details
-* `register` — Register account
-* `unregister` — Unregister account
-* `meta` — Read/Write metadata
+* `role` — Read and write account roles
+* `permission` — Read and write account permissions
+* `list` — List accounts
+* `get` — Retrieve details of a specific account
+* `register` — Register an account
+* `unregister` — Unregister an account
+* `meta` — Read and write metadata
 
 
 
 ## `iroha account role`
 
-Read/Write account roles
+Read and write account roles
 
 **Usage:** `iroha account role <COMMAND>`
 
 ###### **Subcommands:**
 
-* `list` — List account role ids
-* `grant` — Grant account role
-* `revoke` — Revoke account role
+* `list` — List account role IDs
+* `grant` — Grant a role to an account
+* `revoke` — Revoke a role from an account
 
 
 
 ## `iroha account role list`
 
-List account role ids
+List account role IDs
 
 **Usage:** `iroha account role list --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account in form "multihash@domain"
+* `-i`, `--id <ID>` — Account in the format "multihash@domain"
 
 
 
 ## `iroha account role grant`
 
-Grant account role
+Grant a role to an account
 
 **Usage:** `iroha account role grant --id <ID> --role <ROLE>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account in form "multihash@domain"
-* `-r`, `--role <ROLE>` — Role name as double-quoted string
+* `-i`, `--id <ID>` — Account in the format "multihash@domain"
+* `-r`, `--role <ROLE>` — Role name
 
 
 
 ## `iroha account role revoke`
 
-Revoke account role
+Revoke a role from an account
 
 **Usage:** `iroha account role revoke --id <ID> --role <ROLE>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account in form "multihash@domain"
-* `-r`, `--role <ROLE>` — Role name as double-quoted string
+* `-i`, `--id <ID>` — Account in the format "multihash@domain"
+* `-r`, `--role <ROLE>` — Role name
 
 
 
 ## `iroha account permission`
 
-Read/Write account permissions
+Read and write account permissions
 
 **Usage:** `iroha account permission <COMMAND>`
 
 ###### **Subcommands:**
 
 * `list` — List account permissions
-* `grant` — Grant account permission constructed from a JSON5 stdin
-* `revoke` — Revoke account permission constructed from a JSON5 stdin
+* `grant` — Grant an account permission using JSON5 input from stdin
+* `revoke` — Revoke an account permission using JSON5 input from stdin
 
 
 
@@ -393,120 +407,124 @@ List account permissions
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account in form "multihash@domain"
+* `-i`, `--id <ID>` — Account in the format "multihash@domain"
 
 
 
 ## `iroha account permission grant`
 
-Grant account permission constructed from a JSON5 stdin
+Grant an account permission using JSON5 input from stdin
 
 **Usage:** `iroha account permission grant --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account in form "multihash@domain"
+* `-i`, `--id <ID>` — Account in the format "multihash@domain"
 
 
 
 ## `iroha account permission revoke`
 
-Revoke account permission constructed from a JSON5 stdin
+Revoke an account permission using JSON5 input from stdin
 
 **Usage:** `iroha account permission revoke --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account in form "multihash@domain"
+* `-i`, `--id <ID>` — Account in the format "multihash@domain"
 
 
 
 ## `iroha account list`
 
-List account ids
+List accounts
 
 **Usage:** `iroha account list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all account ids
-* `filter` — Filter accounts by given predicate
+* `all` — List all IDs, or full entries when `--verbose` is specified
+* `filter` — Filter by a given predicate
 
 
 
 ## `iroha account list all`
 
-List all account ids
+List all IDs, or full entries when `--verbose` is specified
 
-**Usage:** `iroha account list all`
+**Usage:** `iroha account list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs
 
 
 
 ## `iroha account list filter`
 
-Filter accounts by given predicate
+Filter by a given predicate
 
 **Usage:** `iroha account list filter <PREDICATE>`
 
 ###### **Arguments:**
 
-* `<PREDICATE>` — Predicate for filtering given as JSON5 string
+* `<PREDICATE>` — Filtering condition specified as a JSON5 string
 
 
 
 ## `iroha account get`
 
-Read a single account details
+Retrieve details of a specific account
 
 **Usage:** `iroha account get --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account in form "multihash@domain"
+* `-i`, `--id <ID>` — Account in the format "multihash@domain"
 
 
 
 ## `iroha account register`
 
-Register account
+Register an account
 
 **Usage:** `iroha account register --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account in form "multihash@domain"
+* `-i`, `--id <ID>` — Account in the format "multihash@domain"
 
 
 
 ## `iroha account unregister`
 
-Unregister account
+Unregister an account
 
 **Usage:** `iroha account unregister --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account in form "multihash@domain"
+* `-i`, `--id <ID>` — Account in the format "multihash@domain"
 
 
 
 ## `iroha account meta`
 
-Read/Write metadata
+Read and write metadata
 
 **Usage:** `iroha account meta <COMMAND>`
 
 ###### **Subcommands:**
 
-* `get` — Read a value from a key-value store
-* `set` — Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
-* `remove` — Delete an entry from a key-value store
+* `get` — Retrieve a value from the key-value store
+* `set` — Create or update an entry in the key-value store using JSON5 input from stdin
+* `remove` — Delete an entry from the key-value store
 
 
 
 ## `iroha account meta get`
 
-Read a value from a key-value store
+Retrieve a value from the key-value store
 
 **Usage:** `iroha account meta get --id <ID> --key <KEY>`
 
@@ -519,7 +537,7 @@ Read a value from a key-value store
 
 ## `iroha account meta set`
 
-Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
+Create or update an entry in the key-value store using JSON5 input from stdin
 
 **Usage:** `iroha account meta set --id <ID> --key <KEY>`
 
@@ -532,7 +550,7 @@ Create or update an entry in a key-value store, with a value constructed from a 
 
 ## `iroha account meta remove`
 
-Delete an entry from a key-value store
+Delete an entry from the key-value store
 
 **Usage:** `iroha account meta remove --id <ID> --key <KEY>`
 
@@ -545,144 +563,148 @@ Delete an entry from a key-value store
 
 ## `iroha asset`
 
-Read/Write assets
+Read and write assets
 
 **Usage:** `iroha asset <COMMAND>`
 
 ###### **Subcommands:**
 
-* `definition` — Read/Write asset definitions
-* `get` — Read a single asset details
-* `list` — List asset ids
-* `mint` — Increase an amount of asset
-* `burn` — Decrease an amount of asset
-* `transfer` — Transfer an amount of asset between accounts
+* `definition` — Read and write asset definitions
+* `get` — Retrieve details of a specific asset
+* `list` — List assets
+* `mint` — Increase the quantity of an asset
+* `burn` — Decrease the quantity of an asset
+* `transfer` — Transfer an asset between accounts
 * `transferkvs` — Transfer a key-value store between accounts
-* `getkv` — Read a value from a key-value store
-* `setkv` — Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
-* `removekv` — Delete an entry from a key-value store
+* `getkv` — Retrieve a value from the key-value store
+* `setkv` — Create or update a key-value entry using JSON5 input from stdin
+* `removekv` — Delete an entry from the key-value store
 
 
 
 ## `iroha asset definition`
 
-Read/Write asset definitions
+Read and write asset definitions
 
 **Usage:** `iroha asset definition <COMMAND>`
 
 ###### **Subcommands:**
 
-* `list` — List asset definition ids
-* `get` — Read a single asset definition details
-* `register` — Register asset definition
-* `unregister` — Unregister asset definition
-* `transfer` — Transfer asset definition
-* `meta` — Read/Write metadata
+* `list` — List asset definitions
+* `get` — Retrieve details of a specific asset definition
+* `register` — Register an asset definition
+* `unregister` — Unregister an asset definition
+* `transfer` — Transfer ownership of an asset definition
+* `meta` — Read and write metadata
 
 
 
 ## `iroha asset definition list`
 
-List asset definition ids
+List asset definitions
 
 **Usage:** `iroha asset definition list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all asset definition ids
-* `filter` — Filter asset definitions by given predicate
+* `all` — List all IDs, or full entries when `--verbose` is specified
+* `filter` — Filter by a given predicate
 
 
 
 ## `iroha asset definition list all`
 
-List all asset definition ids
+List all IDs, or full entries when `--verbose` is specified
 
-**Usage:** `iroha asset definition list all`
+**Usage:** `iroha asset definition list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs
 
 
 
 ## `iroha asset definition list filter`
 
-Filter asset definitions by given predicate
+Filter by a given predicate
 
 **Usage:** `iroha asset definition list filter <PREDICATE>`
 
 ###### **Arguments:**
 
-* `<PREDICATE>` — Predicate for filtering given as JSON5 string
+* `<PREDICATE>` — Filtering condition specified as a JSON5 string
 
 
 
 ## `iroha asset definition get`
 
-Read a single asset definition details
+Retrieve details of a specific asset definition
 
 **Usage:** `iroha asset definition get --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in form "asset#domain"
+* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
 
 
 
 ## `iroha asset definition register`
 
-Register asset definition
+Register an asset definition
 
 **Usage:** `iroha asset definition register [OPTIONS] --id <ID> --type <TYPE>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in form "asset#domain"
-* `-u`, `--unmintable` — Mintability of asset
-* `-t`, `--type <TYPE>` — Value type stored in asset
+* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
+* `-m`, `--mint-once` — Disables minting after the first instance
+* `-t`, `--type <TYPE>` — Data type stored in the asset
 
 
 
 ## `iroha asset definition unregister`
 
-Unregister asset definition
+Unregister an asset definition
 
 **Usage:** `iroha asset definition unregister --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in form "asset#domain"
+* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
 
 
 
 ## `iroha asset definition transfer`
 
-Transfer asset definition
+Transfer ownership of an asset definition
 
 **Usage:** `iroha asset definition transfer --id <ID> --from <FROM> --to <TO>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition in form "asset#domain"
-* `-f`, `--from <FROM>` — Account from which to transfer, in form "multihash@domain"
-* `-t`, `--to <TO>` — Account to which to transfer, in form "multihash@domain"
+* `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
+* `-f`, `--from <FROM>` — Source account, in the format "multihash@domain"
+* `-t`, `--to <TO>` — Destination account, in the format "multihash@domain"
 
 
 
 ## `iroha asset definition meta`
 
-Read/Write metadata
+Read and write metadata
 
 **Usage:** `iroha asset definition meta <COMMAND>`
 
 ###### **Subcommands:**
 
-* `get` — Read a value from a key-value store
-* `set` — Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
-* `remove` — Delete an entry from a key-value store
+* `get` — Retrieve a value from the key-value store
+* `set` — Create or update an entry in the key-value store using JSON5 input from stdin
+* `remove` — Delete an entry from the key-value store
 
 
 
 ## `iroha asset definition meta get`
 
-Read a value from a key-value store
+Retrieve a value from the key-value store
 
 **Usage:** `iroha asset definition meta get --id <ID> --key <KEY>`
 
@@ -695,7 +717,7 @@ Read a value from a key-value store
 
 ## `iroha asset definition meta set`
 
-Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
+Create or update an entry in the key-value store using JSON5 input from stdin
 
 **Usage:** `iroha asset definition meta set --id <ID> --key <KEY>`
 
@@ -708,7 +730,7 @@ Create or update an entry in a key-value store, with a value constructed from a 
 
 ## `iroha asset definition meta remove`
 
-Delete an entry from a key-value store
+Delete an entry from the key-value store
 
 **Usage:** `iroha asset definition meta remove --id <ID> --key <KEY>`
 
@@ -721,86 +743,90 @@ Delete an entry from a key-value store
 
 ## `iroha asset get`
 
-Read a single asset details
+Retrieve details of a specific asset
 
 **Usage:** `iroha asset get --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in form "asset##account@domain" or "asset#another_domain#account@domain"
+* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
 
 
 
 ## `iroha asset list`
 
-List asset ids
+List assets
 
 **Usage:** `iroha asset list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all asset ids
-* `filter` — Filter assets by given predicate
+* `all` — List all IDs, or full entries when `--verbose` is specified
+* `filter` — Filter by a given predicate
 
 
 
 ## `iroha asset list all`
 
-List all asset ids
+List all IDs, or full entries when `--verbose` is specified
 
-**Usage:** `iroha asset list all`
+**Usage:** `iroha asset list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs
 
 
 
 ## `iroha asset list filter`
 
-Filter assets by given predicate
+Filter by a given predicate
 
 **Usage:** `iroha asset list filter <PREDICATE>`
 
 ###### **Arguments:**
 
-* `<PREDICATE>` — Predicate for filtering given as JSON5 string
+* `<PREDICATE>` — Filtering condition specified as a JSON5 string
 
 
 
 ## `iroha asset mint`
 
-Increase an amount of asset
+Increase the quantity of an asset
 
 **Usage:** `iroha asset mint --id <ID> --quantity <QUANTITY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in form "asset##account@domain" or "asset#another_domain#account@domain"
-* `-q`, `--quantity <QUANTITY>` — Amount in an integer or decimal
+* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
+* `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
 
 ## `iroha asset burn`
 
-Decrease an amount of asset
+Decrease the quantity of an asset
 
 **Usage:** `iroha asset burn --id <ID> --quantity <QUANTITY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in form "asset##account@domain" or "asset#another_domain#account@domain"
-* `-q`, `--quantity <QUANTITY>` — Amount in an integer or decimal
+* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
+* `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
 
 ## `iroha asset transfer`
 
-Transfer an amount of asset between accounts
+Transfer an asset between accounts
 
 **Usage:** `iroha asset transfer --id <ID> --to <TO> --quantity <QUANTITY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset to transfer, in form "asset##account@domain" or "asset#another_domain#account@domain"
-* `-t`, `--to <TO>` — Account to which to transfer, in form "multihash@domain"
-* `-q`, `--quantity <QUANTITY>` — Amount to transfer, in an integer or decimal
+* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
+* `-t`, `--to <TO>` — Destination account, in the format "multihash@domain"
+* `-q`, `--quantity <QUANTITY>` — Transfer amount (integer or decimal)
 
 
 
@@ -812,61 +838,61 @@ Transfer a key-value store between accounts
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset to transfer, in form "asset##account@domain" or "asset#another_domain#account@domain"
-* `-t`, `--to <TO>` — Account to which to transfer, in form "multihash@domain"
+* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
+* `-t`, `--to <TO>` — Destination account, in the format "multihash@domain"
 
 
 
 ## `iroha asset getkv`
 
-Read a value from a key-value store
+Retrieve a value from the key-value store
 
 **Usage:** `iroha asset getkv --id <ID> --key <KEY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in form "asset##account@domain" or "asset#another_domain#account@domain"
-* `-k`, `--key <KEY>` — Key for the value
+* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
+* `-k`, `--key <KEY>` — Key for retrieving the corresponding value
 
 
 
 ## `iroha asset setkv`
 
-Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
+Create or update a key-value entry using JSON5 input from stdin
 
 **Usage:** `iroha asset setkv --id <ID> --key <KEY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in form "asset##account@domain" or "asset#another_domain#account@domain"
-* `-k`, `--key <KEY>` — Key for the value
+* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
+* `-k`, `--key <KEY>` — Key for retrieving the corresponding value
 
 
 
 ## `iroha asset removekv`
 
-Delete an entry from a key-value store
+Delete an entry from the key-value store
 
 **Usage:** `iroha asset removekv --id <ID> --key <KEY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in form "asset##account@domain" or "asset#another_domain#account@domain"
-* `-k`, `--key <KEY>` — Key for the value
+* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
+* `-k`, `--key <KEY>` — Key for retrieving the corresponding value
 
 
 
 ## `iroha peer`
 
-Read/Write peers
+Read and write peers
 
 **Usage:** `iroha peer <COMMAND>`
 
 ###### **Subcommands:**
 
 * `list` — List registered peers expected to connect with each other
-* `register` — Register peer
-* `unregister` — Unregister peer
+* `register` — Register a peer
+* `unregister` — Unregister a peer
 
 
 
@@ -892,51 +918,51 @@ List all registered peers
 
 ## `iroha peer register`
 
-Register peer
+Register a peer
 
 **Usage:** `iroha peer register --key <KEY>`
 
 ###### **Options:**
 
-* `-k`, `--key <KEY>` — Peer's public key in multihash
+* `-k`, `--key <KEY>` — Peer's public key in multihash format
 
 
 
 ## `iroha peer unregister`
 
-Unregister peer
+Unregister a peer
 
 **Usage:** `iroha peer unregister --key <KEY>`
 
 ###### **Options:**
 
-* `-k`, `--key <KEY>` — Peer's public key in multihash
+* `-k`, `--key <KEY>` — Peer's public key in multihash format
 
 
 
 ## `iroha events`
 
-Subscribe events: state changes, status of transactions/blocks/triggers
+Subscribe to events: state changes, transaction/block/trigger progress
 
 **Usage:** `iroha events [OPTIONS] <COMMAND>`
 
 ###### **Subcommands:**
 
-* `state` — Notify when world state has certain changes
-* `transaction` — Notify when transaction passes certain processes
-* `block` — Notify when block passes certain processes
-* `trigger-execute` — Notify when trigger execution is ordered
-* `trigger-complete` — Notify when trigger execution is completed
+* `state` — Notify when the world state undergoes certain changes
+* `transaction` — Notify when a transaction reaches specific stages
+* `block` — Notify when a block reaches specific stages
+* `trigger-execute` — Notify when a trigger execution is ordered
+* `trigger-complete` — Notify when a trigger execution is completed
 
 ###### **Options:**
 
-* `-t`, `--timeout <TIMEOUT>` — How long to listen for events ex. "1y 6M 2w 3d 12h 30m 30s 500ms"
+* `-t`, `--timeout <TIMEOUT>` — Duration to listen for events. Example: "1y 6M 2w 3d 12h 30m 30s"
 
 
 
 ## `iroha events state`
 
-Notify when world state has certain changes
+Notify when the world state undergoes certain changes
 
 **Usage:** `iroha events state`
 
@@ -944,7 +970,7 @@ Notify when world state has certain changes
 
 ## `iroha events transaction`
 
-Notify when transaction passes certain processes
+Notify when a transaction reaches specific stages
 
 **Usage:** `iroha events transaction`
 
@@ -952,7 +978,7 @@ Notify when transaction passes certain processes
 
 ## `iroha events block`
 
-Notify when block passes certain processes
+Notify when a block reaches specific stages
 
 **Usage:** `iroha events block`
 
@@ -960,7 +986,7 @@ Notify when block passes certain processes
 
 ## `iroha events trigger-execute`
 
-Notify when trigger execution is ordered
+Notify when a trigger execution is ordered
 
 **Usage:** `iroha events trigger-execute`
 
@@ -968,7 +994,7 @@ Notify when trigger execution is ordered
 
 ## `iroha events trigger-complete`
 
-Notify when trigger execution is completed
+Notify when a trigger execution is completed
 
 **Usage:** `iroha events trigger-complete`
 
@@ -976,7 +1002,7 @@ Notify when trigger execution is completed
 
 ## `iroha blocks`
 
-Subscribe blocks
+Subscribe to blocks
 
 **Usage:** `iroha blocks [OPTIONS] <HEIGHT>`
 
@@ -986,13 +1012,15 @@ Subscribe blocks
 
 ###### **Options:**
 
-* `-t`, `--timeout <TIMEOUT>` — How long to listen for blocks ex. "1y 6M 2w 3d 12h 30m 30s 500ms"
+* `-t`, `--timeout <TIMEOUT>` — Duration to listen for events. Example: "1y 6M 2w 3d 12h 30m 30s"
 
 
 
 ## `iroha multisig`
 
-Read/Write multisig accounts and transactions
+Read and write multi-signature accounts and transactions.
+
+See the [usage guide](./docs/multisig.md) for details
 
 **Usage:** `iroha multisig <COMMAND>`
 
@@ -1000,7 +1028,7 @@ Read/Write multisig accounts and transactions
 
 * `list` — List pending multisig transactions relevant to you
 * `register` — Register a multisig account
-* `propose` — Propose a multisig transaction, constructed from instructions as a JSON5 stdin
+* `propose` — Propose a multisig transaction using JSON5 input from stdin
 * `approve` — Approve a multisig transaction
 
 
@@ -1034,10 +1062,10 @@ Register a multisig account
 ###### **Options:**
 
 * `-a`, `--account <ACCOUNT>` — ID of the multisig account to be registered
-* `-s`, `--signatories <SIGNATORIES>` — Signatories of the multisig account
-* `-w`, `--weights <WEIGHTS>` — Relative weights of responsibility of respective signatories
-* `-q`, `--quorum <QUORUM>` — Threshold of total weight at which the multisig is considered authenticated
-* `-t`, `--transaction-ttl <TRANSACTION_TTL>` — Time-to-live of multisig transactions made by the multisig account ex. "1y 6M 2w 3d 12h 30m 30s 500ms"
+* `-s`, `--signatories <SIGNATORIES>` — List of signatories for the multisig account
+* `-w`, `--weights <WEIGHTS>` — Relative weights of signatories' responsibilities
+* `-q`, `--quorum <QUORUM>` — Threshold of total weight required for authentication
+* `-t`, `--transaction-ttl <TRANSACTION_TTL>` — Time-to-live for multisig transactions. Example: "1y 6M 2w 3d 12h 30m 30s"
 
   Default value: `1h`
 
@@ -1045,14 +1073,14 @@ Register a multisig account
 
 ## `iroha multisig propose`
 
-Propose a multisig transaction, constructed from instructions as a JSON5 stdin
+Propose a multisig transaction using JSON5 input from stdin
 
 **Usage:** `iroha multisig propose [OPTIONS] --account <ACCOUNT>`
 
 ###### **Options:**
 
-* `-a`, `--account <ACCOUNT>` — Multisig authority of the multisig transaction
-* `-t`, `--transaction-ttl <TRANSACTION_TTL>` — Time-to-live of multisig transactions that overrides to shorten the account default ex. "1y 6M 2w 3d 12h 30m 30s 500ms"
+* `-a`, `--account <ACCOUNT>` — Multisig authority managing the proposed transaction
+* `-t`, `--transaction-ttl <TRANSACTION_TTL>` — Overrides the default time-to-live for this transaction. Example: "1y 6M 2w 3d 12h 30m 30s"
 
 
 
@@ -1064,26 +1092,26 @@ Approve a multisig transaction
 
 ###### **Options:**
 
-* `-a`, `--account <ACCOUNT>` — Multisig authority of the multisig transaction
-* `-i`, `--instructions-hash <INSTRUCTIONS_HASH>` — Instructions to approve
+* `-a`, `--account <ACCOUNT>` — Multisig authority of the transaction
+* `-i`, `--instructions-hash <INSTRUCTIONS_HASH>` — Hash of the instructions to approve
 
 
 
 ## `iroha query`
 
-Read in general
+Read various data
 
 **Usage:** `iroha query <COMMAND>`
 
 ###### **Subcommands:**
 
-* `stdin` — Query constructed from a JSON5 stdin
+* `stdin` — Query using JSON5 input from stdin
 
 
 
 ## `iroha query stdin`
 
-Query constructed from a JSON5 stdin
+Query using JSON5 input from stdin
 
 **Usage:** `iroha query stdin`
 
@@ -1091,40 +1119,40 @@ Query constructed from a JSON5 stdin
 
 ## `iroha transaction`
 
-Read transactions, Write in general
+Read transactions and write various data
 
 **Usage:** `iroha transaction <COMMAND>`
 
 ###### **Subcommands:**
 
-* `get` — Read a single transaction details
-* `ping` — Empty transaction that just leaves a log message
-* `wasm` — Transaction constructed from a Wasm executable input
-* `stdin` — Transaction constructed from instructions as a JSON5 stdin
+* `get` — Retrieve details of a specific transaction
+* `ping` — Send an empty transaction that logs a message
+* `wasm` — Send a transaction using Wasm input
+* `stdin` — Send a transaction using JSON5 input from stdin
 
 
 
 ## `iroha transaction get`
 
-Read a single transaction details
+Retrieve details of a specific transaction
 
 **Usage:** `iroha transaction get --hash <HASH>`
 
 ###### **Options:**
 
-* `-H`, `--hash <HASH>` — Transaction hash
+* `-H`, `--hash <HASH>` — Hash of the transaction to retrieve
 
 
 
 ## `iroha transaction ping`
 
-Empty transaction that just leaves a log message
+Send an empty transaction that logs a message
 
 **Usage:** `iroha transaction ping [OPTIONS] --msg <MSG>`
 
 ###### **Options:**
 
-* `-l`, `--log-level <LOG_LEVEL>` — TRACE, DEBUG, INFO, WARN, ERROR: grows more noticeable in this order
+* `-l`, `--log-level <LOG_LEVEL>` — Log levels: TRACE, DEBUG, INFO, WARN, ERROR (in increasing order of visibility)
 
   Default value: `INFO`
 * `-m`, `--msg <MSG>` — Log message
@@ -1133,19 +1161,19 @@ Empty transaction that just leaves a log message
 
 ## `iroha transaction wasm`
 
-Transaction constructed from a Wasm executable input
+Send a transaction using Wasm input
 
 **Usage:** `iroha transaction wasm [OPTIONS]`
 
 ###### **Options:**
 
-* `-p`, `--path <PATH>` — Specify a path to the Wasm file or skip this arg to read from stdin
+* `-p`, `--path <PATH>` — Path to the Wasm file. If omitted, reads from stdin
 
 
 
 ## `iroha transaction stdin`
 
-Transaction constructed from instructions as a JSON5 stdin
+Send a transaction using JSON5 input from stdin
 
 **Usage:** `iroha transaction stdin`
 
@@ -1153,30 +1181,30 @@ Transaction constructed from instructions as a JSON5 stdin
 
 ## `iroha role`
 
-Read/Write roles
+Read and write roles
 
 **Usage:** `iroha role <COMMAND>`
 
 ###### **Subcommands:**
 
-* `permission` — Read/Write role permissions
-* `list` — List role ids
-* `register` — Register role and grant it to you registrant
-* `unregister` — Unregister role
+* `permission` — Read and write role permissions
+* `list` — List role IDs
+* `register` — Register a role and grant it to the registrant
+* `unregister` — Unregister a role
 
 
 
 ## `iroha role permission`
 
-Read/Write role permissions
+Read and write role permissions
 
 **Usage:** `iroha role permission <COMMAND>`
 
 ###### **Subcommands:**
 
 * `list` — List role permissions
-* `grant` — Grant role permission constructed from a JSON5 stdin
-* `revoke` — Revoke role permission constructed from a JSON5 stdin
+* `grant` — Grant role permission using JSON5 input from stdin
+* `revoke` — Revoke role permission using JSON5 input from stdin
 
 
 
@@ -1188,49 +1216,49 @@ List role permissions
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Role name as double-quoted string
+* `-i`, `--id <ID>` — Role name
 
 
 
 ## `iroha role permission grant`
 
-Grant role permission constructed from a JSON5 stdin
+Grant role permission using JSON5 input from stdin
 
 **Usage:** `iroha role permission grant --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Role name as double-quoted string
+* `-i`, `--id <ID>` — Role name
 
 
 
 ## `iroha role permission revoke`
 
-Revoke role permission constructed from a JSON5 stdin
+Revoke role permission using JSON5 input from stdin
 
 **Usage:** `iroha role permission revoke --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Role name as double-quoted string
+* `-i`, `--id <ID>` — Role name
 
 
 
 ## `iroha role list`
 
-List role ids
+List role IDs
 
 **Usage:** `iroha role list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all role ids
+* `all` — List all role IDs
 
 
 
 ## `iroha role list all`
 
-List all role ids
+List all role IDs
 
 **Usage:** `iroha role list all`
 
@@ -1238,56 +1266,56 @@ List all role ids
 
 ## `iroha role register`
 
-Register role and grant it to you registrant
+Register a role and grant it to the registrant
 
 **Usage:** `iroha role register --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Role name as double-quoted string
+* `-i`, `--id <ID>` — Role name
 
 
 
 ## `iroha role unregister`
 
-Unregister role
+Unregister a role
 
 **Usage:** `iroha role unregister --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Role name as double-quoted string
+* `-i`, `--id <ID>` — Role name
 
 
 
 ## `iroha parameter`
 
-Read/Write parameters
+Read and write system parameters
 
 **Usage:** `iroha parameter <COMMAND>`
 
 ###### **Subcommands:**
 
-* `list` — List parameters
-* `set` — Set parameter constructed from a JSON5 stdin
+* `list` — List system parameters
+* `set` — Set a system parameter using JSON5 input from stdin
 
 
 
 ## `iroha parameter list`
 
-List parameters
+List system parameters
 
 **Usage:** `iroha parameter list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all parameters
+* `all` — List all system parameters
 
 
 
 ## `iroha parameter list all`
 
-List all parameters
+List all system parameters
 
 **Usage:** `iroha parameter list all`
 
@@ -1295,7 +1323,7 @@ List all parameters
 
 ## `iroha parameter set`
 
-Set parameter constructed from a JSON5 stdin
+Set a system parameter using JSON5 input from stdin
 
 **Usage:** `iroha parameter set`
 
@@ -1303,35 +1331,37 @@ Set parameter constructed from a JSON5 stdin
 
 ## `iroha trigger`
 
-TODO Read/Write triggers
+Read and write triggers
 
 **Usage:** `iroha trigger <COMMAND>`
 
 ###### **Subcommands:**
 
-* `list` — List trigger ids
-* `get` — Read a single trigger details
-* `register` — TODO Register trigger
-* `unregister` — Unregister trigger
-* `meta` — Read/Write metadata
+* `list` — List trigger IDs
+* `get` — Retrieve details of a specific trigger
+* `register` — TODO: Register a trigger
+* `unregister` — Unregister a trigger
+* `mint` — Increase the number of trigger executions
+* `burn` — Decrease the number of trigger executions
+* `meta` — Read and write metadata
 
 
 
 ## `iroha trigger list`
 
-List trigger ids
+List trigger IDs
 
 **Usage:** `iroha trigger list <COMMAND>`
 
 ###### **Subcommands:**
 
-* `all` — List all trigger ids
+* `all` — List all trigger IDs
 
 
 
 ## `iroha trigger list all`
 
-List all trigger ids
+List all trigger IDs
 
 **Usage:** `iroha trigger list all`
 
@@ -1339,19 +1369,19 @@ List all trigger ids
 
 ## `iroha trigger get`
 
-Read a single trigger details
+Retrieve details of a specific trigger
 
 **Usage:** `iroha trigger get --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Trigger name as double-quoted string
+* `-i`, `--id <ID>` — Trigger name
 
 
 
 ## `iroha trigger register`
 
-TODO Register trigger
+TODO: Register a trigger
 
 **Usage:** `iroha trigger register`
 
@@ -1359,33 +1389,59 @@ TODO Register trigger
 
 ## `iroha trigger unregister`
 
-Unregister trigger
+Unregister a trigger
 
 **Usage:** `iroha trigger unregister --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Trigger name as double-quoted string
+* `-i`, `--id <ID>` — Trigger name
+
+
+
+## `iroha trigger mint`
+
+Increase the number of trigger executions
+
+**Usage:** `iroha trigger mint --id <ID> --repetitions <REPETITIONS>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Trigger name
+* `-r`, `--repetitions <REPETITIONS>` — Amount of change (integer)
+
+
+
+## `iroha trigger burn`
+
+Decrease the number of trigger executions
+
+**Usage:** `iroha trigger burn --id <ID> --repetitions <REPETITIONS>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Trigger name
+* `-r`, `--repetitions <REPETITIONS>` — Amount of change (integer)
 
 
 
 ## `iroha trigger meta`
 
-Read/Write metadata
+Read and write metadata
 
 **Usage:** `iroha trigger meta <COMMAND>`
 
 ###### **Subcommands:**
 
-* `get` — Read a value from a key-value store
-* `set` — Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
-* `remove` — Delete an entry from a key-value store
+* `get` — Retrieve a value from the key-value store
+* `set` — Create or update an entry in the key-value store using JSON5 input from stdin
+* `remove` — Delete an entry from the key-value store
 
 
 
 ## `iroha trigger meta get`
 
-Read a value from a key-value store
+Retrieve a value from the key-value store
 
 **Usage:** `iroha trigger meta get --id <ID> --key <KEY>`
 
@@ -1398,7 +1454,7 @@ Read a value from a key-value store
 
 ## `iroha trigger meta set`
 
-Create or update an entry in a key-value store, with a value constructed from a JSON5 stdin
+Create or update an entry in the key-value store using JSON5 input from stdin
 
 **Usage:** `iroha trigger meta set --id <ID> --key <KEY>`
 
@@ -1411,7 +1467,7 @@ Create or update an entry in a key-value store, with a value constructed from a 
 
 ## `iroha trigger meta remove`
 
-Delete an entry from a key-value store
+Delete an entry from the key-value store
 
 **Usage:** `iroha trigger meta remove --id <ID> --key <KEY>`
 
@@ -1424,19 +1480,28 @@ Delete an entry from a key-value store
 
 ## `iroha executor`
 
-Update executor
+Read and write the executor
 
 **Usage:** `iroha executor <COMMAND>`
 
 ###### **Subcommands:**
 
-* `upgrade` — Upgrade executor
+* `data-model` — Retrieve the executor data model
+* `upgrade` — Upgrade the executor
+
+
+
+## `iroha executor data-model`
+
+Retrieve the executor data model
+
+**Usage:** `iroha executor data-model`
 
 
 
 ## `iroha executor upgrade`
 
-Upgrade executor
+Upgrade the executor
 
 **Usage:** `iroha executor upgrade --path <PATH>`
 
@@ -1448,7 +1513,7 @@ Upgrade executor
 
 ## `iroha markdown-help`
 
-Dump a markdown help of this CLI to stdout
+Output CLI documentation in Markdown format
 
 **Usage:** `iroha markdown-help`
 
