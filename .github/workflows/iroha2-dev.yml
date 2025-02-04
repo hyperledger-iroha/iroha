@@ -58,7 +58,7 @@ jobs:
           registry: docker.soramitsu.co.jp
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_TOKEN }}
-      - name: Build and push iroha2:dev image
+      - name: Build and push iroha:dev image
         uses: docker/build-push-action@v6
         with:
           context: .
