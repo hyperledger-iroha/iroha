@@ -15,9 +15,3 @@ iroha_wasm_builder check path/to/project
 ```bash
 iroha_wasm_builder build path/to/project --out-file ./smartcontract.wasm
 ```
-
-**Build with options:**
-
-```bash
-iroha_wasm_builder build path/to/project --optimize --format --out-file ./smartcontract.wasm
-```
