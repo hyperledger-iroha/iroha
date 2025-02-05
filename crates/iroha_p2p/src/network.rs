@@ -29,7 +29,7 @@ use crate::{
         Connection, ConnectionId,
     },
     unbounded_with_len, Broadcast, Error, NetworkMessage, OnlinePeers, Post, UpdatePeers,
-    UpdateTopology,
+    UpdateTopology, UpdateOnlinePeers
 };
 
 /// [`NetworkBase`] actor handle.
@@ -47,6 +47,8 @@ pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     update_topology_sender: mpsc::UnboundedSender<UpdateTopology>,
     /// [`UpdatePeers`] message sender
     update_peers_sender: mpsc::UnboundedSender<UpdatePeers>,
+    /// [`UpdateOnlinePeers`] message sender
+    update_online_peers_sender: mpsc::UnboundedSender<UpdateOnlinePeers>,
     /// Sender of [`NetworkMessage`] message
     network_message_sender: unbounded_with_len::Sender<NetworkMessage<T>>,
     /// Key exchange used by network
@@ -62,6 +64,7 @@ impl<T: Pload, K: Kex, E: Enc> Clone for NetworkBaseHandle<T, K, E> {
             online_peers_receiver: self.online_peers_receiver.clone(),
             update_topology_sender: self.update_topology_sender.clone(),
             update_peers_sender: self.update_peers_sender.clone(),
+            update_online_peers_sender: self.update_online_peers_sender.clone(),
             network_message_sender: self.network_message_sender.clone(),
             _key_exchange: core::marker::PhantomData::<K>,
             _encryptor: core::marker::PhantomData::<E>,
@@ -92,6 +95,7 @@ impl<T: Pload, K: Kex + Sync, E: Enc + Sync> NetworkBaseHandle<T, K, E> {
             mpsc::unbounded_channel();
         let (update_topology_sender, update_topology_receiver) = mpsc::unbounded_channel();
         let (update_peers_sender, update_peers_receiver) = mpsc::unbounded_channel();
+        let (update_online_peers_sender, update_online_peers_receiver) = mpsc::unbounded_channel();
         let (network_message_sender, network_message_receiver) =
             unbounded_with_len::unbounded_channel();
         let (peer_message_sender, peer_message_receiver) = mpsc::channel(1);
@@ -108,6 +112,7 @@ impl<T: Pload, K: Kex + Sync, E: Enc + Sync> NetworkBaseHandle<T, K, E> {
             online_peers_sender,
             update_topology_receiver,
             update_peers_receiver,
+            update_online_peers_receiver,
             network_message_receiver,
             peer_message_receiver,
             peer_message_sender,
@@ -130,6 +135,7 @@ impl<T: Pload, K: Kex + Sync, E: Enc + Sync> NetworkBaseHandle<T, K, E> {
                 online_peers_receiver,
                 update_topology_sender,
                 update_peers_sender,
+                update_online_peers_sender,
                 network_message_sender,
                 _key_exchange: core::marker::PhantomData,
                 _encryptor: core::marker::PhantomData,
@@ -171,6 +177,13 @@ impl<T: Pload, K: Kex + Sync, E: Enc + Sync> NetworkBaseHandle<T, K, E> {
     /// Send [`UpdatePeers`] message on network actor.
     pub fn update_peers_addresses(&self, peers: UpdatePeers) {
         self.update_peers_sender
+            .send(peers)
+            .expect("NetworkBase must accept messages until there is at least one handle to it")
+    }
+
+    /// Send [`UpdateOnlinePeers`] message on network actor.
+    pub fn update_online_peers_addresses(&self, peers: UpdateOnlinePeers) {
+        self.update_online_peers_sender
             .send(peers)
             .expect("NetworkBase must accept messages until there is at least one handle to it")
     }
@@ -217,6 +230,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     update_topology_receiver: mpsc::UnboundedReceiver<UpdateTopology>,
     /// [`UpdatePeers`] message receiver
     update_peers_receiver: mpsc::UnboundedReceiver<UpdatePeers>,
+    /// [`UpdateOnlinePeers`] message receiver
+    update_online_peers_receiver: mpsc::UnboundedReceiver<UpdateOnlinePeers>,
     /// Receiver of [`Post`] message
     network_message_receiver: unbounded_with_len::Receiver<NetworkMessage<T>>,
     /// Channel to gather messages from all peers
@@ -265,6 +280,9 @@ impl<T: Pload, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 }
                 Some(update_peers) = self.update_peers_receiver.recv() => {
                     self.set_current_peers_addresses(update_peers);
+                }
+                Some(update_peers) = self.update_online_peers_receiver.recv() => {
+                    self.update_online_peers_addresses(update_peers);
                 }
                 // Frequency of update is relatively low, so it won't block other tasks from execution
                 _ = update_topology_interval.tick() => {
@@ -353,6 +371,15 @@ impl<T: Pload, K: Kex, E: Enc> NetworkBase<T, K, E> {
         debug!(?peers, "Network receive new peers addresses");
         self.current_peers_addresses = peers;
         self.update_topology()
+    }
+
+    // Updates the list of online peers with new addresses.  
+    // Useful when a peer needs to initiate its integration into the network.  
+    fn update_online_peers_addresses(&mut self, UpdateOnlinePeers(peers): UpdateOnlinePeers) {
+        debug!(?peers, "Add new online peers addresses");
+        for peer in &peers {
+            self.connect_peer(peer);
+        }
     }
 
     fn update_topology(&mut self) {
@@ -576,6 +603,10 @@ pub mod message {
     /// The message that is sent to [`NetworkBase`] to update peers addresses of the network.
     #[derive(Clone, Debug)]
     pub struct UpdatePeers(pub Vec<(PeerId, SocketAddr)>);
+
+    /// The message that is sent to [`NetworkBase`] to update online peers addresses of the network.
+    #[derive(Clone, Debug)]
+    pub struct UpdateOnlinePeers(pub Vec<Peer>);
 
     /// The message to be sent to the other [`Peer`].
     #[derive(Clone, Debug)]

@@ -11,7 +11,7 @@ use std::{
 use iroha_config::parameters::actual::TrustedPeers;
 use iroha_data_model::peer::{Peer, PeerId};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-use iroha_p2p::{Broadcast, UpdatePeers, UpdateTopology};
+use iroha_p2p::{Broadcast, UpdatePeers, UpdateTopology, UpdateOnlinePeers};
 use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
 use iroha_version::{Decode, Encode};
 use parity_scale_codec::{Error, Input};
@@ -116,7 +116,8 @@ impl PeersGossiper {
                     self.set_current_topology(update_topology);
                 }
                 _ = gossip_period.tick() => {
-                    self.gossip_peers()
+                    self.sync_online_peers();
+                    self.gossip_peers();
                 }
                 () = self.network.wait_online_peers_update(|_| ()) => {
                     self.gossip_peers();
@@ -144,6 +145,21 @@ impl PeersGossiper {
         });
 
         self.current_topology = topology.into_iter().collect();
+    }
+
+    fn sync_online_peers(&self) {
+        let online_peers = self.network.online_peers(Clone::clone);
+        if online_peers.len() == 0 {
+            iroha_logger::debug!("Peer is disconnected from the network");
+
+            let peers: Vec<_> = self.initial_peers.iter()
+            .map(|(id, address)| Peer::new(address.clone(), id.clone()))
+            .chain(self.gossip_peers.iter()
+                .map(|(id, addresses)| Peer::new(choose_address_majority_rule(addresses), id.clone())))
+            .collect();
+        
+            self.network.update_online_peers_addresses(UpdateOnlinePeers(peers));
+        }
     }
 
     fn gossip_peers(&self) {
