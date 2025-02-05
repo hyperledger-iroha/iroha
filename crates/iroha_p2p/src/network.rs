@@ -28,8 +28,8 @@ use crate::{
         message::*,
         Connection, ConnectionId,
     },
-    unbounded_with_len, Broadcast, Error, NetworkMessage, OnlinePeers, Post, UpdatePeers,
-    UpdateTopology, UpdateOnlinePeers
+    unbounded_with_len, Broadcast, Error, NetworkMessage, OnlinePeers, Post, UpdateOnlinePeers,
+    UpdatePeers, UpdateTopology,
 };
 
 /// [`NetworkBase`] actor handle.
@@ -373,8 +373,8 @@ impl<T: Pload, K: Kex, E: Enc> NetworkBase<T, K, E> {
         self.update_topology()
     }
 
-    // Updates the list of online peers with new addresses.  
-    // Useful when a peer needs to initiate its integration into the network.  
+    // Updates the list of online peers with new addresses.
+    // Useful when a peer needs to initiate its integration into the network.
     fn update_online_peers_addresses(&mut self, UpdateOnlinePeers(peers): UpdateOnlinePeers) {
         debug!(?peers, "Add new online peers addresses");
         for peer in &peers {
