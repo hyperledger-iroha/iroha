@@ -119,7 +119,7 @@ trait RunContext {
             Executable::Wasm(wasm) => {
                 if self.input_instructions() || self.output_instructions() {
                     eyre::bail!(
-                        "Incompatible `iroha transaction wasm` with `--input` `--output` flags"
+                        "Incompatible `--input` `--output` flags with `iroha transaction wasm`"
                     )
                 }
                 return self._submit(wasm);
@@ -127,7 +127,7 @@ trait RunContext {
             Executable::Instructions(instructions) => instructions.into_vec(),
         };
         if self.input_instructions() {
-            let mut acc: Vec<InstructionBox> = parse_json5_stdin()?;
+            let mut acc: Vec<InstructionBox> = parse_json5_stdin_unchecked()?;
             acc.append(&mut instructions);
             instructions = acc;
         }
@@ -724,7 +724,7 @@ mod account {
                     context.print_data(&permissions)
                 }
                 Grant(args) => {
-                    let permission: Permission = parse_json5_stdin()?;
+                    let permission: Permission = parse_json5_stdin(context)?;
                     let instruction =
                         iroha::data_model::isi::Grant::account_permission(permission, args.id);
                     context
@@ -732,7 +732,7 @@ mod account {
                         .wrap_err("Failed to grant the permission to the account")
                 }
                 Revoke(args) => {
-                    let permission: Permission = parse_json5_stdin()?;
+                    let permission: Permission = parse_json5_stdin(context)?;
                     let instruction =
                         iroha::data_model::isi::Revoke::account_permission(permission, args.id);
                     context
@@ -856,7 +856,7 @@ mod asset {
                     context.print_data(&value)
                 }
                 SetKeyValue(args) => {
-                    let value: Json = parse_json5_stdin()?;
+                    let value: Json = parse_json5_stdin(context)?;
                     let instruction =
                         iroha::data_model::isi::SetKeyValue::asset(args.id, args.key, value);
                     context.finish([instruction])
@@ -909,7 +909,7 @@ mod asset {
                     }
                     Register(args) => {
                         let mut entry = AssetDefinition::new(args.id, args.r#type);
-                        if args.unmintable {
+                        if args.mint_once {
                             entry = entry.mintable_once();
                         }
                         let instruction = iroha::data_model::isi::Register::asset_definition(entry);
@@ -942,9 +942,9 @@ mod asset {
             /// Asset definition in the format "asset#domain"
             #[arg(short, long)]
             pub id: AssetDefinitionId,
-            /// Whether the asset can be mint
+            /// Disables minting after the first instance
             #[arg(short, long)]
-            pub unmintable: bool,
+            pub mint_once: bool,
             /// Data type stored in the asset
             #[arg(short, long)]
             pub r#type: AssetType,
@@ -1178,7 +1178,7 @@ mod multisig {
 
     impl Run for Propose {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let instructions: Vec<InstructionBox> = parse_json5_stdin()?;
+            let instructions: Vec<InstructionBox> = parse_json5_stdin(context)?;
             let transaction_ttl_ms = self.transaction_ttl.map(|duration| {
                 duration
                     .as_millis()
@@ -1439,7 +1439,7 @@ mod query {
     impl Run for Stdin {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = Client::new(context.config().clone());
-            let query: AnyQueryBox = parse_json5_stdin()?;
+            let query: AnyQueryBox = parse_json5_stdin(context)?;
 
             match query {
                 AnyQueryBox::Singular(query) => {
@@ -1578,7 +1578,7 @@ mod transaction {
 
     impl Run for Stdin {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let instructions: Vec<InstructionBox> = parse_json5_stdin()?;
+            let instructions: Vec<InstructionBox> = parse_json5_stdin(context)?;
             context
                 .finish(instructions)
                 .wrap_err("Failed to submit parsed instructions")
@@ -1654,7 +1654,7 @@ mod role {
                     Ok(())
                 }
                 Grant(args) => {
-                    let permission: Permission = parse_json5_stdin()?;
+                    let permission: Permission = parse_json5_stdin(context)?;
                     let instruction =
                         iroha::data_model::isi::Grant::role_permission(permission, args.id);
                     context
@@ -1662,7 +1662,7 @@ mod role {
                         .wrap_err("Failed to grant the permission to the role")
                 }
                 Revoke(args) => {
-                    let permission: Permission = parse_json5_stdin()?;
+                    let permission: Permission = parse_json5_stdin(context)?;
                     let instruction =
                         iroha::data_model::isi::Revoke::role_permission(permission, args.id);
                     context
@@ -1733,7 +1733,7 @@ mod parameter {
 
     impl Run for Set {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let entry: Parameter = parse_json5_stdin()?;
+            let entry: Parameter = parse_json5_stdin(context)?;
             let instruction = SetParameter::new(entry);
             context.finish([instruction])
         }
@@ -1930,7 +1930,7 @@ mod metadata {
                                 context.print_data(&value)
                             }
                             Set(args) => {
-                                let value: Json = parse_json5_stdin()?;
+                                let value: Json = parse_json5_stdin(context)?;
                                 let instruction = iroha::data_model::isi::SetKeyValue::$constructor(
                                     args.id, args.key, value,
                                 );
@@ -1991,7 +1991,7 @@ mod metadata {
                         context.print_data(&value)
                     }
                     Set(args) => {
-                        let value: Json = parse_json5_stdin()?;
+                        let value: Json = parse_json5_stdin(context)?;
                         let instruction =
                             iroha::data_model::isi::SetKeyValue::trigger(args.id, args.key, value);
                         context.finish([instruction])
@@ -2016,7 +2016,17 @@ where
     Ok(())
 }
 
-fn parse_json5_stdin<T>() -> Result<T>
+fn parse_json5_stdin<T>(context: &impl RunContext) -> Result<T>
+where
+    T: for<'a> serde::Deserialize<'a>,
+{
+    if context.input_instructions() {
+        eyre::bail!("Incompatible `--input` flag with the command")
+    }
+    parse_json5_stdin_unchecked()
+}
+
+fn parse_json5_stdin_unchecked<T>() -> Result<T>
 where
     T: for<'a> serde::Deserialize<'a>,
 {

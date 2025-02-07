@@ -657,7 +657,7 @@ Register an asset definition
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
-* `-u`, `--unmintable` — Whether the asset can be mint
+* `-m`, `--mint-once` — Disables minting after the first instance
 * `-t`, `--type <TYPE>` — Data type stored in the asset
 
 
