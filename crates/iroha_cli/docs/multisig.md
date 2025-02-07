@@ -61,7 +61,7 @@ echo '"congratulations"' | iroha -o account meta set \
 
 __Explanation:__
 
-- Submits the contents of `../samples/instructions.json` as a proposal to the multi-signature __account__.
+- Proposes setting the string value "congratulations" for the key "success_marker" in the metadata of the multi-signature __account__.
 - The proposer automatically becomes the first __approver__.
 
 ## Listing Multi-Signature Transactions
@@ -130,4 +130,4 @@ __Explanation:__
 
 - Approves a proposal linked to the given __instructions hash__ for the multi-signature __account__.
 - Approval may lead to either execution or expiration of the proposal.
-- If the approval satisfies the quorum, but the multi-signature account lacks the required permissions to execute it, the final approval is dismissed.
+- If the approval meets the quorum but the multi-signature account lacks the necessary permissions to execute it, the final approval is discarded. Signatories who have not yet approved it can retry after the multi-signature account has acquired the required permissions.
