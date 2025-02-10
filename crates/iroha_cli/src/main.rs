@@ -1207,7 +1207,7 @@ mod nft {
             let value = client
                 .query(FindNfts)
                 .filter_with(|nft| nft.id.eq(nft_id))
-                .select_with(|nft| nft.metadata.key(key))
+                .select_with(|nft| nft.content.key(key))
                 .execute_single()
                 .wrap_err("Failed to get key-value")?;
 

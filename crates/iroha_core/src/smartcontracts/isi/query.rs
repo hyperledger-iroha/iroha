@@ -55,7 +55,7 @@ impl SortableQueryOutput for Asset {
 
 impl SortableQueryOutput for Nft {
     fn get_metadata_sorting_key(&self, key: &Name) -> Option<Json> {
-        self.metadata.get(key).cloned()
+        self.content.get(key).cloned()
     }
 }
 

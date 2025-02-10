@@ -274,7 +274,7 @@ type_descriptions! {
     // NFT
     Nft[NftProjection, NftPrototype]: NftId, DomainId, AccountId, PublicKey, Name, Metadata, Json {
         id(Id, NftIdProjector): NftId,
-        metadata(Metadata, NftMetadataProjector): Metadata,
+        content(Metadata, NftMetadataProjector): Metadata,
         owned_by(AccountId, NftOwnedByProjector): AccountId,
     }
     NftId[NftIdProjection, NftIdPrototype]: DomainId, Name {
