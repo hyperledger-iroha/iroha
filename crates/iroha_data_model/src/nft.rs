@@ -78,9 +78,9 @@ mod model {
     pub struct Nft {
         /// An Identification of the [`Nft`].
         pub id: NftId,
-        /// Metadata as a key-value store.
+        /// Content of the [`Nft`], as a key-value store.
         #[getset(get = "pub")]
-        pub metadata: Metadata,
+        pub content: Metadata,
         /// The account that owns this NFT.
         #[getset(get = "pub")]
         pub owned_by: AccountId,
@@ -94,17 +94,17 @@ mod model {
     #[serde(rename = "Nft")]
     #[ffi_type]
     pub struct NewNft {
-        /// The identification associated with the NFT builder.
+        /// An Identification of the [`Nft`].
         pub id: NftId,
-        /// Metadata associated with the NFT builder.
-        pub metadata: Metadata,
+        /// Content of the [`Nft`], as a key-value store.
+        pub content: Metadata,
     }
 }
 
 impl Nft {
     /// Constructor
-    pub fn new(id: NftId, metadata: Metadata) -> <Self as Registered>::With {
-        NewNft { id, metadata }
+    pub fn new(id: NftId, content: Metadata) -> <Self as Registered>::With {
+        NewNft { id, content }
     }
 }
 
