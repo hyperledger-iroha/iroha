@@ -1040,7 +1040,7 @@ mod nft {
                     let value = client
                         .query(FindNfts)
                         .filter_with(|nft| nft.id.eq(args.id))
-                        .select_with(|nft| nft.metadata.key(args.key))
+                        .select_with(|nft| nft.content.key(args.key))
                         .execute_single()
                         .wrap_err("Failed to get value")?;
                     context.print_data(&value)

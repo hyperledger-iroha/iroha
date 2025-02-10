@@ -52,7 +52,7 @@ fn client_register_nft_second_time_should_fail() -> eyre::Result<()> {
         .into_iter()
         .find(|nft| *nft.id() == nft_id)
         .unwrap();
-    assert_eq!(*nft.metadata(), metadata);
+    assert_eq!(*nft.content(), metadata);
 
     assert!(client.submit_blocking(register_nft).is_err());
 

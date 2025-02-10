@@ -12,7 +12,7 @@ impl Registrable for NewNft {
     fn build(self, authority: &AccountId) -> Self::Target {
         Self::Target {
             id: self.id,
-            metadata: self.metadata,
+            content: self.content,
             owned_by: authority.clone(),
         }
     }
@@ -94,7 +94,7 @@ pub mod isi {
                 .world
                 .nft_mut(&nft_id)
                 .map_err(Error::from)
-                .map(|nft| nft.metadata.insert(self.key.clone(), self.value.clone()))?;
+                .map(|nft| nft.content.insert(self.key.clone(), self.value.clone()))?;
 
             state_transaction
                 .world
@@ -118,7 +118,7 @@ pub mod isi {
             let nft_id = self.object;
 
             let value = state_transaction.world.nft_mut(&nft_id).and_then(|nft| {
-                nft.metadata
+                nft.content
                     .remove(&self.key)
                     .ok_or_else(|| FindError::MetadataKey(self.key.clone()))
             })?;

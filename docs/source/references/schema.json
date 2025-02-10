@@ -3161,7 +3161,7 @@
         "type": "NftId"
       },
       {
-        "name": "metadata",
+        "name": "content",
         "type": "Metadata"
       }
     ]
@@ -3185,7 +3185,7 @@
         "type": "NftId"
       },
       {
-        "name": "metadata",
+        "name": "content",
         "type": "Metadata"
       },
       {
