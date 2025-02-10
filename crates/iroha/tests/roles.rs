@@ -263,3 +263,16 @@ fn grant_revoke_role_permissions() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+#[should_panic(expected = "a peer exited unexpectedly")]
+fn grant_unexisting_role_in_genesis_fail() {
+    // Grant Alice UNEXISTING role
+    let alice_id = ALICE_ID.clone();
+    let role_id = "UNEXISTING".parse::<RoleId>().unwrap();
+    let grant_genesis_role = Grant::account_role(role_id, alice_id);
+
+    let _result = NetworkBuilder::new()
+    .with_genesis_instruction(grant_genesis_role)
+    .start_blocking();
+}
