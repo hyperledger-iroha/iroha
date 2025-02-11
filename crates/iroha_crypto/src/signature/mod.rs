@@ -66,6 +66,11 @@ impl Signature {
         }
     }
 
+    /// Get the raw payload of the signature.
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
     /// Creates new signature from its raw payload and public key.
     ///
     /// **This method does not sign the payload.** Use [`Signature::new`] for this purpose.
