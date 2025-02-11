@@ -337,9 +337,9 @@ impl GenesisDomainBuilder {
     }
 
     /// Add [`AssetDefinition`] to this domain.
-    pub fn asset(mut self, asset_name: Name, asset_type: AssetType) -> Self {
+    pub fn asset(mut self, asset_name: Name, asset_spec: NumericSpec) -> Self {
         let asset_definition_id = AssetDefinitionId::new(self.domain_id.clone(), asset_name);
-        let asset_definition = AssetDefinition::new(asset_definition_id, asset_type);
+        let asset_definition = AssetDefinition::new(asset_definition_id, asset_spec);
         self.instructions
             .push(Register::asset_definition(asset_definition).into());
         self
@@ -501,10 +501,7 @@ mod tests {
             .finish_domain()
             .domain("meadow".parse().unwrap())
             .account(public_key["mad_hatter"].clone())
-            .asset(
-                "hats".parse().unwrap(),
-                AssetType::Numeric(NumericSpec::default()),
-            )
+            .asset("hats".parse().unwrap(), NumericSpec::default())
             .finish_domain();
 
         // In real cases executor should be constructed from a wasm blob
