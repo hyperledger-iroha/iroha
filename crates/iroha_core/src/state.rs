@@ -667,6 +667,18 @@ pub trait WorldReadOnly {
         self.nfts().iter().map(|(_, nft)| nft)
     }
 
+    /// Iterate NFTs in domain
+    #[allow(clippy::type_complexity)]
+    fn nfts_in_domain_iter<'slf>(
+        &'slf self,
+        id: &DomainId,
+    ) -> core::iter::Map<RangeIter<'slf, NftId, Nft>, fn((&'slf NftId, &'slf Nft)) -> &'slf Nft>
+    {
+        self.nfts()
+            .range::<dyn AsNftIdDomainCompare>(NftByDomainBounds::new(id))
+            .map(|(_, ad)| ad)
+    }
+
     // Role-related methods
 
     /// Get `Role` and return reference to it.
@@ -1764,6 +1776,60 @@ mod range_bounds {
         target: AssetDefinitionId,
         key: AssetDefinitionIdDomainCompare<'_>,
         trait: AsAssetDefinitionIdDomainCompare
+    }
+
+    /// `DomainId` wrapper for fetching NFTs belonging to a domain from the global store
+    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
+    pub struct NftIdDomainCompare<'a> {
+        domain_id: &'a DomainId,
+        name: MinMaxExt<&'a Name>,
+    }
+
+    /// Bounds for range quired over NFTs by domain
+    pub struct NftByDomainBounds<'a> {
+        start: NftIdDomainCompare<'a>,
+        end: NftIdDomainCompare<'a>,
+    }
+
+    impl<'a> NftByDomainBounds<'a> {
+        /// Create range bounds for range quires over NFTs by domain
+        pub fn new(domain_id: &'a DomainId) -> Self {
+            Self {
+                start: NftIdDomainCompare {
+                    domain_id,
+                    name: MinMaxExt::Min,
+                },
+                end: NftIdDomainCompare {
+                    domain_id,
+                    name: MinMaxExt::Max,
+                },
+            }
+        }
+    }
+
+    impl<'a> RangeBounds<dyn AsNftIdDomainCompare + 'a> for NftByDomainBounds<'a> {
+        fn start_bound(&self) -> Bound<&(dyn AsNftIdDomainCompare + 'a)> {
+            Bound::Excluded(&self.start)
+        }
+
+        fn end_bound(&self) -> Bound<&(dyn AsNftIdDomainCompare + 'a)> {
+            Bound::Excluded(&self.end)
+        }
+    }
+
+    impl AsNftIdDomainCompare for NftId {
+        fn as_key(&self) -> NftIdDomainCompare<'_> {
+            NftIdDomainCompare {
+                domain_id: &self.domain,
+                name: (&self.name).into(),
+            }
+        }
+    }
+
+    impl_as_dyn_key! {
+        target: NftId,
+        key: NftIdDomainCompare<'_>,
+        trait: AsNftIdDomainCompare
     }
 
     /// `AccountId` wrapper for fetching assets beloning to an account from the global store
