@@ -170,6 +170,15 @@ pub mod isi {
                     .remove(asset_definition_id.clone());
             }
 
+            let remove_nfts: Vec<NftId> = state_transaction
+                .world
+                .nfts_in_domain_iter(&domain_id)
+                .map(|nft| nft.id().clone())
+                .collect();
+            for nft_id in remove_nfts {
+                state_transaction.world.nfts.remove(nft_id.clone());
+            }
+
             if state_transaction
                 .world
                 .domains
