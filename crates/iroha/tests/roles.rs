@@ -273,6 +273,6 @@ fn grant_unexisting_role_in_genesis_fail() {
     let grant_genesis_role = Grant::account_role(role_id, alice_id);
 
     let _result = NetworkBuilder::new()
-    .with_genesis_instruction(grant_genesis_role)
-    .start_blocking();
+        .with_genesis_instruction(grant_genesis_role)
+        .start_blocking();
 }
