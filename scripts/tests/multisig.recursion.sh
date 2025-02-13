@@ -64,7 +64,7 @@ SIGS_012345=(${SIGNATORIES[0]} $MSA_12345)
 ./iroha multisig register --account $MSA_012345 --signatories ${SIGS_012345[*]} --weights 1 1 --quorum 2
 
 # propose a multisig transaction
-INSTRUCTIONS="../scripts/tests/instructions.json"
+INSTRUCTIONS="../scripts/tests/multisig.instructions.json"
 cat $INSTRUCTIONS | ./iroha --config "client.0.toml" multisig propose --account $MSA_012345
 
 get_list_as_signatory() {

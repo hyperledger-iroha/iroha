@@ -758,6 +758,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap-markdown"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ebc67e6266e14f8b31541c2f204724fa2ac7ad5c17d6f5908fbb92a60f42cff"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "clap_builder"
 version = "4.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1610,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "executor_custom_data_model"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
@@ -2908,7 +2917,7 @@ checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
 
 [[package]]
 name = "iroha"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "assert_matches",
  "assertables",
@@ -2956,9 +2965,10 @@ dependencies = [
 
 [[package]]
 name = "iroha_cli"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "clap",
+ "clap-markdown",
  "color-eyre",
  "derive_more",
  "erased-serde",
@@ -2980,7 +2990,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_codec"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "clap",
  "colored",
@@ -2997,7 +3007,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_config"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "assertables",
  "cfg-if",
@@ -3025,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_config_base"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "derive_more",
  "drop_bomb",
@@ -3044,7 +3054,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_config_base_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "darling",
  "expect-test",
@@ -3060,7 +3070,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_core"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "async-trait",
  "criterion",
@@ -3102,7 +3112,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_crypto"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "aead",
  "amcl",
@@ -3144,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_data_model"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "base64 0.22.1",
  "criterion",
@@ -3171,7 +3181,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_data_model_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "darling",
  "derive_more",
@@ -3190,7 +3200,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "darling",
  "impls",
@@ -3206,7 +3216,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_executor"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_executor_data_model",
  "iroha_executor_derive",
@@ -3219,7 +3229,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_executor_data_model"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "derive_more",
  "iroha_data_model",
@@ -3231,7 +3241,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_executor_data_model_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_executor_data_model",
  "manyhow",
@@ -3242,7 +3252,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_executor_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "darling",
  "iroha_macro_utils",
@@ -3254,7 +3264,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_ffi"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "derive_more",
  "getset",
@@ -3264,7 +3274,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_ffi_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "darling",
  "getset",
@@ -3281,7 +3291,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_futures"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_config",
  "iroha_futures_derive",
@@ -3297,7 +3307,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_futures_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_macro_utils",
  "manyhow",
@@ -3308,7 +3318,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_genesis"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "derive_more",
  "eyre",
@@ -3325,7 +3335,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_kagami"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "clap",
  "color-eyre",
@@ -3344,7 +3354,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_logger"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "color-eyre",
  "console-subscriber",
@@ -3363,14 +3373,14 @@ dependencies = [
 
 [[package]]
 name = "iroha_macro"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_derive",
 ]
 
 [[package]]
 name = "iroha_macro_utils"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "darling",
  "drop_bomb",
@@ -3382,7 +3392,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_numeric"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "derive_more",
  "displaydoc",
@@ -3398,7 +3408,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_p2p"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3420,7 +3430,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_primitives"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "derive_more",
  "displaydoc",
@@ -3442,7 +3452,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_primitives_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_numeric",
  "iroha_primitives",
@@ -3454,7 +3464,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_schema"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "impls",
  "iroha_schema_derive",
@@ -3465,7 +3475,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_schema_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "darling",
  "iroha_macro_utils",
@@ -3479,7 +3489,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_schema_gen"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_crypto",
  "iroha_data_model",
@@ -3491,7 +3501,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_smart_contract"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "derive_more",
  "displaydoc",
@@ -3506,7 +3516,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_smart_contract_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_macro_utils",
  "manyhow",
@@ -3517,7 +3527,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_smart_contract_utils"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "cfg-if",
  "getrandom",
@@ -3528,7 +3538,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_swarm"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "clap",
  "color-eyre",
@@ -3551,7 +3561,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_telemetry"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3577,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_telemetry_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_macro_utils",
  "manyhow",
@@ -3589,7 +3599,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_test_network"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "backoff",
  "color-eyre",
@@ -3622,7 +3632,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_test_samples"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_crypto",
  "iroha_data_model",
@@ -3631,7 +3641,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_torii"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "async-trait",
  "axum 0.7.5",
@@ -3666,14 +3676,14 @@ dependencies = [
 
 [[package]]
 name = "iroha_torii_const"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_primitives",
 ]
 
 [[package]]
 name = "iroha_trigger"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_smart_contract",
  "iroha_smart_contract_utils",
@@ -3682,7 +3692,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_trigger_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "darling",
  "iroha_macro_utils",
@@ -3694,7 +3704,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_version"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_data_model",
  "iroha_logger",
@@ -3708,7 +3718,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_version_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "darling",
  "iroha_macro",
@@ -3725,7 +3735,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_wasm_builder"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "clap",
  "color-eyre",
@@ -3740,7 +3750,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_wasm_codec"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_wasm_codec_derive",
  "parity-scale-codec",
@@ -3750,7 +3760,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_wasm_codec_derive"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_macro_utils",
  "manyhow",
@@ -3761,7 +3771,7 @@ dependencies = [
 
 [[package]]
 name = "iroha_wasm_test_runner"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "anyhow",
  "wasmtime",
@@ -3769,7 +3779,7 @@ dependencies = [
 
 [[package]]
 name = "irohad"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "assertables",
  "clap",
@@ -3921,7 +3931,7 @@ dependencies = [
 
 [[package]]
 name = "kura_inspector"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "clap",
  "iroha_core",
@@ -4170,7 +4180,7 @@ dependencies = [
 
 [[package]]
 name = "mint_rose_trigger_data_model"
-version = "2.0.0-rc.1.0"
+version = "2.0.0-rc.1.1"
 dependencies = [
  "iroha_data_model",
  "serde",
