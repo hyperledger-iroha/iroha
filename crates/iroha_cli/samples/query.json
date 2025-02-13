@@ -1,5 +1,32 @@
 {
-  "Singular": {
-    "FindParameters": null
+  "Iterable": {
+    "query": {
+      "FindAccounts": {
+        "query": null,
+        "predicate": {
+          "Atom": {
+            "Metadata": {
+              "Key": {
+                "key": "key",
+                "projection": {
+                  "Atom": {
+                    "Equals": "value"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "selector": [
+          {
+            "Id": {
+              "Signatory": {
+                "Atom": null
+              }
+            }
+          }
+        ]
+      }
+    }
   }
 }
