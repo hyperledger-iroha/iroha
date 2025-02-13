@@ -414,7 +414,7 @@ fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
     if !profile.is_optimized() {
         client.submit_all_blocking::<InstructionBox>([InstructionBox::SetParameter(
             SetParameter::new(Parameter::Executor(SmartContractParameter::Fuel(
-                std::num::NonZeroU64::new(80_000_000_u64).expect("Fuel must be positive."),
+                std::num::NonZeroU64::new(90_000_000_u64).expect("Fuel must be positive."),
             ))),
         )])?;
     }
