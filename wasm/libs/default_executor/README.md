@@ -4,5 +4,5 @@ Use the [Wasm Builder CLI](../../../crates/iroha_wasm_builder) in order to build
 
 ```bash
 cargo run --bin iroha_wasm_builder -- \
-  build ./wasm/libs/default_executor --optimize --out-file ./defaults/executor.wasm
+  build ./wasm/libs/default_executor --profile=release --out-file ./defaults/executor.wasm
 ```
