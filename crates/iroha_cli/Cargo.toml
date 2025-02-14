@@ -34,6 +34,7 @@ thiserror = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
 eyre = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+clap-markdown = "0.1.4"
 humantime = { workspace = true }
 json5 = { workspace = true }
 serde = { workspace = true }

@@ -78,7 +78,7 @@ Prerequisites:
 - (Optional) Build the latest Iroha image:
 
   ```bash
-  docker build . -t hyperledger/iroha2:dev
+  docker build . -t hyperledger/iroha:dev
   ```
 
   If you skip this step, the Iroha container will be built using the latest available image.
@@ -181,7 +181,7 @@ Iroha stores blocks and snapshots in the `storage` directory, which is created a
 
 Multiple instances of Iroha peer and client binaries can be run on the same physical machine and in the same working directory. However, we recommend to give each instance a clean new working directory.
 
-The provided `docker-compose` file showcases a minimum viable network and the general methods of using the `hyperledger/iroha2:dev` docker image for deploying a network of peers.
+The provided `docker-compose` file showcases a minimum viable network and the general methods of using the `hyperledger/iroha:dev` docker image for deploying a network of peers.
 
 ## Further Reading
 
