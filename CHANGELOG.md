@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2.0.0-rc.1.1] - 2025-02-12
+
+### Added
+
+- add `iroha transaction get` and other important commands (#5289)
+
 ## [2.0.0-rc.1.0] - 2024-12-06
 
 ### Added

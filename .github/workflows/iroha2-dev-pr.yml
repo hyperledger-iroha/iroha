@@ -36,6 +36,9 @@ jobs:
       - name: Check schema.json
         if: always()
         run: ./scripts/tests/consistency.sh schema
+      - name: Check CommandLineHelp.md
+        if: always()
+        run: ./scripts/tests/consistency.sh cli-help
       - name: Check Docker Compose configurations
         if: always()
         run: ./scripts/tests/consistency.sh docker-compose
@@ -119,7 +122,7 @@ jobs:
           --all-features
           --branch --no-report
       - name: Generate lcov report
-        run: cargo llvm-cov report --doctests --lcov --output-path lcov.info
+        run: cargo llvm-cov report --doctests --ignore-filename-regex 'iroha_cli|iroha_torii' --lcov --output-path lcov.info
       - name: Upload lcov report
         uses: actions/upload-artifact@v4
         with:
@@ -160,12 +163,12 @@ jobs:
         uses: docker/setup-buildx-action@v2
         with:
           install: true
-      - name: Build and push iroha2:dev image
+      - name: Build and push iroha:dev image
         uses: docker/build-push-action@v6
         if: always()
         with:
           push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha2:dev-${{ github.event.pull_request.head.sha }}
+          tags: docker.soramitsu.co.jp/iroha2/iroha:dev-${{ github.event.pull_request.head.sha }}
           labels: commit=${{ github.sha }}
           build-args: TAG=dev
           # This context specification is required
