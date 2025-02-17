@@ -41,7 +41,7 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build and push iroha2:dev-nightly image
+      - name: Build and push iroha:dev-nightly image
         uses: docker/build-push-action@v6
         with:
           push: true
