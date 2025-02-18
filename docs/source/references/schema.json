@@ -3041,11 +3041,11 @@
       },
       {
         "name": "proposed_at_ms",
-        "type": "NonZero<u64>"
+        "type": "u64"
       },
       {
         "name": "expires_at_ms",
-        "type": "NonZero<u64>"
+        "type": "u64"
       },
       {
         "name": "approvals",

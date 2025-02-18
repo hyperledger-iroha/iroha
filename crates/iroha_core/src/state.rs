@@ -2221,7 +2221,7 @@ mod tests {
         let assets = accounts
             .into_iter()
             .zip(asset_definitions)
-            .map(|(account, asset_definiton)| AssetId::new(asset_definiton, account))
+            .map(|(account, asset_definition)| AssetId::new(asset_definition, account))
             .map(|asset| (asset, ()));
 
         let map: Storage<_, _> = assets.collect();

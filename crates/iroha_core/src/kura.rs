@@ -888,7 +888,7 @@ mod tests {
         assert_eq!(block_store.read_block_index(2).unwrap(), (6, 3));
         assert_eq!(block_store.read_block_index(3).unwrap(), (1, 2));
 
-        // or equivilant
+        // or equivalent
         {
             let should_be = indices([(2, 9), (0, 0), (6, 3), (1, 2)]);
             let mut is = indices([(0, 0), (0, 0), (0, 0), (0, 0)]);

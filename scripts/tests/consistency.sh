@@ -13,6 +13,11 @@ case $1 in
             echo 'Please re-generate schema with `cargo run --release --bin kagami -- schema > docs/source/references/schema.json`'
             exit 1
         };;
+    "cli-help")
+        cargo run --release --bin iroha -- markdown-help | diff - crates/iroha_cli/CommandLineHelp.md || {
+            echo 'Please re-generate command-line help with `cargo run --bin iroha -- markdown-help > crates/iroha_cli/CommandLineHelp.md`'
+            exit 1
+        };;
     "docker-compose")
         do_check() {
             cmd_base=$1
