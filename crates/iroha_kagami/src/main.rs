@@ -76,7 +76,6 @@ impl<T: Write> RunArgs<T> for Args {
     }
 }
 
-/// Parity Scale decoder for Iroha data types
 #[derive(Debug, ClapArgs, Clone)]
 struct MarkdownHelp;
 
