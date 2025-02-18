@@ -3882,7 +3882,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha256",
- "spinoff",
  "strum 0.25.0",
  "wasm-opt",
 ]
