@@ -13,22 +13,10 @@ cargo build --bin kagami
 This will place `kagami` inside the `target/debug/` directory (from the root of the repository).
 
 ## Usage
+See [Command-Line Help](CommandLineHelp.md).
 
-### Subcommands
-
-| Command                                             | Description                                                                                                                        |
-|-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| `crypto`                         | Generate cryptographic key pairs using the given algorithm and either private key or seed                                                                                                      |
-| `schema` | Generate the schema used for code generation in Iroha SDKs                                                                                           |
-| [`genesis`](docs/genesis.md) | Commands related to genesis                                                                                            |
-| [`codec`](docs/codec.md)                  | Commands related to codec |
-| [`kura`](docs/kura.md)                  | Commands related to block inspection |
-| [`swarm`](docs/swarm.md)                  | Commands related to Docker Compose configuration generation |
-| [`wasm`](docs/wasm.md)                  | Commands related to building smartcontracts |
-| `help`                                              | Print the help message for the tool or a subcommand   
-
-Run:
-
-```bash
-kagami --help
-```
+## Examples
+- [codec](docs/codec.md)
+- [kura](docs/kura.md)
+- [swarm](docs/swarm.md)
+- [wasm](docs/wasm.md)

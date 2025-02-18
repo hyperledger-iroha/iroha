@@ -3466,6 +3466,7 @@ name = "iroha_kagami"
 version = "2.0.0-rc.1.0"
 dependencies = [
  "clap",
+ "clap-markdown",
  "color-eyre",
  "derive_more",
  "inquire",

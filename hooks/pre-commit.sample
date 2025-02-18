@@ -15,6 +15,7 @@ cargo run --bin kagami -- genesis generate --executor executor.wasm --wasm-dir l
 cargo run --bin kagami -- schema > ./docs/source/references/schema.json
 # update command-line help
 cargo run --bin iroha -- markdown-help > ./crates/iroha_cli/CommandLineHelp.md
+cargo run --bin kagami -- markdown-help > ./crates/iroha_kagami/CommandLineHelp.md
 # update docker compose files
 cargo run --bin kagami -- swarm -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.single.yml -F
 cargo run --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.local.yml -F

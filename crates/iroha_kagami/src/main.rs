@@ -1,5 +1,5 @@
-//! CLI for generating Iroha sample configuration, genesis and
-//! cryptographic key pairs. To be used with all compliant Iroha
+//! CLI for generating Iroha sample configuration, genesis,
+//! cryptographic key pairs and other. To be used with all compliant Iroha
 //! installations.
 use std::io::{stdout, BufWriter, Write};
 
@@ -55,6 +55,8 @@ enum Args {
     /// Commands related to building wasm smartcontracts
     #[clap(subcommand)]
     Wasm(wasm::Args),
+    /// Output CLI documentation in Markdown format
+    MarkdownHelp(MarkdownHelp),
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -69,7 +71,20 @@ impl<T: Write> RunArgs<T> for Args {
             Kura(args) => args.run(writer),
             Swarm(args) => args.run(writer),
             Wasm(args) => args.run(writer),
+            MarkdownHelp(args) => args.run(writer),
         }
+    }
+}
+
+/// Parity Scale decoder for Iroha data types
+#[derive(Debug, ClapArgs, Clone)]
+struct MarkdownHelp;
+
+impl<T: Write> RunArgs<T> for MarkdownHelp {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let command_info = clap_markdown::help_markdown::<Args>();
+        writer.write_all(command_info.as_bytes())?;
+        Ok(())
     }
 }
 

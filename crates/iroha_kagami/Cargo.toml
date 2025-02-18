@@ -28,6 +28,7 @@ iroha_wasm_builder.workspace = true
 iroha_swarm = { path = "../iroha_swarm" }
 
 clap = { workspace = true, features = ["derive"] }
+clap-markdown = "0.1.4"
 serde = { workspace = true, features = ["derive"] }
 spinoff = { workspace = true, features = ["binary"] }
 owo-colors = { workspace = true, features = ["supports-colors"] }
