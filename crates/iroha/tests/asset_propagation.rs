@@ -15,6 +15,7 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount_on_a
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )))
+        .with_default_pipeline_time()
         .start_blocking()?;
     let mut peers = network.peers().iter();
     let peer_a = peers.next().unwrap();

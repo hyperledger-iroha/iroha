@@ -80,7 +80,9 @@ fn execute_trigger_should_produce_event() -> Result<()> {
 
 #[test]
 fn infinite_recursion_should_produce_one_call_per_block() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+        .with_default_pipeline_time()
+        .start_blocking()?;
     let test_client = network.client();
 
     let asset_definition_id = "rose#wonderland".parse()?;
@@ -155,10 +157,8 @@ fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<()> {
 
     // Checking results
     let new_asset_value = get_asset_value(&test_client, asset_id);
-    assert_eq!(
-        new_asset_value,
-        prev_asset_value.checked_add(Numeric::ONE).unwrap()
-    );
+    // There will be empty blocks, so we can't check for ==
+    assert!(new_asset_value >= prev_asset_value.checked_add(Numeric::ONE).unwrap());
     Ok(())
 }
 

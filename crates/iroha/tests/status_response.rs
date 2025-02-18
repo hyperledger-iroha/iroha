@@ -35,7 +35,10 @@ async fn check(client: &client::Client, blocks: u64) -> Result<()> {
 
 #[tokio::test]
 async fn json_and_scale_statuses_equality() -> Result<()> {
-    let network = NetworkBuilder::new().start().await?;
+    let network = NetworkBuilder::new()
+        .with_default_pipeline_time()
+        .start()
+        .await?;
     let client = network.client();
 
     check(&client, 1).await?;

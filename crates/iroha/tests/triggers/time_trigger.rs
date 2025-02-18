@@ -24,8 +24,8 @@ fn curr_time() -> Duration {
 }
 
 #[test]
-fn mint_asset_after_3_sec() -> Result<()> {
-    const GAP: Duration = Duration::from_secs(3);
+fn mint_asset_after_5_sec() -> Result<()> {
+    const GAP: Duration = Duration::from_secs(5);
 
     let (network, _rt) = NetworkBuilder::new()
         .with_default_pipeline_time()
@@ -121,7 +121,8 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
 
     for _ in event_listener.take(CHECKS_COUNT) {
         let new_value = get_asset_value(&test_client, asset_id.clone());
-        assert_eq!(new_value, prev_value.checked_add(Numeric::ONE).unwrap());
+        // There will be empty blocks, so we can't check for ==
+        assert!(new_value >= prev_value.checked_add(Numeric::ONE).unwrap());
         prev_value = new_value;
 
         // ISI just to create a new block

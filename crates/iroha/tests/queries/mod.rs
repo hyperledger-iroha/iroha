@@ -35,7 +35,9 @@ fn too_big_fetch_size_is_not_allowed() {
 
 #[test]
 fn find_blocks_reversed() -> eyre::Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+        .with_default_pipeline_time()
+        .start_blocking()?;
     let client = network.client();
 
     client.submit_blocking(Register::domain(Domain::new("domain1".parse()?)))?;
