@@ -38,10 +38,6 @@ pub mod isi {
             let nft = self.object.build(authority);
             let nft_id = nft.id.clone();
 
-            state_transaction
-                .world
-                .domain(&nft_id.domain)
-                .expect("INTERNAL BUG: Can't find domain of NFT to register");
             if state_transaction.world.nft(&nft_id).is_ok() {
                 return Err(RepetitionError {
                     instruction: InstructionType::Register,
@@ -49,6 +45,10 @@ pub mod isi {
                 }
                 .into());
             }
+            state_transaction
+                .world
+                .domain(&nft_id.domain)
+                .expect("INTERNAL BUG: Can't find domain of NFT to register");
 
             state_transaction.world.nfts.insert(nft_id, nft.clone());
 
@@ -71,13 +71,13 @@ pub mod isi {
 
             state_transaction
                 .world
-                .domain(&nft_id.domain)
-                .expect("INTERNAL BUG: Can't find domain of NFT to unregister");
-            state_transaction
-                .world
                 .nfts
                 .remove(nft_id.clone())
                 .ok_or_else(|| FindError::Nft(nft_id.clone()))?;
+            state_transaction
+                .world
+                .domain(&nft_id.domain)
+                .expect("INTERNAL BUG: Can't find domain of NFT to unregister");
 
             state_transaction
                 .world
