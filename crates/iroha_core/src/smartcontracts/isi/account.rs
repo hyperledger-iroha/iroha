@@ -307,6 +307,7 @@ pub mod isi {
             let account_id = self.destination;
             let role_id = self.object;
 
+            state_transaction.world.role(&role_id)?;
             state_transaction.world.account(&account_id)?;
 
             if state_transaction
