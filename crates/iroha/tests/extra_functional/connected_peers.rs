@@ -47,7 +47,11 @@ async fn register_new_peer() -> Result<()> {
 async fn connected_peers_with_f(faults: usize) -> Result<()> {
     let n_peers = 3 * faults + 1;
 
-    let network = NetworkBuilder::new().with_peers(n_peers).start().await?;
+    let network = NetworkBuilder::new()
+        .with_peers(n_peers)
+        .with_default_pipeline_time()
+        .start()
+        .await?;
 
     assert_peers_status(network.peers().iter(), 1, n_peers as u64 - 1).await;
 
@@ -86,7 +90,7 @@ async fn connected_peers_with_f(faults: usize) -> Result<()> {
 
     let status = removed_peer.status().await?;
     // Peer might have been disconnected before getting the block
-    assert_matches!(status.blocks, 1 | 2);
+    assert_matches!(status.blocks_non_empty, 1 | 2);
     assert_eq!(status.peers, 0);
 
     // Re-register the peer: committed with f = `faults` - 1 then `status.peers` increments
@@ -124,7 +128,7 @@ async fn assert_peers_status(
                 peer.peer_id()
             );
             assert_eq!(
-                status.blocks,
+                status.blocks_non_empty,
                 expected_blocks,
                 "expected blocks for {}",
                 peer.peer_id()

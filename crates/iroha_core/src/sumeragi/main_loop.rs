@@ -882,9 +882,8 @@ impl Sumeragi {
         let view_change_in_progress = self.topology.view_change_index() > 0;
         let block_time = state.world.view().parameters.sumeragi.block_time();
         let deadline_reached = self.round_start_time.elapsed() > block_time;
-        let tx_cache_non_empty = !self.transaction_cache.is_empty();
 
-        if tx_cache_full || tx_cache_non_empty && (view_change_in_progress || deadline_reached) {
+        if tx_cache_full || view_change_in_progress || deadline_reached {
             let transactions = self
                 .transaction_cache
                 .iter()
@@ -1151,42 +1150,37 @@ pub(crate) fn run(
         );
 
         // We broadcast our view change suggestion after having processed the latest from others inside `receive_network_packet`
-        let block_expected = !sumeragi.transaction_cache.is_empty();
         let view_change_in_progress = view_change_index > 0;
-        if (block_expected || view_change_in_progress)
-            && last_view_change_time.elapsed() > view_change_time
-        {
-            if block_expected {
-                if let Some(VotingBlock { block, .. }) = voting_block.as_ref() {
-                    // NOTE: Suspecting the tail node because it hasn't committed the block yet
+        if view_change_in_progress && last_view_change_time.elapsed() > view_change_time {
+            if let Some(VotingBlock { block, .. }) = voting_block.as_ref() {
+                // NOTE: Suspecting the tail node because it hasn't committed the block yet
 
-                    warn!(
-                        peer_id=%sumeragi.peer,
-                        role=%sumeragi.role(),
-                        block=%block.as_ref().hash(),
-                        "Block not committed in due time, requesting view change..."
-                    );
-                } else {
-                    // NOTE: Suspecting the leader node because it hasn't produced a block
-                    // If the current node has a transaction, leader should have as well
+                warn!(
+                    peer_id=%sumeragi.peer,
+                    role=%sumeragi.role(),
+                    block=%block.as_ref().hash(),
+                    "Block not committed in due time, requesting view change..."
+                );
+            } else {
+                // NOTE: Suspecting the leader node because it hasn't produced a block
+                // If the current node has a transaction, leader should have as well
 
-                    warn!(
-                        peer_id=%sumeragi.peer,
-                        role=%sumeragi.role(),
-                        "No block produced in due time, requesting view change..."
-                    );
-                }
-
-                let latest_block = state_view
-                    .latest_block_hash()
-                    .expect("INTERNAL BUG: No latest block");
-                let suspect_proof =
-                    ProofBuilder::new(latest_block, view_change_index).sign(&sumeragi.key_pair);
-
-                view_change_proof_chain
-                    .insert_proof(suspect_proof, &sumeragi.topology, latest_block)
-                    .unwrap_or_else(|err| error!("{err}"));
+                warn!(
+                    peer_id=%sumeragi.peer,
+                    role=%sumeragi.role(),
+                    "No block produced in due time, requesting view change..."
+                );
             }
+
+            let latest_block = state_view
+                .latest_block_hash()
+                .expect("INTERNAL BUG: No latest block");
+            let suspect_proof =
+                ProofBuilder::new(latest_block, view_change_index).sign(&sumeragi.key_pair);
+
+            view_change_proof_chain
+                .insert_proof(suspect_proof, &sumeragi.topology, latest_block)
+                .unwrap_or_else(|err| error!("{err}"));
 
             // If exist broadcast latest verified proof in case some peers missed it.
             // Proof doesn't exist in case view_change_index == 0.

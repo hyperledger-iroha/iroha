@@ -7,6 +7,7 @@ use tokio::task::spawn_blocking;
 fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {
     lhs.peers == rhs.peers
         && lhs.blocks == rhs.blocks
+        && lhs.blocks_non_empty == rhs.blocks_non_empty
         && lhs.txs_approved == rhs.txs_approved
         && lhs.txs_rejected == rhs.txs_rejected
         && lhs.view_changes == rhs.view_changes
@@ -27,14 +28,17 @@ async fn check(client: &client::Client, blocks: u64) -> Result<()> {
         &status_json,
         &status_scale
     ));
-    assert_eq!(status_json.blocks, blocks);
+    assert_eq!(status_json.blocks_non_empty, blocks);
 
     Ok(())
 }
 
 #[tokio::test]
 async fn json_and_scale_statuses_equality() -> Result<()> {
-    let network = NetworkBuilder::new().start().await?;
+    let network = NetworkBuilder::new()
+        .with_default_pipeline_time()
+        .start()
+        .await?;
     let client = network.client();
 
     check(&client, 1).await?;

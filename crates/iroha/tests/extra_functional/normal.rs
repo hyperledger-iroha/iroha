@@ -5,7 +5,10 @@ use nonzero_ext::nonzero;
 
 #[test]
 fn transactions_should_be_applied() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().with_peers(4).start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+        .with_peers(4)
+        .with_default_pipeline_time()
+        .start_blocking()?;
     let iroha = network.client();
     iroha.submit_blocking(SetParameter::new(Parameter::Block(
         BlockParameter::MaxTransactions(nonzero!(1_u64)),
