@@ -927,7 +927,11 @@ pub mod nft {
     use super::*;
     use crate::{
         data_model::isi::BuiltInInstruction,
-        permission::{account::is_account_owner, nft::is_nft_owner, revoke_permissions},
+        permission::{
+            account::is_account_owner,
+            nft::{is_nft_full_owner, is_nft_weak_owner},
+            revoke_permissions,
+        },
     };
 
     pub fn visit_register_nft<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Register<Nft>) {
@@ -965,7 +969,7 @@ pub mod nft {
         let nft_id = isi.object();
 
         if executor.context().curr_block.is_genesis()
-            || match is_nft_owner(nft_id, &executor.context().authority, executor.host()) {
+            || match is_nft_full_owner(nft_id, &executor.context().authority, executor.host()) {
                 Err(err) => deny!(executor, err),
                 Ok(is_owner) => is_owner,
             }
@@ -1019,7 +1023,7 @@ pub mod nft {
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
         }
-        match is_nft_owner(nft_id, &executor.context().authority, executor.host()) {
+        match is_nft_weak_owner(nft_id, &executor.context().authority, executor.host()) {
             Err(err) => deny!(executor, err),
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
@@ -1057,7 +1061,7 @@ pub mod nft {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_nft_owner(nft_id, &executor.context().authority, executor.host()) {
+        match is_nft_full_owner(nft_id, &executor.context().authority, executor.host()) {
             Err(err) => deny!(executor, err),
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}

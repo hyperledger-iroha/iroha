@@ -593,9 +593,15 @@ pub mod asset_definition {
     );
 }
 
+/// Module with pass conditions for NFT related tokens
+///
+/// - Owner of `nft.domain` can unregister, modify and transfer NFT
+/// - Owner of NFT can only transfer NFT
+///
+/// So:
+/// - *full* owner - can unregister, modify and transfer NFT
+/// - *weak* owner - can transfer NFT
 pub mod nft {
-    //! Module with pass conditions for NFT related tokens
-
     use iroha_executor_data_model::permission::nft::{
         CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
     };
@@ -609,16 +615,18 @@ pub mod nft {
         Iroha,
     };
 
-    /// Check if `authority` is the owner of NFT
+    /// Check if `authority` is *week* owner of NFT.
     ///
-    /// `authority` is owner of NFT if:
+    /// `authority` is *week* owner of NFT if:
     /// - `nft.owned_by` is `authority`
     /// - `nft.domain_id` domain is owned by `authority`
+    ///
+    /// Also see [nft] module documentation.
     ///
     /// # Errors
     /// - if `FindNfts` fails
     /// - if `is_domain_owner` fails
-    pub fn is_nft_owner(nft_id: &NftId, authority: &AccountId, host: &Iroha) -> Result<bool> {
+    pub fn is_nft_weak_owner(nft_id: &NftId, authority: &AccountId, host: &Iroha) -> Result<bool> {
         let nft = host
             .query(FindNfts)
             .filter_with(|nft| nft.id.eq(nft_id.clone()))
@@ -636,25 +644,57 @@ pub mod nft {
         if nft.owned_by() == authority {
             Ok(true)
         } else {
-            domain::is_domain_owner(nft_id.domain(), authority, host)
+            is_nft_full_owner(nft_id, authority, host)
         }
     }
 
-    /// Pass condition that checks if `authority` is the owner of NFT.
+    /// Check if `authority` is *full* owner of NFT.
+    ///
+    /// `authority` is *full* owner of NFT if:
+    /// - `nft.domain_id` domain is owned by `authority`
+    ///
+    /// Also see [nft] module documentation.
+    ///
+    /// # Errors
+    /// - if `is_domain_owner` fails
+    pub fn is_nft_full_owner(nft_id: &NftId, authority: &AccountId, host: &Iroha) -> Result<bool> {
+        domain::is_domain_owner(nft_id.domain(), authority, host)
+    }
+
+    /// Pass condition that checks if `authority` is the *weak* owner of NFT.
     #[derive(Debug, Clone)]
-    pub struct Owner<'nft> {
+    pub struct WeakOwner<'nft> {
         /// NFT id to check against
         pub nft: &'nft NftId,
     }
 
-    impl PassCondition for Owner<'_> {
+    impl PassCondition for WeakOwner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
-            if is_nft_owner(self.nft, authority, host)? {
+            if is_nft_weak_owner(self.nft, authority, host)? {
                 return Ok(());
             }
 
             Err(ValidationFail::NotPermitted(
                 "Can't access NFT owned by another account".to_owned(),
+            ))
+        }
+    }
+
+    /// Pass condition that checks if `authority` is the *full* owner of NFT.
+    #[derive(Debug, Clone)]
+    pub struct FullOwner<'nft> {
+        /// NFT id to check against
+        pub nft: &'nft NftId,
+    }
+
+    impl PassCondition for FullOwner<'_> {
+        fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
+            if is_nft_full_owner(self.nft, authority, host)? {
+                return Ok(());
+            }
+
+            Err(ValidationFail::NotPermitted(
+                "Can't access NFT from domain owned by another account".to_owned(),
             ))
         }
     }
@@ -674,8 +714,8 @@ pub mod nft {
     }
 
     macro_rules! impl_froms_and_validate_grant_revoke {
-        ($($name:ty),+ $(,)?) => {$(
-            impl<'t> From<&'t $name> for Owner<'t> {
+        ($owner:ident : $($name:ty),+ $(,)?) => {$(
+            impl<'t> From<&'t $name> for $owner<'t> {
                 fn from(value: &'t $name) -> Self {
                     Self { nft: &value.nft }
                 }
@@ -683,7 +723,7 @@ pub mod nft {
 
             impl ValidateGrantRevoke for $name {
                 fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-                    Owner::from(self).validate(authority, host, context)
+                    $owner::from(self).validate(authority, host, context)
                 }
                 fn validate_revoke(
                     &self,
@@ -691,13 +731,14 @@ pub mod nft {
                     context: &Context,
                     host: &Iroha,
                 ) -> Result {
-                    Owner::from(self).validate(authority, host, context)
+                    $owner::from(self).validate(authority, host, context)
                 }
             }
         )+};
     }
 
-    impl_froms_and_validate_grant_revoke!(CanUnregisterNft, CanTransferNft, CanModifyNftMetadata);
+    impl_froms_and_validate_grant_revoke!(WeakOwner: CanTransferNft);
+    impl_froms_and_validate_grant_revoke!(FullOwner: CanUnregisterNft, CanModifyNftMetadata);
 }
 
 pub mod account {
