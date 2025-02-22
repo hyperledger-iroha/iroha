@@ -3,21 +3,14 @@
 pub mod uri {
     //! URI that Torii uses to route incoming requests.
 
-    /// Default socket for listening on external requests
-    pub const DEFAULT_API_ADDR: iroha_primitives::addr::SocketAddr =
-        iroha_primitives::addr::socket_addr!(127.0.0.1:8080);
     /// Query URI is used to handle incoming Query requests.
     pub const QUERY: &str = "/query";
     /// Transaction URI is used to handle incoming ISI requests.
     pub const TRANSACTION: &str = "/transaction";
-    /// Block URI is used to handle incoming Block requests.
-    pub const CONSENSUS: &str = "/consensus";
     /// Health URI is used to handle incoming Healthcheck requests.
     pub const HEALTH: &str = "/health";
     /// Peers URI is used to find all peers in the network
     pub const PEERS: &str = "/peers";
-    /// The URI used for block synchronization.
-    pub const BLOCK_SYNC: &str = "/block/sync";
     /// The web socket uri used to subscribe to block and transactions statuses.
     pub const SUBSCRIPTION: &str = "/events";
     /// The web socket uri used to subscribe to blocks stream.

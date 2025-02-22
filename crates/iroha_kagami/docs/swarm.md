@@ -1,11 +1,11 @@
 # Iroha Swarm
 
-Command-line tool for generating Docker Compose configuration for Iroha.
+Tools for generating Docker Compose configuration for Iroha.
 
 ## Usage
 
 ```bash
-iroha_swarm [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-file <FILE>
+kagami swarm [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-file <FILE>
 ```
 
 ### Options
@@ -50,7 +50,7 @@ iroha_swarm [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-fi
 Generate a configuration with 4 peers, using `Iroha` as the cryptographic seed, using `./peer_config` as a directory with configuration, and using `.` as a directory with the Iroha `Dockerfile` to build a `myiroha:local` image, saving the Compose config to `./my-configs/docker-compose.build.yml` in the current directory: 
 
 ```bash
-iroha_swarm \
+kagami swarm \
     --peers 4 \
     --seed Iroha \
     --config-dir ./peer_config \
@@ -62,7 +62,7 @@ iroha_swarm \
 Generate the same configuration, but use an existing image pulled from Docker Hub instead. The output is printed to stdout (notice how the target path still has to be provided, as it is used to resolve the config and build directories):
 
 ```bash
-iroha_swarm \
+kagami swarm \
     --peers 4 \
     --seed Iroha \
     --healthcheck \

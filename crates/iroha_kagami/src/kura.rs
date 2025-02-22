@@ -1,15 +1,19 @@
-//! Kura inspector binary. For usage run with `--help`.
-use std::path::{Path, PathBuf};
+use std::{
+    io::{BufWriter, Write},
+    path::{Path, PathBuf},
+};
 
-use clap::{Parser, Subcommand};
+use clap::{Args as ClapArgs, Subcommand};
+use color_eyre::eyre::{eyre, WrapErr as _};
 use iroha_core::kura::{BlockIndex, BlockStore};
 use iroha_data_model::block::SignedBlock;
 use iroha_version::scale::DecodeVersioned;
 
+use crate::{Outcome, RunArgs};
+
 /// Kura inspector
-#[derive(Parser)]
-#[clap(author, version, about)]
-struct Args {
+#[derive(Debug, ClapArgs, Clone)]
+pub struct Args {
     /// Height of the block from which start the inspection.
     /// Defaults to the latest block height
     #[clap(short, long, name = "BLOCK_HEIGHT")]
@@ -20,7 +24,7 @@ struct Args {
     command: Command,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug, Clone)]
 enum Command {
     /// Print contents of a certain length of the blocks
     Print {
@@ -31,25 +35,36 @@ enum Command {
     },
 }
 
-fn main() {
-    let args = Args::parse();
+impl<T: Write> RunArgs<T> for Args {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let args = self;
+        let from_height = args.from.map(|height| {
+            if height == 0 {
+                Err(eyre!("The genesis block has the height 1. Therefore, the \"from height\" you specify must not be 0 ({} is provided). ", height))
+            } else {
+                // Kura starts counting blocks from 0 like an array while the outside world counts the first block as number 1.
+                Ok(height - 1)
+            }
+        }).transpose()?;
 
-    let from_height = args.from.map(|height| {
-        assert!(height != 0, "The genesis block has the height 1. Therefore, the \"from height\" you specify must not be 0.");
-        // Kura starts counting blocks from 0 like an array while the outside world counts the first block as number 1.
-        height - 1
-    });
-
-    match args.command {
-        Command::Print { length } => print_blockchain(
-            &args.path_to_block_store,
-            from_height.unwrap_or(u64::MAX),
-            length,
-        ),
+        match args.command {
+            Command::Print { length } => print_blockchain(
+                writer,
+                &args.path_to_block_store,
+                from_height.unwrap_or(u64::MAX),
+                length,
+            )
+            .wrap_err("failed to print blockchain"),
+        }
     }
 }
 
-fn print_blockchain(block_store_path: &Path, from_height: u64, block_count: u64) {
+fn print_blockchain(
+    writer: &mut dyn Write,
+    block_store_path: &Path,
+    from_height: u64,
+    block_count: u64,
+) -> Outcome {
     let mut block_store_path: std::borrow::Cow<'_, Path> = block_store_path.into();
 
     if let Some(os_str_file_name) = block_store_path.file_name() {
@@ -63,17 +78,11 @@ fn print_blockchain(block_store_path: &Path, from_height: u64, block_count: u64)
 
     let index_count = block_store
         .read_index_count()
-        .expect("Failed to read index count from block store {block_store_path:?}.");
+        .wrap_err("failed to read index count from block store {block_store_path:?}.")?;
 
     if index_count == 0 {
-        println!("The block store is empty.");
-        return;
+        return Err(eyre!("Index count is zero. This could be because there are no blocks in the store: {block_store_path:?}"));
     }
-
-    assert!(
-        index_count != 0,
-        "Index count is zero. This could be because there are no blocks in the store: {block_store_path:?}"
-    );
 
     let from_height = if from_height >= index_count {
         index_count - 1
@@ -94,39 +103,43 @@ fn print_blockchain(block_store_path: &Path, from_height: u64, block_count: u64)
         };
         block_count
             .try_into()
-            .expect("block_count didn't fit in 32-bits")
+            .wrap_err("block_count didn't fit in 32-bits")?
     ];
     block_store
         .read_block_indices(from_height, &mut block_indices)
-        .expect("Failed to read block indices");
+        .wrap_err("failed to read block indices")?;
     let block_indices = block_indices;
 
     // Now for the actual printing
-    println!("Index file says there are {index_count} blocks.");
-    println!(
+    writeln!(writer, "Index file says there are {index_count} blocks.",)?;
+    writeln!(
+        writer,
         "Printing blocks {}-{}...",
         from_height + 1,
         from_height + block_count
-    );
+    )?;
 
     for i in 0..block_count {
-        let idx = block_indices[usize::try_from(i).expect("i didn't fit in 32-bits")];
+        let idx = block_indices[usize::try_from(i).wrap_err("index didn't fit in 32-bits")?];
         let meta_index = from_height + i;
 
-        println!(
+        writeln!(
+            writer,
             "Block#{} starts at byte offset {} and is {} bytes long.",
             meta_index + 1,
             idx.start,
             idx.length
-        );
+        )?;
         let mut block_buf =
-            vec![0_u8; usize::try_from(idx.length).expect("index_len didn't fit in 32-bits")];
+            vec![0_u8; usize::try_from(idx.length).wrap_err("index_len didn't fit in 32-bits")?];
         block_store
             .read_block_data(idx.start, &mut block_buf)
-            .unwrap_or_else(|_| panic!("Failed to read block № {} data.", meta_index + 1));
+            .wrap_err(format!("failed to read block № {} data.", meta_index + 1))?;
         let block = SignedBlock::decode_all_versioned(&block_buf)
-            .unwrap_or_else(|_| panic!("Failed to decode block № {}", meta_index + 1));
-        println!("Block#{} :", meta_index + 1);
-        println!("{block:#?}");
+            .wrap_err(format!("Failed to decode block № {}", meta_index + 1))?;
+        writeln!(writer, "Block#{} :", meta_index + 1)?;
+        writeln!(writer, "{block:#?}")?;
     }
+
+    Ok(())
 }

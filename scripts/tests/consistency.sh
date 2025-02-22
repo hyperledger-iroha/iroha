@@ -17,7 +17,12 @@ case $1 in
         cargo run --release --bin iroha -- markdown-help | diff - crates/iroha_cli/CommandLineHelp.md || {
             echo 'Please re-generate command-line help with `cargo run --bin iroha -- markdown-help > crates/iroha_cli/CommandLineHelp.md`'
             exit 1
-        };;
+        }
+        cargo run --release --bin kagami -- markdown-help | diff - crates/iroha_kagami/CommandLineHelp.md || {
+            echo 'Please re-generate command-line help with `cargo run --bin kagami -- markdown-help > crates/iroha_kagami/CommandLineHelp.md`'
+            exit 1
+        }
+        ;;
     "docker-compose")
         do_check() {
             cmd_base=$1
@@ -30,15 +35,15 @@ case $1 in
         }
 
         command_base_for_single() {
-            echo "cargo run --release --bin iroha_swarm -- -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
+            echo "cargo run --release --bin kagami -- swarm -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
         }
 
         command_base_for_multiple_local() {
-            echo "cargo run --release --bin iroha_swarm -- -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
+            echo "cargo run --release --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
         }
 
         command_base_for_default() {
-            echo "cargo run --release --bin iroha_swarm -- -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev"
+            echo "cargo run --release --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev"
         }
 
 

@@ -1,8 +1,8 @@
 # `iroha_default_executor`
 
-Use the [Wasm Builder CLI](../../../crates/iroha_wasm_builder) in order to build it:
+Use the [Kagami Wasm Builder](../../../crates/iroha_kagami/README.md) in order to build it:
 
 ```bash
-cargo run --bin iroha_wasm_builder -- \
-  build ./wasm/libs/default_executor --optimize --out-file ./defaults/executor.wasm
+cargo run --bin kagami -- wasm \
+  build ./wasm/libs/default_executor --profile=release --out-file ./defaults/executor.wasm
 ```
