@@ -37,6 +37,7 @@ pub mod block;
 pub mod domain;
 pub mod events;
 pub mod executor;
+pub mod fee;
 pub mod ipfs;
 pub mod isi;
 pub mod metadata;
@@ -115,6 +116,8 @@ mod seal {
         Revoke<RoleId, Account>,
         Revoke<Permission, Role>,
 
+        Declare<FeeReceiverDefinition>,
+
         SetParameter,
         Upgrade,
         ExecuteTrigger,
@@ -133,6 +136,8 @@ mod seal {
         FindTransactions,
         FindPermissionsByAccountId,
         FindExecutorDataModel,
+        FindFeeReceiverAccount,
+        FindFeePaymentAsset,
         FindActiveTriggerIds,
         FindTriggers,
         FindRoles,
@@ -483,9 +488,9 @@ pub mod prelude {
 
     pub use super::{
         account::prelude::*, asset::prelude::*, domain::prelude::*, events::prelude::*,
-        executor::prelude::*, isi::prelude::*, metadata::prelude::*, name::prelude::*,
-        parameter::prelude::*, peer::prelude::*, permission::prelude::*, query::prelude::*,
-        role::prelude::*, transaction::prelude::*, trigger::prelude::*, ChainId, EnumTryAsError,
-        HasMetadata, IdBox, Identifiable, ValidationFail,
+        executor::prelude::*, fee::prelude::*, isi::prelude::*, metadata::prelude::*,
+        name::prelude::*, parameter::prelude::*, peer::prelude::*, permission::prelude::*,
+        query::prelude::*, role::prelude::*, transaction::prelude::*, trigger::prelude::*, ChainId,
+        EnumTryAsError, HasMetadata, IdBox, Identifiable, ValidationFail,
     };
 }

@@ -51,6 +51,7 @@ impl Execute for InstructionBox {
             Self::RemoveKeyValue(isi) => isi.execute(authority, state_transaction),
             Self::Grant(isi) => isi.execute(authority, state_transaction),
             Self::Revoke(isi) => isi.execute(authority, state_transaction),
+            Self::Declare(isi) => isi.execute(authority, state_transaction),
             Self::ExecuteTrigger(isi) => isi.execute(authority, state_transaction),
             Self::SetParameter(isi) => isi.execute(authority, state_transaction),
             Self::Upgrade(isi) => isi.execute(authority, state_transaction),
@@ -214,6 +215,19 @@ impl Execute for RevokeBox {
             Self::Permission(sub_isi) => sub_isi.execute(authority, state_transaction),
             Self::Role(sub_isi) => sub_isi.execute(authority, state_transaction),
             Self::RolePermission(sub_isi) => sub_isi.execute(authority, state_transaction),
+        }
+    }
+}
+
+impl Execute for DeclareBox {
+    #[iroha_logger::log(name = "declare", skip_all, fields(object))]
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        match self {
+            Self::FeeReceiver(sub_isi) => sub_isi.execute(authority, state_transaction),
         }
     }
 }

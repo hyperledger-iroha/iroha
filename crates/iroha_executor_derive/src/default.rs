@@ -143,6 +143,7 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_revoke_account_permission(operation: &Revoke<Permission, Account>)",
         "fn visit_register_role(operation: &Register<Role>)",
         "fn visit_unregister_role(operation: &Unregister<Role>)",
+        "fn visit_declare_fee_receiver_definition(operation: &Declare<FeeReceiverDefinition>)",
         "fn visit_grant_account_role(operation: &Grant<RoleId, Account>)",
         "fn visit_revoke_account_role(operation: &Revoke<RoleId, Account>)",
         "fn visit_grant_role_permission(operation: &Grant<Permission, Role>)",

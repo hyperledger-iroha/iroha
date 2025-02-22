@@ -314,6 +314,37 @@ pub mod isi {
         }
     }
 
+    impl Execute for Declare<FeeReceiverDefinition> {
+        #[metrics(+"fee_receiver")]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let fee_receiver = self.object;
+
+            state_transaction.world.account(&fee_receiver.account)?;
+            state_transaction
+                .world
+                .asset_definition(&fee_receiver.asset)?;
+
+            state_transaction
+                .world
+                .fee_receiver
+                .get_or_insert(fee_receiver.clone());
+
+            let event: DataEvent = FeeEvent::RecepientUpdated(FeeReceiverUpdated {
+                account: fee_receiver.account,
+                asset: fee_receiver.asset,
+            })
+            .into();
+
+            state_transaction.world.emit_events(Some(event));
+
+            Ok(())
+        }
+    }
+
     impl Execute for SetParameter {
         #[metrics(+"set_parameter")]
         fn execute(
@@ -520,6 +551,33 @@ pub mod query {
         #[metrics(+"find_parameters")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Parameters, Error> {
             Ok(state_ro.world().parameters().clone())
+        }
+    }
+
+    impl ValidSingularQuery for FindFeeReceiverAccount {
+        #[metrics(+"find_fee_receiver")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Option<AccountId>, Error> {
+            let fee_receiver = state_ro
+                .world()
+                .fee_receiever()
+                .clone()
+                .map(|frd| frd.account);
+            Ok(fee_receiver)
+        }
+    }
+
+    impl ValidSingularQuery for FindFeePaymentAsset {
+        #[metrics(+"find_fee_receiver")]
+        fn execute(
+            &self,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<Option<AssetDefinitionId>, Error> {
+            let fee_asset = state_ro
+                .world()
+                .fee_receiever()
+                .clone()
+                .map(|frd| frd.asset);
+            Ok(fee_asset)
         }
     }
 }

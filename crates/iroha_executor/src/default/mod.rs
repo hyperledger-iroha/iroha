@@ -22,6 +22,7 @@ pub use domain::{
     visit_transfer_domain, visit_unregister_domain,
 };
 pub use executor::visit_upgrade;
+pub use fee::visit_declare_fee_receiver_definition;
 use iroha_smart_contract::data_model::{prelude::*, visit::Visit};
 pub use isi::visit_custom_instruction;
 pub use log::visit_log;
@@ -106,6 +107,9 @@ pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &In
         InstructionBox::Revoke(isi) => {
             executor.visit_revoke(isi);
         }
+        InstructionBox::Declare(isi) => {
+            executor.visit_declare(isi);
+        }
         InstructionBox::SetKeyValue(isi) => {
             executor.visit_set_key_value(isi);
         }
@@ -155,6 +159,24 @@ pub mod peer {
         }
 
         deny!(executor, "Can't unregister peer");
+    }
+}
+
+pub mod fee {
+    use iroha_smart_contract::data_model::fee::FeeReceiverDefinition;
+
+    use super::*;
+
+    pub fn visit_declare_fee_receiver_definition<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &Declare<FeeReceiverDefinition>,
+    ) {
+        // Fee recipient must be declared in genesis only
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+
+        deny!(executor, "Can't declare fee receiver");
     }
 }
 

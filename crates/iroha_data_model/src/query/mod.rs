@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 pub use self::model::*;
 use self::{
-    account::*, asset::*, block::*, domain::*, dsl::*, executor::*, peer::*, permission::*,
+    account::*, asset::*, block::*, domain::*, dsl::*, executor::*, fee::*, peer::*, permission::*,
     role::*, transaction::*, trigger::*,
 };
 use crate::{
@@ -176,6 +176,9 @@ mod model {
     pub enum SingularQueryBox {
         FindExecutorDataModel(FindExecutorDataModel),
         FindParameters(FindParameters),
+        // Fees-related queries
+        FindFeeReceiverAccount(crate::prelude::FindFeeReceiverAccount),
+        FindFeePaymentAsset(crate::prelude::FindFeePaymentAsset),
     }
 
     /// An enum of all possible singular query outputs
@@ -185,6 +188,8 @@ mod model {
     pub enum SingularQueryOutputBox {
         ExecutorDataModel(crate::executor::ExecutorDataModel),
         Parameters(Parameters),
+        FeeReceiverAccount(Option<crate::account::AccountId>),
+        FindFeePaymentAsset(Option<crate::asset::AssetDefinitionId>),
     }
 
     /// The results of a single iterable query request.
@@ -689,6 +694,8 @@ impl_iter_queries! {
 impl_singular_queries! {
     FindParameters => crate::parameter::Parameters,
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
+    FindFeeReceiverAccount => Option<crate::account::AccountId>,
+    FindFeePaymentAsset => Option<crate::asset::AssetDefinitionId>,
 }
 
 impl AsRef<SignedTransaction> for CommittedTransaction {
@@ -899,6 +906,34 @@ pub mod peer {
     /// The prelude re-exports most commonly used traits, structs and macros from this crate.
     pub mod prelude {
         pub use super::FindPeers;
+    }
+}
+
+pub mod fee {
+    //! Queries related to [`crate::fee`].
+
+    #[cfg(not(feature = "std"))]
+    use alloc::{format, string::String, vec::Vec};
+
+    use derive_more::Display;
+
+    queries! {
+        /// [`FindFeeReceiverAccount`] Iroha Query finds fee receiver account id.
+        #[derive(Copy, Display)]
+        #[display(fmt = "Find fee receiver account")]
+        #[ffi_type]
+        pub struct FindFeeReceiverAccount;
+
+        /// [`FindFeePaymentAsset`] Iroha Query finds fee payment asset id.
+        #[derive(Copy, Display)]
+        #[display(fmt = "Find fee payemnt asset")]
+        #[ffi_type]
+        pub struct FindFeePaymentAsset;
+    }
+
+    /// The prelude re-exports most commonly used traits, structs and macros from this crate.
+    pub mod prelude {
+        pub use super::{FindFeePaymentAsset, FindFeeReceiverAccount};
     }
 }
 
@@ -1125,8 +1160,9 @@ pub mod error {
 pub mod prelude {
     pub use super::{
         account::prelude::*, asset::prelude::*, block::prelude::*, builder::prelude::*,
-        domain::prelude::*, dsl::prelude::*, executor::prelude::*, parameters::prelude::*,
-        peer::prelude::*, permission::prelude::*, role::prelude::*, transaction::prelude::*,
-        trigger::prelude::*, CommittedTransaction, QueryBox, QueryRequest, SingularQueryBox,
+        domain::prelude::*, dsl::prelude::*, executor::prelude::*, fee::prelude::*,
+        parameters::prelude::*, peer::prelude::*, permission::prelude::*, role::prelude::*,
+        transaction::prelude::*, trigger::prelude::*, CommittedTransaction, QueryBox, QueryRequest,
+        SingularQueryBox,
     };
 }

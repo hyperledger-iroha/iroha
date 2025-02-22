@@ -81,6 +81,8 @@ pub struct World {
     pub(crate) account_permissions: Storage<AccountId, Permissions>,
     /// Roles of an account.
     pub(crate) account_roles: Storage<RoleIdWithOwner, ()>,
+    /// Fees
+    pub(crate) fee_receiver: Cell<Option<FeeReceiverDefinition>>,
     /// Triggers
     pub(crate) triggers: TriggerSet,
     /// Runtime Executor
@@ -109,6 +111,8 @@ pub struct WorldBlock<'world> {
     pub(crate) account_permissions: StorageBlock<'world, AccountId, Permissions>,
     /// Roles of an account.
     pub(crate) account_roles: StorageBlock<'world, RoleIdWithOwner, ()>,
+    /// Fee receiver if declared in network.
+    pub(crate) fee_receiver: CellBlock<'world, Option<FeeReceiverDefinition>>,
     /// Triggers
     pub(crate) triggers: TriggerSetBlock<'world>,
     /// Runtime Executor
@@ -140,6 +144,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) account_permissions: StorageTransaction<'block, 'world, AccountId, Permissions>,
     /// Roles of an account.
     pub(crate) account_roles: StorageTransaction<'block, 'world, RoleIdWithOwner, ()>,
+    /// Fee receiver if declared in network.
+    pub(crate) fee_receiver: CellTransaction<'block, 'world, Option<FeeReceiverDefinition>>,
     /// Triggers
     pub(crate) triggers: TriggerSetTransaction<'block, 'world>,
     /// Runtime Executor
@@ -178,6 +184,8 @@ pub struct WorldView<'world> {
     pub(crate) account_permissions: StorageView<'world, AccountId, Permissions>,
     /// Roles of an account.
     pub(crate) account_roles: StorageView<'world, RoleIdWithOwner, ()>,
+    /// Fee receiver if declared in network.
+    pub(crate) fee_receiver: CellView<'world, Option<FeeReceiverDefinition>>,
     /// Triggers
     pub(crate) triggers: TriggerSetView<'world>,
     /// Runtime Executor
@@ -360,6 +368,7 @@ impl World {
             roles: self.roles.block(),
             account_permissions: self.account_permissions.block(),
             account_roles: self.account_roles.block(),
+            fee_receiver: self.fee_receiver.block(),
             triggers: self.triggers.block(),
             executor: self.executor.block(),
             executor_data_model: self.executor_data_model.block(),
@@ -379,6 +388,7 @@ impl World {
             roles: self.roles.block_and_revert(),
             account_permissions: self.account_permissions.block_and_revert(),
             account_roles: self.account_roles.block_and_revert(),
+            fee_receiver: self.fee_receiver.block_and_revert(),
             triggers: self.triggers.block_and_revert(),
             executor: self.executor.block_and_revert(),
             executor_data_model: self.executor_data_model.block_and_revert(),
@@ -398,6 +408,7 @@ impl World {
             roles: self.roles.view(),
             account_permissions: self.account_permissions.view(),
             account_roles: self.account_roles.view(),
+            fee_receiver: self.fee_receiver.view(),
             triggers: self.triggers.view(),
             executor: self.executor.view(),
             executor_data_model: self.executor_data_model.view(),
@@ -417,6 +428,7 @@ pub trait WorldReadOnly {
     fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
     fn account_permissions(&self) -> &impl StorageReadOnly<AccountId, Permissions>;
     fn account_roles(&self) -> &impl StorageReadOnly<RoleIdWithOwner, ()>;
+    fn fee_receiever(&self) -> &Option<FeeReceiverDefinition>;
     fn triggers(&self) -> &impl TriggerSetReadOnly;
     fn executor(&self) -> &Executor;
     fn executor_data_model(&self) -> &ExecutorDataModel;
@@ -667,6 +679,9 @@ macro_rules! impl_world_ro {
             fn account_roles(&self) -> &impl StorageReadOnly<RoleIdWithOwner, ()> {
                 &self.account_roles
             }
+            fn fee_receiever(&self) -> &Option<FeeReceiverDefinition> {
+                &self.fee_receiver
+            }
             fn triggers(&self) -> &impl TriggerSetReadOnly {
                 &self.triggers
             }
@@ -697,6 +712,7 @@ impl<'world> WorldBlock<'world> {
             roles: self.roles.transaction(),
             account_permissions: self.account_permissions.transaction(),
             account_roles: self.account_roles.transaction(),
+            fee_receiver: self.fee_receiver.transaction(),
             triggers: self.triggers.transaction(),
             executor: self.executor.transaction(),
             executor_data_model: self.executor_data_model.transaction(),
@@ -720,6 +736,7 @@ impl<'world> WorldBlock<'world> {
             roles,
             account_permissions,
             account_roles,
+            fee_receiver,
             triggers,
             executor,
             executor_data_model,
@@ -737,6 +754,7 @@ impl<'world> WorldBlock<'world> {
         accounts.commit();
         domains.commit();
         peers.commit();
+        fee_receiver.commit();
         parameters.commit();
     }
 }
@@ -755,6 +773,7 @@ impl WorldTransaction<'_, '_> {
             roles,
             account_permissions,
             account_roles,
+            fee_receiver,
             triggers,
             executor,
             executor_data_model,
@@ -771,6 +790,7 @@ impl WorldTransaction<'_, '_> {
         accounts.apply();
         domains.apply();
         peers.apply();
+        fee_receiver.apply();
         parameters.apply();
         events_buffer.events_created_in_transaction = 0;
     }
@@ -1861,6 +1881,7 @@ pub(crate) mod deserialize {
                     let mut roles = None;
                     let mut account_permissions = None;
                     let mut account_roles = None;
+                    let mut fee_receiver = None;
                     let mut triggers = None;
                     let mut executor = None;
                     let mut executor_data_model = None;
@@ -1893,6 +1914,9 @@ pub(crate) mod deserialize {
                             }
                             "account_roles" => {
                                 account_roles = Some(map.next_value()?);
+                            }
+                            "fee_receiver" => {
+                                fee_receiver = Some(map.next_value()?);
                             }
                             "triggers" => {
                                 triggers =
@@ -1928,6 +1952,8 @@ pub(crate) mod deserialize {
                         })?,
                         account_roles: account_roles
                             .ok_or_else(|| serde::de::Error::missing_field("account_roles"))?,
+                        fee_receiver: fee_receiver
+                            .ok_or_else(|| serde::de::Error::missing_field("fee_receiver"))?,
                         triggers: triggers
                             .ok_or_else(|| serde::de::Error::missing_field("triggers"))?,
                         executor: executor

@@ -110,6 +110,9 @@ mod model {
         #[enum_ref(transparent)]
         Revoke(RevokeBox),
         #[debug(fmt = "{_0:?}")]
+        #[enum_ref(transparent)]
+        Declare(DeclareBox),
+        #[debug(fmt = "{_0:?}")]
         ExecuteTrigger(ExecuteTrigger),
         #[debug(fmt = "{_0:?}")]
         SetParameter(SetParameter),
@@ -174,6 +177,7 @@ impl_instruction! {
     Revoke<Permission, Account>,
     Revoke<RoleId, Account>,
     Revoke<Permission, Role>,
+    Declare<FeeReceiverDefinition>,
     SetParameter,
     Upgrade,
     ExecuteTrigger,
@@ -966,6 +970,39 @@ mod transparent {
     }
 
     isi! {
+        /// Generic instruction for objects declaring.
+        #[serde(transparent)]
+        pub struct Declare<O> {
+            /// Object to declare.
+            pub object: O,
+        }
+    }
+
+    impl Declare<FeeReceiverDefinition> {
+        /// Constructs a new [`Declare`] for a [`FeeReceiverDefinition`].
+        pub fn fee_receiver(fee_receiver_definition: FeeReceiverDefinition) -> Self {
+            Self {
+                object: fee_receiver_definition,
+            }
+        }
+    }
+
+    impl_display! {
+        Declare<O>
+        where
+            O: Display,
+        =>
+        "DECLARE {}",
+        object,
+    }
+
+    impl_into_box! {
+        Declare<FeeReceiverDefinition>
+    => DeclareBox => InstructionBox[Declare],
+    => DeclareBoxRef<'a> => InstructionBoxRef<'a>[Declare]
+    }
+
+    isi! {
         /// Blockchain specific instruction (defined in the executor).
         /// Can be used to extend instruction set or add expression system.
         ///
@@ -1205,6 +1242,19 @@ isi_box! {
         Role(Revoke<RoleId, Account>),
         /// Revoke [`Permission`] from [`Role`].
         RolePermission(Revoke<Permission, Role>),
+    }
+}
+
+isi_box! {
+    #[strum_discriminants(
+        vis(pub(crate)),
+        name(DeclareType),
+        derive(Encode),
+    )]
+    /// Enum with all supported [`Declare`] instructions.
+    pub enum DeclareBox {
+        /// Declare `FeeReceiver`.
+        FeeReceiver(Declare<FeeReceiverDefinition>),
     }
 }
 
@@ -1511,8 +1561,8 @@ pub mod error {
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{
-        AssetTransferBox, Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox,
-        InstructionBox, Log, Mint, MintBox, Register, RegisterBox, RemoveKeyValue,
+        AssetTransferBox, Burn, BurnBox, CustomInstruction, Declare, DeclareBox, ExecuteTrigger,
+        Grant, GrantBox, InstructionBox, Log, Mint, MintBox, Register, RegisterBox, RemoveKeyValue,
         RemoveKeyValueBox, Revoke, RevokeBox, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
         TransferBox, Unregister, UnregisterBox, Upgrade,
     };

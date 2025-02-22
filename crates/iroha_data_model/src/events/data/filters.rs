@@ -688,6 +688,8 @@ impl EventFilter for DataEventFilter {
             (DataEvent::Role(event), Role(filter)) => filter.matches(event),
             (DataEvent::Configuration(event), Configuration(filter)) => filter.matches(event),
             (DataEvent::Executor(event), Executor(filter)) => filter.matches(event),
+            // Fee events filtering is temporality disabled since there no events to filter
+            (DataEvent::Fee(_), _) => false,
 
             (
                 DataEvent::Peer(_)
