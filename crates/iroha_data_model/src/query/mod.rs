@@ -924,7 +924,7 @@ pub mod fee {
         #[ffi_type]
         pub struct FindFeeReceiverAccount;
 
-        /// [`FindFeePaymentAsset`] Iroha Query finds fee payment asset id.
+        /// [`FindFeePaymentAsset`] Iroha Query finds fee payment asset definition id.
         #[derive(Copy, Display)]
         #[display(fmt = "Find fee payemnt asset")]
         #[ffi_type]

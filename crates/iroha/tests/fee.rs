@@ -1,6 +1,3 @@
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-
 use eyre::Result;
 use iroha::{
     client,

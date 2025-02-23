@@ -171,7 +171,7 @@ pub mod fee {
         executor: &mut V,
         isi: &Declare<FeeReceiverDefinition>,
     ) {
-        // Fee recipient must be declared in genesis only
+        // Fee recipient must be declared only in genesis
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }

@@ -567,7 +567,7 @@ pub mod query {
     }
 
     impl ValidSingularQuery for FindFeePaymentAsset {
-        #[metrics(+"find_fee_receiver")]
+        #[metrics(+"find_fee_asset")]
         fn execute(
             &self,
             state_ro: &impl StateReadOnly,
