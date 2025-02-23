@@ -647,6 +647,18 @@ pub trait WorldReadOnly {
     fn asset_total_amount(&self, definition_id: &AssetDefinitionId) -> Result<Numeric, FindError> {
         Ok(self.asset_definition(definition_id)?.total_quantity)
     }
+
+    // Role-related methods
+
+    /// Get `Role` and return reference to it.
+    ///
+    /// # Errors
+    /// Fails if there is no role
+    fn role(&self, id: &RoleId) -> Result<&Role, FindError> {
+        self.roles()
+            .get(id)
+            .ok_or_else(|| FindError::Role(id.clone()))
+    }
 }
 
 macro_rules! impl_world_ro {

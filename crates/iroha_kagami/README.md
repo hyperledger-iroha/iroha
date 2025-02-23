@@ -13,11 +13,10 @@ cargo build --bin kagami
 This will place `kagami` inside the `target/debug/` directory (from the root of the repository).
 
 ## Usage
+See [Command-Line Help](CommandLineHelp.md).
 
-As it is an internal tool with no stable API, we decided to move all the documentation into the CLI help messages and keep it up to date in a single place.
-
-Run:
-
-```bash
-kagami --help
-```
+## Examples
+- [codec](docs/codec.md)
+- [kura](docs/kura.md)
+- [swarm](docs/swarm.md)
+- [wasm](docs/wasm.md)

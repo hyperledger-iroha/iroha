@@ -1,5 +1,5 @@
-//! CLI for generating Iroha sample configuration, genesis and
-//! cryptographic key pairs. To be used with all compliant Iroha
+//! CLI for generating Iroha sample configuration, genesis,
+//! cryptographic key pairs and other. To be used with all compliant Iroha
 //! installations.
 use std::io::{stdout, BufWriter, Write};
 
@@ -7,9 +7,13 @@ use clap::{Args as ClapArgs, Parser};
 use color_eyre::eyre::WrapErr as _;
 use iroha_data_model::prelude::*;
 
+mod codec;
 mod crypto;
 mod genesis;
+mod kura;
 mod schema;
+mod swarm;
+mod wasm;
 
 /// Outcome shorthand used throughout this crate
 pub(crate) type Outcome = color_eyre::Result<()>;
@@ -42,6 +46,17 @@ enum Args {
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
+    /// Commands related to codec
+    Codec(codec::Args),
+    /// Commands related to block inspection
+    Kura(kura::Args),
+    /// Commands related to Docker Compose configuration generation
+    Swarm(swarm::Args),
+    /// Commands related to building wasm smartcontracts
+    #[clap(subcommand)]
+    Wasm(wasm::Args),
+    /// Output CLI documentation in Markdown format
+    MarkdownHelp(MarkdownHelp),
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -52,6 +67,95 @@ impl<T: Write> RunArgs<T> for Args {
             Crypto(args) => args.run(writer),
             Schema(args) => args.run(writer),
             Genesis(args) => args.run(writer),
+            Codec(args) => args.run(writer),
+            Kura(args) => args.run(writer),
+            Swarm(args) => args.run(writer),
+            Wasm(args) => args.run(writer),
+            MarkdownHelp(args) => args.run(writer),
         }
+    }
+}
+
+#[derive(Debug, ClapArgs, Clone)]
+struct MarkdownHelp;
+
+impl<T: Write> RunArgs<T> for MarkdownHelp {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let command_info = clap_markdown::help_markdown::<Args>();
+        writer.write_all(command_info.as_bytes())?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Error;
+
+    use super::Args;
+
+    fn parse(args: &str) -> Result<Args, Error> {
+        <Args as clap::Parser>::try_parse_from(args.split(' '))
+    }
+
+    #[test]
+    fn ok_with_flags() {
+        assert!(parse(
+            "kagami swarm \
+            -p 20 \
+            -c ./config \
+            -i hyperledger/iroha \
+            -o sample.yml\
+            -HF",
+        )
+        .is_ok())
+    }
+
+    #[test]
+    fn cannot_mix_print_and_force() {
+        assert!(parse(
+            "kagami swarm \
+            -p 20 \
+            -c ./config \
+            -i hyperledger/iroha \
+            -o sample.yml \
+            -PF",
+        )
+        .is_err())
+    }
+
+    #[test]
+    fn ok_when_pull_image() {
+        assert!(parse(
+            "kagami swarm \
+            -p 20 \
+            -c ./config \
+            -i hyperledger/iroha \
+            -o sample.yml",
+        )
+        .is_ok())
+    }
+
+    #[test]
+    fn ok_when_build_image() {
+        assert!(parse(
+            "kagami swarm \
+            -p 20 \
+            -i hyperledger/iroha \
+            -b . \
+            -c ./config \
+            -o sample.yml",
+        )
+        .is_ok())
+    }
+
+    #[test]
+    fn fails_when_image_is_omitted() {
+        assert!(parse(
+            "kagami swarm \
+            -p 1 \
+            -c ./ \
+            -o test.yml",
+        )
+        .is_err())
     }
 }
