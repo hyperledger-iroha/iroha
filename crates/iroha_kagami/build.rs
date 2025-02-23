@@ -2,7 +2,7 @@
 
 use std::{fs, path::PathBuf};
 
-use eyre::Result;
+use color_eyre::eyre::Result;
 use iroha_data_model::{account::NewAccount, domain::NewDomain, prelude::*};
 use parity_scale_codec::Encode;
 use serde::de::DeserializeOwned;
@@ -20,7 +20,7 @@ where
     T: Encode + DeserializeOwned,
 {
     let mut path_to = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path_to.push("samples/");
+    path_to.push("samples/codec");
     path_to.push(filename);
 
     let path_to_json = path_to.with_extension("json");
