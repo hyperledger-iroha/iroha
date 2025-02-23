@@ -1,18 +1,8 @@
 use eyre::Result;
-use iroha::{
-    client,
-    crypto::KeyPair,
-    data_model::{
-        asset::{AssetId, AssetType, AssetValue},
-        isi::error::{InstructionEvaluationError, InstructionExecutionError, TypeError},
-        prelude::*,
-        transaction::error::TransactionRejectionReason,
-    },
-};
+use iroha::data_model::prelude::*;
 use iroha_data_model::fee::FeeReceiverDefinition;
-use iroha_executor_data_model::permission::asset::CanTransferAsset;
 use iroha_test_network::*;
-use iroha_test_samples::{gen_account_in, ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID};
 
 #[test]
 fn fee_receiver_declared_in_genesis() -> Result<()> {
