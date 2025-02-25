@@ -99,8 +99,11 @@ fn infinite_recursion_should_produce_one_call_per_block() -> Result<()> {
 
     test_client.submit_blocking(call_trigger)?;
 
+    // Waiting for empty block to be committed
+    thread::sleep(network.pipeline_time());
+
     let new_value = get_asset_value(&test_client, asset_id);
-    assert_eq!(new_value, prev_value.checked_add(Numeric::ONE).unwrap());
+    assert_eq!(new_value, prev_value.checked_add(numeric!(2)).unwrap());
 
     Ok(())
 }
@@ -153,11 +156,14 @@ fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<()> {
     // Executing bad trigger
     test_client.submit_blocking(ExecuteTrigger::new(bad_trigger_id))?;
 
+    // Waiting for empty block to be committed
+    thread::sleep(network.pipeline_time());
+
     // Checking results
     let new_asset_value = get_asset_value(&test_client, asset_id);
     assert_eq!(
         new_asset_value,
-        prev_asset_value.checked_add(Numeric::ONE).unwrap()
+        prev_asset_value.checked_add(numeric!(2)).unwrap()
     );
     Ok(())
 }
