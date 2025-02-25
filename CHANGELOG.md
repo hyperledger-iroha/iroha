@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2.0.0-rc.1.2] - 2025-02-25
+
+### Fixed
+
+- re-registered peers are now correctly reflected in the peer list (#5327)
+
 ## [2.0.0-rc.1.1] - 2025-02-12
 
 ### Added
