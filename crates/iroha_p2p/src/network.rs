@@ -352,7 +352,6 @@ impl<T: Pload, K: Kex, E: Enc> NetworkBase<T, K, E> {
     fn set_current_peers_addresses(&mut self, UpdatePeers(peers): UpdatePeers) {
         debug!(?peers, "Network receive new peers addresses");
         self.current_peers_addresses = peers;
-        self.update_topology()
     }
 
     fn update_topology(&mut self) {
