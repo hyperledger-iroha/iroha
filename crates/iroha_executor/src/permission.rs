@@ -107,12 +107,14 @@ declare_permissions! {
     iroha_executor_data_model::permission::asset::{CanMintAssetWithDefinition},
     iroha_executor_data_model::permission::asset::{CanBurnAssetWithDefinition},
     iroha_executor_data_model::permission::asset::{CanTransferAssetWithDefinition},
-    iroha_executor_data_model::permission::asset::{CanRegisterAsset},
-    iroha_executor_data_model::permission::asset::{CanUnregisterAsset},
     iroha_executor_data_model::permission::asset::{CanMintAsset},
     iroha_executor_data_model::permission::asset::{CanBurnAsset},
     iroha_executor_data_model::permission::asset::{CanTransferAsset},
-    iroha_executor_data_model::permission::asset::{CanModifyAssetMetadata},
+
+    iroha_executor_data_model::permission::nft::{CanRegisterNft},
+    iroha_executor_data_model::permission::nft::{CanUnregisterNft},
+    iroha_executor_data_model::permission::nft::{CanTransferNft},
+    iroha_executor_data_model::permission::nft::{CanModifyNftMetadata},
 
     iroha_executor_data_model::permission::parameter::{CanSetParameters},
     iroha_executor_data_model::permission::role::{CanManageRoles},
@@ -291,8 +293,8 @@ pub mod asset {
 
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-        CanModifyAssetMetadata, CanRegisterAsset, CanRegisterAssetWithDefinition, CanTransferAsset,
-        CanTransferAssetWithDefinition, CanUnregisterAsset, CanUnregisterAssetWithDefinition,
+        CanRegisterAssetWithDefinition, CanTransferAsset, CanTransferAssetWithDefinition,
+        CanUnregisterAssetWithDefinition,
     };
 
     use super::*;
@@ -399,34 +401,6 @@ pub mod asset {
         }
     }
 
-    impl ValidateGrantRevoke for CanRegisterAsset {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            super::account::Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            super::account::Owner::from(self).validate(authority, host, context)
-        }
-    }
-
-    impl ValidateGrantRevoke for CanUnregisterAsset {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-
     impl ValidateGrantRevoke for CanMintAsset {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             Owner::from(self).validate(authority, host, context)
@@ -469,28 +443,6 @@ pub mod asset {
         }
     }
 
-    impl ValidateGrantRevoke for CanModifyAssetMetadata {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-
-    impl<'t> From<&'t CanRegisterAsset> for super::account::Owner<'t> {
-        fn from(value: &'t CanRegisterAsset) -> Self {
-            Self {
-                account: &value.owner,
-            }
-        }
-    }
-
     macro_rules! impl_froms {
         ($($name:ty),+ $(,)?) => {$(
             impl<'t> From<&'t $name> for Owner<'t> {
@@ -501,13 +453,7 @@ pub mod asset {
         };
     }
 
-    impl_froms!(
-        CanUnregisterAsset,
-        CanMintAsset,
-        CanBurnAsset,
-        CanTransferAsset,
-        CanModifyAssetMetadata,
-    );
+    impl_froms!(CanMintAsset, CanBurnAsset, CanTransferAsset);
 }
 
 pub mod asset_definition {
@@ -645,6 +591,154 @@ pub mod asset_definition {
         iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,
         iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition,
     );
+}
+
+/// Module with pass conditions for NFT related tokens
+///
+/// - Owner of `nft.domain` can unregister, modify and transfer NFT
+/// - Owner of NFT can only transfer NFT
+///
+/// So:
+/// - *full* owner - can unregister, modify and transfer NFT
+/// - *weak* owner - can transfer NFT
+pub mod nft {
+    use iroha_executor_data_model::permission::nft::{
+        CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
+    };
+
+    use super::*;
+    use crate::smart_contract::{
+        data_model::{
+            isi::error::InstructionExecutionError,
+            query::{builder::SingleQueryError, error::FindError},
+        },
+        Iroha,
+    };
+
+    /// Check if `authority` is *week* owner of NFT.
+    ///
+    /// `authority` is *week* owner of NFT if:
+    /// - `nft.owned_by` is `authority`
+    /// - `nft.domain_id` domain is owned by `authority`
+    ///
+    /// Also see [nft] module documentation.
+    ///
+    /// # Errors
+    /// - if `FindNfts` fails
+    /// - if `is_domain_owner` fails
+    pub fn is_nft_weak_owner(nft_id: &NftId, authority: &AccountId, host: &Iroha) -> Result<bool> {
+        let nft = host
+            .query(FindNfts)
+            .filter_with(|nft| nft.id.eq(nft_id.clone()))
+            .execute_single()
+            .map_err(|e| match e {
+                SingleQueryError::QueryError(e) => e,
+                SingleQueryError::ExpectedOneGotNone => {
+                    // assuming this can only happen due to such a NFT not existing
+                    ValidationFail::InstructionFailed(InstructionExecutionError::Find(
+                        FindError::Nft(nft_id.clone()),
+                    ))
+                }
+                _ => unreachable!(),
+            })?;
+        if nft.owned_by() == authority {
+            Ok(true)
+        } else {
+            is_nft_full_owner(nft_id, authority, host)
+        }
+    }
+
+    /// Check if `authority` is *full* owner of NFT.
+    ///
+    /// `authority` is *full* owner of NFT if:
+    /// - `nft.domain_id` domain is owned by `authority`
+    ///
+    /// Also see [nft] module documentation.
+    ///
+    /// # Errors
+    /// - if `is_domain_owner` fails
+    pub fn is_nft_full_owner(nft_id: &NftId, authority: &AccountId, host: &Iroha) -> Result<bool> {
+        domain::is_domain_owner(nft_id.domain(), authority, host)
+    }
+
+    /// Pass condition that checks if `authority` is the *weak* owner of NFT.
+    #[derive(Debug, Clone)]
+    pub struct WeakOwner<'nft> {
+        /// NFT id to check against
+        pub nft: &'nft NftId,
+    }
+
+    impl PassCondition for WeakOwner<'_> {
+        fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
+            if is_nft_weak_owner(self.nft, authority, host)? {
+                return Ok(());
+            }
+
+            Err(ValidationFail::NotPermitted(
+                "Can't access NFT owned by another account".to_owned(),
+            ))
+        }
+    }
+
+    /// Pass condition that checks if `authority` is the *full* owner of NFT.
+    #[derive(Debug, Clone)]
+    pub struct FullOwner<'nft> {
+        /// NFT id to check against
+        pub nft: &'nft NftId,
+    }
+
+    impl PassCondition for FullOwner<'_> {
+        fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
+            if is_nft_full_owner(self.nft, authority, host)? {
+                return Ok(());
+            }
+
+            Err(ValidationFail::NotPermitted(
+                "Can't access NFT from domain owned by another account".to_owned(),
+            ))
+        }
+    }
+
+    impl ValidateGrantRevoke for CanRegisterNft {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            super::domain::Owner::from(self).validate(authority, host, context)
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            super::domain::Owner::from(self).validate(authority, host, context)
+        }
+    }
+
+    macro_rules! impl_froms_and_validate_grant_revoke {
+        ($owner:ident : $($name:ty),+ $(,)?) => {$(
+            impl<'t> From<&'t $name> for $owner<'t> {
+                fn from(value: &'t $name) -> Self {
+                    Self { nft: &value.nft }
+                }
+            }
+
+            impl ValidateGrantRevoke for $name {
+                fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+                    $owner::from(self).validate(authority, host, context)
+                }
+                fn validate_revoke(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    $owner::from(self).validate(authority, host, context)
+                }
+            }
+        )+};
+    }
+
+    impl_froms_and_validate_grant_revoke!(WeakOwner: CanTransferNft);
+    impl_froms_and_validate_grant_revoke!(FullOwner: CanUnregisterNft, CanModifyNftMetadata);
 }
 
 pub mod account {
@@ -917,8 +1011,9 @@ pub mod trigger {
 
 pub mod domain {
     //! Module with pass conditions for domain related tokens
-    use iroha_executor_data_model::permission::domain::{
-        CanModifyDomainMetadata, CanRegisterDomain, CanUnregisterDomain,
+    use iroha_executor_data_model::permission::{
+        domain::{CanModifyDomainMetadata, CanRegisterDomain, CanUnregisterDomain},
+        nft::CanRegisterNft,
     };
     use iroha_smart_contract::data_model::{
         isi::error::InstructionExecutionError,
@@ -1027,6 +1122,7 @@ pub mod domain {
         CanModifyDomainMetadata,
         iroha_executor_data_model::permission::account::CanRegisterAccount,
         iroha_executor_data_model::permission::asset_definition::CanRegisterAssetDefinition,
+        CanRegisterNft,
     );
 }
 

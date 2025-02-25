@@ -1,11 +1,7 @@
 //! This module contains definitions of prototypes and projections for the data model types. See the [module-level documentation](crate::query::dsl) for more information.
 
 #[cfg(not(feature = "std"))]
-use alloc::{
-    format,
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{format, string::String, vec::Vec};
 
 use derive_where::derive_where;
 use iroha_crypto::{HashOf, PublicKey};
@@ -18,11 +14,12 @@ use crate::query::dsl::{
 };
 use crate::{
     account::{Account, AccountId},
-    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId, AssetValue},
+    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::{BlockHeader, SignedBlock},
     domain::{Domain, DomainId},
     metadata::Metadata,
     name::Name,
+    nft::{Nft, NftId},
     parameter::Parameter,
     peer::PeerId,
     permission::Permission,
@@ -265,18 +262,24 @@ type_descriptions! {
         domain(Domain, AssetDefinitionIdDomainProjector): DomainId,
         name(Name, AssetDefinitionIdNameProjector): Name,
     }
-    Asset[AssetProjection, AssetPrototype]: AssetId, AccountId, DomainId, Name, PublicKey, AssetDefinitionId, AssetValue, Numeric, Metadata, Json {
+    Asset[AssetProjection, AssetPrototype]: AssetId, AccountId, DomainId, Name, PublicKey, AssetDefinitionId, Numeric, Metadata, Json {
         id(Id, AssetIdProjector): AssetId,
-        value(Value, AssetValueProjector): AssetValue,
+        value(Value, AssetValueProjector): Numeric,
     }
     AssetId[AssetIdProjection, AssetIdPrototype]: AccountId, DomainId, Name, PublicKey, AssetDefinitionId {
         account(Account, AssetIdAccountProjector): AccountId,
         definition(Definition, AssetIdDefinitionProjector): AssetDefinitionId,
     }
-    #[custom_evaluate]
-    AssetValue[AssetValueProjection, AssetValuePrototype]: Numeric, Metadata, Json {
-        numeric(Numeric, AssetValueNumericProjector): Numeric,
-        store(Store, AssetValueStoreProjector): Metadata,
+
+    // NFT
+    Nft[NftProjection, NftPrototype]: NftId, DomainId, AccountId, PublicKey, Name, Metadata, Json {
+        id(Id, NftIdProjector): NftId,
+        content(Metadata, NftMetadataProjector): Metadata,
+        owned_by(AccountId, NftOwnedByProjector): AccountId,
+    }
+    NftId[NftIdProjection, NftIdPrototype]: DomainId, Name {
+        domain(Domain, NftIdDomainProjector): DomainId,
+        name(Name, NftIdNameProjector): Name,
     }
 
     // block
@@ -571,83 +574,6 @@ impl EvaluateSelector<SignedTransaction> for SignedTransactionProjection<Selecto
             SignedTransactionProjection::Authority(authority) => {
                 authority.project(batch.map(|item| item.authority().clone()))
             }
-        }
-    }
-}
-
-impl EvaluatePredicate<AssetValue> for AssetValueProjection<PredicateMarker> {
-    fn applies(&self, input: &AssetValue) -> bool {
-        match self {
-            AssetValueProjection::Atom(atom) => atom.applies(input),
-            AssetValueProjection::Numeric(numeric) => match input {
-                AssetValue::Numeric(v) => numeric.applies(v),
-                AssetValue::Store(_) => false,
-            },
-            AssetValueProjection::Store(store) => match input {
-                AssetValue::Numeric(_) => false,
-                AssetValue::Store(v) => store.applies(v),
-            },
-        }
-    }
-}
-
-impl EvaluateSelector<AssetValue> for AssetValueProjection<SelectorMarker> {
-    #[expect(single_use_lifetimes)]
-    fn project_clone<'a>(
-        &self,
-        batch: impl Iterator<Item = &'a AssetValue>,
-    ) -> Result<QueryOutputBatchBox, QueryExecutionFail> {
-        match self {
-            AssetValueProjection::Atom(()) => Ok(batch.cloned().collect::<Vec<_>>().into()),
-            AssetValueProjection::Numeric(proj) => fallible_selector::map_clone(
-                batch,
-                |item| match item {
-                    AssetValue::Numeric(v) => Ok(v),
-                    AssetValue::Store(_) => Err(QueryExecutionFail::Conversion(
-                        "Expected numeric value, got store".to_string(),
-                    )),
-                },
-                proj,
-            ),
-            AssetValueProjection::Store(proj) => fallible_selector::map_clone(
-                batch,
-                |item| match item {
-                    AssetValue::Numeric(_) => Err(QueryExecutionFail::Conversion(
-                        "Expected store value, got numeric".to_string(),
-                    )),
-                    AssetValue::Store(v) => Ok(v),
-                },
-                proj,
-            ),
-        }
-    }
-
-    fn project(
-        &self,
-        batch: impl Iterator<Item = AssetValue>,
-    ) -> Result<QueryOutputBatchBox, QueryExecutionFail> {
-        match self {
-            AssetValueProjection::Atom(()) => Ok(batch.collect::<Vec<_>>().into()),
-            AssetValueProjection::Numeric(proj) => fallible_selector::map(
-                batch,
-                |item| match item {
-                    AssetValue::Numeric(v) => Ok(v),
-                    AssetValue::Store(_) => Err(QueryExecutionFail::Conversion(
-                        "Expected numeric value, got store".to_string(),
-                    )),
-                },
-                proj,
-            ),
-            AssetValueProjection::Store(proj) => fallible_selector::map(
-                batch,
-                |item| match item {
-                    AssetValue::Numeric(_) => Err(QueryExecutionFail::Conversion(
-                        "Expected store value, got numeric".to_string(),
-                    )),
-                    AssetValue::Store(v) => Ok(v),
-                },
-                proj,
-            ),
         }
     }
 }
