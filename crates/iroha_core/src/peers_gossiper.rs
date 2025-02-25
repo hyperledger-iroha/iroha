@@ -120,6 +120,7 @@ impl PeersGossiper {
                 }
                 () = self.network.wait_online_peers_update(|_| ()) => {
                     self.gossip_peers();
+                    self.network_update_peers_addresses();
                 }
                 Some((peers_gossip, peer)) = message_receiver.recv() => {
                     self.handle_peers_gossip(peers_gossip, &peer);
