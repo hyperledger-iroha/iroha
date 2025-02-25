@@ -898,12 +898,16 @@
         "type": "NonZero<u64>"
       },
       {
+        "name": "height_non_empty",
+        "type": "NonZero<u64>"
+      },
+      {
         "name": "prev_block_hash",
         "type": "Option<HashOf<BlockHeader>>"
       },
       {
         "name": "transactions_hash",
-        "type": "HashOf<MerkleTree<SignedTransaction>>"
+        "type": "Option<HashOf<MerkleTree<SignedTransaction>>>"
       },
       {
         "name": "creation_time_ms",
@@ -3249,6 +3253,9 @@
   "Option<HashOf<BlockHeader>>": {
     "Option": "HashOf<BlockHeader>"
   },
+  "Option<HashOf<MerkleTree<SignedTransaction>>>": {
+    "Option": "HashOf<MerkleTree<SignedTransaction>>"
+  },
   "Option<HashOf<SignedTransaction>>": {
     "Option": "HashOf<SignedTransaction>"
   },
@@ -4795,7 +4802,12 @@
     ]
   },
   "SignedBlockPredicateAtom": {
-    "Enum": []
+    "Enum": [
+      {
+        "tag": "IsEmpty",
+        "discriminant": 0
+      }
+    ]
   },
   "SignedBlockProjection<PredicateMarker>": {
     "Enum": [

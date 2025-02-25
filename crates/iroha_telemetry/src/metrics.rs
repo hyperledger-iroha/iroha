@@ -54,6 +54,9 @@ pub struct Status {
     /// Number of committed blocks (blockchain height)
     #[codec(compact)]
     pub blocks: u64,
+    /// Number of committed non-empty blocks
+    #[codec(compact)]
+    pub blocks_non_empty: u64,
     /// Number of approved transactions
     #[codec(compact)]
     pub txs_approved: u64,
@@ -76,6 +79,7 @@ impl<T: Deref<Target = Metrics>> From<&T> for Status {
         Self {
             peers: val.connected_peers.get(),
             blocks: val.block_height.get(),
+            blocks_non_empty: val.block_height_non_empty.get(),
             txs_approved: val.txs.with_label_values(&["accepted"]).get(),
             txs_rejected: val.txs.with_label_values(&["rejected"]).get(),
             uptime: Uptime(Duration::from_millis(val.uptime_since_genesis_ms.get())),
@@ -96,6 +100,8 @@ pub struct Metrics {
     pub txs: IntCounterVec,
     /// Number of committed blocks (blockchain height)
     pub block_height: IntCounter,
+    /// Number of committed non-empty blocks
+    pub block_height_non_empty: IntCounter,
     /// Number of currently connected peers excluding the reporting peer
     pub connected_peers: GenericGauge<AtomicU64>,
     /// Uptime of the network, starting from commit of the genesis block
@@ -141,6 +147,11 @@ impl Default for Metrics {
         .expect("Infallible");
         let block_height =
             IntCounter::new("block_height", "Current block height").expect("Infallible");
+        let block_height_non_empty = IntCounter::new(
+            "block_height_non_empty",
+            "Current count of non-empty blocks",
+        )
+        .expect("Infallible");
         let connected_peers = GenericGauge::new(
             "connected_peers",
             "Total number of currently connected peers",
@@ -182,6 +193,7 @@ impl Default for Metrics {
             txs,
             tx_amounts,
             block_height,
+            block_height_non_empty,
             connected_peers,
             uptime_since_genesis_ms,
             domains,
@@ -196,6 +208,7 @@ impl Default for Metrics {
         Self {
             txs,
             block_height,
+            block_height_non_empty,
             connected_peers,
             uptime_since_genesis_ms,
             domains,
@@ -249,6 +262,7 @@ mod test {
         Status {
             peers: 4,
             blocks: 5,
+            blocks_non_empty: 3,
             txs_approved: 31,
             txs_rejected: 3,
             uptime: Uptime(Duration::new(5, 937_000_000)),
@@ -268,6 +282,7 @@ mod test {
             {
               "peers": 4,
               "blocks": 5,
+              "blocks_non_empty": 3,
               "txs_approved": 31,
               "txs_rejected": 3,
               "uptime": {
@@ -288,7 +303,7 @@ mod test {
         let actual = hex::encode_upper(bytes);
         // CAUTION: if this is outdated, make sure to update the documentation:
         // https://docs.iroha.tech/reference/torii-endpoints.html#status
-        let expected = expect_test::expect!["10147C0C14407CD9370848"];
+        let expected = expect_test::expect!["10140C7C0C14407CD9370848"];
         expected.assert_eq(&actual);
     }
 }

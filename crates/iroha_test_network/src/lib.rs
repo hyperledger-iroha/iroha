@@ -210,7 +210,7 @@ impl Network {
         self.peers.iter().map(|x| x.id.clone()).collect()
     }
 
-    /// Resolves when all _running_ peers have at least N blocks
+    /// Resolves when all _running_ peers have at least N non-empty blocks
     /// # Errors
     /// If this doesn't happen within a timeout.
     pub async fn ensure_blocks(&self, height: u64) -> Result<&Self> {
@@ -466,6 +466,7 @@ pub struct NetworkPeer {
     is_running: Arc<AtomicBool>,
     events: broadcast::Sender<PeerLifecycleEvent>,
     block_height: watch::Sender<Option<u64>>,
+    block_height_non_empty: watch::Sender<Option<u64>>,
     // dropping these the last
     port_p2p: Arc<AllocatedPort>,
     port_api: Arc<AllocatedPort>,
@@ -493,6 +494,7 @@ impl NetworkPeer {
 
         let (events, _rx) = broadcast::channel(32);
         let (block_height, _rx) = watch::channel(None);
+        let (block_height_non_empty, _rx) = watch::channel(None);
 
         let result = Self {
             id,
@@ -503,6 +505,7 @@ impl NetworkPeer {
             is_running: Default::default(),
             events,
             block_height,
+            block_height_non_empty,
             port_p2p: Arc::new(port_p2p),
             port_api: Arc::new(port_api),
         };
@@ -636,6 +639,7 @@ impl NetworkPeer {
             is_running: self.is_running.clone(),
             events: self.events.clone(),
             block_height: self.block_height.clone(),
+            block_height_non_empty: self.block_height_non_empty.clone(),
         };
         tasks.spawn(async move {
             if let Err(err) = peer_exit.monitor(shutdown_rx).await {
@@ -649,6 +653,7 @@ impl NetworkPeer {
             let client = self.client();
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
+            let block_height_non_empty_tx = self.block_height_non_empty.clone();
             tasks.spawn(async move {
                 let status_client = client.clone();
                 let status = backoff::future::retry(
@@ -670,7 +675,8 @@ impl NetworkPeer {
                 .await
                 .expect("there is no max elapsed time");
                 let _ = events_tx.send(PeerLifecycleEvent::ServerStarted);
-                let _ = block_height_tx.send(Some(status.blocks));
+                let _ = block_height_tx.send_replace(Some(status.blocks));
+                let _ = block_height_non_empty_tx.send_replace(Some(status.blocks_non_empty));
                 eprintln!("{log_prefix} server started, {status:?}");
 
                 let mut events = client
@@ -685,9 +691,11 @@ impl NetworkPeer {
                     if let EventBox::Pipeline(PipelineEventBox::Block(block)) = event {
                         if *block.status() == BlockStatus::Applied {
                             let height = block.header().height().get();
-                            eprintln!("{log_prefix} BlockStatus::Applied height={height}",);
+                            let height_non_empty = block.header().height_non_empty().get();
+                            eprintln!("{log_prefix} BlockStatus::Applied height={height}, height_non_empty={height_non_empty}");
                             let _ = events_tx.send(PeerLifecycleEvent::BlockApplied { height });
                             block_height_tx.send_modify(|x| *x = Some(height));
+                            block_height_non_empty_tx.send_modify(|x| *x = Some(height_non_empty));
                         }
                     }
                 }
@@ -756,11 +764,11 @@ impl NetworkPeer {
         }
     }
 
-    /// Wait until peer's block height reaches N.
+    /// Wait until peer's count of non-empty blocks reaches N.
     ///
-    /// Resolves immediately if peer is already running _and_ its current block height is greater or equal to N.
+    /// Resolves immediately if peer is already running _and_ has at least N non-empty blocks committed.
     pub async fn once_block(&self, n: u64) {
-        let mut recv = self.block_height.subscribe();
+        let mut recv = self.block_height_non_empty.subscribe();
 
         if recv.borrow().map(|x| x >= n).unwrap_or(false) {
             return;
@@ -825,10 +833,6 @@ impl NetworkPeer {
             .await
             .expect("should not panic")
     }
-
-    pub fn blocks(&self) -> watch::Receiver<Option<u64>> {
-        self.block_height.subscribe()
-    }
 }
 
 /// Compare by ID
@@ -863,6 +867,7 @@ struct PeerExit {
     is_running: Arc<AtomicBool>,
     events: broadcast::Sender<PeerLifecycleEvent>,
     block_height: watch::Sender<Option<u64>>,
+    block_height_non_empty: watch::Sender<Option<u64>>,
 }
 
 impl PeerExit {
@@ -876,6 +881,7 @@ impl PeerExit {
         let _ = self.events.send(PeerLifecycleEvent::Terminated { status });
         self.is_running.store(false, Ordering::Relaxed);
         self.block_height.send_modify(|x| *x = None);
+        self.block_height_non_empty.send_modify(|x| *x = None);
 
         Ok(())
     }

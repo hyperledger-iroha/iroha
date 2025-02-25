@@ -351,12 +351,13 @@ mod tests {
 
     impl BlockHeader {
         fn dummy(height: NonZeroU64) -> Self {
+            let transactions_hash =
+                HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH]));
             Self {
                 height,
+                height_non_empty: height,
                 prev_block_hash: None,
-                transactions_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
-                    [1_u8; Hash::LENGTH],
-                )),
+                transactions_hash: Some(transactions_hash),
                 creation_time_ms: 0,
                 view_change_index: 0,
             }
