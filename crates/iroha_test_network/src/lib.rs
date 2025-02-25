@@ -555,7 +555,7 @@ impl NetworkPeer {
                 format!("127.0.0.1:{}", self.port_p2p),
             )
             .write(["torii", "address"], format!("127.0.0.1:{}", self.port_api))
-            .write(["logger", "format"], "json");
+            .write(["logger", "format"], "pretty");
 
         let config_path = self.dir.path().join(format!("run-{run_num}-config.toml"));
         let genesis_path = self.dir.path().join(format!("run-{run_num}-genesis.scale"));
@@ -597,7 +597,8 @@ impl NetworkPeer {
                 .unwrap();
             tasks.spawn(async move {
                 let mut lines = BufReader::new(output).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
+                while let Ok(Some(mut line)) = lines.next_line().await {
+                    line.push('\n');
                     file.write_all(line.as_bytes())
                         .await
                         .expect("writing logs to file shouldn't fail");
