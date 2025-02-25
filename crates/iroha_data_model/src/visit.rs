@@ -41,6 +41,7 @@ pub trait Visit {
         visit_register(&RegisterBox),
         visit_remove_key_value(&RemoveKeyValueBox),
         visit_revoke(&RevokeBox),
+        visit_declare(&DeclareBox),
         visit_set_key_value(&SetKeyValueBox),
         visit_transfer(&TransferBox),
         visit_unregister(&UnregisterBox),
@@ -54,6 +55,8 @@ pub trait Visit {
         // Visit SingularQueryBox
         visit_find_executor_data_model(&FindExecutorDataModel),
         visit_find_parameters(&FindParameters),
+        visit_find_fee_receiver_account(&FindFeeReceiverAccount),
+        visit_find_fee_paymnet_asset(&FindFeePaymentAsset),
 
         // Visit IterableQueryBox
         visit_find_domains(&QueryWithFilter<FindDomains>),
@@ -128,6 +131,9 @@ pub trait Visit {
         visit_revoke_account_permission(&Revoke<Permission, Account>),
         visit_revoke_account_role(&Revoke<RoleId, Account>),
         visit_revoke_role_permission(&Revoke<Permission, Role>),
+
+        // Visit DeclareBox
+        visit_declare_fee_receiver_definition(&Declare<FeeReceiverDefinition>),
     }
 }
 
@@ -154,6 +160,8 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
     singular_query_visitors! {
         visit_find_executor_data_model(FindExecutorDataModel),
         visit_find_parameters(FindParameters),
+        visit_find_fee_receiver_account(FindFeeReceiverAccount),
+        visit_find_fee_paymnet_asset(FindFeePaymentAsset),
     }
 }
 
@@ -214,6 +222,7 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
             visitor.visit_remove_key_value(variant_value)
         }
         InstructionBox::Revoke(variant_value) => visitor.visit_revoke(variant_value),
+        InstructionBox::Declare(variant_value) => visitor.visit_declare(variant_value),
         InstructionBox::SetKeyValue(variant_value) => visitor.visit_set_key_value(variant_value),
         InstructionBox::Transfer(variant_value) => visitor.visit_transfer(variant_value),
         InstructionBox::Unregister(variant_value) => visitor.visit_unregister(variant_value),
@@ -309,6 +318,12 @@ pub fn visit_revoke<V: Visit + ?Sized>(visitor: &mut V, isi: &RevokeBox) {
     }
 }
 
+pub fn visit_declare<V: Visit + ?Sized>(visitor: &mut V, isi: &DeclareBox) {
+    match isi {
+        DeclareBox::FeeReceiver(obj) => visitor.visit_declare_fee_receiver_definition(obj),
+    }
+}
+
 macro_rules! leaf_visitors {
     ( $($visitor:ident($operation:ty)),+ $(,)? ) => { $(
         pub fn $visitor<V: Visit + ?Sized>(_visitor: &mut V, _operation: $operation) {
@@ -353,6 +368,7 @@ leaf_visitors! {
     visit_revoke_account_role(&Revoke<RoleId, Account>),
     visit_grant_role_permission(&Grant<Permission, Role>),
     visit_revoke_role_permission(&Revoke<Permission, Role>),
+    visit_declare_fee_receiver_definition(&Declare<FeeReceiverDefinition>),
     visit_register_trigger(&Register<Trigger>),
     visit_unregister_trigger(&Unregister<Trigger>),
     visit_mint_trigger_repetitions(&Mint<u32, Trigger>),
@@ -366,6 +382,8 @@ leaf_visitors! {
     // Singular Query visitors
     visit_find_executor_data_model(&FindExecutorDataModel),
     visit_find_parameters(&FindParameters),
+    visit_find_fee_receiver_account(&FindFeeReceiverAccount),
+    visit_find_fee_paymnet_asset(&FindFeePaymentAsset),
 
     // Iterable Query visitors
     visit_find_domains(&QueryWithFilter<FindDomains>),

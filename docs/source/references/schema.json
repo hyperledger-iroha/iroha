@@ -1736,13 +1736,18 @@
         "type": "RoleEvent"
       },
       {
-        "tag": "Configuration",
+        "tag": "Fee",
         "discriminant": 4,
+        "type": "FeeEvent"
+      },
+      {
+        "tag": "Configuration",
+        "discriminant": 5,
         "type": "ConfigurationEvent"
       },
       {
         "tag": "Executor",
-        "discriminant": 5,
+        "discriminant": 6,
         "type": "ExecutorEvent"
       }
     ]
@@ -1797,6 +1802,23 @@
         "tag": "Executor",
         "discriminant": 9,
         "type": "ExecutorEventFilter"
+      }
+    ]
+  },
+  "Declare<FeeReceiverDefinition>": {
+    "Struct": [
+      {
+        "name": "object",
+        "type": "FeeReceiverDefinition"
+      }
+    ]
+  },
+  "DeclareBox": {
+    "Enum": [
+      {
+        "tag": "FeeReceiver",
+        "discriminant": 0,
+        "type": "Declare<FeeReceiverDefinition>"
       }
     ]
   },
@@ -2195,6 +2217,39 @@
       }
     ]
   },
+  "FeeEvent": {
+    "Enum": [
+      {
+        "tag": "RecepientUpdated",
+        "discriminant": 0,
+        "type": "FeeReceiverUpdated"
+      }
+    ]
+  },
+  "FeeReceiverDefinition": {
+    "Struct": [
+      {
+        "name": "account",
+        "type": "AccountId"
+      },
+      {
+        "name": "asset",
+        "type": "AssetDefinitionId"
+      }
+    ]
+  },
+  "FeeReceiverUpdated": {
+    "Struct": [
+      {
+        "name": "account",
+        "type": "AccountId"
+      },
+      {
+        "name": "asset",
+        "type": "AssetDefinitionId"
+      }
+    ]
+  },
   "FetchSize": {
     "Struct": [
       {
@@ -2283,6 +2338,8 @@
     ]
   },
   "FindExecutorDataModel": null,
+  "FindFeePaymentAsset": null,
+  "FindFeeReceiverAccount": null,
   "FindParameters": null,
   "FindPeers": null,
   "FindPermissionsByAccountId": {
@@ -2506,28 +2563,33 @@
         "type": "RevokeBox"
       },
       {
-        "tag": "ExecuteTrigger",
+        "tag": "Declare",
         "discriminant": 9,
+        "type": "DeclareBox"
+      },
+      {
+        "tag": "ExecuteTrigger",
+        "discriminant": 10,
         "type": "ExecuteTrigger"
       },
       {
         "tag": "SetParameter",
-        "discriminant": 10,
+        "discriminant": 11,
         "type": "SetParameter"
       },
       {
         "tag": "Upgrade",
-        "discriminant": 11,
+        "discriminant": 12,
         "type": "Upgrade"
       },
       {
         "tag": "Log",
-        "discriminant": 12,
+        "discriminant": 13,
         "type": "Log"
       },
       {
         "tag": "Custom",
-        "discriminant": 13,
+        "discriminant": 14,
         "type": "CustomInstruction"
       }
     ]
@@ -2651,24 +2713,28 @@
         "discriminant": 8
       },
       {
-        "tag": "ExecuteTrigger",
+        "tag": "Declare",
         "discriminant": 9
       },
       {
-        "tag": "SetParameter",
+        "tag": "ExecuteTrigger",
         "discriminant": 10
       },
       {
-        "tag": "Upgrade",
+        "tag": "SetParameter",
         "discriminant": 11
       },
       {
-        "tag": "Log",
+        "tag": "Upgrade",
         "discriminant": 12
       },
       {
-        "tag": "Custom",
+        "tag": "Log",
         "discriminant": 13
+      },
+      {
+        "tag": "Custom",
+        "discriminant": 14
       }
     ]
   },
@@ -4935,6 +5001,16 @@
         "tag": "FindParameters",
         "discriminant": 1,
         "type": "FindParameters"
+      },
+      {
+        "tag": "FindFeeReceiverAccount",
+        "discriminant": 2,
+        "type": "FindFeeReceiverAccount"
+      },
+      {
+        "tag": "FindFeePaymentAsset",
+        "discriminant": 3,
+        "type": "FindFeePaymentAsset"
       }
     ]
   },
@@ -4949,6 +5025,16 @@
         "tag": "Parameters",
         "discriminant": 1,
         "type": "Parameters"
+      },
+      {
+        "tag": "FeeReceiverAccount",
+        "discriminant": 2,
+        "type": "Option<AccountId>"
+      },
+      {
+        "tag": "FindFeePaymentAsset",
+        "discriminant": 3,
+        "type": "Option<AssetDefinitionId>"
       }
     ]
   },

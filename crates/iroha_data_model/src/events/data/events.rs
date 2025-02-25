@@ -88,6 +88,8 @@ mod model {
         Trigger(trigger::TriggerEvent),
         /// Role event
         Role(role::RoleEvent),
+        /// Fee event
+        Fee(fee::FeeEvent),
         /// Configuration event
         Configuration(config::ConfigurationEvent),
         /// Executor event
@@ -278,6 +280,51 @@ mod role {
             // TODO: Skipped temporarily because of FFI
             #[getset(skip)]
             pub permission: Permission,
+        }
+    }
+}
+
+mod fee {
+    //! This module contains `FeeEvent` and its impls
+
+    use iroha_data_model_derive::model;
+
+    pub use self::model::*;
+    use super::*;
+    use crate::fee::FeeReceiverDefinition;
+
+    data_event! {
+        #[has_origin(origin = FeeReceiverDefinition)]
+        pub enum FeeEvent {
+            #[has_origin(receiver_updated => &receiver_updated.account)]
+            RecepientUpdated(FeeReceiverUpdated),
+        }
+    }
+
+    #[model]
+    mod model {
+        use super::*;
+
+        /// [`FeeReceiverUpdated`] represents updates in the fee receiver.
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Getters,
+            Decode,
+            Encode,
+            Deserialize,
+            Serialize,
+            IntoSchema,
+        )]
+        #[getset(get = "pub")]
+        #[ffi_type]
+        pub struct FeeReceiverUpdated {
+            pub account: AccountId,
+            pub asset: AssetDefinitionId,
         }
     }
 }
@@ -636,6 +683,7 @@ impl DataEvent {
             | Self::Executor(_)
             | Self::Peer(_)
             | Self::Role(_)
+            | Self::Fee(_)
             | Self::Trigger(_) => None,
         }
     }
@@ -669,6 +717,7 @@ pub mod prelude {
         config::{ConfigurationEvent, ConfigurationEventSet, ParameterChanged},
         domain::{DomainEvent, DomainEventSet, DomainOwnerChanged},
         executor::{ExecutorEvent, ExecutorEventSet, ExecutorUpgrade},
+        fee::{FeeEvent, FeeReceiverUpdated},
         peer::{PeerEvent, PeerEventSet},
         role::{RoleEvent, RoleEventSet, RolePermissionChanged},
         trigger::{TriggerEvent, TriggerEventSet, TriggerNumberOfExecutionsChanged},

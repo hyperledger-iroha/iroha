@@ -668,6 +668,7 @@ pub mod error {
                 RemoveKeyValue(_) => "remove key-value pair",
                 Grant(_) => "grant",
                 Revoke(_) => "revoke",
+                Declare(_) => "declare",
                 ExecuteTrigger(_) => "execute trigger",
                 SetParameter(_) => "set parameter",
                 Upgrade(_) => "upgrade",

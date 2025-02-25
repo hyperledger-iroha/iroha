@@ -242,6 +242,12 @@ impl ValidQueryRequest {
                     SingularQueryBox::FindParameters(q) => {
                         SingularQueryOutputBox::from(q.execute(state)?)
                     }
+                    SingularQueryBox::FindFeeReceiverAccount(q) => {
+                        SingularQueryOutputBox::from(q.execute(state)?)
+                    }
+                    SingularQueryBox::FindFeePaymentAsset(q) => {
+                        SingularQueryOutputBox::from(q.execute(state)?)
+                    }
                 };
 
                 Ok(QueryResponse::Singular(output))
