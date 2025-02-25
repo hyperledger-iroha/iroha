@@ -898,6 +898,10 @@
         "type": "NonZero<u64>"
       },
       {
+        "name": "height_non_empty",
+        "type": "NonZero<u64>"
+      },
+      {
         "name": "prev_block_hash",
         "type": "Option<HashOf<BlockHeader>>"
       },

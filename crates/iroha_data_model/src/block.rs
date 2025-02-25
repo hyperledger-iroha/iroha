@@ -52,6 +52,9 @@ mod model {
         /// Number of blocks in the chain including this block.
         #[getset(get_copy = "pub")]
         pub height: NonZeroU64,
+        /// Number of non-empty blocks in the chain including this block.
+        #[getset(get_copy = "pub")]
+        pub height_non_empty: NonZeroU64,
         /// Hash of the previous block in the chain.
         #[getset(get_copy = "pub")]
         pub prev_block_hash: Option<HashOf<BlockHeader>>,
@@ -337,6 +340,7 @@ impl SignedBlock {
         let creation_time_ms = Self::get_genesis_block_creation_time(&transactions);
         let header = BlockHeader {
             height: nonzero!(1_u64),
+            height_non_empty: nonzero!(1_u64),
             prev_block_hash: None,
             transactions_hash: Some(transactions_hash),
             creation_time_ms,
@@ -435,6 +439,10 @@ mod candidate {
 
             if expected_txs_hash != actual_txs_hash {
                 return Err("Transactions' hash incorrect");
+            }
+
+            if self.header.height < self.header.height_non_empty {
+                return Err("Incorrect `height_non_empty`");
             }
 
             self.transactions.iter().try_for_each(|tx| {

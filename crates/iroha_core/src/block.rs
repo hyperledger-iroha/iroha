@@ -180,6 +180,16 @@ mod pending {
                             .expect("INTERNAL BUG: Blockchain height exceeds usize::MAX")
                     },
                 ),
+                height_non_empty: prev_block
+                    .map(|block| block.header().height_non_empty)
+                    .map_or_else(
+                        || nonzero!(1_u64),
+                        |height| {
+                            height
+                                .checked_add(u64::from(!transactions.is_empty()))
+                                .expect("INTERNAL BUG: Blockchain height exceeds usize::MAX")
+                        },
+                    ),
                 prev_block_hash: prev_block.map(SignedBlock::hash),
                 transactions_hash: transactions
                     .iter()
@@ -808,6 +818,7 @@ mod valid {
                 HashOf::from_untyped_unchecked(Hash::prehashed([1; Hash::LENGTH]));
             let mut header = BlockHeader {
                 height: nonzero_ext::nonzero!(2_u64),
+                height_non_empty: nonzero_ext::nonzero!(2_u64),
                 prev_block_hash: None,
                 transactions_hash: Some(transactions_hash),
                 creation_time_ms: 0,

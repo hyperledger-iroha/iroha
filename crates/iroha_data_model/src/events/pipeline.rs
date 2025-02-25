@@ -355,6 +355,7 @@ mod tests {
                 HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH]));
             Self {
                 height,
+                height_non_empty: height,
                 prev_block_hash: None,
                 transactions_hash: Some(transactions_hash),
                 creation_time_ms: 0,

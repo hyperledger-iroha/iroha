@@ -77,7 +77,8 @@ impl MetricsReporter {
                 };
                 block_index += 1;
                 let block_txs_rejected = block.errors().count() as u64;
-                let block_txs_approved = block.transactions().count() as u64 - block_txs_rejected;
+                let block_txs_all = block.transactions().count() as u64;
+                let block_txs_approved = block_txs_all - block_txs_rejected;
 
                 self.metrics
                     .txs
@@ -92,6 +93,9 @@ impl MetricsReporter {
                     .with_label_values(&["total"])
                     .inc_by(block_txs_approved + block_txs_rejected);
                 self.metrics.block_height.inc();
+                if block_txs_all != 0 {
+                    self.metrics.block_height_non_empty.inc();
+                }
             }
             *lastest_block_height = block_index;
         }
