@@ -263,7 +263,7 @@ mod transparent {
     }
 
     impl SetParameter {
-        /// [`Parameter`]` of [`SetParameter`]
+        /// [`Parameter`] of [`SetParameter`]
         pub fn parameter(&self) -> &Parameter {
             &self.0
         }

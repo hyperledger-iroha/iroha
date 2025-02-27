@@ -1,21 +1,23 @@
 use alloc::{format, string::String, vec::Vec};
 
+use iroha_data_model::prelude::*;
 use iroha_executor_data_model::parameter::Parameter as ExecutorParameter;
 use iroha_schema::IntoSchema;
-use iroha_data_model::prelude::*;
 use serde::{Deserialize, Serialize};
+// use cargo_metadata::MetadataCommand;
 
-#[derive(PartialEq, Eq, ExecutorParameter, Deserialize, Serialize, IntoSchema)]
+#[derive(PartialEq, Eq, ExecutorParameter, Deserialize, Serialize, IntoSchema, Debug)]
 pub struct FeesOptions {
-    pub receiver: AccountId,
-    pub asset: AssetDefinitionId,
+    pub asset: AssetId,
 }
 
 impl Default for FeesOptions {
     fn default() -> Self {
+        // Value can be defined in .cargo/config.toml
+        let asset = env!("FEES_ASSET");
+
         Self {
-            receiver: "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland".parse().unwrap(),
-            asset: "xor#wonderland".parse().unwrap(),
+            asset: asset.parse().unwrap(),
         }
     }
 }

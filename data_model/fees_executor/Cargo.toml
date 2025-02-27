@@ -11,8 +11,7 @@ license.workspace = true
 iroha_executor_data_model.workspace = true
 iroha_data_model.workspace = true
 iroha_schema.workspace = true
+iroha_executor.workspace = true
 
 serde_json.workspace = true
 serde.workspace = true
-
-iroha_executor.workspace = true

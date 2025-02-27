@@ -407,7 +407,7 @@ fn define_custom_parameter() -> Result<()> {
     Ok(())
 }
 
-fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
+pub(crate) fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
     let upgrade_executor = Upgrade::new(Executor::new(load_sample_wasm(executor)));
     let profile = load_wasm_build_profile();
 
