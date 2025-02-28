@@ -9,11 +9,10 @@ extern crate alloc;
 use alloc::{format, string::String, string::ToString, vec, vec::Vec};
 use core::str::FromStr;
 
-use derive_more::Display;
+use derive_more::{Display, From};
 use parity_scale_codec::{Decode, Encode};
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
-use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 /// Decimal number with arbitrary precision and scale.
 ///
@@ -45,8 +44,9 @@ pub struct Numeric {
     Ord,
     Default,
     Hash,
-    SerializeDisplay,
-    DeserializeFromStr,
+    From,
+    Deserialize,
+    Serialize,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -348,35 +348,6 @@ impl core::str::FromStr for Numeric {
     }
 }
 
-impl core::str::FromStr for NumericSpec {
-    type Err = NumericSpecParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Valid formats:
-        // Numeric
-        // Numeric(scale)
-
-        // Trim Numeric prefix return error if not present
-        let Some(s) = s.strip_prefix("Numeric") else {
-            return Err(NumericSpecParseError::StartWithNumeric);
-        };
-
-        let scale = if s.is_empty() {
-            None
-        } else {
-            // Trim braces
-            let Some(s) = s.strip_prefix('(').and_then(|s| s.strip_suffix(')')) else {
-                return Err(NumericSpecParseError::WrappedInBraces);
-            };
-
-            // Parse scale
-            Some(s.parse().map_err(NumericSpecParseError::InvalidScale)?)
-        };
-
-        Ok(NumericSpec { scale })
-    }
-}
-
 impl core::fmt::Display for NumericSpec {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "Numeric")?;
@@ -562,45 +533,5 @@ mod tests {
         let num2 = Numeric::decode(&mut s.as_slice()).expect("failed to decode numeric");
 
         assert_eq!(num1, num2);
-    }
-
-    #[test]
-    fn check_numeric_scale_from_str() {
-        // Valid representations
-        assert_eq!(NumericSpec { scale: None }, "Numeric".parse().unwrap());
-        assert_eq!(
-            NumericSpec { scale: Some(0) },
-            "Numeric(0)".parse().unwrap()
-        );
-        assert_eq!(
-            NumericSpec { scale: Some(42) },
-            "Numeric(42)".parse().unwrap()
-        );
-
-        // Invalid representations
-        assert!(matches!(
-            "RandomString".parse::<NumericSpec>().unwrap_err(),
-            NumericSpecParseError::StartWithNumeric
-        ));
-        assert!(matches!(
-            "Numeric%123%".parse::<NumericSpec>().unwrap_err(),
-            NumericSpecParseError::WrappedInBraces
-        ));
-        assert!(matches!(
-            "Numeric(123".parse::<NumericSpec>().unwrap_err(),
-            NumericSpecParseError::WrappedInBraces
-        ));
-        assert!(matches!(
-            "Numeric123)".parse::<NumericSpec>().unwrap_err(),
-            NumericSpecParseError::WrappedInBraces
-        ));
-        assert!(matches!(
-            "Numeric(NaN)".parse::<NumericSpec>().unwrap_err(),
-            NumericSpecParseError::InvalidScale(_)
-        ));
-        assert!(matches!(
-            "Numeric(-1)".parse::<NumericSpec>().unwrap_err(),
-            NumericSpecParseError::InvalidScale(_)
-        ));
     }
 }
