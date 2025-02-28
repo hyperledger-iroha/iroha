@@ -4,7 +4,7 @@
 use iroha_data_model::{
     isi::error::{MathError, Mismatch, TypeError},
     prelude::*,
-    query::error::{FindError, QueryExecutionFail},
+    query::error::FindError,
 };
 use iroha_telemetry::metrics;
 
@@ -18,7 +18,7 @@ impl Registrable for NewAssetDefinition {
     fn build(self, authority: &AccountId) -> Self::Target {
         Self::Target {
             id: self.id,
-            type_: self.type_,
+            spec: self.spec,
             mintable: self.mintable,
             logo: self.logo,
             metadata: self.metadata,
@@ -33,139 +33,10 @@ impl Registrable for NewAssetDefinition {
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
-    use iroha_data_model::{asset::AssetType, isi::error::MintabilityError};
+    use iroha_data_model::isi::error::MintabilityError;
 
     use super::*;
     use crate::smartcontracts::account::isi::forbid_minting;
-
-    impl Execute for SetKeyValue<Asset> {
-        #[metrics(+"set_asset_key_value")]
-        fn execute(
-            self,
-            _authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let asset_id = self.object;
-
-            assert_asset_type(
-                &asset_id.definition,
-                state_transaction,
-                expected_asset_type_store,
-            )?;
-
-            // Increase `Store` asset total quantity by 1 if asset was not present earlier
-            if matches!(
-                state_transaction.world.asset(&asset_id),
-                Err(QueryExecutionFail::Find(_))
-            ) {
-                state_transaction
-                    .world
-                    .increase_asset_total_amount(&asset_id.definition, Numeric::ONE)?;
-            }
-
-            let asset = state_transaction
-                .world
-                .asset_or_insert(&asset_id, Metadata::default())?;
-
-            {
-                let AssetValue::Store(store) = &mut asset.value else {
-                    return Err(Error::Conversion("Expected store asset type".to_owned()));
-                };
-
-                store.insert(self.key.clone(), self.value.clone());
-            }
-
-            state_transaction
-                .world
-                .emit_events(Some(AssetEvent::MetadataInserted(MetadataChanged {
-                    target: asset_id,
-                    key: self.key,
-                    value: self.value,
-                })));
-
-            Ok(())
-        }
-    }
-
-    impl Execute for RemoveKeyValue<Asset> {
-        #[metrics(+"remove_asset_key_value")]
-        fn execute(
-            self,
-            _authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let asset_id = self.object;
-
-            assert_asset_type(
-                &asset_id.definition,
-                state_transaction,
-                expected_asset_type_store,
-            )?;
-
-            let value = {
-                let asset = state_transaction.world.asset_mut(&asset_id)?;
-
-                let AssetValue::Store(store) = &mut asset.value else {
-                    return Err(Error::Conversion("Expected store asset type".to_owned()));
-                };
-
-                store
-                    .remove(&self.key)
-                    .ok_or_else(|| FindError::MetadataKey(self.key.clone()))?
-            };
-
-            state_transaction
-                .world
-                .emit_events(Some(AssetEvent::MetadataRemoved(MetadataChanged {
-                    target: asset_id,
-                    key: self.key,
-                    value,
-                })));
-
-            Ok(())
-        }
-    }
-
-    impl Execute for Transfer<Asset, Metadata, Account> {
-        #[metrics(+"transfer_store")]
-        fn execute(
-            self,
-            _authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let asset_id = self.source;
-            assert_asset_type(
-                &asset_id.definition,
-                state_transaction,
-                expected_asset_type_store,
-            )?;
-
-            let asset = state_transaction
-                .world
-                .assets
-                .get_mut(&asset_id)
-                .ok_or_else(|| FindError::Asset(asset_id.clone()))?;
-
-            let destination_store = {
-                let value = asset.value.clone();
-
-                let destination_id =
-                    AssetId::new(asset_id.definition.clone(), self.destination.clone());
-                let destination_store_asset = state_transaction
-                    .world
-                    .asset_or_insert(&destination_id, value)?;
-
-                destination_store_asset.clone()
-            };
-
-            state_transaction.world.emit_events([
-                AssetEvent::Deleted(asset_id),
-                AssetEvent::Created(destination_store),
-            ]);
-
-            Ok(())
-        }
-    }
 
     impl Execute for Mint<Numeric, Asset> {
         fn execute(
@@ -175,20 +46,16 @@ pub mod isi {
         ) -> Result<(), Error> {
             let asset_id = self.destination;
 
-            let asset_definition = assert_asset_type(
-                &asset_id.definition,
-                state_transaction,
-                expected_asset_type_numeric,
-            )?;
+            let asset_definition = state_transaction
+                .world
+                .asset_definition(&asset_id.definition)?;
             assert_numeric_spec(&self.object, &asset_definition)?;
 
             assert_can_mint(&asset_definition, state_transaction)?;
             let asset = state_transaction
                 .world
                 .asset_or_insert(&asset_id, Numeric::ZERO)?;
-            let AssetValue::Numeric(quantity) = &mut asset.value else {
-                return Err(Error::Conversion("Expected numeric asset type".to_owned()));
-            };
+            let quantity = &mut asset.value;
             *quantity = quantity
                 .checked_add(self.object)
                 .ok_or(MathError::Overflow)?;
@@ -208,7 +75,7 @@ pub mod isi {
                 .world
                 .emit_events(Some(AssetEvent::Added(AssetChanged {
                     asset: asset_id,
-                    amount: self.object.into(),
+                    amount: self.object,
                 })));
 
             Ok(())
@@ -223,11 +90,9 @@ pub mod isi {
         ) -> Result<(), Error> {
             let asset_id = self.destination;
 
-            let asset_definition = assert_asset_type(
-                &asset_id.definition,
-                state_transaction,
-                expected_asset_type_numeric,
-            )?;
+            let asset_definition = state_transaction
+                .world
+                .asset_definition(&asset_id.definition)?;
             assert_numeric_spec(&self.object, &asset_definition)?;
 
             let asset = state_transaction
@@ -235,14 +100,12 @@ pub mod isi {
                 .assets
                 .get_mut(&asset_id)
                 .ok_or_else(|| FindError::Asset(asset_id.clone()))?;
-            let AssetValue::Numeric(quantity) = &mut asset.value else {
-                return Err(Error::Conversion("Expected numeric asset type".to_owned()));
-            };
+            let quantity = &mut asset.value;
             *quantity = quantity
                 .checked_sub(self.object)
                 .ok_or(MathError::NotEnoughQuantity)?;
 
-            if asset.value.is_zero_value() {
+            if asset.value.is_zero() {
                 assert!(state_transaction
                     .world
                     .assets
@@ -265,7 +128,7 @@ pub mod isi {
                 .world
                 .emit_events(Some(AssetEvent::Removed(AssetChanged {
                     asset: asset_id.clone(),
-                    amount: self.object.into(),
+                    amount: self.object,
                 })));
 
             Ok(())
@@ -282,11 +145,9 @@ pub mod isi {
             let destination_id =
                 AssetId::new(source_id.definition.clone(), self.destination.clone());
 
-            let asset_definition = assert_asset_type(
-                &source_id.definition,
-                state_transaction,
-                expected_asset_type_numeric,
-            )?;
+            let asset_definition = state_transaction
+                .world
+                .asset_definition(&source_id.definition)?;
             assert_numeric_spec(&self.object, &asset_definition)?;
 
             {
@@ -295,13 +156,11 @@ pub mod isi {
                     .assets
                     .get_mut(&source_id)
                     .ok_or_else(|| FindError::Asset(source_id.clone()))?;
-                let AssetValue::Numeric(quantity) = &mut asset.value else {
-                    return Err(Error::Conversion("Expected numeric asset type".to_owned()));
-                };
+                let quantity = &mut asset.value;
                 *quantity = quantity
                     .checked_sub(self.object)
                     .ok_or(MathError::NotEnoughQuantity)?;
-                if asset.value.is_zero_value() {
+                if asset.value.is_zero() {
                     assert!(state_transaction
                         .world
                         .assets
@@ -314,9 +173,7 @@ pub mod isi {
                 .world
                 .asset_or_insert(&destination_id, Numeric::ZERO)?;
             {
-                let AssetValue::Numeric(quantity) = &mut destination_asset.value else {
-                    return Err(Error::Conversion("Expected numeric asset type".to_owned()));
-                };
+                let quantity = &mut destination_asset.value;
                 *quantity = quantity
                     .checked_add(self.object)
                     .ok_or(MathError::Overflow)?;
@@ -333,11 +190,11 @@ pub mod isi {
             state_transaction.world.emit_events([
                 AssetEvent::Removed(AssetChanged {
                     asset: source_id,
-                    amount: self.object.into(),
+                    amount: self.object,
                 }),
                 AssetEvent::Added(AssetChanged {
                     asset: destination_id,
-                    amount: self.object.into(),
+                    amount: self.object,
                 }),
             ]);
 
@@ -351,36 +208,14 @@ pub mod isi {
         asset_definition: &AssetDefinition,
     ) -> Result<NumericSpec, Error> {
         let object_spec = NumericSpec::fractional(object.scale());
-        let object_asset_type = AssetType::Numeric(object_spec);
-        let asset_definition_spec = match asset_definition.type_ {
-            AssetType::Numeric(spec) => spec,
-            other => {
-                return Err(TypeError::from(Mismatch {
-                    expected: other,
-                    actual: object_asset_type,
-                })
-                .into())
-            }
-        };
-        asset_definition_spec.check(object).map_err(|_| {
+        let asset_spec = asset_definition.spec;
+        asset_spec.check(object).map_err(|_| {
             TypeError::from(Mismatch {
-                expected: AssetType::Numeric(asset_definition_spec),
-                actual: object_asset_type,
+                expected: asset_spec,
+                actual: object_spec,
             })
         })?;
-        Ok(asset_definition_spec)
-    }
-
-    /// Asserts that asset definition with [`definition_id`] has asset type [`expected_type`].
-    pub(crate) fn assert_asset_type(
-        definition_id: &AssetDefinitionId,
-        state_transaction: &StateTransaction<'_, '_>,
-        expected_type: impl Fn(&AssetType) -> Result<(), TypeError>,
-    ) -> Result<AssetDefinition, Error> {
-        let asset_definition = state_transaction.world.asset_definition(definition_id)?;
-        expected_type(&asset_definition.type_)
-            .map(|()| asset_definition)
-            .map_err(Into::into)
+        Ok(asset_spec)
     }
 
     /// Assert that this asset is `mintable`.
@@ -402,20 +237,6 @@ pub mod isi {
                 ));
                 Ok(())
             }
-        }
-    }
-
-    pub(crate) fn expected_asset_type_numeric(asset_type: &AssetType) -> Result<(), TypeError> {
-        match asset_type {
-            AssetType::Numeric(_) => Ok(()),
-            other => Err(TypeError::NumericAssetTypeExpected(*other)),
-        }
-    }
-
-    pub(crate) fn expected_asset_type_store(asset_type: &AssetType) -> Result<(), TypeError> {
-        match asset_type {
-            AssetType::Store => Ok(()),
-            other => Err(TypeError::NumericAssetTypeExpected(*other)),
         }
     }
 }

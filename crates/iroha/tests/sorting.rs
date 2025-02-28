@@ -42,22 +42,17 @@ fn correct_pagination_assets_after_creating_new_one() {
         let asset_definition_id = format!("xor{i}#wonderland")
             .parse::<AssetDefinitionId>()
             .expect("Valid");
-        let asset_definition = AssetDefinition::store(asset_definition_id.clone());
-        let mut asset_metadata = Metadata::default();
-        asset_metadata.insert(sort_by_metadata_key.clone(), i as u32);
-        let asset = Asset::new(
-            AssetId::new(asset_definition_id, account_id.clone()),
-            AssetValue::Store(asset_metadata),
-        );
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone());
+        let asset = Asset::new(AssetId::new(asset_definition_id, account_id.clone()), 1u32);
 
         if missing_indices.contains(&i) {
             missing_tester_assets.push(asset.clone());
             missing_register_asset_definitions.push(Register::asset_definition(asset_definition));
-            missing_register_assets.push(Register::asset(asset));
+            missing_register_assets.push(Mint::asset_numeric(1u32, asset.id));
         } else {
             tester_assets.push(asset.clone());
             register_asset_definitions.push(Register::asset_definition(asset_definition));
-            register_assets.push(Register::asset(asset));
+            register_assets.push(Mint::asset_numeric(1u32, asset.id));
         }
     }
     register_asset_definitions.shuffle(&mut thread_rng());

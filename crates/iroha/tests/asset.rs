@@ -2,7 +2,6 @@ use eyre::Result;
 use iroha::{
     crypto::KeyPair,
     data_model::{
-        asset::{AssetId, AssetType, AssetValue},
         isi::error::{InstructionEvaluationError, InstructionExecutionError, TypeError},
         prelude::*,
         transaction::error::TransactionRejectionReason,
@@ -11,92 +10,6 @@ use iroha::{
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
 use iroha_test_network::*;
 use iroha_test_samples::{gen_account_in, ALICE_ID, BOB_ID};
-
-#[test]
-// This test is also covered at the UI level in the iroha_cli tests
-// in test_register_asset_definitions.py
-fn client_register_asset_should_add_asset_once_but_not_twice() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
-    let test_client = network.client();
-
-    // Given
-    let account_id = ALICE_ID.clone();
-
-    let asset_definition_id = "test_asset#wonderland"
-        .parse::<AssetDefinitionId>()
-        .expect("Valid");
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
-    let register_asset = Register::asset(Asset::new(
-        AssetId::new(asset_definition_id.clone(), account_id.clone()),
-        0_u32,
-    ));
-
-    test_client.submit_all_blocking::<InstructionBox>([
-        create_asset.into(),
-        register_asset.clone().into(),
-    ])?;
-
-    // Registering an asset to an account which doesn't have one
-    // should result in asset being created
-    let asset = test_client
-        .query(FindAssets::new())
-        .filter_with(|asset| asset.id.account.eq(account_id))
-        .execute_all()?
-        .into_iter()
-        .find(|asset| *asset.id().definition() == asset_definition_id)
-        .unwrap();
-    assert_eq!(*asset.value(), AssetValue::Numeric(Numeric::ZERO));
-
-    // But registering an asset to account already having one should fail
-    assert!(test_client.submit_blocking(register_asset).is_err());
-
-    Ok(())
-}
-
-#[test]
-fn unregister_asset_should_remove_asset_from_account() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
-    let test_client = network.client();
-
-    // Given
-    let account_id = ALICE_ID.clone();
-
-    let asset_definition_id = "test_asset#wonderland"
-        .parse::<AssetDefinitionId>()
-        .expect("Valid");
-    let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-    let create_asset: InstructionBox =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone())).into();
-    let register_asset = Register::asset(Asset::new(asset_id.clone(), 0_u32)).into();
-    let unregister_asset = Unregister::asset(asset_id);
-
-    test_client.submit_all_blocking([create_asset, register_asset])?;
-
-    // Check for asset to be registered
-    let assets = test_client
-        .query(FindAssets::new())
-        .filter_with(|asset| asset.id.account.eq(account_id.clone()))
-        .execute_all()?;
-
-    assert!(assets
-        .iter()
-        .any(|asset| *asset.id().definition() == asset_definition_id));
-
-    test_client.submit_blocking(unregister_asset)?;
-
-    // ... and check that it is removed after Unregister
-    let assets = test_client
-        .query(FindAssets::new())
-        .filter_with(|asset| asset.id.account.eq(account_id.clone()))
-        .execute_all()?;
-
-    assert!(assets
-        .iter()
-        .all(|asset| *asset.id().definition() != asset_definition_id));
-
-    Ok(())
-}
 
 #[test]
 // This test is also covered at the UI level in the iroha_cli tests
@@ -130,7 +43,7 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
         .into_iter()
         .find(|asset| *asset.id().definition() == asset_definition_id)
         .unwrap();
-    assert_eq!(*asset.value(), AssetValue::Numeric(quantity));
+    assert_eq!(*asset.value(), quantity);
     Ok(())
 }
 
@@ -164,7 +77,7 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
         .into_iter()
         .find(|asset| *asset.id().definition() == asset_definition_id)
         .unwrap();
-    assert_eq!(*asset.value(), AssetValue::Numeric(quantity));
+    assert_eq!(*asset.value(), quantity);
     Ok(())
 }
 
@@ -199,7 +112,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         .into_iter()
         .find(|asset| *asset.id().definition() == asset_definition_id)
         .unwrap();
-    assert_eq!(*asset.value(), AssetValue::Numeric(quantity));
+    assert_eq!(*asset.value(), quantity);
 
     // Add some fractional part
     let quantity2 = numeric!(0.55);
@@ -220,7 +133,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         .into_iter()
         .find(|asset| *asset.id().definition() == asset_definition_id)
         .unwrap();
-    assert_eq!(*asset.value(), AssetValue::Numeric(sum));
+    assert_eq!(*asset.value(), sum);
 
     Ok(())
 }
@@ -286,7 +199,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() {
         let got = test_client
             .query(FindAssets)
             .filter_with(|asset| asset.id.eq(asset_id))
-            .select_with(|asset| asset.value.numeric)
+            .select_with(|asset| asset.value)
             .execute_single()
             .expect("query should succeed");
         assert_eq!(got, expected);
@@ -298,7 +211,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() {
     let rate: u32 = test_client
         .query(FindAssets)
         .filter_with(|asset| asset.id.eq(rate))
-        .select_with(|asset| asset.value.numeric)
+        .select_with(|asset| asset.value)
         .execute_single()
         .expect("query should succeed")
         .try_into()
@@ -314,7 +227,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() {
         let _err = test_client
             .query(FindAssets)
             .filter_with(|asset| asset.id.eq(asset_id))
-            .select_with(|asset| asset.value.numeric)
+            .select_with(|asset| asset.value)
             .execute_single()
             .expect_err("query should fail, as zero assets are purged from accounts");
     };
@@ -379,18 +292,20 @@ fn fail_if_dont_satisfy_spec() {
     let asset_definition_id: AssetDefinitionId = "asset#wonderland".parse().expect("Valid");
     let asset_id: AssetId = AssetId::new(asset_definition_id.clone(), alice_id.clone());
     // Create asset definition which accepts only integers
-    let asset_definition = AssetDefinition::new(
-        asset_definition_id.clone(),
-        AssetType::Numeric(NumericSpec::integer()),
-    );
+    let asset_definition =
+        AssetDefinition::new(asset_definition_id.clone(), NumericSpec::integer());
 
     test_client
         .submit_blocking(Register::asset_definition(asset_definition))
         .expect("Failed to submit transaction");
 
+    // Mint 1 of asset, so that it will not be deleted after burn
+    test_client
+        .submit_blocking(Mint::asset_numeric(numeric!(1), asset_id.clone()))
+        .expect("Should be accepted since submitting integer value");
+
     let isi = |value: Numeric| {
         [
-            Register::asset(Asset::new(asset_id.clone(), value)).into(),
             Mint::asset_numeric(value, asset_id.clone()).into(),
             Burn::asset_numeric(value, asset_id.clone()).into(),
             Transfer::asset_numeric(asset_id.clone(), value, bob_id.clone()).into(),
@@ -411,20 +326,14 @@ fn fail_if_dont_satisfy_spec() {
 
         let TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
             InstructionExecutionError::Evaluate(InstructionEvaluationError::Type(
-                TypeError::AssetType(rejection_reason),
+                TypeError::AssetNumericSpec(rejection_reason),
             )),
         )) = rejection_reason
         else {
             panic!("Wrong rejection reason");
         };
-        assert_eq!(
-            *rejection_reason.expected(),
-            AssetType::Numeric(NumericSpec::integer()),
-        );
-        assert_eq!(
-            *rejection_reason.actual(),
-            AssetType::Numeric(NumericSpec::fractional(2))
-        );
+        assert_eq!(*rejection_reason.expected(), NumericSpec::integer());
+        assert_eq!(*rejection_reason.actual(), NumericSpec::fractional(2));
     }
 
     // Everything works fine when submitting proper integer value

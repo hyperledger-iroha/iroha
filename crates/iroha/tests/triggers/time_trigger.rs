@@ -43,7 +43,7 @@ fn mint_asset_after_3_sec() -> Result<()> {
     let init_quantity = test_client
         .query(FindAssets)
         .filter_with(|asset| asset.id.eq(asset_id.clone()))
-        .select_with(|asset| asset.value.numeric)
+        .select_with(|asset| asset.value)
         .execute_single()?;
 
     let start_time = curr_time();
@@ -69,7 +69,7 @@ fn mint_asset_after_3_sec() -> Result<()> {
     let after_registration_quantity = test_client
         .query(FindAssets)
         .filter_with(|asset| asset.id.eq(asset_id.clone()))
-        .select_with(|asset| asset.value.numeric)
+        .select_with(|asset| asset.value)
         .execute_single()?;
     assert_eq!(init_quantity, after_registration_quantity);
 
@@ -80,7 +80,7 @@ fn mint_asset_after_3_sec() -> Result<()> {
     let after_wait_quantity = test_client
         .query(FindAssets)
         .filter_with(|asset| asset.id.eq(asset_id.clone()))
-        .select_with(|asset| asset.value.numeric)
+        .select_with(|asset| asset.value)
         .execute_single()?;
     // Schedule is in the past now so trigger is executed
     assert_eq!(
@@ -199,15 +199,15 @@ fn mint_nft_for_every_user_every_1_sec() -> Result<()> {
     // Checking results
     for account_id in accounts {
         let start_pattern = "nft_number_";
-        let end_pattern = format!("_for_{}#{}", account_id.signatory(), account_id.domain());
-        let assets = test_client
-            .query(FindAssets::new())
-            .filter_with(|asset| asset.id.account.eq(account_id.clone()))
+        let end_pattern = format!("_for_{}${}", account_id.signatory(), account_id.domain());
+        let nfts = test_client
+            .query(FindNfts::new())
+            .filter_with(|nft| nft.owned_by.eq(account_id.clone()))
             .execute_all()?;
-        let count: u64 = assets
+        let count: u64 = nfts
             .into_iter()
-            .filter(|asset| {
-                let s = asset.id().definition().to_string();
+            .filter(|nft| {
+                let s = nft.id().to_string();
                 s.starts_with(start_pattern) && s.ends_with(&end_pattern)
             })
             .count()

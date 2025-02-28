@@ -25,16 +25,17 @@ use serde::{Deserialize, Serialize};
 
 pub use self::model::*;
 use self::{
-    account::*, asset::*, block::*, domain::*, dsl::*, executor::*, peer::*, permission::*,
+    account::*, asset::*, block::*, domain::*, dsl::*, executor::*, nft::*, peer::*, permission::*,
     role::*, transaction::*, trigger::*,
 };
 use crate::{
     account::{Account, AccountId},
-    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId, AssetValue},
+    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::{BlockHeader, SignedBlock},
     domain::{Domain, DomainId},
     metadata::Metadata,
     name::Name,
+    nft::{Nft, NftId},
     parameter::{Parameter, Parameters},
     peer::PeerId,
     permission::Permission,
@@ -108,6 +109,7 @@ mod model {
         FindAccounts(QueryWithFilter<FindAccounts>),
         FindAssets(QueryWithFilter<FindAssets>),
         FindAssetsDefinitions(QueryWithFilter<FindAssetsDefinitions>),
+        FindNfts(QueryWithFilter<FindNfts>),
         FindRoles(QueryWithFilter<FindRoles>),
 
         FindRoleIds(QueryWithFilter<FindRoleIds>),
@@ -142,9 +144,10 @@ mod model {
         Account(Vec<Account>),
         AssetId(Vec<AssetId>),
         Asset(Vec<Asset>),
-        AssetValue(Vec<AssetValue>),
         AssetDefinitionId(Vec<AssetDefinitionId>),
         AssetDefinition(Vec<AssetDefinition>),
+        NftId(Vec<NftId>),
+        Nft(Vec<Nft>),
         Role(Vec<Role>),
         Parameter(Vec<Parameter>),
         Permission(Vec<Permission>),
@@ -301,9 +304,10 @@ impl QueryOutputBatchBox {
             (Self::Account(v1), Self::Account(v2)) => v1.extend(v2),
             (Self::AssetId(v1), Self::AssetId(v2)) => v1.extend(v2),
             (Self::Asset(v1), Self::Asset(v2)) => v1.extend(v2),
-            (Self::AssetValue(v1), Self::AssetValue(v2)) => v1.extend(v2),
             (Self::AssetDefinitionId(v1), Self::AssetDefinitionId(v2)) => v1.extend(v2),
             (Self::AssetDefinition(v1), Self::AssetDefinition(v2)) => v1.extend(v2),
+            (Self::NftId(v1), Self::NftId(v2)) => v1.extend(v2),
+            (Self::Nft(v1), Self::Nft(v2)) => v1.extend(v2),
             (Self::Role(v1), Self::Role(v2)) => v1.extend(v2),
             (Self::Parameter(v1), Self::Parameter(v2)) => v1.extend(v2),
             (Self::Permission(v1), Self::Permission(v2)) => v1.extend(v2),
@@ -341,9 +345,10 @@ impl QueryOutputBatchBox {
             Self::Account(v) => v.len(),
             Self::AssetId(v) => v.len(),
             Self::Asset(v) => v.len(),
-            Self::AssetValue(v) => v.len(),
             Self::AssetDefinitionId(v) => v.len(),
             Self::AssetDefinition(v) => v.len(),
+            Self::NftId(v) => v.len(),
+            Self::Nft(v) => v.len(),
             Self::Role(v) => v.len(),
             Self::Parameter(v) => v.len(),
             Self::Permission(v) => v.len(),
@@ -676,6 +681,7 @@ impl_iter_queries! {
     FindAccounts => crate::account::Account,
     FindAssets => crate::asset::Asset,
     FindAssetsDefinitions => crate::asset::AssetDefinition,
+    FindNfts => crate::nft::Nft,
     FindDomains => crate::domain::Domain,
     FindPeers => crate::peer::PeerId,
     FindActiveTriggerIds => crate::trigger::TriggerId,
@@ -853,6 +859,29 @@ pub mod asset {
     /// The prelude re-exports most commonly used traits, structs and macros from this crate.
     pub mod prelude {
         pub use super::{FindAssets, FindAssetsDefinitions};
+    }
+}
+
+pub mod nft {
+    //! Queries related to [`Nft`].
+
+    #[cfg(not(feature = "std"))]
+    use alloc::{format, string::String, vec::Vec};
+
+    use derive_more::Display;
+
+    queries! {
+        /// [`FindNfts`] Iroha Query finds all [`Nft`]s presented
+        /// in Iroha Peer.
+        #[derive(Copy, Display)]
+        #[display(fmt = "Find all NFTs")]
+        #[ffi_type]
+        pub struct FindNfts;
+    }
+
+    /// The prelude re-exports most commonly used traits, structs and macros from this crate.
+    pub mod prelude {
+        pub use super::FindNfts;
     }
 }
 
@@ -1096,6 +1125,8 @@ pub mod error {
             Asset(AssetId),
             /// Failed to find asset definition: `{0}`
             AssetDefinition(AssetDefinitionId),
+            /// Failed to find NFT: `{0}`
+            Nft(NftId),
             /// Failed to find account: `{0}`
             Account(AccountId),
             /// Failed to find domain: `{0}`
@@ -1125,8 +1156,9 @@ pub mod error {
 pub mod prelude {
     pub use super::{
         account::prelude::*, asset::prelude::*, block::prelude::*, builder::prelude::*,
-        domain::prelude::*, dsl::prelude::*, executor::prelude::*, parameters::prelude::*,
-        peer::prelude::*, permission::prelude::*, role::prelude::*, transaction::prelude::*,
-        trigger::prelude::*, CommittedTransaction, QueryBox, QueryRequest, SingularQueryBox,
+        domain::prelude::*, dsl::prelude::*, executor::prelude::*, nft::prelude::*,
+        parameters::prelude::*, peer::prelude::*, permission::prelude::*, role::prelude::*,
+        transaction::prelude::*, trigger::prelude::*, CommittedTransaction, QueryBox, QueryRequest,
+        SingularQueryBox,
     };
 }

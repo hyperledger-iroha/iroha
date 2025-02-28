@@ -28,7 +28,7 @@ Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instruc
 
 ### Create new Domain
 
-To create a domain, you need to specify the entity type first (`domain` in our case) and then the command (`register`) with a list of required parameters. For the `domain` entity, you only need to provide the `id` argument as a string that doesn't contain the `@` and `#` symbols.
+To create a domain, you need to specify the entity type first (`domain` in our case) and then the command (`register`) with a list of required parameters. For the `domain` entity, you only need to provide the `id` argument as a string that doesn't contain the `@`, `#` or `$` symbols.
 
 ```bash
 iroha domain register --id "Soramitsu"

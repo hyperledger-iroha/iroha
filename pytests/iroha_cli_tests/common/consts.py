@@ -24,7 +24,7 @@ class Stderr(Enum):
     INVALID_TYPE = "should be either `Store` or `Numeric`"
     RESERVED_CHARACTER = (
         "The `@` character is reserved for `account@domain` constructs, "
-        "and `#` — for `asset#domain`."
+        "`#` for `asset#domain`, and `$` — for `nft$domain`."
     )
     WHITESPACES = "White space not allowed"
     INSUFFICIENT_FUNDS = "Not enough quantity to transfer/burn"

@@ -77,7 +77,7 @@ impl executor_custom_data_model::complex_isi::Context for Context<'_> {
                 .host
                 .query(FindAssets)
                 .filter_with(|asset| asset.id.eq(asset_id))
-                .select_with(|asset| asset.value.numeric)
+                .select_with(|asset| asset.value)
                 .execute_single()
                 .map_err(|e| match e {
                     SingleQueryError::QueryError(e) => e,
