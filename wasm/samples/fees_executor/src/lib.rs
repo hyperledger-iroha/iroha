@@ -19,7 +19,6 @@ static ALLOC: GlobalDlmalloc = GlobalDlmalloc;
 #[visit(custom(
     visit_set_parameter,
     visit_unregister_domain,
-    visit_unregister_asset,
     visit_unregister_asset_definition,
     visit_unregister_account,
 ))]
@@ -82,19 +81,6 @@ fn visit_unregister_domain(executor: &mut Executor, isi: &Unregister<Domain>) {
         deny!(
             executor,
             "Domain associated with technical account cannot be unregistered"
-        );
-    }
-
-    execute!(executor, isi);
-}
-
-fn visit_unregister_asset(executor: &mut Executor, isi: &Unregister<Asset>) {
-    let fees_options = finds_fee_options(&executor.host());
-
-    if isi.object().eq(&fees_options.asset) {
-        deny!(
-            executor,
-            "Asset associated with technical account cannot be unregistered"
         );
     }
 
