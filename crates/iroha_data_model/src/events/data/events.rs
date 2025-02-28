@@ -26,7 +26,6 @@ macro_rules! data_event {
                 serde::Serialize,
                 iroha_schema::IntoSchema,
             )]
-            #[non_exhaustive]
             #[ffi_type]
             $item
         }
@@ -620,7 +619,6 @@ mod executor {
             iroha_schema::IntoSchema,
             EventSet,
         )]
-        #[non_exhaustive]
         #[ffi_type(opaque)]
         #[serde(untagged)] // Unaffected by #3330, as single unit variant
         #[repr(transparent)]
