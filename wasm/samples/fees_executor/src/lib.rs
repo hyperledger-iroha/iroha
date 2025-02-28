@@ -9,17 +9,20 @@ extern crate alloc;
 
 use dlmalloc::GlobalDlmalloc;
 use fees_executor_data_model::parameters::*;
-use iroha_executor::{
-    data_model::{isi::CustomInstruction, parameter::Parameter},
-    prelude::*,
-};
+use iroha_executor::prelude::*;
 use iroha_executor_data_model::parameter::Parameter as _;
 
 #[global_allocator]
 static ALLOC: GlobalDlmalloc = GlobalDlmalloc;
 
-#[derive(Debug, Clone, Visit, Execute, Entrypoints)]
-#[visit(custom(visit_set_parameter,))]
+#[derive(Visit, Execute, Entrypoints, Debug, Clone)]
+#[visit(custom(
+    visit_set_parameter,
+    visit_unregister_domain,
+    visit_unregister_asset,
+    visit_unregister_asset_definition,
+    visit_unregister_account,
+))]
 struct Executor {
     host: Iroha,
     context: Context,
@@ -27,8 +30,8 @@ struct Executor {
 }
 
 /// Finds currently used fees options
-fn finds_fee_options(executor: &mut Executor) -> FeesOptions {
-    let parameters = executor.host().query_single(FindParameters).dbg_unwrap();
+fn finds_fee_options(host: &Iroha) -> FeesOptions {
+    let parameters = host.query_single(FindParameters).dbg_unwrap();
 
     let fees_options: FeesOptions = parameters
         .custom()
@@ -62,9 +65,63 @@ fn validate_fees_options(
 fn visit_set_parameter(executor: &mut Executor, isi: &SetParameter) {
     if let Parameter::Custom(param) = isi.parameter() {
         // Fees options are read-only
-        if param.id() == &FeesOptions::id() {
+        if param.id().eq(&FeesOptions::id()) {
             deny!(executor, "Fees options cannot be changed");
         }
+    }
+
+    execute!(executor, isi);
+}
+
+fn visit_unregister_domain(executor: &mut Executor, isi: &Unregister<Domain>) {
+    let fees_options = finds_fee_options(&executor.host());
+
+    if isi.object().eq(fees_options.asset.account().domain())
+        || isi.object().eq(fees_options.asset.definition().domain())
+    {
+        deny!(
+            executor,
+            "Domain associated with technical account cannot be unregistered"
+        );
+    }
+
+    execute!(executor, isi);
+}
+
+fn visit_unregister_asset(executor: &mut Executor, isi: &Unregister<Asset>) {
+    let fees_options = finds_fee_options(&executor.host());
+
+    if isi.object().eq(&fees_options.asset) {
+        deny!(
+            executor,
+            "Asset associated with technical account cannot be unregistered"
+        );
+    }
+
+    execute!(executor, isi);
+}
+
+fn visit_unregister_asset_definition(executor: &mut Executor, isi: &Unregister<AssetDefinition>) {
+    let fees_options = finds_fee_options(&executor.host());
+
+    if isi.object().eq(fees_options.asset.definition()) {
+        deny!(
+            executor,
+            "Asset definition associated with technical account cannot be unregistered"
+        );
+    }
+
+    execute!(executor, isi);
+}
+
+fn visit_unregister_account(executor: &mut Executor, isi: &Unregister<Account>) {
+    let fees_options = finds_fee_options(&executor.host());
+
+    if isi.object().eq(fees_options.asset.account()) {
+        deny!(
+            executor,
+            "Account associated with technical account cannot be unregistered"
+        );
     }
 
     execute!(executor, isi);
