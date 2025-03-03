@@ -262,6 +262,13 @@ mod transparent {
         pub struct SetParameter(pub Parameter);
     }
 
+    impl SetParameter {
+        /// [`Parameter`] of [`SetParameter`]
+        pub fn parameter(&self) -> &Parameter {
+            &self.0
+        }
+    }
+
     isi! {
         /// Generic instruction to set key value at the object.
         pub struct SetKeyValue<O: Identifiable> {
