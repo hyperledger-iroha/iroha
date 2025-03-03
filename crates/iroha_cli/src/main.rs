@@ -875,7 +875,7 @@ mod asset {
                         context.print_data(&entry)
                     }
                     Register(args) => {
-                        let mut entry = AssetDefinition::new(args.id, args.spec);
+                        let mut entry = AssetDefinition::new(args.id, args.scale.into());
                         if args.mint_once {
                             entry = entry.mintable_once();
                         }
@@ -912,9 +912,9 @@ mod asset {
             /// Disables minting after the first instance
             #[arg(short, long)]
             pub mint_once: bool,
-            /// Numeric spec of the asset
+            /// Numeric scale of the asset. No value means unconstrained.
             #[arg(short, long)]
-            pub spec: NumericSpec,
+            pub scale: Option<u32>,
         }
 
         #[derive(clap::Args, Debug)]
