@@ -8,9 +8,9 @@ import pytest
 
 from typing import Any, Generator, List
 
-from ..common.consts import ValueTypes
 from ..common.helpers import (
     fake_asset_name,
+    fake_nft_name,
     fake_name,
     generate_public_key,
     generate_random_string_with_reserved_char,
@@ -23,7 +23,7 @@ from ..common.helpers import (
     string,
 )
 from ..common.settings import PEER_CONFIGS_PATH
-from ..models import Account, Asset, AssetDefinition, Domain
+from ..models import Account, Asset, AssetDefinition, Nft, Domain
 from ..src.iroha_cli import iroha_cli, config
 
 
@@ -113,14 +113,12 @@ def GIVEN_currently_authorized_account() -> Account:
 @pytest.fixture()
 def GIVEN_currently_account_quantity_with_two_quantity_of_asset(
     GIVEN_currently_authorized_account: Account,
-    GIVEN_numeric_type: str,
     GIVEN_fake_asset_name: str,
 ) -> Asset:
     """Fixture to get the currently authorized account's asset with a quantity of 2."""
     asset_def = AssetDefinition(
         name=GIVEN_fake_asset_name,
         domain=GIVEN_currently_authorized_account.domain,
-        type_=GIVEN_numeric_type,
     )
     asset = Asset(
         definition=asset_def,
@@ -135,7 +133,6 @@ def GIVEN_currently_account_quantity_with_two_quantity_of_asset(
         iroha_cli.register().asset_definition(
             asset=asset.definition.name,
             domain=asset.definition.domain,
-            type_=asset.definition.type_,
         )
         iroha_cli.mint().asset(
             account=GIVEN_currently_authorized_account,
@@ -148,7 +145,6 @@ def GIVEN_currently_account_quantity_with_two_quantity_of_asset(
 @pytest.fixture()
 def GIVEN_numeric_asset_for_account(
     request: Any,
-    GIVEN_numeric_type: str,
     GIVEN_fake_asset_name: str,
     GIVEN_numeric_value: str,
 ) -> Asset:
@@ -156,9 +152,7 @@ def GIVEN_numeric_asset_for_account(
     account_str, domain = request.param.split("@")
     account = Account(signatory=account_str, domain=domain)
 
-    asset_def = AssetDefinition(
-        name=GIVEN_fake_asset_name, domain=domain, type_=GIVEN_numeric_type
-    )
+    asset_def = AssetDefinition(name=GIVEN_fake_asset_name, domain=domain)
     asset = Asset(
         definition=asset_def, value=GIVEN_numeric_value, account=account.signatory
     )
@@ -169,7 +163,6 @@ def GIVEN_numeric_asset_for_account(
         iroha_cli.register().asset_definition(
             asset=asset.definition.name,
             domain=asset.definition.domain,
-            type_=asset.definition.type_,
         )
         iroha_cli.mint().asset(
             account=account,
@@ -181,16 +174,14 @@ def GIVEN_numeric_asset_for_account(
 
 
 @pytest.fixture()
-def GIVEN_registered_asset_definition_with_numeric_type(
+def GIVEN_registered_asset_definition(
     GIVEN_registered_domain: Domain,
-    GIVEN_numeric_type: str,
     GIVEN_fake_asset_name: str,
 ) -> AssetDefinition:
     """Fixture to create and register an asset definition with a numeric value type."""
     asset_def = AssetDefinition(
         name=GIVEN_fake_asset_name,
         domain=GIVEN_registered_domain.name,
-        type_=GIVEN_numeric_type,
     )
     with allure.step(
         f'GIVEN the asset definition "{asset_def.name}" '
@@ -199,21 +190,21 @@ def GIVEN_registered_asset_definition_with_numeric_type(
         iroha_cli.register().asset_definition(
             asset=asset_def.name,
             domain=asset_def.domain,
-            type_=asset_def.type_,
+            scale=asset_def.scale,
         )
     return asset_def
 
 
 @pytest.fixture()
 def GIVEN_minted_asset_quantity(
-    GIVEN_registered_asset_definition_with_numeric_type: AssetDefinition,
+    GIVEN_registered_asset_definition: AssetDefinition,
     GIVEN_registered_account: Account,
     GIVEN_numeric_value: str,
 ) -> Asset:
     """Fixture to create and return an asset with a specified quantity."""
     asset = Asset(
         account=GIVEN_registered_account,
-        definition=GIVEN_registered_asset_definition_with_numeric_type,
+        definition=GIVEN_registered_asset_definition,
         value=GIVEN_numeric_value,
     )
     iroha_cli.mint().asset(
@@ -225,25 +216,22 @@ def GIVEN_minted_asset_quantity(
 
 
 @pytest.fixture()
-def GIVEN_registered_asset_definition_with_store_type(
-    GIVEN_registered_domain: Domain, GIVEN_store_type: str, GIVEN_fake_asset_name: str
-) -> AssetDefinition:
-    """Fixture to create and register an asset definition with a store value type."""
-    asset_def = AssetDefinition(
-        name=GIVEN_fake_asset_name,
+def GIVEN_registered_nft(
+    GIVEN_registered_domain: Domain, GIVEN_fake_nft_name: str
+) -> Nft:
+    """Fixture to create and register an NFT."""
+    nft = Nft(
+        name=GIVEN_fake_nft_name,
         domain=GIVEN_registered_domain.name,
-        type_=GIVEN_store_type,
+        content="{}",
     )
-    with allure.step(
-        f'GIVEN the asset definition "{asset_def.name}" '
-        f'in the "{asset_def.domain}" domain'
-    ):
-        iroha_cli.register().asset_definition(
-            asset=asset_def.name,
-            domain=asset_def.domain,
-            type_=asset_def.type_,
+    with allure.step(f'GIVEN the NFT "{nft.name}" ' f'in the "{nft.domain}" domain'):
+        iroha_cli.register().nft(
+            asset=nft.name,
+            domain=nft.domain,
+            content=nft.content,
         )
-    return asset_def
+    return nft
 
 
 # Fixtures for generating various types of data (strings, keys, names, etc.)
@@ -263,6 +251,15 @@ def GIVEN_fake_asset_name() -> str:
     with allure.step(f'GIVEN a "{asset_name}" asset'):
         pass
     return asset_name
+
+
+@pytest.fixture()
+def GIVEN_fake_nft_name() -> str:
+    """Fixture to provide a fake NFT name."""
+    nft_name = fake_nft_name()
+    with allure.step(f'GIVEN a "{nft_name}" NFT'):
+        pass
+    return nft_name
 
 
 @pytest.fixture()
@@ -318,24 +315,6 @@ def GIVEN_key_with_invalid_character_in_key(
     with allure.step(f'GIVEN an invalid key "{invalid_key}"'):
         pass
     return invalid_key
-
-
-@pytest.fixture()
-def GIVEN_numeric_type() -> str:
-    """Fixture to provide a numeric value type."""
-    type_ = ValueTypes.NUMERIC.value
-    with allure.step(f'GIVEN a "{type_}" value type'):
-        pass
-    return type_
-
-
-@pytest.fixture()
-def GIVEN_store_type() -> str:
-    """Fixture to provide a store value type."""
-    type_ = ValueTypes.STORE.value
-    with allure.step(f'GIVEN a "{type_}" value type'):
-        pass
-    return type_
 
 
 @pytest.fixture()

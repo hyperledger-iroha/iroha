@@ -11,34 +11,34 @@ def story_account_mint_asset():
 
 @allure.label("sdk_test_id", "mint_asset_for_account_in_same_domain")
 def test_mint_asset_for_account_in_same_domain(
-    GIVEN_registered_asset_definition_with_numeric_type,
+    GIVEN_registered_asset_definition,
     GIVEN_registered_account,
     GIVEN_numeric_value,
 ):
     with allure.step(
         f'WHEN iroha_cli mint "{GIVEN_numeric_value}" of '
-        f'"{GIVEN_registered_asset_definition_with_numeric_type}" '
+        f'"{GIVEN_registered_asset_definition}" '
         f'for the "{GIVEN_registered_account}"'
     ):
         iroha_cli.mint().asset(
             account=GIVEN_registered_account,
-            asset_definition=GIVEN_registered_asset_definition_with_numeric_type,
+            asset_definition=GIVEN_registered_asset_definition,
             value_of_type=GIVEN_numeric_value,
         )
     with allure.step(
         f'THEN "{GIVEN_registered_account}" '
         f'should have the "{GIVEN_numeric_value}" of '
-        f'"{GIVEN_registered_asset_definition_with_numeric_type}"'
+        f'"{GIVEN_registered_asset_definition}"'
     ):
         iroha.should(
             have.asset(
-                f"{GIVEN_registered_asset_definition_with_numeric_type.name}##"
+                f"{GIVEN_registered_asset_definition.name}##"
                 f"{GIVEN_registered_account}"
             )
         )
         iroha.should(
             have.asset_has_quantity(
-                f"{GIVEN_registered_asset_definition_with_numeric_type.name}##"
+                f"{GIVEN_registered_asset_definition.name}##"
                 f"{GIVEN_registered_account}",
                 GIVEN_numeric_value,
             )

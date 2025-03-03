@@ -40,12 +40,3 @@ class ReservedChars(Enum):
     SPECIAL = "@#"
     WHITESPACES = string.whitespace
     ALL = SPECIAL + WHITESPACES
-
-
-class ValueTypes(Enum):
-    """
-    Enum for value types used in the application.
-    """
-
-    STORE = "Store"  # storing key-values in object's metadata
-    NUMERIC = "Numeric"  # 96bit decimal value with optional decimal point
