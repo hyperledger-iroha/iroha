@@ -102,8 +102,6 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
     let account_id = ALICE_ID.clone();
     let asset_id = AssetId::new(asset_definition_id, account_id.clone());
 
-    let mut prev_value = get_asset_value(&test_client, asset_id.clone());
-
     // Start listening BEFORE submitting any transaction not to miss any block committed event
     let event_listener = get_block_committed_event_listener(&test_client)?;
 
@@ -119,11 +117,11 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
     ));
     test_client.submit(register_trigger)?;
 
-    for _ in event_listener.take(CHECKS_COUNT) {
-        let new_value = get_asset_value(&test_client, asset_id.clone());
-        assert_eq!(new_value, prev_value.checked_add(Numeric::ONE).unwrap());
-        prev_value = new_value;
+    // Waiting for empty block to be committed
+    std::thread::sleep(network.pipeline_time());
 
+    let mut prev_value = get_asset_value(&test_client, asset_id.clone());
+    for _ in event_listener.take(CHECKS_COUNT) {
         // ISI just to create a new block
         let sample_isi = SetKeyValue::account(
             account_id.clone(),
@@ -131,6 +129,13 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
             "value".parse::<Json>()?,
         );
         test_client.submit(sample_isi)?;
+
+        // Waiting for empty block to be committed
+        std::thread::sleep(network.pipeline_time());
+
+        let new_value = get_asset_value(&test_client, asset_id.clone());
+        assert_eq!(new_value, prev_value.checked_add(numeric!(2)).unwrap());
+        prev_value = new_value;
     }
 
     Ok(())
