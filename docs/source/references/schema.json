@@ -620,16 +620,6 @@
         "tag": "Removed",
         "discriminant": 3,
         "type": "AssetChanged"
-      },
-      {
-        "tag": "MetadataInserted",
-        "discriminant": 4,
-        "type": "MetadataChanged<AssetId>"
-      },
-      {
-        "tag": "MetadataRemoved",
-        "discriminant": 5,
-        "type": "MetadataChanged<AssetId>"
       }
     ]
   },
@@ -664,14 +654,6 @@
         {
           "name": "Removed",
           "mask": 8
-        },
-        {
-          "name": "MetadataInserted",
-          "mask": 16
-        },
-        {
-          "name": "MetadataRemoved",
-          "mask": 32
         }
       ]
     }
@@ -2776,22 +2758,6 @@
       {
         "name": "target",
         "type": "AssetDefinitionId"
-      },
-      {
-        "name": "key",
-        "type": "Name"
-      },
-      {
-        "name": "value",
-        "type": "Json"
-      }
-    ]
-  },
-  "MetadataChanged<AssetId>": {
-    "Struct": [
-      {
-        "name": "target",
-        "type": "AssetId"
       },
       {
         "name": "key",
