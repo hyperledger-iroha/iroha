@@ -311,7 +311,6 @@ types!(
     Metadata,
     MetadataChanged<AccountId>,
     MetadataChanged<AssetDefinitionId>,
-    MetadataChanged<AssetId>,
     MetadataChanged<DomainId>,
     MetadataChanged<NftId>,
     MetadataChanged<TriggerId>,
