@@ -77,8 +77,6 @@ pub fn build_schemas() -> MetaMap {
         permission::asset_definition::CanUnregisterAssetDefinition,
         permission::asset_definition::CanModifyAssetDefinitionMetadata,
 
-        permission::asset::CanRegisterAssetWithDefinition,
-        permission::asset::CanUnregisterAssetWithDefinition,
         permission::asset::CanMintAssetWithDefinition,
         permission::asset::CanBurnAssetWithDefinition,
         permission::asset::CanTransferAssetWithDefinition,
@@ -746,12 +744,6 @@ mod tests {
             iroha_executor_data_model::permission::asset_definition::CanUnregisterAssetDefinition
         );
         insert_into_test_map!(iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata);
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset::CanRegisterAssetWithDefinition
-        );
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset::CanUnregisterAssetWithDefinition
-        );
         insert_into_test_map!(
             iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition
         );
