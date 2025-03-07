@@ -1078,14 +1078,6 @@
       }
     ]
   },
-  "CanRegisterAssetWithDefinition": {
-    "Struct": [
-      {
-        "name": "asset_definition",
-        "type": "AssetDefinitionId"
-      }
-    ]
-  },
   "CanRegisterDomain": null,
   "CanRegisterNft": {
     "Struct": [
@@ -1137,14 +1129,6 @@
     ]
   },
   "CanUnregisterAssetDefinition": {
-    "Struct": [
-      {
-        "name": "asset_definition",
-        "type": "AssetDefinitionId"
-      }
-    ]
-  },
-  "CanUnregisterAssetWithDefinition": {
     "Struct": [
       {
         "name": "asset_definition",

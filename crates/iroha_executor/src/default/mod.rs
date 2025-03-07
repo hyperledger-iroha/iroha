@@ -308,12 +308,6 @@ pub mod domain {
             AnyPermission::CanModifyAssetDefinitionMetadata(permission) => {
                 permission.asset_definition.domain() == domain_id
             }
-            AnyPermission::CanRegisterAssetWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
-            }
-            AnyPermission::CanUnregisterAssetWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
-            }
             AnyPermission::CanMintAssetWithDefinition(permission) => {
                 permission.asset_definition.domain() == domain_id
             }
@@ -514,8 +508,6 @@ pub mod account {
             | AnyPermission::CanRegisterAssetDefinition(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
-            | AnyPermission::CanRegisterAssetWithDefinition(_)
-            | AnyPermission::CanUnregisterAssetWithDefinition(_)
             | AnyPermission::CanMintAssetWithDefinition(_)
             | AnyPermission::CanBurnAssetWithDefinition(_)
             | AnyPermission::CanTransferAssetWithDefinition(_)
@@ -719,12 +711,6 @@ pub mod asset_definition {
                 &permission.asset_definition == asset_definition_id
             }
             AnyPermission::CanModifyAssetDefinitionMetadata(permission) => {
-                &permission.asset_definition == asset_definition_id
-            }
-            AnyPermission::CanRegisterAssetWithDefinition(permission) => {
-                &permission.asset_definition == asset_definition_id
-            }
-            AnyPermission::CanUnregisterAssetWithDefinition(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
             AnyPermission::CanMintAssetWithDefinition(permission) => {
@@ -1531,8 +1517,6 @@ pub mod trigger {
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
-            | AnyPermission::CanRegisterAssetWithDefinition(_)
-            | AnyPermission::CanUnregisterAssetWithDefinition(_)
             | AnyPermission::CanMintAssetWithDefinition(_)
             | AnyPermission::CanBurnAssetWithDefinition(_)
             | AnyPermission::CanTransferAssetWithDefinition(_)
