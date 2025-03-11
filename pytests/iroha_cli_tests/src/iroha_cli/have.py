@@ -125,9 +125,7 @@ def asset_has_quantity(expected_asset_id: Any, expected_quantity: str) -> bool:
         actual_quantity = None
         for asset_item in assets:
             if asset_item == expected_asset_id:
-                actual_quantity = (
-                    assets.get(expected_asset_id, {}).get("value", {}).get("Numeric")
-                )
+                actual_quantity = assets.get(expected_asset_id, {}).get("value", {})
                 break
         if actual_quantity is None:
             raise ValueError(f"Asset with ID {expected_asset_id} not found.")
@@ -146,6 +144,23 @@ def asset_has_quantity(expected_asset_id: Any, expected_quantity: str) -> bool:
         return expected_quantity == str(actual_quantity)
 
     return iroha_cli.wait_for(check_quantity)
+
+
+def nft(expected: Any) -> bool:
+    """
+    Check if the expected NFT is present in the list of NFTs.
+
+    :param expected: The expected NFT identifier.
+    :return: True if the NFT is present, False otherwise.
+    """
+
+    def nft_in_nfts() -> bool:
+        nfts = iroha.list_filter(
+            {"Atom": {"Id": {"Atom": {"Equals": expected}}}}
+        ).nfts()
+        return expected_in_actual(expected, nfts)
+
+    return iroha_cli.wait_for(nft_in_nfts)
 
 
 def error(expected: str) -> bool:

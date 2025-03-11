@@ -656,13 +656,13 @@ Retrieve details of a specific asset definition
 
 Register an asset definition
 
-**Usage:** `iroha asset definition register [OPTIONS] --id <ID> --spec <SPEC>`
+**Usage:** `iroha asset definition register [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
 * `-m`, `--mint-once` — Disables minting after the first instance
-* `-s`, `--spec <SPEC>` — Numeric spec of the asset
+* `-s`, `--scale <SCALE>` — Numeric scale of the asset. No value means unconstrained
 
 
 

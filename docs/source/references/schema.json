@@ -620,16 +620,6 @@
         "tag": "Removed",
         "discriminant": 3,
         "type": "AssetChanged"
-      },
-      {
-        "tag": "MetadataInserted",
-        "discriminant": 4,
-        "type": "MetadataChanged<AssetId>"
-      },
-      {
-        "tag": "MetadataRemoved",
-        "discriminant": 5,
-        "type": "MetadataChanged<AssetId>"
       }
     ]
   },
@@ -664,14 +654,6 @@
         {
           "name": "Removed",
           "mask": 8
-        },
-        {
-          "name": "MetadataInserted",
-          "mask": 16
-        },
-        {
-          "name": "MetadataRemoved",
-          "mask": 32
         }
       ]
     }
@@ -812,7 +794,7 @@
       },
       {
         "name": "transactions_hash",
-        "type": "HashOf<MerkleTree<SignedTransaction>>"
+        "type": "Option<HashOf<MerkleTree<SignedTransaction>>>"
       },
       {
         "name": "creation_time_ms",
@@ -1096,14 +1078,6 @@
       }
     ]
   },
-  "CanRegisterAssetWithDefinition": {
-    "Struct": [
-      {
-        "name": "asset_definition",
-        "type": "AssetDefinitionId"
-      }
-    ]
-  },
   "CanRegisterDomain": null,
   "CanRegisterNft": {
     "Struct": [
@@ -1155,14 +1129,6 @@
     ]
   },
   "CanUnregisterAssetDefinition": {
-    "Struct": [
-      {
-        "name": "asset_definition",
-        "type": "AssetDefinitionId"
-      }
-    ]
-  },
-  "CanUnregisterAssetWithDefinition": {
     "Struct": [
       {
         "name": "asset_definition",
@@ -2787,22 +2753,6 @@
       }
     ]
   },
-  "MetadataChanged<AssetId>": {
-    "Struct": [
-      {
-        "name": "target",
-        "type": "AssetId"
-      },
-      {
-        "name": "key",
-        "type": "Name"
-      },
-      {
-        "name": "value",
-        "type": "Json"
-      }
-    ]
-  },
   "MetadataChanged<DomainId>": {
     "Struct": [
       {
@@ -3448,6 +3398,9 @@
   },
   "Option<HashOf<BlockHeader>>": {
     "Option": "HashOf<BlockHeader>"
+  },
+  "Option<HashOf<MerkleTree<SignedTransaction>>>": {
+    "Option": "HashOf<MerkleTree<SignedTransaction>>"
   },
   "Option<HashOf<SignedTransaction>>": {
     "Option": "HashOf<SignedTransaction>"
@@ -5025,7 +4978,12 @@
     ]
   },
   "SignedBlockPredicateAtom": {
-    "Enum": []
+    "Enum": [
+      {
+        "tag": "IsEmpty",
+        "discriminant": 0
+      }
+    ]
   },
   "SignedBlockProjection<PredicateMarker>": {
     "Enum": [
