@@ -34,10 +34,20 @@ fn fees_options_cannot_change() -> Result<()> {
     let test_client = network.client();
     upgrade_executor(&test_client, "fees_executor")?;
 
-    let result = test_client.submit_blocking(SetParameter::new(Parameter::Custom(
-        FeesOptions::default().into(),
-    )));
-    assert!(result.is_err());
+    let err = test_client
+        .submit_blocking(SetParameter::new(Parameter::Custom(
+            FeesOptions::default().into(),
+        )))
+        .expect_err("Isi was not rejected");
+
+    let rejection_reason = err
+        .downcast_ref::<TransactionRejectionReason>()
+        .expect("Error {err} is not TransactionRejectionReason");
+
+    assert!(matches!(
+        rejection_reason,
+        &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
+    ));
 
     Ok(())
 }
@@ -57,10 +67,20 @@ fn technical_domain_cannot_unregister() -> Result<()> {
         .try_into()
         .unwrap();
 
-    let result = test_client.submit_blocking(Unregister::domain(
-        fees_options.asset.account().domain().clone(),
+    let err = test_client
+        .submit_blocking(Unregister::domain(
+            fees_options.asset.account().domain().clone(),
+        ))
+        .expect_err("Isi was not rejected");
+
+    let rejection_reason = err
+        .downcast_ref::<TransactionRejectionReason>()
+        .expect("Error {err} is not TransactionRejectionReason");
+
+    assert!(matches!(
+        rejection_reason,
+        &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
     ));
-    assert!(result.is_err());
 
     Ok(())
 }
@@ -80,10 +100,20 @@ fn technical_asset_definition_cannot_unregister() -> Result<()> {
         .try_into()
         .unwrap();
 
-    let result = test_client.submit_blocking(Unregister::asset_definition(
-        fees_options.asset.definition().clone(),
+    let err = test_client
+        .submit_blocking(Unregister::asset_definition(
+            fees_options.asset.definition().clone(),
+        ))
+        .expect_err("Isi was not rejected");
+
+    let rejection_reason = err
+        .downcast_ref::<TransactionRejectionReason>()
+        .expect("Error {err} is not TransactionRejectionReason");
+
+    assert!(matches!(
+        rejection_reason,
+        &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_))
     ));
-    assert!(result.is_err());
 
     Ok(())
 }

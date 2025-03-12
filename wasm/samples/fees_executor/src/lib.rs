@@ -29,7 +29,7 @@ struct Executor {
 }
 
 /// Finds currently used fees options
-fn finds_fee_options(host: &Iroha) -> FeesOptions {
+fn find_fees_options(host: &Iroha) -> FeesOptions {
     let parameters = host.query_single(FindParameters).dbg_unwrap();
 
     let fees_options: FeesOptions = parameters
@@ -43,10 +43,10 @@ fn finds_fee_options(host: &Iroha) -> FeesOptions {
 }
 
 /// Errors as a result of fees options validation
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum FeesOptionsValidationError {
-    /// Invalid Asset
-    Asset,
+    #[error("Could not find asset specified in the fee options {0}")]
+    AssetNotFound(AssetId),
 }
 
 /// Validates fees options against the current network
@@ -58,7 +58,7 @@ fn validate_fees_options(
         .filter_with(|asset| asset.id.eq(options.asset.clone()))
         .execute_single()
         .map(|_| ())
-        .map_err(|_| FeesOptionsValidationError::Asset)
+        .map_err(|_| FeesOptionsValidationError::AssetNotFound(options.asset.clone()))
 }
 
 fn visit_set_parameter(executor: &mut Executor, isi: &SetParameter) {
@@ -73,7 +73,7 @@ fn visit_set_parameter(executor: &mut Executor, isi: &SetParameter) {
 }
 
 fn visit_unregister_domain(executor: &mut Executor, isi: &Unregister<Domain>) {
-    let fees_options = finds_fee_options(&executor.host());
+    let fees_options = find_fees_options(&executor.host());
 
     if isi.object().eq(fees_options.asset.account().domain())
         || isi.object().eq(fees_options.asset.definition().domain())
@@ -88,7 +88,7 @@ fn visit_unregister_domain(executor: &mut Executor, isi: &Unregister<Domain>) {
 }
 
 fn visit_unregister_asset_definition(executor: &mut Executor, isi: &Unregister<AssetDefinition>) {
-    let fees_options = finds_fee_options(&executor.host());
+    let fees_options = find_fees_options(&executor.host());
 
     if isi.object().eq(fees_options.asset.definition()) {
         deny!(
@@ -101,7 +101,7 @@ fn visit_unregister_asset_definition(executor: &mut Executor, isi: &Unregister<A
 }
 
 fn visit_unregister_account(executor: &mut Executor, isi: &Unregister<Account>) {
-    let fees_options = finds_fee_options(&executor.host());
+    let fees_options = find_fees_options(&executor.host());
 
     if isi.object().eq(fees_options.asset.account()) {
         deny!(

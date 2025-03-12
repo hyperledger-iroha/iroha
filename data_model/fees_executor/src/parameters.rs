@@ -14,7 +14,7 @@ pub struct FeesOptions {
 impl Default for FeesOptions {
     fn default() -> Self {
         // Value can be defined in .cargo/config.toml
-        let asset = env!("FEES_ASSET");
+        let asset = env!("DEFAULT_FEE_ASSET");
 
         Self {
             asset: asset.parse().unwrap(),
