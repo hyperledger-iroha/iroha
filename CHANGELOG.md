@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2.0.0-rc.1.4] - 2025-03-13
+
+### Fixed
+
+- revert backward-incompatible changes to the `/status` endpoint (#5320)
+
 ## [2.0.0-rc.1.3] - 2025-03-07
 
 ### Added
