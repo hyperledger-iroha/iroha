@@ -655,7 +655,6 @@ impl NetworkPeer {
             let client = self.client();
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
-            let block_height_non_empty_tx = self.block_height_non_empty.clone();
             let barrier = barrier.clone();
             tasks.spawn(async move {
                 let status_client = client.clone();
@@ -679,7 +678,6 @@ impl NetworkPeer {
                 .expect("there is no max elapsed time");
                 let _ = events_tx.send(PeerLifecycleEvent::ServerStarted);
                 let _ = block_height_tx.send_replace(Some(status.blocks));
-                let _ = block_height_non_empty_tx.send_replace(Some(status.blocks_non_empty));
                 eprintln!("{log_prefix} server started, {status:?}");
 
                 let mut events = client
@@ -707,9 +705,6 @@ impl NetworkPeer {
                             eprintln!("{log_prefix} BlockStatus::Applied height={height}, is_empty={is_empty}");
                             let _ = events_tx.send(PeerLifecycleEvent::BlockApplied { height });
                             block_height_tx.send_modify(|x| *x = Some(height));
-
-                            let status = client.get_status().expect("Can't get status");
-                            block_height_non_empty_tx.send_modify(|x| *x = Some(status.blocks_non_empty));
                         }
                     }
                 }
