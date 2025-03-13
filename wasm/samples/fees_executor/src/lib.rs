@@ -35,7 +35,7 @@ fn find_fees_options(host: &Iroha) -> FeesOptions {
     let fees_options: FeesOptions = parameters
         .custom()
         .get(&FeesOptions::id())
-        .unwrap()
+        .expect("INTERNAL BUG: Fees executor sets FeesOptions during migration and does not allow its modification")
         .try_into()
         .expect("INTERNAL BUG: Failed to deserialize json as `FeesOptions`");
 
