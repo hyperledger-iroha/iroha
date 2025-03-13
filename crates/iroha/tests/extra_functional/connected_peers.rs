@@ -74,7 +74,7 @@ async fn connected_peers_with_f(faults: usize) -> Result<()> {
 
     let status = removed_peer.status().await?;
     // Peer might have been disconnected before getting the block
-    assert_matches!(status.blocks_non_empty, 1 | 2);
+    assert_matches!(status.blocks, 1 | 2);
     assert_eq!(status.peers, 0);
 
     // Re-register the peer: committed with f = `faults` - 1 then `status.peers` increments
@@ -112,7 +112,7 @@ async fn assert_peers_status(
                 peer.peer_id()
             );
             assert_eq!(
-                status.blocks_non_empty,
+                status.blocks,
                 expected_blocks,
                 "expected blocks for {}",
                 peer.peer_id()
