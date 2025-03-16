@@ -1,10 +1,5 @@
 use eyre::Result;
-use iroha::{
-    client,
-    data_model::{parameter::SumeragiParameter, prelude::*},
-};
-use iroha_test_network::*;
-use iroha_test_samples::{gen_account_in, ALICE_ID};
+use iroha::{client, data_model::parameter::SumeragiParameter};
 
 use super::*;
 

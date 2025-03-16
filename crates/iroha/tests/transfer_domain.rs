@@ -289,6 +289,7 @@ fn domain_owner_nft_permissions() -> Result<()> {
 }
 
 #[test]
+#[cfg_attr(feature = "prediction", ignore = "depends on deprecated event types")]
 fn domain_owner_trigger_permissions() -> Result<()> {
     let (network, _rt) = NetworkBuilder::new().start_blocking()?;
     let test_client = network.client();
