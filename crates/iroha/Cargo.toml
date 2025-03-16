@@ -97,3 +97,9 @@ hex = { workspace = true }
 assertables = { workspace = true }
 trybuild = { workspace = true }
 assert_matches = "1.5.0"
+criterion = { workspace = true }
+
+[[bench]]
+name = "one_block"
+harness = false
+path = "benches/one_block.rs"
