@@ -3,7 +3,7 @@
 //! It aims to integrate executables, events, and event filters while enabling recursive trigger prediction in a static manner.
 //! The prediction is based on the union of possible execution paths, enabling pessimistic event loop detection.
 //!
-//! Additionally, to maintain performance, it consolidates:
+//! Additionally, to maintain performance while enabling per-transaction triggers (#4937), it consolidates:
 //!
 //! - Instructions into a single [`ChangeSet`] per transaction.
 //! - (Data) events into a single [`Event`] per transaction.

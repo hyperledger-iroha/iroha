@@ -282,7 +282,7 @@ pub mod transitional {
                 let event_expected = match &world_triggers[trigger_id].1 {
                     state::tr::ExecutableV::Static(changeset) => changeset.as_status(),
                     state::tr::ExecutableV::Dynamic(_wasm) => {
-                        todo!("Wasm executable should declare the union of possible events")
+                        todo!("Wasm executable should declare the union of possible events (#5362)")
                     }
                 };
                 if event_expected.iter().any(|(_k, v)| {

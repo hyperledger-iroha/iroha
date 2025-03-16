@@ -712,7 +712,7 @@ mod transitional {
                     .collect(),
                 },
                 InstructionBox::ExecuteTrigger(_inst) => unimplemented!(
-                    "planned to be replaced with calls to pre-registered executables"
+                    "planned to be replaced with calls to pre-registered executables (#5147)"
                 ),
                 InstructionBox::SetParameter(inst) => [node!(
                     Parameter,
@@ -738,7 +738,7 @@ mod transitional {
                     [].into_iter().collect()
                 }
                 InstructionBox::Custom(_inst) => unimplemented!(
-                    "planned to be replaced with calls to pre-registered executables"
+                    "planned to be replaced with calls to pre-registered executables (#5147)"
                 ),
             };
 
