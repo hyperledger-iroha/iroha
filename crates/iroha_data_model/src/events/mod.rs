@@ -46,8 +46,10 @@ mod model {
         /// Time event.
         Time(time::TimeEvent),
         /// Trigger execution event.
+        // TODO #4968 Remove as it is no longer needed.
         ExecuteTrigger(execute_trigger::ExecuteTriggerEvent),
         /// Trigger completion event.
+        // TODO #4968 Merge into pipeline events as an internal transaction.
         TriggerCompleted(trigger_completed::TriggerCompletedEvent),
     }
 

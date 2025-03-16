@@ -2,6 +2,8 @@
 //!
 //! `Block`s are organised into a linear sequence over time (also known as the block chain).
 
+#[cfg(all(feature = "transparent_api", not(feature = "std")))]
+use alloc::{borrow::ToOwned, vec};
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
 use core::{fmt::Display, time::Duration};
