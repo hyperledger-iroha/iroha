@@ -348,7 +348,6 @@ types!(
     Option<DomainId>,
     Option<ForwardCursor>,
     Option<HashOf<BlockHeader>>,
-    Option<HashOf<MerkleTree<SignedTransaction>>>,
     Option<HashOf<SignedTransaction>>,
     Option<IpfsPath>,
     Option<Name>,

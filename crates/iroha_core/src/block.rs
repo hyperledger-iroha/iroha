@@ -133,9 +133,16 @@ mod pending {
         const TIME_PADDING: Duration = Duration::from_millis(1);
 
         /// Create [`Self`]
+        ///
+        /// # Panics
+        ///
+        /// if the given list of transaction is empty
         #[inline]
         pub fn new(transactions: Vec<AcceptedTransaction>) -> Self {
-            // Note that empty block is allowed
+            assert!(
+                !transactions.is_empty(),
+                "Block must contain at least 1 transaction"
+            );
 
             Self(Pending { transactions })
         }
@@ -153,8 +160,7 @@ mod pending {
                 .map(AsRef::as_ref)
                 .map(SignedTransaction::creation_time)
                 .max()
-                // Empty block is allowed
-                .unwrap_or(Duration::ZERO);
+                .expect("INTERNAL BUG: Block empty");
 
             let now = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -186,7 +192,8 @@ mod pending {
                     .map(AsRef::as_ref)
                     .map(SignedTransaction::hash)
                     .collect::<MerkleTree<_>>()
-                    .hash(),
+                    .hash()
+                    .expect("INTERNAL BUG: Empty block created"),
                 creation_time_ms: creation_time
                     .as_millis()
                     .try_into()
@@ -804,12 +811,12 @@ mod valid {
             leader_private_key: &PrivateKey,
             f: impl FnOnce(&mut BlockHeader),
         ) -> Self {
-            let transactions_hash =
-                HashOf::from_untyped_unchecked(Hash::prehashed([1; Hash::LENGTH]));
             let mut header = BlockHeader {
                 height: nonzero_ext::nonzero!(2_u64),
                 prev_block_hash: None,
-                transactions_hash: Some(transactions_hash),
+                transactions_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+                    [1; Hash::LENGTH],
+                )),
                 creation_time_ms: 0,
                 view_change_index: 0,
             };
