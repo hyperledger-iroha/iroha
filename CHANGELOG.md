@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2.0.0-rc.1.5] - 2025-03-17
+
+### Fixed
+
+- revert empty blocks PR due to backward-incompatible changes (#5368)
+
 ## [2.0.0-rc.1.4] - 2025-03-13
 
 ### Fixed
