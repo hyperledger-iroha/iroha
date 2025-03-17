@@ -300,10 +300,7 @@ impl_predicate_atom! {
         Equals(expected: HashOf<BlockHeader>) [eq] => input == expected,
     }
     BlockHeaderPredicateAtom(_input: BlockHeader) [BlockHeaderPrototype] {}
-    SignedBlockPredicateAtom(input: SignedBlock) [SignedBlockPrototype] {
-        /// Checks if the block is empty (has no transactions)
-        IsEmpty [is_empty] => input.is_empty(),
-    }
+    SignedBlockPredicateAtom(_input: SignedBlock) [SignedBlockPrototype] {}
     TransactionHashPredicateAtom(input: HashOf<SignedTransaction>) [TransactionHashPrototype] {
         /// Checks if the input is equal to the expected value.
         Equals(expected: HashOf<SignedTransaction>) [eq] => input == expected,
