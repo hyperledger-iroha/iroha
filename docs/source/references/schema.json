@@ -903,7 +903,7 @@
       },
       {
         "name": "transactions_hash",
-        "type": "Option<HashOf<MerkleTree<SignedTransaction>>>"
+        "type": "HashOf<MerkleTree<SignedTransaction>>"
       },
       {
         "name": "creation_time_ms",
@@ -3249,9 +3249,6 @@
   "Option<HashOf<BlockHeader>>": {
     "Option": "HashOf<BlockHeader>"
   },
-  "Option<HashOf<MerkleTree<SignedTransaction>>>": {
-    "Option": "HashOf<MerkleTree<SignedTransaction>>"
-  },
   "Option<HashOf<SignedTransaction>>": {
     "Option": "HashOf<SignedTransaction>"
   },
@@ -4798,12 +4795,7 @@
     ]
   },
   "SignedBlockPredicateAtom": {
-    "Enum": [
-      {
-        "tag": "IsEmpty",
-        "discriminant": 0
-      }
-    ]
+    "Enum": []
   },
   "SignedBlockProjection<PredicateMarker>": {
     "Enum": [
