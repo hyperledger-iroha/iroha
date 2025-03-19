@@ -102,14 +102,16 @@ jobs:
         run: |
           mv ${{ env.WASM_TARGET_DIR }}/libs ${{ env.DEFAULTS_DIR }}/libs
           mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
-      - name: Install irohad
-        run: which irohad || cargo install --path crates/irohad --locked
+      - name: Install irohad with no default features
+        run: cargo install --path crates/irohad --locked --no-default-features
       - name: Test with no default features
         id: test_no_features
         run: >
           mold --run cargo llvm-cov nextest
           --no-default-features
           --branch --no-report
+      - name: Install irohad with all features
+        run: cargo install --path crates/irohad --locked --all-features
       - name: Test with all features
         id: test_all_features
         run: >
