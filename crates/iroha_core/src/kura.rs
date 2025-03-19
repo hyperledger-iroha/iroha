@@ -276,6 +276,7 @@ impl Kura {
                     error!(?error, "Failed to store block");
                     panic!("Kura has encountered a fatal IO error.");
                 }
+                latest_written_block_hash = Some(block.hash());
             }
         }
     }
