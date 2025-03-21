@@ -260,6 +260,7 @@ impl Iroha {
         );
 
         let (peers_gossiper, child) = PeersGossiper::start(
+            config.common.peer.id.clone(),
             config.common.trusted_peers.value().clone(),
             network.clone(),
             supervisor.shutdown_signal(),
