@@ -1,5 +1,7 @@
 //! Tokio actor Peer
 
+use std::net::SocketAddr;
+
 use bytes::{Buf, BufMut, BytesMut};
 use message::*;
 use parity_scale_codec::{DecodeAll, Encode};
@@ -110,7 +112,7 @@ mod run {
 
     /// Peer task.
     #[allow(clippy::too_many_lines)]
-    #[log(skip_all, fields(conn_id = peer.connection_id(), peer, disambiguator))]
+    #[log(skip_all, fields(connection = &peer.log_description(), conn_id = peer.connection_id(), peer, disambiguator))]
     pub(super) async fn run<T: Pload, K: Kex, E: Enc, P: Entrypoint<K, E>>(
         RunPeerArgs {
             peer,
@@ -145,6 +147,7 @@ mod run {
                         read,
                         write,
                         id: connection_id,
+                        ..
                     },
                 cryptographer,
             } = ready_peer;
@@ -298,17 +301,37 @@ mod run {
     /// Trait for peer stages that might be used as starting point for peer's [`run`] function.
     pub(super) trait Entrypoint<K: Kex, E: Enc>: Handshake<K, E> + Send + 'static {
         fn connection_id(&self) -> ConnectionId;
+
+        /// Debug description, used for logging
+        fn log_description(&self) -> String;
     }
 
     impl<K: Kex, E: Enc> Entrypoint<K, E> for Connecting {
         fn connection_id(&self) -> ConnectionId {
             self.connection_id
         }
+
+        fn log_description(&self) -> String {
+            format!("outgoing to {}", self.peer_addr)
+        }
     }
 
     impl<K: Kex, E: Enc> Entrypoint<K, E> for ConnectedFrom {
         fn connection_id(&self) -> ConnectionId {
             self.connection.id
+        }
+
+        fn log_description(&self) -> String {
+            #[allow(clippy::option_if_let_else)]
+            match self.connection.remote_addr {
+                None => "incoming".to_owned(),
+                Some(remote_addr) => {
+                    // In case of incoming connection,
+                    // only host will have some meaningful value.
+                    // Port will have some random value chosen only for this connection.
+                    format!("incoming from {}", remote_addr.ip())
+                }
+            }
         }
     }
 
@@ -859,12 +882,20 @@ pub struct Connection {
     pub read: OwnedReadHalf,
     /// Writing half of `TcpStream`
     pub write: OwnedWriteHalf,
+    /// Remote addr, for logging purpose.
+    pub remote_addr: Option<SocketAddr>,
 }
 
 impl Connection {
     /// Instantiate new connection from `connection_id` and `stream`.
     pub fn new(id: ConnectionId, stream: TcpStream) -> Self {
+        let remote_addr = stream.peer_addr().ok();
         let (read, write) = stream.into_split();
-        Connection { id, read, write }
+        Connection {
+            id,
+            read,
+            write,
+            remote_addr,
+        }
     }
 }
