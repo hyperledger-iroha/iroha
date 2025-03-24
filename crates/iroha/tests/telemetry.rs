@@ -88,8 +88,8 @@ async fn misc_measurements() -> eyre::Result<()> {
     // genesis measurements
     assert_eq!(metrics.get("tx_amount_sum"), 57.0);
     assert_eq!(metrics.get("tx_amount_count"), 2.0);
-    assert_eq!(metrics.get("tx_amount_bucket{le=\"1\"}"), 0.0);
-    assert_eq!(metrics.get("tx_amount_bucket{le=\"100\"}"), 2.0);
+    assert_eq!(metrics.get("tx_amount_bucket{le=\"0\"}"), 0.0);
+    assert_eq!(metrics.get("tx_amount_bucket{le=\"1000\"}"), 2.0);
     assert_eq!(metrics.get("domains"), 3.0);
     assert_eq!(metrics.get("accounts{domain=\"genesis\"}"), 1.0);
     assert_eq!(metrics.get("accounts{domain=\"wonderland\"}"), 2.0);
