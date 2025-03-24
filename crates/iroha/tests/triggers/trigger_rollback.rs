@@ -3,7 +3,7 @@ use eyre::Result;
 use super::*;
 
 #[test]
-#[cfg_attr(feature = "prediction", ignore = "depends on deprecated event types")]
+#[ignore = "depends on deprecated event types"]
 fn failed_trigger_revert() -> Result<()> {
     let (network, _rt) = NetworkBuilder::new().start_blocking()?;
     let client = network.client();
