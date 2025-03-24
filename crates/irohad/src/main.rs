@@ -14,6 +14,8 @@ use iroha_config::{
     base::{read::ConfigReader, util::Emitter, WithOrigin},
     parameters::{actual::Root as Config, user::Root as UserConfig},
 };
+#[cfg(feature = "telemetry")]
+use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     block_sync::{BlockSynchronizer, BlockSynchronizerHandle},
     gossiper::{TransactionGossiper, TransactionGossiperHandle},
@@ -28,13 +30,13 @@ use iroha_core::{
     sumeragi::{GenesisWithPubKey, SumeragiHandle, SumeragiStartArgs},
     IrohaNetwork,
 };
-#[cfg(feature = "telemetry")]
-use iroha_core::{metrics::MetricsReporter, sumeragi::SumeragiMetrics};
 use iroha_data_model::{block::SignedBlock, prelude::*};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, Supervisor};
 use iroha_genesis::GenesisBlock;
 use iroha_logger::{actor::LoggerHandle, InitConfig as LoggerInitConfig};
 use iroha_primitives::addr::SocketAddr;
+#[cfg(feature = "telemetry")]
+use iroha_primitives::time::TimeSource;
 use iroha_torii::Torii;
 use iroha_version::scale::DecodeVersioned;
 use thiserror::Error;
@@ -199,11 +201,19 @@ impl Iroha {
                 .start();
         supervisor.monitor(child);
 
+        #[cfg(feature = "telemetry")]
+        let (metrics, state_telemetry) = {
+            let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+            (metrics.clone(), StateTelemetry::new(metrics))
+        };
+
         let state = match try_read_snapshot(
             config.snapshot.store_dir.resolve_relative_path(),
             &kura,
             || live_query_store.clone(),
             block_count,
+            #[cfg(feature = "telemetry")]
+            state_telemetry.clone()
         ) {
             Ok(state) => {
                 iroha_logger::info!(
@@ -231,6 +241,8 @@ impl Iroha {
                 world,
                 Arc::clone(&kura),
                 live_query_store.clone(),
+                #[cfg(feature = "telemetry")]
+                state_telemetry
             )
         });
         let state = Arc::new(state);
@@ -252,12 +264,19 @@ impl Iroha {
         start_telemetry(&logger, &config, &mut supervisor).await?;
 
         #[cfg(feature = "telemetry")]
-        let metrics_reporter = MetricsReporter::new(
-            Arc::clone(&state),
-            network.clone(),
-            kura.clone(),
-            queue.clone(),
-        );
+        let telemetry = {
+            let (metrics_reporter, child) = iroha_core::telemetry::start(
+                metrics,
+                Arc::clone(&state),
+                kura.clone(),
+                queue.clone(),
+                network.online_peers_receiver(),
+                TimeSource::new_system(),
+            );
+            supervisor.monitor(child);
+
+            metrics_reporter
+        };
 
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.trusted_peers.value().clone(),
@@ -281,10 +300,7 @@ impl Iroha {
             },
             block_count,
             #[cfg(feature = "telemetry")]
-            metrics: SumeragiMetrics {
-                dropped_messages: metrics_reporter.metrics().dropped_messages.clone(),
-                view_changes: metrics_reporter.metrics().view_changes.clone(),
-            },
+            telemetry: telemetry.clone(),
         }
         .start(supervisor.shutdown_signal());
         supervisor.monitor(child);
@@ -340,7 +356,7 @@ impl Iroha {
             kura.clone(),
             state.clone(),
             #[cfg(feature = "telemetry")]
-            metrics_reporter,
+            telemetry,
         )
         .start(supervisor.shutdown_signal());
         supervisor.monitor(Child::new(

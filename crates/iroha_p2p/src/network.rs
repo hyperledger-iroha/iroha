@@ -180,6 +180,11 @@ impl<T: Pload, K: Kex + Sync, E: Enc + Sync> NetworkBaseHandle<T, K, E> {
         f(&self.online_peers_receiver.borrow())
     }
 
+    /// Get a receiver of [`OnlinePeers`]
+    pub fn online_peers_receiver(&self) -> watch::Receiver<OnlinePeers> {
+        self.online_peers_receiver.clone()
+    }
+
     /// Wait for update of [`OnlinePeers`].
     pub async fn wait_online_peers_update<P>(
         &mut self,
