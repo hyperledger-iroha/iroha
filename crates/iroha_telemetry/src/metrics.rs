@@ -4,9 +4,10 @@ use std::{ops::Deref, time::Duration};
 
 use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
 use parity_scale_codec::{Compact, Decode, Encode};
+pub use prometheus::Histogram;
 use prometheus::{
     core::{AtomicU64, GenericGauge, GenericGaugeVec},
-    Encoder, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry,
+    Encoder, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry,
 };
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +85,9 @@ pub struct Status {
     /// Number of committed non-empty blocks
     #[codec(compact)]
     pub blocks_non_empty: u64,
+    /// Time (since block creation) it took for the latest block to be committed by _this_ peer
+    #[codec(compact)]
+    pub last_block_commit_time_ms: u64,
     /// Number of approved transactions
     #[codec(compact)]
     pub txs_approved: u64,
@@ -107,6 +111,7 @@ impl<T: Deref<Target = Metrics>> From<&T> for Status {
             peers: val.connected_peers.get(),
             blocks: val.block_height.get(),
             blocks_non_empty: val.block_height_non_empty.get(),
+            last_block_commit_time_ms: val.last_block_commit_time_ms.get(),
             txs_approved: val.txs.with_label_values(&["accepted"]).get(),
             txs_rejected: val.txs.with_label_values(&["rejected"]).get(),
             uptime: Uptime(Duration::from_millis(val.uptime_since_genesis_ms.get())),
@@ -129,6 +134,10 @@ pub struct Metrics {
     pub block_height: IntCounter,
     /// Number of committed non-empty blocks
     pub block_height_non_empty: IntCounter,
+    /// Time (since block creation) it took for the latest block to reach _this_ peer
+    pub last_block_commit_time_ms: GenericGauge<AtomicU64>,
+    /// Block commit time trends
+    pub block_commit_time_ms: Histogram,
     /// Number of currently connected peers excluding the reporting peer
     pub connected_peers: GenericGauge<AtomicU64>,
     /// Uptime of the network, starting from commit of the genesis block
@@ -167,16 +176,49 @@ impl Default for Metrics {
             &["type"],
         )
         .expect("Infallible");
-        let tx_amounts = Histogram::with_opts(HistogramOpts::new(
-            "tx_amount",
-            "average amount involved in a transaction on this peer",
-        ))
+        let tx_amounts = Histogram::with_opts(
+            HistogramOpts::new(
+                "tx_amount",
+                "average amount involved in a transaction on this peer",
+            )
+            .buckets(
+                // Amounts can vary wildly.
+                // Capturing range
+                //   from 10^-10 to 10^10
+                //   with the step of 2 decimal points (10 steps)
+                vec![
+                    0.0000000001,
+                    0.00000001,
+                    0.000001,
+                    0.0001,
+                    0.01,
+                    1.0,
+                    100.0,
+                    10000.0,
+                    1000000.0,
+                    100000000.0,
+                ],
+            ),
+        )
         .expect("Infallible");
         let block_height =
             IntCounter::new("block_height", "Current block height").expect("Infallible");
         let block_height_non_empty = IntCounter::new(
             "block_height_non_empty",
             "Current count of non-empty blocks",
+        )
+        .expect("Infallible");
+        let last_block_commit_time_ms = GenericGauge::new(
+            "last_block_commit_time_ms",
+            "Time (since block creation) it took for the latest block to be committed by this peer",
+        )
+        .expect("Infallible");
+        let block_commit_time_ms = Histogram::with_opts(
+            HistogramOpts::new(
+                "block_commit_time_ms",
+                "Average block commit time on this peer",
+            )
+            .buckets(prometheus::exponential_buckets(100.0, 4.0, 5).expect("inputs are valid")),
         )
         .expect("Infallible");
         let connected_peers = GenericGauge::new(
@@ -221,6 +263,8 @@ impl Default for Metrics {
             tx_amounts,
             block_height,
             block_height_non_empty,
+            last_block_commit_time_ms,
+            block_commit_time_ms,
             connected_peers,
             uptime_since_genesis_ms,
             domains,
@@ -236,6 +280,8 @@ impl Default for Metrics {
             txs,
             block_height,
             block_height_non_empty,
+            last_block_commit_time_ms,
+            block_commit_time_ms,
             connected_peers,
             uptime_since_genesis_ms,
             domains,
@@ -290,6 +336,7 @@ mod test {
             peers: 4,
             blocks: 5,
             blocks_non_empty: 3,
+            last_block_commit_time_ms: 130,
             txs_approved: 31,
             txs_rejected: 3,
             uptime: Uptime(Duration::new(5, 937_000_000)),
@@ -310,6 +357,7 @@ mod test {
               "peers": 4,
               "blocks": 5,
               "blocks_non_empty": 3,
+              "last_block_commit_time_ms": 130,
               "txs_approved": 31,
               "txs_rejected": 3,
               "uptime": {
@@ -328,9 +376,10 @@ mod test {
         let bytes = value.encode();
 
         let actual = hex::encode_upper(bytes);
+        // TODO: update docs
         // CAUTION: if this is outdated, make sure to update the documentation:
         // https://docs.iroha.tech/reference/torii-endpoints.html#status
-        let expected = expect_test::expect!["10140C7C0C14407CD9370848"];
+        let expected = expect_test::expect!["10140C09027C0C14407CD9370848"];
         expected.assert_eq(&actual);
     }
 }

@@ -6,7 +6,8 @@ pub mod executor;
 pub mod gossiper;
 pub mod kiso;
 pub mod kura;
-pub mod metrics;
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
 pub mod peers_gossiper;
 pub mod query;
 pub mod queue;
