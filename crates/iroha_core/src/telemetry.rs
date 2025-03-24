@@ -67,6 +67,7 @@ impl Telemetry {
     /// Report the event of block commit, measuring the block time.
     pub fn report_block_commit_blocking(&self, block_header: BlockHeader) {
         let report = BlockCommitReport::new(block_header, &self.time_source);
+        #[allow(clippy::cast_precision_loss)]
         self.metrics
             .block_commit_time_ms
             .observe(report.commit_time.as_millis() as f64);
@@ -179,6 +180,7 @@ impl Actor {
                             block.hash()
                         );
                     }
+                    #[allow(clippy::cast_precision_loss)]
                     self.metrics
                         .last_block_commit_time_ms
                         .set(last_reported_block.commit_time.as_millis() as u64);
@@ -271,6 +273,7 @@ impl BlockCommitReport {
         Self {
             #[cfg(debug_assertions)]
             hash: block_header.hash(),
+            #[allow(clippy::cast_precision_loss)]
             height: block_header.height().get() as usize,
             commit_time,
         }
