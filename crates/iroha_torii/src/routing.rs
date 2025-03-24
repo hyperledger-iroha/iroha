@@ -2,7 +2,7 @@
 //! Iroha you should add it here by creating a `handle_*` function,
 //! and add it to impl Torii.
 
-use axum::{extract::ws::WebSocket, http::HeaderValue};
+use axum::extract::ws::WebSocket;
 #[cfg(feature = "telemetry")]
 use eyre::{eyre, WrapErr};
 use iroha_config::client_api::ConfigDTO;
@@ -278,7 +278,7 @@ pub async fn handle_peers(telemetry: &Telemetry) -> Response {
 #[allow(clippy::unnecessary_wraps)]
 pub async fn handle_status(
     telemetry: &Telemetry,
-    accept: Option<HeaderValue>,
+    accept: Option<axum::http::HeaderValue>,
     tail: Option<&str>,
 ) -> Result<Response> {
     use eyre::ContextCompat;
