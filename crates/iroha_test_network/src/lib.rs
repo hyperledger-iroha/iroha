@@ -54,21 +54,33 @@ const PEER_START_TIMEOUT: Duration = Duration::from_secs(30);
 const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 
+const IROHAD_BIN_ENV: &str = "IROHAD_BIN";
+
 fn iroha_bin() -> impl AsRef<Path> {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
 
     PATH.get_or_init(|| {
-        if let Ok(path) = which::which("irohad") {
-            path
-        } else {
+        let path = std::env::var(IROHAD_BIN_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_err| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/debug/irohad")
+                    .canonicalize()
+                    .expect("invoking from crates/iroha_test_samples, should be fine")
+            });
+
+        if !path.exists() {
             eprintln!(
-                "ERROR: could not locate `irohad` binary in $PATH\n  \
-                It is required to run `iroha_test_network`.\n  \
-                The easiest way to satisfy this is to run:\n\n    \
-                cargo install --path ./crates/irohad --locked"
+                "ERROR: `irohad` path does not exist: \"{}\"\n  \
+                It is required to run `iroha_test_network`. Solutions:\n  \
+                1. Run `cargo build --bin irohad`, and `target/debug/irohad` will be used by default\n  \
+                2. Override path via {IROHAD_BIN_ENV} env",
+                path.display(),
             );
             panic!("could not proceed without `irohad`, see the message above");
         }
+
+        path
     })
 }
 
@@ -132,7 +144,7 @@ impl Network {
                     let failure = async move {
                         peer.once(|e| matches!(e, PeerLifecycleEvent::Terminated { .. }))
                             .await;
-                        panic!("a peer exited unexpectedly");
+                        panic!("peer exited unexpectedly");
                     };
 
                     let start = async move {
