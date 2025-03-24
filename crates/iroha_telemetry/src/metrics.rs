@@ -3,10 +3,9 @@
 use std::{ops::Deref, time::Duration};
 
 use parity_scale_codec::{Compact, Decode, Encode};
-pub use prometheus::Histogram;
 use prometheus::{
     core::{AtomicU64, GenericGauge, GenericGaugeVec},
-    Encoder, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry,
+    Encoder, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry,
 };
 use serde::{Deserialize, Serialize};
 
