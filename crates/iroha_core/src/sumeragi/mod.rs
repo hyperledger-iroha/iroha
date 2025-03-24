@@ -153,7 +153,7 @@ impl SumeragiStartArgs {
             genesis_network,
             block_count: BlockCount(block_count),
             #[cfg(feature = "telemetry")]
-            telemetry: metrics,
+                telemetry: metrics,
         } = self;
 
         let (control_message_sender, control_message_receiver) = mpsc::sync_channel(100);
