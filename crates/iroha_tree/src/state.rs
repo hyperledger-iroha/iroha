@@ -59,7 +59,7 @@ pub trait WorldState {
     ///
     /// # Errors
     ///
-    /// Fails if the update violates data integrity constraints.
+    /// Returns an error if the update violates data integrity constraints.
     fn update_by(
         &mut self,
         entry: NodeEntry<changeset::Write>,
@@ -69,7 +69,7 @@ pub trait WorldState {
     ///
     /// # Errors
     ///
-    /// Fails if the expected change is determined to break data integrity.
+    /// Returns an error if the expected change is determined to break data integrity.
     fn sanitize(
         &self,
         event_prediction: &event::Event,
@@ -82,7 +82,7 @@ pub trait WorldState {
     ///
     /// # Errors
     ///
-    /// Fails if the update violates data integrity constraints.
+    /// Returns an error if the update violates data integrity constraints.
     fn update(
         &mut self,
         changeset: changeset::ChangeSet,
@@ -296,7 +296,7 @@ pub mod transitional {
                     return true;
                 }
                 let next_trigger_ids = world_triggers.iter().filter_map(|(id, (receptor, _))| {
-                    event_expected.passes(receptor).is_ok().then_some(id)
+                    event_expected.passes(*receptor).is_ok().then_some(id)
                 });
                 stack.extend(next_trigger_ids);
             }

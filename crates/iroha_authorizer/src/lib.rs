@@ -25,7 +25,7 @@ pub trait Authorizer {
     ///
     /// # Errors
     ///
-    /// Fails if the event-based access attempt is determined to exceed the given context's permissions.
+    /// Returns an error if the event-based access attempt is determined to exceed the given context's permissions.
     fn authorize(
         &self,
         event: &event::Event,

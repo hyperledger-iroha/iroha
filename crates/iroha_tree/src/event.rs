@@ -224,10 +224,13 @@ macro_rules! impl_from_state_write_filtered {
             }
         }
 
-        impl Filtered for $ty {
-            type Filter = FilterU8;
+        impl Filtered<FilterU8> for $ty {
+            type Obstacle = FilterU8;
 
-            fn passes(&self, filter: &Self::Filter) -> Result<(), Self::Filter> {
+            /// # Errors
+            ///
+            /// Returns the difference from the expected filter required for `self` to pass.
+            fn passes(&self, filter: &FilterU8) -> Result<(), Self::Obstacle> {
                 FilterU8::from(*self).passes(filter)
             }
         }
@@ -368,24 +371,31 @@ mod tests {
             Event::default(),
             Event::from_iter([node!(Role, key(0), UnitS::Create)]),
             Event::from_iter([
-                node!(Role, key(0), UnitS::Create),
+                node!(Role, key(0), UnitS::Delete),
                 node!(Role, key(1), UnitS::Create),
             ]),
-            Event::from_iter([
-                node!(Role, key(0), UnitS::Create),
-                node!(Role, key(1), UnitS::Delete),
-            ]),
+            Event::from_iter([node!(Role, key(1), UnitS::Create)]),
+            Event::from_iter([node!(Role, key(1), UnitS::Delete)]),
         ];
         let receptors = [
             Receptor::default(),
             Receptor::from_iter([fuzzy_node!(Role, some!(key(0)), UnitS::Create)]),
-            Receptor::from_iter([fuzzy_node!(Role, None, FilterU8::from_str("c").unwrap())]),
+            Receptor::from_iter([fuzzy_node!(
+                Role,
+                some!(key(0)),
+                FilterU8::from_str("cd").unwrap()
+            )]),
+            Receptor::from_iter([fuzzy_node!(Role, None, UnitS::Create)]),
             Receptor::from_iter([fuzzy_node!(Role, None, FilterU8::from_str("cd").unwrap())]),
         ];
 
         for (i, event) in events.iter().enumerate() {
             for (j, receptor) in receptors.iter().enumerate() {
-                assert_eq!(i <= j, event.passes(receptor).is_ok());
+                if event.is_empty() {
+                    assert!(event.passes(receptor).is_err());
+                } else {
+                    assert_eq!(i <= j, event.passes(receptor).is_ok());
+                }
             }
         }
     }

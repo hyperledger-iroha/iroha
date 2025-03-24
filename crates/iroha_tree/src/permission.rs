@@ -3,26 +3,95 @@
 use super::*;
 
 /// Represents readiness for access of each node.
-pub type Permission = FuzzyTree<ReadWriteStatusFilter>;
+pub type Permission = FuzzyTree<ReadWriteStatusFilterAll>;
 
 /// Each node value indicates readiness for access.
-pub type ReadWriteStatusFilter = receptor::ReadWriteStatusFilter;
+#[derive(Debug, PartialEq, Eq, Clone, Decode, Encode)]
+pub struct ReadWriteStatusFilterAll;
 
-impl Filtered for state::StateView {
-    type Filter = Permission;
+impl Mode for ReadWriteStatusFilterAll {
+    type Authorizer = FilterU8;
+    type Parameter = FilterU8;
+    type Peer = FilterU8;
+    type Domain = FilterU8;
+    type Account = FilterU8;
+    type Asset = FilterU8;
+    type Nft = FilterU8;
+    type AccountAsset = FilterU8;
+    type Role = FilterU8;
+    type Permission = FilterU8;
+    type AccountRole = FilterU8;
+    type AccountPermission = FilterU8;
+    type RolePermission = FilterU8;
+    type Trigger = FilterU8;
+    type Condition = FilterU8;
+    type Executable = FilterU8;
+    type TriggerCondition = FilterU8;
+    type TriggerExecutable = FilterU8;
+    type DomainMetadata = FilterU8;
+    type AccountMetadata = FilterU8;
+    type AssetMetadata = FilterU8;
+    type NftData = FilterU8;
+    type TriggerMetadata = FilterU8;
+    type DomainAdmin = FilterU8;
+    type AssetAdmin = FilterU8;
+    type NftAdmin = FilterU8;
+    type NftOwner = FilterU8;
+    type TriggerAdmin = FilterU8;
+}
+
+impl Filtered<Permission> for state::StateView {
+    type Obstacle = Permission;
 
     /// Post-execution validation of read access.
-    fn passes(&self, filter: &Self::Filter) -> Result<(), Self::Filter> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the difference from the expected permission required for the view to pass.
+    fn passes(&self, filter: &Permission) -> Result<(), Self::Obstacle> {
         self.as_status().passes(filter)
     }
 }
 
-impl Filtered for changeset::ChangeSet {
-    type Filter = Permission;
+impl Filtered<Permission> for changeset::ChangeSet {
+    type Obstacle = Permission;
 
     /// Pre-execution validation of write access.
-    fn passes(&self, filter: &Self::Filter) -> Result<(), Self::Filter> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the difference from the expected permission required for the changeset to pass.
+    fn passes(&self, filter: &Permission) -> Result<(), Self::Obstacle> {
         self.as_status().passes(filter)
+    }
+}
+
+impl Filtered<Permission> for event::Event {
+    type Obstacle = Permission;
+
+    /// # Errors
+    ///
+    /// Returns the difference from the expected permission required for the event to pass.
+    fn passes(&self, filter: &Permission) -> Result<(), Self::Obstacle> {
+        let mut obstacle = permission::Permission::default();
+        for (key, signal) in self.iter() {
+            let signal: FilterU8 = signal.into();
+            let receptor_keys = key.receptor_keys();
+            let receptor_union = filter
+                .iter()
+                .filter_map(|(k, v)| receptor_keys.contains(k).then_some(v).map(FilterU8::from))
+                .fold(FilterU8::DENY, |acc, x| acc | x);
+            if let Err(obs) = signal.passes(&receptor_union) {
+                obstacle.insert(
+                    FuzzyNodeEntry::try_from((key.fuzzy(), NodeValue::from((key, obs)))).unwrap(),
+                );
+            }
+        }
+        if obstacle.is_empty() {
+            Ok(())
+        } else {
+            Err(obstacle)
+        }
     }
 }
 

@@ -800,14 +800,19 @@ mod tests {
                 node!(Role, key(1), UnitW::Create(())),
             ]),
             ChangeSet::from_iter([
-                node!(Role, key(0), UnitW::Create(())),
-                node!(Role, key(1), UnitW::Delete(())),
+                node!(Role, key(0), UnitW::Delete(())),
+                node!(Role, key(1), UnitW::Create(())),
             ]),
+            ChangeSet::from_iter([node!(Role, key(1), UnitW::Delete(()))]),
         ];
         let permissions = [
             Permission::default(),
             Permission::from_iter([fuzzy_node!(Role, some!(key(0)), UnitS::Create)]),
             Permission::from_iter([fuzzy_node!(Role, None, FilterU8::from_str("c").unwrap())]),
+            Permission::from_iter([
+                fuzzy_node!(Role, some!(key(0)), UnitS::Delete),
+                fuzzy_node!(Role, None, UnitS::Create),
+            ]),
             Permission::from_iter([fuzzy_node!(Role, None, FilterU8::from_str("cd").unwrap())]),
         ];
 

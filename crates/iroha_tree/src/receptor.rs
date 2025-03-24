@@ -3,13 +3,13 @@
 use super::*;
 
 /// Represents readiness for status of each node.
-pub type Receptor = FuzzyTree<ReadWriteStatusFilter>;
+pub type Receptor = FuzzyTree<ReadWriteStatusFilterAny>;
 
 /// Each node value indicates readiness for status.
 #[derive(Debug, PartialEq, Eq, Clone, Decode, Encode)]
-pub struct ReadWriteStatusFilter;
+pub struct ReadWriteStatusFilterAny;
 
-impl Mode for ReadWriteStatusFilter {
+impl Mode for ReadWriteStatusFilterAny {
     type Authorizer = FilterU8;
     type Parameter = FilterU8;
     type Peer = FilterU8;
@@ -40,11 +40,10 @@ impl Mode for ReadWriteStatusFilter {
     type TriggerAdmin = FilterU8;
 }
 
-impl Filtered for event::Event {
-    type Filter = Receptor;
+impl Filtered<Receptor> for event::Event {
+    type Obstacle = &'static str;
 
-    fn passes(&self, filter: &Self::Filter) -> Result<(), Self::Filter> {
-        let mut obstacle = Self::Filter::default();
+    fn passes(&self, filter: &Receptor) -> Result<(), Self::Obstacle> {
         for (key, signal) in self.iter() {
             let signal: FilterU8 = signal.into();
             let receptor_keys = key.receptor_keys();
@@ -52,17 +51,11 @@ impl Filtered for event::Event {
                 .iter()
                 .filter_map(|(k, v)| receptor_keys.contains(k).then_some(v).map(FilterU8::from))
                 .fold(FilterU8::DENY, |acc, x| acc | x);
-            if let Err(obs) = signal.passes(&receptor_union) {
-                obstacle.insert(
-                    FuzzyNodeEntry::try_from((key.fuzzy(), NodeValue::from((key, obs)))).unwrap(),
-                );
+            if signal.passes(&receptor_union).is_ok() {
+                return Ok(());
             }
         }
-        if obstacle.is_empty() {
-            Ok(())
-        } else {
-            Err(obstacle)
-        }
+        Err("the event was blocked by the receptor")
     }
 }
 
@@ -198,7 +191,9 @@ mod transitional {
                     ExecutionTime::PreCommit => Ok(state::tr::BlockCommit.into()),
                     ExecutionTime::Schedule(schedule) => Ok(schedule.into()),
                 },
-                EventFilterBox::Pipeline(_) => Err("pipeline triggers are scheduled for removal"),
+                EventFilterBox::Pipeline(_) => {
+                    Err("pipeline events are never supposed to be used as triggering signals")
+                }
                 _ => Err("these event types are scheduled for removal"),
             }
         }

@@ -209,24 +209,24 @@ macro_rules! some {
     };
 }
 
-/// Intention to read or write access, which should be filtered in some way.
-pub trait NodeReadWrite: Filtered {
-    /// Abstract status of read or write access, which should also be filtered in some way.
-    type Status: Filtered;
+/// Represents read or write access.
+pub trait NodeReadWrite {
+    /// Abstract representation of read or write access.
+    type Status;
 
-    /// An abstraction of access.
+    /// Returns the access status.
     fn as_status(&self) -> Self::Status;
 }
 
-/// Determines whether it passes a certain filter.
-pub trait Filtered {
-    /// Tests whether the challenger can pass the filter.
-    type Filter;
+/// Determines whether an instance passes a given filter.
+pub trait Filtered<T> {
+    /// Represents the condition that prevents passing the filter.
+    type Obstacle;
 
     /// # Errors
     ///
-    /// Returns the difference from the expected filter required for `self` to pass.
-    fn passes(&self, filter: &Self::Filter) -> Result<(), Self::Filter>;
+    /// Returns an error if `self` does not pass the filter.
+    fn passes(&self, filter: &T) -> Result<(), Self::Obstacle>;
 }
 
 /// A filter represented as a byte.
@@ -245,10 +245,13 @@ pub trait Filtered {
 )]
 pub struct FilterU8(#[debug("{_0:#010b}")] u8);
 
-impl Filtered for FilterU8 {
-    type Filter = Self;
+impl Filtered<Self> for FilterU8 {
+    type Obstacle = Self;
 
-    fn passes(&self, filter: &Self::Filter) -> Result<(), Self::Filter> {
+    /// # Errors
+    ///
+    /// Returns the difference from the expected filter required for `self` to pass.
+    fn passes(&self, filter: &Self) -> Result<(), Self::Obstacle> {
         let obstacle = self.0 & !filter.0;
         if obstacle == 0 {
             Ok(())
@@ -384,8 +387,8 @@ macro_rules! impl_for_node_key_values {
             }
         }
 
-        impl From<&NodeValue<receptor::ReadWriteStatusFilter>> for FilterU8 {
-            fn from(value: &NodeValue<receptor::ReadWriteStatusFilter>) -> Self {
+        impl From<&NodeValue<receptor::ReadWriteStatusFilterAny>> for FilterU8 {
+            fn from(value: &NodeValue<receptor::ReadWriteStatusFilterAny>) -> Self {
                 match value {
                     $(
                     NodeValue::$variant(filter_u8) => *filter_u8,
@@ -394,7 +397,17 @@ macro_rules! impl_for_node_key_values {
             }
         }
 
-        impl From<(&NodeKey, FilterU8)> for NodeValue<receptor::ReadWriteStatusFilter> {
+        impl From<&NodeValue<permission::ReadWriteStatusFilterAll>> for FilterU8 {
+            fn from(value: &NodeValue<permission::ReadWriteStatusFilterAll>) -> Self {
+                match value {
+                    $(
+                    NodeValue::$variant(filter_u8) => *filter_u8,
+                    )+
+                }
+            }
+        }
+
+        impl From<(&NodeKey, FilterU8)> for NodeValue<permission::ReadWriteStatusFilterAll> {
             fn from(value: (&NodeKey, FilterU8)) -> Self {
                 match value.0 {
                     $(
@@ -420,7 +433,7 @@ macro_rules! impl_for_node_key_values {
             }
         }
 
-        impl BitOr for NodeValue<permission::ReadWriteStatusFilter> {
+        impl BitOr for NodeValue<permission::ReadWriteStatusFilterAll> {
             type Output = Result<Self, (Self, Self)>;
 
             fn bitor(self, rhs: Self) -> Self::Output {
