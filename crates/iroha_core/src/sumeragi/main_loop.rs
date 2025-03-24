@@ -367,10 +367,10 @@ impl Sumeragi {
 
         let block_hash = block.as_ref().hash();
         let block_height = block.as_ref().header().height();
-        Strategy::kura_store_block(&self.kura, block);
         #[cfg(feature = "telemetry")]
         self.telemetry
             .report_block_commit_blocking(block.as_ref().header());
+        Strategy::kura_store_block(&self.kura, block);
 
         // Commit new block making it's effect visible for the rest of application
         state_block.commit();
