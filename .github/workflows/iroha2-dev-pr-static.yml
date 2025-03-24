@@ -40,7 +40,7 @@ jobs:
       - name: Install dependencies using Poetry for pytests/${{ matrix.suite }}
         working-directory: pytests/${{ matrix.suite }}
         run: |
-          poetry lock --no-update
+          poetry lock
           poetry install --no-root
       - name: Check code formatting with Black in pytests/${{ matrix.suite }}
         working-directory: pytests/${{ matrix.suite }}
