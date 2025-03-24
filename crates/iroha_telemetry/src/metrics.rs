@@ -163,6 +163,7 @@ pub struct Metrics {
 }
 
 impl Default for Metrics {
+    #[allow(clippy::too_many_lines)]
     fn default() -> Self {
         let txs = IntCounterVec::new(Opts::new("txs", "Transactions committed"), &["type"])
             .expect("Infallible");
