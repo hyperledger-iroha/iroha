@@ -2,6 +2,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
+#[cfg(debug_assertions)]
 use iroha_crypto::HashOf;
 use iroha_data_model::{block::BlockHeader, peer::Peer};
 use iroha_futures::supervisor::{Child, OnShutdown};
