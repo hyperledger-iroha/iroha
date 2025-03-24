@@ -2,8 +2,7 @@
 //! Iroha you should add it here by creating a `handle_*` function,
 //! and add it to impl Torii.
 
-use axum::extract::ws::WebSocket;
-use axum::http::HeaderValue;
+use axum::{extract::ws::WebSocket, http::HeaderValue};
 #[cfg(feature = "telemetry")]
 use eyre::{eyre, WrapErr};
 use iroha_config::client_api::ConfigDTO;
