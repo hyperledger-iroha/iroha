@@ -8,14 +8,14 @@ struct MetricsReader {
 }
 
 impl MetricsReader {
-    fn new(raw: String) -> Self {
+    fn new(raw: &str) -> Self {
         let map = raw
             .lines()
-            .filter(|line| !line.starts_with("#"))
+            .filter(|line| !line.starts_with('#'))
             .map(|line| {
-                let mut iter = line.split(" ").into_iter();
+                let mut iter = line.split(' ');
                 let key = iter.next().expect("key").to_owned();
-                let value: f64 = iter.next().expect("value").parse().expect("number");
+                let value = iter.next().expect("value").parse().unwrap();
                 assert!(iter.next().is_none());
                 (key, value)
             })
@@ -83,7 +83,7 @@ async fn misc_measurements() -> eyre::Result<()> {
         .text()
         .await?;
     println!("{metrics}");
-    let metrics = MetricsReader::new(metrics);
+    let metrics = MetricsReader::new(&metrics);
 
     // genesis measurements
     assert_eq!(metrics.get("tx_amount_sum"), 57.0);
