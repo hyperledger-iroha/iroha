@@ -5,6 +5,7 @@ mod fslock_ports;
 
 use core::{fmt::Debug, time::Duration};
 use std::{
+    num::NonZero,
     ops::Deref,
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
@@ -25,7 +26,6 @@ use iroha_config::base::{
 };
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 use iroha_data_model::{
-    events::pipeline::BlockEventFilter,
     isi::InstructionBox,
     parameter::{SumeragiParameter, SumeragiParameters},
     ChainId,
@@ -42,32 +42,53 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Child,
     runtime::{self, Runtime},
-    sync::{broadcast, oneshot, watch, Barrier, Mutex},
+    sync::{broadcast, oneshot, watch, Mutex},
     task::{spawn_blocking, JoinSet},
     time::timeout,
 };
 use toml::Table;
 
-const INSTANT_PIPELINE_TIME: Duration = Duration::from_millis(10);
+const INSTANT_PIPELINE_TIME: Duration = Duration::from_millis(500);
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
 const PEER_START_TIMEOUT: Duration = Duration::from_secs(30);
 const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 
+const IROHAD_BIN_ENV: &str = "IROHAD_BIN";
+const IROHAD_DEFAULT: &str = "target/release/irohad";
+const IROHAD_DEFAULT_BUILD: &str = "cargo build --release --bin irohad";
+
 fn iroha_bin() -> impl AsRef<Path> {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
 
     PATH.get_or_init(|| {
-        if let Ok(path) = which::which("irohad") {
-            path
-        } else {
-            eprintln!(
-                "ERROR: could not locate `irohad` binary in $PATH\n  \
-                It is required to run `iroha_test_network`.\n  \
-                The easiest way to satisfy this is to run:\n\n    \
-                cargo install --path ./crates/irohad --locked"
-            );
-            panic!("could not proceed without `irohad`, see the message above");
+        let path = std::env::var(IROHAD_BIN_ENV)
+            .map(PathBuf::from)
+            .map(|path| {
+                if path.is_relative() {
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../")
+                        .join(path)
+                } else { path }
+            })
+            .unwrap_or_else(|_err| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../").join(IROHAD_DEFAULT)
+            });
+
+        match path.canonicalize() {
+            Ok(path) => path,
+            Err(err) => {
+                eprintln!(
+                    "FATAL ERROR: `irohad` path does not exist: {err}\n  \
+                        Path: {}\n  \
+                        It is necessary in order to run `iroha_test_network`. Solutions:\n  \
+                        1. Run `{IROHAD_DEFAULT_BUILD}`, and `{IROHAD_DEFAULT}` will be used by default\n  \
+                        2. Override path via {IROHAD_BIN_ENV} env (relative paths are resolved relative to the project root)",
+                    path.display()
+                );
+                panic!("could not proceed without `irohad`, see the message above");
+            }
         }
     })
 }
@@ -214,21 +235,27 @@ impl Network {
     /// # Errors
     /// If this doesn't happen within a timeout.
     pub async fn ensure_blocks(&self, height: u64) -> Result<&Self> {
+        self.ensure_blocks_with(|block_height| block_height.non_empty >= height)
+            .await
+            .wrap_err_with(|| eyre!("expected to reach height={height}"))?;
+
+        eprintln!("network reached height={height}");
+
+        Ok(self)
+    }
+
+    pub async fn ensure_blocks_with<F: Fn(BlockHeight) -> bool>(&self, f: F) -> Result<&Self> {
         timeout(
             self.sync_timeout(),
             self.peers
                 .iter()
                 .filter(|x| x.is_running())
-                .map(|x| x.once_block(height))
+                .map(|x| x.once_block_with(&f))
                 .collect::<FuturesUnordered<_>>()
                 .collect::<Vec<_>>(),
         )
         .await
-        .wrap_err_with(|| {
-            eyre!("Network hasn't reached the height of {height} block(s) within timeout")
-        })?;
-
-        eprintln!("network reached height={height}");
+        .wrap_err("Network overall height did not pass given predicate within timeout")?;
 
         Ok(self)
     }
@@ -465,8 +492,7 @@ pub struct NetworkPeer {
     runs_count: Arc<AtomicUsize>,
     is_running: Arc<AtomicBool>,
     events: broadcast::Sender<PeerLifecycleEvent>,
-    block_height: watch::Sender<Option<u64>>,
-    block_height_non_empty: watch::Sender<Option<u64>>,
+    block_height: watch::Sender<Option<BlockHeight>>,
     // dropping these the last
     port_p2p: Arc<AllocatedPort>,
     port_api: Arc<AllocatedPort>,
@@ -494,7 +520,6 @@ impl NetworkPeer {
 
         let (events, _rx) = broadcast::channel(32);
         let (block_height, _rx) = watch::channel(None);
-        let (block_height_non_empty, _rx) = watch::channel(None);
 
         let result = Self {
             id,
@@ -505,7 +530,6 @@ impl NetworkPeer {
             is_running: Default::default(),
             events,
             block_height,
-            block_height_non_empty,
             port_p2p: Arc::new(port_p2p),
             port_api: Arc::new(port_api),
         };
@@ -586,7 +610,8 @@ impl NetworkPeer {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .arg("--config")
-            .arg(config_path);
+            .arg(config_path)
+            .arg("--terminal-colors=true");
         cmd.current_dir(self.dir.path());
         let mut child = cmd.spawn().expect("spawn failure is abnormal");
         self.is_running.store(true, Ordering::Relaxed);
@@ -641,7 +666,6 @@ impl NetworkPeer {
             is_running: self.is_running.clone(),
             events: self.events.clone(),
             block_height: self.block_height.clone(),
-            block_height_non_empty: self.block_height_non_empty.clone(),
         };
         tasks.spawn(async move {
             if let Err(err) = peer_exit.monitor(shutdown_rx).await {
@@ -650,15 +674,12 @@ impl NetworkPeer {
             }
         });
 
-        let barrier = Arc::new(Barrier::new(2));
-
         {
             let log_prefix = log_prefix.clone();
+            let log_prefix_status = log_prefix.clone();
             let client = self.client();
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
-            let block_height_non_empty_tx = self.block_height_non_empty.clone();
-            let barrier = barrier.clone();
             tasks.spawn(async move {
                 let status_client = client.clone();
                 let status = backoff::future::retry(
@@ -669,57 +690,53 @@ impl NetworkPeer {
                         .build(),
                     move || {
                         let client = status_client.clone();
+                        let log_prefix_status = log_prefix_status.clone();
                         async move {
                             let status = spawn_blocking(move || client.get_status())
                                 .await
-                                .expect("should not panic")?;
-                            Ok(status)
+                                .expect("should not panic");
+                            if let Err(err) = &status {
+                                eprintln!("{log_prefix_status} get status failed: {err}")
+                            };
+                            Ok(status?)
                         }
                     },
                 )
                 .await
                 .expect("there is no max elapsed time");
+                let mut block_height = BlockHeight::from(status);
                 let _ = events_tx.send(PeerLifecycleEvent::ServerStarted);
-                let _ = block_height_tx.send_replace(Some(status.blocks));
-                let _ = block_height_non_empty_tx.send_replace(Some(status.blocks_non_empty));
+                let _ = block_height_tx.send_replace(Some(block_height));
                 eprintln!("{log_prefix} server started, {status:?}");
 
-                let mut events = client
-                    .listen_for_events_async([EventFilterBox::from(BlockEventFilter::default())])
+                let mut blocks = client
+                    .listen_for_blocks_async(NonZero::new(block_height.total + 1).unwrap())
                     .await
                     .unwrap_or_else(|err| {
-                        eprintln!("{log_prefix} failed to subscribe on events: {err}");
+                        eprintln!("{log_prefix} failed to subscribe to blocks: {err}");
                         panic!("cannot proceed")
                     });
 
-                // We need to connect to event stream before [start] function returns.
-                // Otherwise there can be such situation:
-                // * [start] function returns
-                // * test code submits some transactions and peer applied some blocks
-                // * we do not yet connect to event stream,
-                //   so `height` and `height_non_empty` will not be updated
-                // * test code uses `ensure_blocks` function which relies on `height_non_empty`
-                barrier.wait().await;
-
-                while let Some(Ok(event)) = events.next().await {
-                    if let EventBox::Pipeline(PipelineEventBox::Block(block)) = event {
-                        if *block.status() == BlockStatus::Applied {
-                            let height = block.header().height().get();
-                            let is_empty = block.header().transactions_hash().is_none();
-                            eprintln!("{log_prefix} BlockStatus::Applied height={height}, is_empty={is_empty}");
-                            let _ = events_tx.send(PeerLifecycleEvent::BlockApplied { height });
-                            block_height_tx.send_modify(|x| *x = Some(height));
-
-                            let status = client.get_status().expect("Can't get status");
-                            block_height_non_empty_tx.send_modify(|x| *x = Some(status.blocks_non_empty));
-                        }
+                while let Some(Ok(block)) = blocks.next().await {
+                    let height = block.header().height().get();
+                    let is_empty = block.header().transactions_hash().is_none();
+                    assert_eq!(height, block_height.total + 1);
+                    block_height.total += 1;
+                    if !is_empty {
+                        block_height.non_empty += 1;
                     }
+
+                    eprintln!("{log_prefix} {block_height:?}");
+                    block_height_tx.send_modify(|x| {
+                        if x.is_some() {
+                            *x = Some(block_height);
+                        }
+                        // if none - peer already terminated
+                    });
                 }
-                eprintln!("{log_prefix} events stream is closed");
+                eprintln!("{log_prefix} blocks stream is closed");
             });
         }
-
-        barrier.wait().await;
 
         *run_guard = Some(PeerRun {
             tasks,
@@ -782,13 +799,20 @@ impl NetworkPeer {
         }
     }
 
-    /// Wait until peer's count of non-empty blocks reaches N.
+    /// Wait until peer's non-empty block height reaches N.
     ///
     /// Resolves immediately if peer is already running _and_ has at least N non-empty blocks committed.
     pub async fn once_block(&self, n: u64) {
-        let mut recv = self.block_height_non_empty.subscribe();
+        self.once_block_with(|height| height.non_empty >= n).await
+    }
 
-        if recv.borrow().map(|x| x >= n).unwrap_or(false) {
+    /// Wait until peer's block height passes the given predicate.
+    ///
+    /// Resolves immediately if peer is running _and_ the predicate passes.
+    pub async fn once_block_with<F: Fn(BlockHeight) -> bool>(&self, f: F) {
+        let mut recv = self.block_height.subscribe();
+
+        if recv.borrow().map(&f).unwrap_or(false) {
             return;
         }
 
@@ -797,7 +821,7 @@ impl NetworkPeer {
                 .await
                 .expect("could fail only if the peer is dropped");
 
-            if recv.borrow_and_update().map(|x| x >= n).unwrap_or(false) {
+            if recv.borrow_and_update().map(&f).unwrap_or(false) {
                 break;
             }
         }
@@ -884,8 +908,7 @@ struct PeerExit {
     log_prefix: String,
     is_running: Arc<AtomicBool>,
     events: broadcast::Sender<PeerLifecycleEvent>,
-    block_height: watch::Sender<Option<u64>>,
-    block_height_non_empty: watch::Sender<Option<u64>>,
+    block_height: watch::Sender<Option<BlockHeight>>,
 }
 
 impl PeerExit {
@@ -899,7 +922,6 @@ impl PeerExit {
         let _ = self.events.send(PeerLifecycleEvent::Terminated { status });
         self.is_running.store(false, Ordering::Relaxed);
         self.block_height.send_modify(|x| *x = None);
-        self.block_height_non_empty.send_modify(|x| *x = None);
 
         Ok(())
     }
@@ -930,6 +952,24 @@ impl PeerExit {
         .await
         .wrap_err("didn't terminate after SIGKILL")?
         .wrap_err("wait failure")
+    }
+}
+
+/// Composite block height representation
+#[derive(Debug, Copy, Clone)]
+pub struct BlockHeight {
+    /// Total blocks
+    pub total: u64,
+    /// Non-empty blocks
+    pub non_empty: u64,
+}
+
+impl From<Status> for BlockHeight {
+    fn from(value: Status) -> Self {
+        Self {
+            total: value.blocks,
+            non_empty: value.blocks_non_empty,
+        }
     }
 }
 
