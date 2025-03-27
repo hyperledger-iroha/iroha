@@ -44,7 +44,7 @@ impl TryFrom<&Json> for FeesInstructionBox {
 #[derive(Debug, Deserialize, Serialize, IntoSchema)]
 pub struct SetDefaultFeesAmountsOptions(pub FeesAmountsOptions);
 
-#[derive(Debug, Deserialize, Serialize, IntoSchema)]
+#[derive(Debug, Deserialize, Serialize, IntoSchema, derive_more::Constructor)]
 pub struct SetAccountFeesAmountsOptions {
     pub account: AccountId,
     pub options: FeesAmountsOptions,

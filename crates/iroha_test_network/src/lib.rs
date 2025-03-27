@@ -82,17 +82,19 @@ fn tempdir_in() -> Option<impl AsRef<Path>> {
         .as_ref()
 }
 
-pub fn upgrade_executor_isi(executor: impl AsRef<str>) -> impl Iterator<Item=InstructionBox> {
-    let upgrade_executor = InstructionBox::Upgrade(Upgrade::new(Executor::new(iroha_test_samples::load_sample_wasm(executor))));
+pub fn upgrade_executor_isi(executor: impl AsRef<str>) -> impl Iterator<Item = InstructionBox> {
+    let upgrade_executor = InstructionBox::Upgrade(Upgrade::new(Executor::new(
+        iroha_test_samples::load_sample_wasm(executor),
+    )));
     let profile = iroha_test_samples::load_wasm_build_profile();
 
     let mut isi = vec![];
     if !profile.is_optimized() {
-        isi.push(InstructionBox::SetParameter(
-            SetParameter::new(Parameter::Executor(SmartContractParameter::Fuel(
+        isi.push(InstructionBox::SetParameter(SetParameter::new(
+            Parameter::Executor(SmartContractParameter::Fuel(
                 std::num::NonZeroU64::new(90_000_000_u64).expect("Fuel must be positive."),
-            ))),
-        ));
+            )),
+        )));
     }
 
     isi.push(upgrade_executor);

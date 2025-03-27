@@ -1,8 +1,8 @@
 //! Iroha executor with fees support.
-//! 
+//!
 //! Namings:
 //! Treasury - asset that is used to pay fees.
-//! 
+//!
 //! Only trasury account specified in the fees configuration can grant/revoke `CanModifyFeesOptions` permission.
 //! Accounts with `CanModifyFeesOptions` can change default and individuals's fee amounts.
 
@@ -44,7 +44,9 @@ struct Executor {
 
 /// Finds currently used default fees options
 fn find_default_fees_options(host: &Iroha) -> FeesOptions {
-    let parameters = host.query_single(FindParameters).dbg_expect("Failed to get parameters");
+    let parameters = host
+        .query_single(FindParameters)
+        .dbg_expect("Failed to get parameters");
 
     let fees_options: FeesOptions = parameters
         .custom()
@@ -193,12 +195,14 @@ fn visit_set_account_fees_amounts_options(
     if executor.context().curr_block.is_genesis()
         || CanModifyFeesOptions.is_owned_by(&executor.context().authority, executor.host())
     {
-        set_account_fees_amounts(executor.host(), isi.account, isi.options).dbg_expect("Failed to set account fees options")
+        set_account_fees_amounts(executor.host(), isi.account, isi.options)
+            .dbg_expect("Failed to set account fees options");
+        return;
     }
 
     deny!(
         executor,
-        "Account doesn't have permission to modify account fee amounts"
+        "Account doesn't have permission to modify account fee amounts",
     );
 }
 
@@ -209,7 +213,12 @@ fn visit_register_account(executor: &mut Executor, isi: &Register<Account>) {
     }
 
     let fees_options = find_default_fees_options(&executor.host());
-    set_account_fees_amounts(executor.host(), isi.object().id().clone(), fees_options.amounts).dbg_expect("Failed to set account fees options")
+    set_account_fees_amounts(
+        executor.host(),
+        isi.object().id().clone(),
+        fees_options.amounts,
+    )
+    .dbg_expect("Failed to set account fees options")
 }
 
 fn visit_grant_role_permission(executor: &mut Executor, isi: &Grant<Permission, Role>) {
@@ -283,8 +292,7 @@ fn visit_revoke_account_permission(executor: &mut Executor, isi: &Revoke<Permiss
 /// Check if account can control who has permissions to change accounts' fees
 fn can_update_fees_permissions(executor: &mut Executor, account: AccountId) -> bool {
     let fees_options = find_default_fees_options(&executor.host());
-    executor.context().curr_block.is_genesis()
-        || account.eq(fees_options.asset.account())
+    executor.context().curr_block.is_genesis() || account.eq(fees_options.asset.account())
 }
 
 /// Update all accounts' metadata to include default fee options.
@@ -302,12 +310,13 @@ fn apply_config_for_all(host: &Iroha, options: FeesAmountsOptions) {
         });
 
     for account in accounts {
-        set_account_fees_amounts(host, account, options.clone()).dbg_expect("Failed to set account fees options");
+        set_account_fees_amounts(host, account, options.clone())
+            .dbg_expect("Failed to set account fees options");
     }
 }
 
 #[iroha_executor::migrate]
-fn migrate(host: Iroha, context: Context) {
+fn migrate(host: Iroha, _context: Context) {
     let options = FeesOptions::default();
 
     validate_fees_options(&host, &options).dbg_unwrap();
