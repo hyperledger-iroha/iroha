@@ -6,14 +6,13 @@ use iroha_executor_data_model::parameter::Parameter as _;
 use iroha_test_network::*;
 mod upgrade;
 use iroha_test_samples::{gen_account_in, BOB_ID, BOB_KEYPAIR};
-use upgrade::upgrade_executor;
 
 #[test]
 fn fees_options_in_updated_executor() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+    .with_executor("fees_executor")
+    .start_blocking()?;
     let test_client = network.client();
-    // Also sets enough fuel based on the profile
-    upgrade_executor(&test_client, "fees_executor")?;
 
     let parameters = test_client.query_single(FindParameters)?;
     let fees_options: FeesOptions = parameters
@@ -30,10 +29,11 @@ fn fees_options_in_updated_executor() -> Result<()> {
 
 #[test]
 fn fees_options_cannot_change() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+    .with_executor("fees_executor")
+    .start_blocking()?;
 
     let test_client = network.client();
-    upgrade_executor(&test_client, "fees_executor")?;
 
     let err = test_client
         .submit_blocking(SetParameter::new(Parameter::Custom(
@@ -55,10 +55,11 @@ fn fees_options_cannot_change() -> Result<()> {
 
 #[test]
 fn technical_domain_cannot_unregister() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+    .with_executor("fees_executor")
+    .start_blocking()?;
 
     let test_client = network.client();
-    upgrade_executor(&test_client, "fees_executor")?;
 
     let parameters = test_client.query_single(FindParameters)?;
     let fees_options: FeesOptions = parameters
@@ -88,10 +89,11 @@ fn technical_domain_cannot_unregister() -> Result<()> {
 
 #[test]
 fn technical_asset_definition_cannot_unregister() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+    .with_executor("fees_executor")
+    .start_blocking()?;
 
     let test_client = network.client();
-    upgrade_executor(&test_client, "fees_executor")?;
 
     let parameters = test_client.query_single(FindParameters)?;
     let fees_options: FeesOptions = parameters
@@ -121,8 +123,9 @@ fn technical_asset_definition_cannot_unregister() -> Result<()> {
 
 #[test]
 fn fees_cannot_update_by_others() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
-    upgrade_executor(&network.client(), "fees_executor")?;
+    let (network, _rt) = NetworkBuilder::new()
+    .with_executor("fees_executor")
+    .start_blocking()?;
 
     // Bob doesn't have `CanModifyFeesOptions` permission
     let test_client = network
@@ -158,9 +161,11 @@ fn fees_cannot_update_by_others() -> Result<()> {
 
 #[test]
 fn fees_can_update_by_owner() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+    .with_executor("fees_executor")
+    .start_blocking()?;
+
     let test_client = network.client();
-    upgrade_executor(&test_client, "fees_executor")?;
 
     let parameters = test_client.query_single(FindParameters)?;
     let fees_options: FeesOptions = parameters
@@ -191,8 +196,9 @@ fn fees_can_update_by_owner() -> Result<()> {
 
 #[test]
 fn fees_options_are_default_for_new_accounts() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
-    upgrade_executor(&network.client(), "fees_executor")?;
+    let (network, _rt) = NetworkBuilder::new()
+    .with_executor("fees_executor")
+    .start_blocking()?;
 
     let test_client = network.client();
 
