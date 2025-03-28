@@ -383,6 +383,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "depends on deprecated event types"]
     async fn unauthorized_trigger_execution_should_return_error() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;

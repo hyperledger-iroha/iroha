@@ -46,8 +46,10 @@ mod model {
         /// Time event.
         Time(time::TimeEvent),
         /// Trigger execution event.
+        // TODO: Remove once registrable executables (#5147) are complete.
         ExecuteTrigger(execute_trigger::ExecuteTriggerEvent),
         /// Trigger completion event.
+        // TODO: Merge into pipeline events as internal transaction executions (#4968).
         TriggerCompleted(trigger_completed::TriggerCompletedEvent),
     }
 
