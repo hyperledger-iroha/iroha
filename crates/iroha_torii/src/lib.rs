@@ -20,7 +20,7 @@ use iroha_config::{
     parameters::actual::Torii as Config,
 };
 #[cfg(feature = "telemetry")]
-use iroha_core::metrics::MetricsReporter;
+use iroha_core::telemetry::Telemetry;
 use iroha_core::{
     kiso::{Error as KisoError, KisoHandle},
     kura::Kura,
@@ -62,7 +62,7 @@ pub struct Torii {
     address: WithOrigin<SocketAddr>,
     state: Arc<State>,
     #[cfg(feature = "telemetry")]
-    metrics_reporter: MetricsReporter,
+    telemetry: Telemetry,
 }
 
 impl Torii {
@@ -77,7 +77,7 @@ impl Torii {
         query_service: LiveQueryStoreHandle,
         kura: Arc<Kura>,
         state: Arc<State>,
-        #[cfg(feature = "telemetry")] metrics_reporter: MetricsReporter,
+        #[cfg(feature = "telemetry")] telemetry: Telemetry,
     ) -> Self {
         Self {
             chain_id: Arc::new(chain_id),
@@ -88,7 +88,7 @@ impl Torii {
             kura,
             state,
             #[cfg(feature = "telemetry")]
-            metrics_reporter,
+            telemetry,
             address: config.address,
             transaction_max_content_len: config.max_content_len,
         }
@@ -119,37 +119,37 @@ impl Torii {
             .route(
                 &format!("{}/*tail", uri::STATUS),
                 get({
-                    let metrics_reporter = self.metrics_reporter.clone();
-                    move |accept: Option<utils::extractors::ExtractAccept>, axum::extract::Path(tail): axum::extract::Path<String>| {
-                        core::future::ready(routing::handle_status(
-                            &metrics_reporter,
+                    let tel = self.telemetry.clone();
+                    move |accept: Option<utils::extractors::ExtractAccept>, axum::extract::Path(tail): axum::extract::Path<String>| async move {
+                        routing::handle_status(
+                            &tel,
                             accept.map(|extract| extract.0),
                             Some(&tail),
-                        ))
+                        ).await
                     }
                 }),
             )
             .route(
                 uri::PEERS,
                 get({
-                    let metrics_reporter = self.metrics_reporter.clone();
-                    move || core::future::ready(routing::handle_peers(&metrics_reporter))
+                    let tel = self.telemetry.clone();
+                    move || async move { routing::handle_peers(&tel).await }
                 }),
             )
             .route(
                 uri::STATUS,
                 get({
-                    let metrics_reporter = self.metrics_reporter.clone();
-                    move |accept: Option<utils::extractors::ExtractAccept>| {
-                        core::future::ready(routing::handle_status(&metrics_reporter, accept.map(|extract| extract.0), None))
+                    let tel = self.telemetry.clone();
+                    move |accept: Option<utils::extractors::ExtractAccept>| async move {
+                        routing::handle_status(&tel, accept.map(|extract| extract.0), None).await
                     }
                 }),
             )
             .route(
                 uri::METRICS,
                 get({
-                    let metrics_reporter = self.metrics_reporter.clone();
-                    move || core::future::ready(routing::handle_metrics(&metrics_reporter))
+                    let tel = self.telemetry.clone();
+                    move || async move { routing::handle_metrics(&tel).await }
                 }),
             );
 
