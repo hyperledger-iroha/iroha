@@ -78,7 +78,7 @@ mod model {
         pub block_time_ms: u64,
         /// Time (in milliseconds) a peer will wait for a block to be committed.
         ///
-        /// If this period expires the block will request a view change
+        /// If this period expires, peer will request a view change
         #[serde(default = "defaults::sumeragi::commit_time_ms")]
         pub commit_time_ms: u64,
         /// Maximal allowed random deviation from the nominal rate

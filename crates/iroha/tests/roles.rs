@@ -265,7 +265,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
 }
 
 #[test]
-#[should_panic(expected = "a peer exited unexpectedly")]
+#[should_panic(expected = "peer exited unexpectedly")]
 fn grant_unexisting_role_in_genesis_fail() {
     // Grant Alice UNEXISTING role
     let alice_id = ALICE_ID.clone();
