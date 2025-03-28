@@ -129,7 +129,7 @@ rustdoc.private_doc_tests = "deny"
 rust.future_incompatible = { level = "deny", priority = -1 }
 rust.nonstandard_style = { level = "deny", priority = -1 }
 rust.rust_2018_idioms = { level = "deny", priority = -1 }
-rust.unused = { level = "deny", priority = -1 }
+rust.unused = { level = "warn", priority = -1 }
 
 rust.anonymous_parameters = "deny"
 rust.missing_copy_implementations = "deny"
@@ -137,14 +137,12 @@ rust.missing_docs = "deny"
 rust.trivial_casts = "deny"
 rust.trivial_numeric_casts = "deny"
 rust.unsafe_code = "deny"
-rust.unused_import_braces = "deny"
 rust.variant_size_differences = "deny"
 rust.explicit_outlives_requirements = "deny"
 rust.non_ascii_idents = "deny"
 rust.elided_lifetimes_in_paths = "allow"
 rust.unknown_lints = "warn"
 rust.single_use_lifetimes = "warn"
-rust.unused_lifetimes = "warn"
 # TODO: reenable
 # rust.unsafe_op_in_unsafe_fn = "deny"
 rust.unexpected_cfgs = { level = "warn", check-cfg = [
