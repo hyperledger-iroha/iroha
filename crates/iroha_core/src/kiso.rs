@@ -1,17 +1,16 @@
 //! Actor responsible for configuration state and its dynamic updates.
 //!
-//! Currently the API exposed by [`KisoHandle`] works only with [`ConfigDTO`], because
+//! Currently the API exposed by [`KisoHandle`] works only with [`ConfigGetDTO`], because
 //! no any part of Iroha is interested in the whole state. However, the API could be extended
 //! in future.
 //!
 //! Updates mechanism is implemented via subscriptions to [`tokio::sync::watch`] channels. For now,
-//! only `logger.level` field is dynamic, which might be tracked with [`KisoHandle::subscribe_on_log_level()`].
+//! only `logger.level` field is dynamic, which might be tracked with [`KisoHandle::subscribe_on_logger_updates()`].
 
 use eyre::Result;
 use iroha_config::{
-    client_api::{ConfigDTO, Logger as LoggerDTO},
-    logger::Directives,
-    parameters::actual::Root as Config,
+    client_api::{ConfigGetDTO, ConfigUpdateDTO},
+    parameters::actual::{Logger as LoggerConfig, Root as Config},
 };
 use iroha_futures::supervisor::{Child, OnShutdown};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -30,11 +29,11 @@ impl KisoHandle {
     /// Spawn a new actor
     pub fn start(state: Config) -> (Self, Child) {
         let (actor_sender, actor_receiver) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
-        let (log_level_update, _) = watch::channel(state.logger.level.clone());
+        let (logger_update, _) = watch::channel(state.logger.clone());
         let mut actor = Actor {
             handle: actor_receiver,
             state,
-            log_level_update,
+            logger_update,
         };
         (
             Self {
@@ -47,11 +46,11 @@ impl KisoHandle {
         )
     }
 
-    /// Fetch the [`ConfigDTO`] from the actor's state.
+    /// Fetch the [`ConfigGetDTO`] from the actor's state.
     ///
     /// # Errors
     /// If communication with actor fails.
-    pub async fn get_dto(&self) -> Result<ConfigDTO, Error> {
+    pub async fn get_dto(&self) -> Result<ConfigGetDTO, Error> {
         let (tx, rx) = oneshot::channel();
         let msg = Message::GetDTO { respond_to: tx };
         let _ = self.actor.send(msg).await;
@@ -66,7 +65,7 @@ impl KisoHandle {
     ///
     /// # Errors
     /// If communication with actor fails.
-    pub async fn update_with_dto(&self, dto: ConfigDTO) -> Result<(), Error> {
+    pub async fn update_with_dto(&self, dto: ConfigUpdateDTO) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
         let msg = Message::UpdateWithDTO {
             dto,
@@ -80,7 +79,9 @@ impl KisoHandle {
     ///
     /// # Errors
     /// If communication with actor fails.
-    pub async fn subscribe_on_log_level(&self) -> Result<watch::Receiver<Directives>, Error> {
+    pub async fn subscribe_on_logger_updates(
+        &self,
+    ) -> Result<watch::Receiver<LoggerConfig>, Error> {
         let (tx, rx) = oneshot::channel();
         let msg = Message::SubscribeOnLogLevel { respond_to: tx };
         let _ = self.actor.send(msg).await;
@@ -91,14 +92,14 @@ impl KisoHandle {
 
 enum Message {
     GetDTO {
-        respond_to: oneshot::Sender<ConfigDTO>,
+        respond_to: oneshot::Sender<ConfigGetDTO>,
     },
     UpdateWithDTO {
-        dto: ConfigDTO,
+        dto: ConfigUpdateDTO,
         respond_to: oneshot::Sender<Result<(), Error>>,
     },
     SubscribeOnLogLevel {
-        respond_to: oneshot::Sender<watch::Receiver<Directives>>,
+        respond_to: oneshot::Sender<watch::Receiver<LoggerConfig>>,
     },
 }
 
@@ -116,7 +117,7 @@ struct Actor {
     // future dynamic parameter, it will require its own `subscribe_on_<field>` function in [`KisoHandle`],
     // new channel here, and new [`Message`] variant. If boilerplate expands, a more general solution will be
     // required. However, as of now a single manually written implementation seems optimal.
-    log_level_update: watch::Sender<Directives>,
+    logger_update: watch::Sender<LoggerConfig>,
 }
 
 impl Actor {
@@ -129,23 +130,22 @@ impl Actor {
     fn handle_message(&mut self, msg: Message) {
         match msg {
             Message::GetDTO { respond_to } => {
-                let dto = ConfigDTO::from(&self.state);
+                let dto = ConfigGetDTO::from(&self.state);
                 let _ = respond_to.send(dto);
             }
             Message::UpdateWithDTO {
-                dto:
-                    ConfigDTO {
-                        logger: LoggerDTO { level: new_level },
-                    },
+                dto: ConfigUpdateDTO { logger: update },
                 respond_to,
             } => {
-                let _ = self.log_level_update.send(new_level.clone());
-                self.state.logger.level = new_level;
+                self.state.logger.level = update.level;
+                self.state.logger.filter = update.filter;
+
+                let _ = self.logger_update.send(self.state.logger.clone());
 
                 let _ = respond_to.send(Ok(()));
             }
             Message::SubscribeOnLogLevel { respond_to } => {
-                let _ = respond_to.send(self.log_level_update.subscribe());
+                let _ = respond_to.send(self.logger_update.subscribe());
             }
         }
     }
@@ -157,7 +157,7 @@ mod tests {
 
     use iroha_config::{
         base::{read::ConfigReader, toml::TomlSource},
-        client_api::{ConfigDTO, Logger as LoggerDTO},
+        client_api::Logger as LoggerDTO,
         parameters::{actual::Root, user::Root as UserConfig},
     };
     use iroha_logger::Level;
@@ -187,7 +187,7 @@ mod tests {
         let (kiso, _) = KisoHandle::start(config);
 
         let mut recv = kiso
-            .subscribe_on_log_level()
+            .subscribe_on_logger_updates()
             .await
             .expect("Subscription should be fine");
 
@@ -195,9 +195,10 @@ mod tests {
             .await
             .expect_err("Watcher should not be active initially");
 
-        kiso.update_with_dto(ConfigDTO {
+        kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
                 level: NEW_LOG_LEVEL.into(),
+                filter: Some("trace,trace,trace".parse().unwrap()),
             },
         })
         .await
@@ -209,6 +210,7 @@ mod tests {
             .expect("Watcher should not be closed");
 
         let value = recv.borrow_and_update().clone();
-        assert_eq!(value, NEW_LOG_LEVEL.into());
+        assert_eq!(value.level, NEW_LOG_LEVEL.into());
+        assert_eq!(format!("{}", value.filter.unwrap()), "trace,trace,trace");
     }
 }

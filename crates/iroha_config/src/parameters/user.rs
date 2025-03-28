@@ -26,7 +26,7 @@ use iroha_config_base::{
     ReadConfig, WithOrigin,
 };
 use iroha_crypto::{PrivateKey, PublicKey};
-use iroha_data_model::{peer::Peer, ChainId};
+use iroha_data_model::{peer::Peer, ChainId, Level};
 use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
 use serde::Deserialize;
 use url::Url;
@@ -366,10 +366,39 @@ pub struct Logger {
     //       because `format` is set in lowercase, and `LOG_LEVEL=INFO` + `LOG_FORMAT=pretty`
     //       looks inconsistent
     #[config(env = "LOG_LEVEL", default)]
-    pub level: Directives,
+    pub level: Level,
+    /// Refined directives
+    #[config(env = "LOG_FILTER")]
+    pub filter: Option<Directives>,
     /// Output format
     #[config(env = "LOG_FORMAT", default)]
     pub format: LoggerFormat,
+}
+
+impl Logger {
+    /// Combine `level` and `filter` into a single directives list.
+    ///
+    /// ```
+    /// use iroha_config::{logger::Level, parameters::user::Logger};
+    ///
+    /// let value = Logger {
+    ///     level: Level::DEBUG,
+    ///     filter: Some("iroha_core=trace".parse().unwrap()),
+    ///     format: <_>::default(),
+    /// };
+    ///
+    /// assert_eq!(
+    ///     format!("{}", value.resolve_filter()),
+    ///     "debug,iroha_core=trace"
+    /// );
+    /// ```
+    pub fn resolve_filter(&self) -> Directives {
+        let mut dirs: Directives = self.level.into();
+        if let Some(more) = &self.filter {
+            dirs.extend(more.clone());
+        }
+        dirs
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -469,5 +498,27 @@ impl Torii {
         };
 
         (torii, query)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_logger_filters() {
+        let mut cfg = Logger {
+            level: Level::INFO,
+            filter: None,
+            format: <_>::default(),
+        };
+        assert_eq!(format!("{}", cfg.resolve_filter()), "info");
+
+        cfg.filter = Some("iroha_core=debug".parse().unwrap());
+        assert_eq!(format!("{}", cfg.resolve_filter()), "info,iroha_core=debug");
+
+        cfg.level = Level::WARN;
+        cfg.filter = Some("info".parse().unwrap());
+        assert_eq!(format!("{}", cfg.resolve_filter()), "warn,info");
     }
 }
