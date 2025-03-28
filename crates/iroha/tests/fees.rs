@@ -272,7 +272,10 @@ fn change_account_fees_options() -> Result<()> {
     let mut new_amounts = old_default_amounts.clone();
     new_amounts.fixed = new_amounts.fixed.checked_add(100_u32.into()).unwrap();
 
-    test_client.submit_blocking(SetAccountFeesAmountsOptions::new(user_a.clone(), new_amounts.clone()))?;
+    test_client.submit_blocking(SetAccountFeesAmountsOptions::new(
+        user_a.clone(),
+        new_amounts.clone(),
+    ))?;
 
     let user_b_fees = get_account_fees_options(&test_client, user_b.clone());
     let user_a_fees = get_account_fees_options(&test_client, user_a.clone());
