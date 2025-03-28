@@ -171,7 +171,8 @@ fn minimal_config_snapshot() {
                 capacity_per_user: 128,
             },
             logger: Logger {
-                level: info,
+                level: INFO,
+                filter: None,
                 format: Full,
             },
             queue: Queue {
