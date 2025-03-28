@@ -35,9 +35,16 @@ pub enum Format {
     Json,
 }
 
-/// List of directives
+/// List of filtering directives
 #[derive(Clone, DeserializeFromStr, SerializeDisplay, PartialEq, Eq)]
 pub struct Directives(Vec<Directive>);
+
+impl Directives {
+    /// Join two sets of directives
+    pub fn extend(&mut self, Directives(vec): Directives) {
+        self.0.extend(vec);
+    }
+}
 
 impl FromStr for Directives {
     type Err = tracing_subscriber::filter::ParseError;
@@ -99,12 +106,42 @@ fn into_tracing_level(level: Level) -> tracing::Level {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::logger::Format;
+    use iroha_data_model::Level;
+
+    use crate::logger::{Directives, Format};
 
     #[test]
     fn serialize_pretty_format_in_lowercase() {
         let value = Format::Pretty;
         let actual = serde_json::to_string(&value).unwrap();
         assert_eq!("\"pretty\"", actual);
+    }
+
+    #[test]
+    fn parse_display_directives() {
+        for sample in [
+            "iroha_core=info",
+            "info",
+            "trace",
+            "iroha_p2p=trace,axum=warn",
+        ] {
+            let value: Directives = sample.parse().unwrap();
+            assert_eq!(format!("{value}"), sample)
+        }
+    }
+
+    #[test]
+    fn directives_from_level() {
+        for level in [
+            Level::DEBUG,
+            Level::DEBUG,
+            Level::TRACE,
+            Level::INFO,
+            Level::WARN,
+            Level::ERROR,
+        ] {
+            let value: Directives = level.into();
+            assert_eq!(format!("{value}"), format!("{level}").to_lowercase())
+        }
     }
 }

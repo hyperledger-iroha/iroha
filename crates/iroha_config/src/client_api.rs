@@ -2,61 +2,127 @@
 //!
 //! Intended usage:
 //!
-//! - Create [`ConfigDTO`] from [`crate::iroha::Configuration`] and serialize it for the client
-//! - Deserialize [`ConfigDTO`] from the client and use [`ConfigDTO::apply_update()`] to update the configuration
+//! - Create [`ConfigGetDTO`] from [`crate::iroha::Configuration`] and serialize it for the client
+//! - Deserialize [`ConfigGetDTO`] from the client and use [`ConfigGetDTO::apply_update()`] to update the configuration
 // TODO: Currently logic here is not generalised and handles only `logger.level` parameter. In future, when
 //       other parts of configuration are refactored and there is a solid foundation e.g. as a general
 //       configuration-related crate, this part should be re-written in a clean way.
 //       Track configuration refactoring here: https://github.com/hyperledger-iroha/iroha/issues/2585
 
+use std::num::NonZero;
+
+use iroha_crypto::PublicKey;
+use iroha_data_model::Level;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    logger::Directives,
-    parameters::actual::{Logger as BaseLogger, Root as BaseConfig},
-};
+use crate::{logger::Directives, parameters::actual as base};
 
-/// Subset of [`super::iroha`] configuration.
+/// Subset of Iroha configuration to return to the clients.
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ConfigDTO {
-    #[allow(missing_docs)]
+#[allow(missing_docs)]
+pub struct ConfigGetDTO {
+    pub public_key: PublicKey,
     pub logger: Logger,
+    pub network: Network,
+    pub queue: Queue,
 }
 
-impl From<&'_ BaseConfig> for ConfigDTO {
-    fn from(value: &'_ BaseConfig) -> Self {
+impl From<&'_ base::Root> for ConfigGetDTO {
+    fn from(value: &'_ base::Root) -> Self {
         Self {
+            public_key: value.common.key_pair.public_key().clone(),
             logger: (&value.logger).into(),
+            network: value.into(),
+            queue: (&value.queue).into(),
         }
     }
 }
 
-/// Subset of [`super::logger`] configuration.
+/// Subset of Iroha configuration that clients could update.
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Logger {
-    #[allow(missing_docs)]
-    pub level: Directives,
+#[allow(missing_docs)]
+pub struct ConfigUpdateDTO {
+    pub logger: Logger,
 }
 
-impl From<&'_ BaseLogger> for Logger {
-    fn from(value: &'_ BaseLogger) -> Self {
+/// Subset of [`super::logger`] configuration.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(missing_docs)]
+pub struct Logger {
+    pub level: Level,
+    pub filter: Option<Directives>,
+}
+
+impl From<&'_ base::Logger> for Logger {
+    fn from(value: &'_ base::Logger) -> Self {
         Self {
-            level: value.level.clone(),
+            level: value.level,
+            filter: value.filter.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[allow(missing_docs)]
+pub struct Queue {
+    pub capacity: NonZero<usize>,
+}
+
+impl From<&'_ base::Queue> for Queue {
+    fn from(value: &'_ base::Queue) -> Self {
+        Self {
+            capacity: value.capacity,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[allow(missing_docs)]
+pub struct Network {
+    pub block_gossip_size: NonZero<u32>,
+    pub block_gossip_period_ms: u32,
+    pub transaction_gossip_size: NonZero<u32>,
+    pub transaction_gossip_period_ms: u32,
+}
+
+impl From<&'_ base::Root> for Network {
+    fn from(value: &'_ base::Root) -> Self {
+        Self {
+            block_gossip_size: value.block_sync.gossip_size,
+            block_gossip_period_ms: value.block_sync.gossip_period.as_millis() as u32,
+            transaction_gossip_size: value.transaction_gossiper.gossip_size,
+            transaction_gossip_period_ms: value.transaction_gossiper.gossip_period.as_millis()
+                as u32,
         }
     }
 }
 
 #[cfg(test)]
 mod test {
+    use iroha_crypto::KeyPair;
     use iroha_data_model::Level;
+    use nonzero_ext::nonzero;
 
     use super::*;
 
     #[test]
     fn snapshot_serialized_form() {
-        let value = ConfigDTO {
+        let value = ConfigGetDTO {
+            public_key: KeyPair::from_seed(vec![1, 2, 3], <_>::default())
+                .public_key()
+                .clone(),
             logger: Logger {
                 level: Level::TRACE.into(),
+                filter: None,
+            },
+            network: Network {
+                block_gossip_size: nonzero!(10u32),
+                block_gossip_period_ms: 5000,
+                transaction_gossip_size: nonzero!(512u32),
+                transaction_gossip_period_ms: 1000,
+            },
+            queue: Queue {
+                capacity: nonzero!(656565usize),
             },
         };
 
@@ -66,11 +132,22 @@ mod test {
         //       https://docs.iroha.tech/reference/torii-endpoints.html
         //       -> Configuration endpoints
         let expected = expect_test::expect![[r#"
-                {
-                  "logger": {
-                    "level": "trace"
-                  }
-                }"#]];
+            {
+              "public_key": "ed0120E159467BC273205BB250D41686FCA6CB85F163D5354B06CB3BA8FD42290EDF2A",
+              "logger": {
+                "level": "TRACE",
+                "filter": null
+              },
+              "network": {
+                "block_gossip_size": 10,
+                "block_gossip_period_ms": 5000,
+                "transaction_gossip_size": 512,
+                "transaction_gossip_period_ms": 1000
+              },
+              "queue": {
+                "capacity": 656565
+              }
+            }"#]];
         expected.assert_eq(&actual);
     }
 }

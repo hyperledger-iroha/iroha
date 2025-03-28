@@ -86,7 +86,7 @@ pub fn init_global(config: InitConfig) -> Result<LoggerHandle> {
 
 /// Returns once lazily initialised global logger for testing purposes.
 ///
-/// Log level may be modified via `TEST_LOG_LEVEL` environment variable
+/// Log level may be modified via `TEST_LOG_LEVEL` and `TEST_LOG_FILTER` environment variables
 ///
 /// # Panics
 /// If [`init_global`] or [`disable_global`] were called first.
@@ -105,6 +105,10 @@ pub fn test_logger() -> LoggerHandle {
                     .ok()
                     .and_then(|raw| raw.parse().ok())
                     .unwrap_or(Level::DEBUG)
+                    .into(),
+                filter: std::env::var("TEST_LOG_FILTER")
+                    .ok()
+                    .and_then(|raw| raw.parse().ok())
                     .into(),
                 format: Format::Pretty,
             };
@@ -131,9 +135,9 @@ fn step2<L>(config: InitConfig, layer: L) -> Result<LoggerHandle>
 where
     L: tracing_subscriber::Layer<Registry> + Debug + Send + Sync + 'static,
 {
-    // NOTE: unfortunately constructing EnvFilter from vector of Directive is not part of public api
+    // NOTE: unfortunately, constructing EnvFilter from vector of Directive is not part of public api
     let level_filter =
-        tracing_subscriber::filter::EnvFilter::try_new(config.base.level.to_string())
+        tracing_subscriber::filter::EnvFilter::try_new(config.base.resolve_filter().to_string())
             .expect("INTERNAL BUG: Directives not valid");
     let (level_filter, level_filter_handle) = reload::Layer::new(level_filter);
     let subscriber = Registry::default()
