@@ -156,7 +156,7 @@ impl Torii {
         let router = router
             .route(uri::STATUS, get(routing::telemetry_not_implemented))
             .route(
-                format!("{}/*rest", uri::STATUS),
+                &format!("{}/*rest", uri::STATUS),
                 get(routing::telemetry_not_implemented),
             )
             .route(uri::METRICS, get(routing::telemetry_not_implemented))
