@@ -16,7 +16,7 @@ use http_default::{AsyncWebSocketStream, WebSocketStream};
 pub use iroha_config::client_api::ConfigGetDTO;
 use iroha_config::client_api::ConfigUpdateDTO;
 use iroha_logger::prelude::*;
-use iroha_telemetry::metrics::Status;
+pub use iroha_telemetry::metrics::{Status, Uptime};
 use iroha_torii_const::uri as torii_uri;
 use iroha_version::prelude::*;
 use parity_scale_codec::DecodeAll;

@@ -7,6 +7,7 @@ use iroha_data_model::{
     query::{QueryResponse, SignedQuery},
 };
 use iroha_schema::prelude::*;
+use iroha_telemetry::metrics::Status;
 
 macro_rules! types {
     ($($t:ty),+ $(,)?) => {
@@ -30,7 +31,7 @@ macro_rules! types {
 
 /// Builds the schema for the current state of Iroha.
 ///
-/// You should only include the top-level types, because other types
+/// You should only include the top-level types because other types
 /// shall be included recursively.
 pub fn build_schemas() -> MetaMap {
     use iroha_data_model::prelude::*;
@@ -109,6 +110,9 @@ pub fn build_schemas() -> MetaMap {
         // Genesis file - used by SDKs to generate the genesis block
         // TODO: IMO it could/should be removed from the schema
         iroha_genesis::RawGenesisTransaction,
+
+        // It is exposed via Torii
+        Status
     }
 }
 
@@ -503,6 +507,7 @@ types!(
     SocketAddrV4,
     SocketAddrV6,
     Sorting,
+    Status,
     String,
     StringPredicateAtom,
     SumeragiParameter,
@@ -557,6 +562,7 @@ types!(
     Unregister<Trigger>,
     UnregisterBox,
     Upgrade,
+    Uptime,
     ValidationFail,
     Vec<Account>,
     Vec<AccountId>,
@@ -693,6 +699,7 @@ pub mod complete_data_model {
         json::Json,
     };
     pub use iroha_schema::Compact;
+    pub use iroha_telemetry::metrics::{Status, Uptime};
 }
 
 #[cfg(test)]
@@ -724,6 +731,7 @@ mod tests {
         map_all_schema_types!(insert_into_test_map);
 
         insert_into_test_map!(Compact<u128>);
+        insert_into_test_map!(Compact<u64>);
         insert_into_test_map!(Compact<u32>);
 
         insert_into_test_map!(iroha_executor_data_model::permission::peer::CanManagePeers);

@@ -19,3 +19,4 @@ iroha_primitives = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_crypto = { workspace = true }
 iroha_schema = { workspace = true }
+iroha_telemetry = { workspace = true }

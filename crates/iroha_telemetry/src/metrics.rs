@@ -2,6 +2,7 @@
 
 use std::{ops::Deref, time::Duration};
 
+use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
 use parity_scale_codec::{Compact, Decode, Encode};
 use prometheus::{
     core::{AtomicU64, GenericGauge, GenericGaugeVec},
@@ -45,8 +46,34 @@ impl Decode for Uptime {
     }
 }
 
+impl TypeId for Uptime {
+    fn id() -> Ident {
+        "Uptime".to_owned()
+    }
+}
+
+impl IntoSchema for Uptime {
+    fn type_name() -> Ident {
+        Self::id()
+    }
+
+    fn update_schema_map(metamap: &mut MetaMap) {
+        // dirty, but works
+        if !metamap.contains_key::<iroha_schema::Compact<u64>>() {
+            <iroha_schema::Compact<u64> as iroha_schema::IntoSchema>::update_schema_map(metamap);
+        }
+
+        metamap.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta {
+            types: vec![
+                core::any::TypeId::of::<iroha_schema::Compact<u64>>(),
+                core::any::TypeId::of::<u32>(),
+            ],
+        }));
+    }
+}
+
 /// Response body for GET status request
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Encode, Decode)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Encode, Decode, IntoSchema)]
 pub struct Status {
     /// Number of currently connected peers excluding the reporting peer
     #[codec(compact)]
