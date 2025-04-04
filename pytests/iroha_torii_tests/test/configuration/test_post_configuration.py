@@ -7,7 +7,7 @@ from jsonschema.exceptions import ValidationError
 
 from ...common.settings import BASE_URL
 
-valid_log_levels = ["trace", "debug", "info", "warn", "error"]
+valid_log_levels = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]
 
 
 @pytest.fixture(scope="function", autouse=True)
