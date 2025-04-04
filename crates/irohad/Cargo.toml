@@ -30,6 +30,8 @@ dev-telemetry = ["telemetry", "iroha_telemetry/dev-telemetry", "iroha_logger/tok
 # Support schema generation from the `schema` endpoint in the local binary.
 # Useful for debugging issues with decoding in SDKs.
 schema-endpoint = ["iroha_torii/schema"]
+# Enable profiling endpoint
+profiling-endpoint = ["iroha_torii/profiling"]
 
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }

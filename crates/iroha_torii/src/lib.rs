@@ -152,9 +152,20 @@ impl Torii {
                     move || core::future::ready(routing::handle_metrics(&metrics_reporter))
                 }),
             );
+        #[cfg(not(feature = "telemetry"))]
+        let router = router
+            .route(uri::STATUS, get(routing::telemetry_not_implemented))
+            .route(
+                &format!("{}/*rest", uri::STATUS),
+                get(routing::telemetry_not_implemented),
+            )
+            .route(uri::METRICS, get(routing::telemetry_not_implemented))
+            .route(uri::PEERS, get(routing::telemetry_not_implemented));
 
         #[cfg(feature = "schema")]
         let router = router.route(uri::SCHEMA, get(routing::handle_schema));
+        #[cfg(not(feature = "schema"))]
+        let router = router.route(uri::SCHEMA, get(routing::schema_not_implemented));
 
         #[cfg(feature = "profiling")]
         let router = router.route(
@@ -167,6 +178,8 @@ impl Torii {
                 }
             }),
         );
+        #[cfg(not(feature = "profiling"))]
+        let router = router.route(uri::PROFILE, get(routing::profiling_not_implemented));
 
         let router = router
             .route(
