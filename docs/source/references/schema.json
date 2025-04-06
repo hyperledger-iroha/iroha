@@ -1235,6 +1235,9 @@
   "Compact<u32>": {
     "Int": "Compact"
   },
+  "Compact<u64>": {
+    "Int": "Compact"
+  },
   "CompoundPredicate<Account>": {
     "Enum": [
       {
@@ -5262,6 +5265,42 @@
       }
     ]
   },
+  "Status": {
+    "Struct": [
+      {
+        "name": "peers",
+        "type": "Compact<u64>"
+      },
+      {
+        "name": "blocks",
+        "type": "Compact<u64>"
+      },
+      {
+        "name": "blocks_non_empty",
+        "type": "Compact<u64>"
+      },
+      {
+        "name": "txs_approved",
+        "type": "Compact<u64>"
+      },
+      {
+        "name": "txs_rejected",
+        "type": "Compact<u64>"
+      },
+      {
+        "name": "uptime",
+        "type": "Uptime"
+      },
+      {
+        "name": "view_changes",
+        "type": "Compact<u32>"
+      },
+      {
+        "name": "queue_size",
+        "type": "Compact<u64>"
+      }
+    ]
+  },
   "String": "String",
   "StringPredicateAtom": {
     "Enum": [
@@ -5979,6 +6018,12 @@
         "name": "executor",
         "type": "Executor"
       }
+    ]
+  },
+  "Uptime": {
+    "Tuple": [
+      "Compact<u64>",
+      "u32"
     ]
   },
   "ValidationFail": {
