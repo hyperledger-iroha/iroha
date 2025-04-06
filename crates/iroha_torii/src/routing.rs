@@ -257,6 +257,33 @@ pub async fn handle_version(state: Arc<State>) -> String {
         .to_string()
 }
 
+#[cfg(not(feature = "telemetry"))]
+pub async fn telemetry_not_implemented() -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "This endpoint is not available on this version of \"irohad\", \
+          as it was compiled without the \"telemetry\" feature flag",
+    )
+}
+
+#[cfg(not(feature = "schema"))]
+pub async fn schema_not_implemented() -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "This endpoint is not available on this version of \"irohad\", \
+          as it was compiled without the \"schema-endpoint\" feature flag",
+    )
+}
+
+#[cfg(not(feature = "profiling"))]
+pub async fn profiling_not_implemented() -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "This endpoint is not available on this version of \"irohad\", \
+          as it was compiled without the \"profiling-endpoint\" feature flag",
+    )
+}
+
 #[cfg(feature = "telemetry")]
 fn update_metrics_gracefully(metrics_reporter: &MetricsReporter) {
     if let Err(error) = metrics_reporter.update_metrics() {
