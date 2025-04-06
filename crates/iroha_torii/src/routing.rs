@@ -5,7 +5,7 @@
 use axum::extract::ws::WebSocket;
 #[cfg(feature = "telemetry")]
 use eyre::{eyre, WrapErr};
-use iroha_config::client_api::ConfigDTO;
+use iroha_config::client_api::{ConfigGetDTO, ConfigUpdateDTO};
 use iroha_core::{query::store::LiveQueryStoreHandle, smartcontracts::query::ValidQueryRequest};
 use iroha_data_model::{
     self,
@@ -83,7 +83,7 @@ pub async fn handle_schema() -> axum::Json<iroha_schema::MetaMap> {
 }
 
 #[iroha_futures::telemetry_future]
-pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<axum::Json<ConfigDTO>> {
+pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<axum::Json<ConfigGetDTO>> {
     let dto = kiso.get_dto().await?;
     Ok(axum::Json(dto))
 }
@@ -91,7 +91,7 @@ pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<axum::Json<Con
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_configuration(
     kiso: KisoHandle,
-    value: ConfigDTO,
+    value: ConfigUpdateDTO,
 ) -> Result<impl IntoResponse> {
     kiso.update_with_dto(value).await?;
     Ok((StatusCode::ACCEPTED, ()))

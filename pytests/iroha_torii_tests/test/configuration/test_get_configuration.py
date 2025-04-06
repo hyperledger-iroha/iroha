@@ -10,7 +10,7 @@ from jsonschema.exceptions import ValidationError
 
 from ...common.settings import BASE_URL
 
-valid_log_levels = ["trace", "debug", "info", "warn", "error"]
+valid_log_levels = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -111,9 +111,9 @@ def test_configuration_response_content_length(
         response = GIVEN_get_request_to_configuration_endpoint_is_sent
 
     with allure.step(
-        "THEN the content length should be within the expected range 27-28 bytes"
+        "THEN the content length should be within the expected range 250-300 bytes"
     ):
         content_length = len(response.content)
         assert (
-            27 <= content_length <= 28
+            250 <= content_length <= 300
         ), f"Response content length is {content_length} bytes"
