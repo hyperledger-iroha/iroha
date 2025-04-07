@@ -434,7 +434,7 @@ async fn start_telemetry(
 /// about each other, achieving loose coupling of code and system.
 async fn config_updates_relay(kiso: KisoHandle, logger: LoggerHandle) {
     let mut log_level_update = kiso
-        .subscribe_on_log_level()
+        .subscribe_on_logger_updates()
         .await
         // FIXME: don't like neither the message nor inability to throw Result to the outside
         .expect("Cannot proceed without working subscriptions");
@@ -446,7 +446,7 @@ async fn config_updates_relay(kiso: KisoHandle, logger: LoggerHandle) {
         tokio::select! {
             Ok(()) = log_level_update.changed() => {
                 let value = log_level_update.borrow_and_update().clone();
-                if let Err(error) = logger.reload_level(value).await {
+                if let Err(error) = logger.reload_level(value.resolve_filter()).await {
                     iroha_logger::error!("Failed to reload log level: {error}");
                 };
             }

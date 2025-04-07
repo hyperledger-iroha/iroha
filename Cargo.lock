@@ -3648,6 +3648,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_primitives",
  "iroha_schema",
+ "iroha_telemetry",
 ]
 
 [[package]]
@@ -3722,6 +3723,7 @@ dependencies = [
  "iroha_config",
  "iroha_futures",
  "iroha_logger",
+ "iroha_schema",
  "iroha_telemetry_derive",
  "parity-scale-codec",
  "prometheus",
