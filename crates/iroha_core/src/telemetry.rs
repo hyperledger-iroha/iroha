@@ -4,7 +4,7 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 #[cfg(debug_assertions)]
 use iroha_crypto::HashOf;
-use iroha_data_model::{block::BlockHeader, peer::Peer};
+use iroha_data_model::block::BlockHeader;
 use iroha_futures::supervisor::{Child, OnShutdown};
 use iroha_p2p::OnlinePeers;
 use iroha_primitives::time::TimeSource;
@@ -50,7 +50,6 @@ pub struct Telemetry {
     actor: mpsc::Sender<Message>,
     last_reported_block: Arc<RwLock<Option<BlockCommitReport>>>,
     metrics: Arc<Metrics>,
-    online_peers: watch::Receiver<OnlinePeers>,
     time_source: TimeSource,
 }
 
@@ -80,12 +79,6 @@ impl Telemetry {
         // thus it shouldn't be a problem.
         let mut lock = self.last_reported_block.blocking_write();
         *lock = Some(report);
-    }
-
-    /// Get current online peers in the network.
-    pub fn online_peers(&self) -> Vec<Peer> {
-        let peers = self.online_peers.borrow();
-        peers.iter().cloned().collect()
     }
 
     /// Some metrics are updated lazily, on demand.
@@ -297,7 +290,6 @@ pub fn start(
             actor,
             last_reported_block: last_reported_block.clone(),
             metrics: metrics.clone(),
-            online_peers: online_peers.clone(),
             time_source: time_source.clone(),
         },
         Child::new(
@@ -326,7 +318,11 @@ mod tests {
 
     use iroha_crypto::{KeyPair, PrivateKey};
     use iroha_data_model::{
-        account::AccountId, isi::Log, peer::PeerId, prelude::TransactionBuilder, ChainId, Level,
+        account::AccountId,
+        isi::Log,
+        peer::{Peer, PeerId},
+        prelude::TransactionBuilder,
+        ChainId, Level,
     };
     use iroha_primitives::{
         addr::{socket_addr, SocketAddr},
@@ -493,9 +489,6 @@ mod tests {
         let metrics = sut.telemetry.metrics().await;
 
         assert_eq!(metrics.connected_peers.get(), 2);
-
-        let actual: HashSet<_> = sut.telemetry.online_peers().into_iter().collect();
-        assert_eq!(actual, peers);
     }
 
     #[tokio::test]

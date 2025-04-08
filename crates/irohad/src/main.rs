@@ -327,17 +327,6 @@ impl Iroha {
         .start(supervisor.shutdown_signal());
         supervisor.monitor(child);
 
-        supervisor.monitor(task::spawn(
-            NetworkRelay {
-                sumeragi,
-                block_sync,
-                tx_gossiper,
-                peers_gossiper,
-                network,
-            }
-            .run(),
-        ));
-
         if let Some(snapshot_maker) =
             SnapshotMaker::from_config(&config.snapshot, Arc::clone(&state))
         {
@@ -356,6 +345,7 @@ impl Iroha {
             live_query_store,
             kura.clone(),
             state.clone(),
+            iroha_torii::OnlinePeersProvider::new(network.online_peers_receiver()),
             #[cfg(feature = "telemetry")]
             telemetry,
         )
@@ -370,6 +360,17 @@ impl Iroha {
                 };
             }),
             OnShutdown::Wait(Duration::from_secs(5)),
+        ));
+
+        supervisor.monitor(task::spawn(
+            NetworkRelay {
+                sumeragi,
+                block_sync,
+                tx_gossiper,
+                peers_gossiper,
+                network,
+            }
+            .run(),
         ));
 
         supervisor.monitor(tokio::task::spawn(config_updates_relay(kiso, logger)));
