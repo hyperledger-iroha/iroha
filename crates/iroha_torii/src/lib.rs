@@ -5,7 +5,7 @@
 //! - `telemetry`: enables Status, Metrics, and API Version endpoints
 //! - `schema`: enables Data Model Schema endpoint
 
-use std::{fmt::Debug, sync::Arc, time::Duration};
+use std::{collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
 
 use axum::{
     extract::{DefaultBodyLimit, WebSocketUpgrade},
@@ -30,11 +30,11 @@ use iroha_core::{
     state::State,
     EventsSender,
 };
-use iroha_data_model::ChainId;
+use iroha_data_model::{peer::Peer, ChainId};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
 use iroha_torii_const::uri;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::watch};
 use tower_http::{
     timeout::TimeoutLayer,
     trace::{DefaultMakeSpan, TraceLayer},
@@ -63,6 +63,7 @@ pub struct Torii {
     state: Arc<State>,
     #[cfg(feature = "telemetry")]
     telemetry: Telemetry,
+    online_peers: OnlinePeersProvider,
 }
 
 impl Torii {
@@ -77,6 +78,7 @@ impl Torii {
         query_service: LiveQueryStoreHandle,
         kura: Arc<Kura>,
         state: Arc<State>,
+        online_peers: OnlinePeersProvider,
         #[cfg(feature = "telemetry")] telemetry: Telemetry,
     ) -> Self {
         Self {
@@ -87,6 +89,7 @@ impl Torii {
             query_service,
             kura,
             state,
+            online_peers,
             #[cfg(feature = "telemetry")]
             telemetry,
             address: config.address,
@@ -112,6 +115,13 @@ impl Torii {
                     let state = self.state.clone();
                     move || routing::handle_version(state)
                 }),
+            )
+            .route(
+                uri::PEERS,
+                get({
+                    let peers = self.online_peers.clone();
+                    move || async move { routing::handle_peers(&peers).await }
+                }),
             );
 
         #[cfg(feature = "telemetry")]
@@ -127,13 +137,6 @@ impl Torii {
                             Some(&tail),
                         ).await
                     }
-                }),
-            )
-            .route(
-                uri::PEERS,
-                get({
-                    let tel = self.telemetry.clone();
-                    move || async move { routing::handle_peers(&tel).await }
                 }),
             )
             .route(
@@ -159,8 +162,7 @@ impl Torii {
                 &format!("{}/*rest", uri::STATUS),
                 get(routing::telemetry_not_implemented),
             )
-            .route(uri::METRICS, get(routing::telemetry_not_implemented))
-            .route(uri::PEERS, get(routing::telemetry_not_implemented));
+            .route(uri::METRICS, get(routing::telemetry_not_implemented));
 
         #[cfg(feature = "schema")]
         let router = router.route(uri::SCHEMA, get(routing::handle_schema));
@@ -377,6 +379,23 @@ impl Error {
 
 /// Result type
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Provider of online peers
+#[derive(Clone)]
+pub struct OnlinePeersProvider {
+    rx: watch::Receiver<HashSet<Peer>>,
+}
+
+impl OnlinePeersProvider {
+    /// Constructor
+    pub fn new(rx: watch::Receiver<HashSet<Peer>>) -> Self {
+        Self { rx }
+    }
+
+    pub(crate) fn get(&self) -> HashSet<Peer> {
+        self.rx.borrow().clone()
+    }
+}
 
 #[cfg(test)]
 mod tests {

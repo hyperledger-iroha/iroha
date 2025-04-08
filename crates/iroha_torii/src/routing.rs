@@ -295,10 +295,9 @@ pub async fn handle_metrics(telemetry: &Telemetry) -> Result<String> {
         .map_err(Error::Prometheus)
 }
 
-#[cfg(feature = "telemetry")]
-pub async fn handle_peers(telemetry: &Telemetry) -> Response {
-    let peers = telemetry.online_peers();
-    axum::Json(peers).into_response()
+pub async fn handle_peers(online_peers: &OnlinePeersProvider) -> Response {
+    let data = online_peers.get();
+    axum::Json(data).into_response()
 }
 
 #[cfg(feature = "telemetry")]
