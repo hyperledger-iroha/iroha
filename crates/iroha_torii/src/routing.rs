@@ -83,18 +83,24 @@ pub async fn handle_schema() -> axum::Json<iroha_schema::MetaMap> {
 }
 
 #[iroha_futures::telemetry_future]
-pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<axum::Json<ConfigGetDTO>> {
+pub async fn handle_get_configuration(kiso: &KisoHandle) -> Result<axum::Json<ConfigGetDTO>> {
     let dto = kiso.get_dto().await?;
     Ok(axum::Json(dto))
 }
 
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_configuration(
-    kiso: KisoHandle,
+    kiso: &KisoHandle,
     value: ConfigUpdateDTO,
+    policy: ConfigUpdatePolicy,
 ) -> Result<impl IntoResponse> {
-    kiso.update_with_dto(value).await?;
-    Ok((StatusCode::ACCEPTED, ()))
+    match policy {
+        ConfigUpdatePolicy::Forbid => Err(Error::ConfigurationUpdateForbidden),
+        ConfigUpdatePolicy::Allow => {
+            kiso.update_with_dto(value).await?;
+            Ok((StatusCode::ACCEPTED, ()))
+        }
+    }
 }
 
 pub mod block {
@@ -420,6 +426,81 @@ pub mod profiling {
                 // profile already running return error
                 Err(Error::Pprof(eyre::eyre!("profiling already running")))
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_config::{
+        base::{read::ConfigReader, toml::TomlSource},
+        parameters::{actual::Root as Config, user::Root as UserConfig},
+    };
+    use serde_json::json;
+    use tokio::time::{sleep, timeout};
+
+    use super::*;
+
+    fn test_config() -> Config {
+        // if it fails, it is probably a bug
+        ConfigReader::new()
+            .with_toml_source(
+                TomlSource::from_file("../iroha_config/iroha_test_config.toml").unwrap(),
+            )
+            .read_and_complete::<UserConfig>()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn update_config() {
+        let (kiso, _child) = KisoHandle::start(test_config());
+        let mut logger_updates = kiso.subscribe_on_logger_updates().await.unwrap();
+
+        let mut payload: ConfigUpdateDTO = serde_json::from_value(json!({
+            "logger": {
+                "level": "TRACE",
+                "filter": "tower_http=debug"
+            }
+        }))
+        .unwrap();
+        let resp = timeout(
+            Duration::from_millis(10),
+            handle_post_configuration(&kiso, payload.clone(), ConfigUpdatePolicy::Allow),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        timeout(Duration::from_millis(50), logger_updates.changed())
+            .await
+            .expect("should finish in time")
+            .expect("channel is open");
+        {
+            let updated = logger_updates.borrow();
+            assert_eq!(updated.level, payload.logger.level);
+            assert_eq!(updated.filter, payload.logger.filter);
+        }
+
+        payload.logger.level = "ERROR".parse().unwrap();
+        let Err(err) = timeout(
+            Duration::from_millis(10),
+            handle_post_configuration(&kiso, payload.clone(), ConfigUpdatePolicy::Forbid),
+        )
+        .await
+        .unwrap() else {
+            panic!("must error")
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        sleep(Duration::from_millis(100)).await;
+        {
+            let value = logger_updates.borrow();
+            assert_ne!(value.level, payload.logger.level);
         }
     }
 }
