@@ -142,6 +142,7 @@ fn minimal_config_snapshot() {
                 max_content_len: Bytes(
                     16777216,
                 ),
+                allow_config_update: false,
             },
             kura: Kura {
                 init_mode: Strict,

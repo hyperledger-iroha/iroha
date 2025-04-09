@@ -104,12 +104,10 @@ pub fn test_logger() -> LoggerHandle {
                 level: std::env::var("TEST_LOG_LEVEL")
                     .ok()
                     .and_then(|raw| raw.parse().ok())
-                    .unwrap_or(Level::DEBUG)
-                    .into(),
+                    .unwrap_or(Level::DEBUG),
                 filter: std::env::var("TEST_LOG_FILTER")
                     .ok()
-                    .and_then(|raw| raw.parse().ok())
-                    .into(),
+                    .and_then(|raw| raw.parse().ok()),
                 format: Format::Pretty,
             };
 

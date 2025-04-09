@@ -331,6 +331,11 @@ impl Iroha {
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
 
+        let config_update_policy = if config.torii.allow_config_update {
+            iroha_torii::ConfigUpdatePolicy::Allow
+        } else {
+            iroha_torii::ConfigUpdatePolicy::Forbid
+        };
         let torii_run = Torii::new(
             config.common.chain.clone(),
             kiso.clone(),
@@ -340,6 +345,7 @@ impl Iroha {
             live_query_store,
             kura.clone(),
             state.clone(),
+            config_update_policy,
             #[cfg(feature = "telemetry")]
             metrics_reporter,
         )

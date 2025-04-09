@@ -149,6 +149,7 @@ struct PeerEnv<'a> {
     #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     #[serde_as(as = "serde_with::json::JsonString")]
     trusted_peers: std::collections::BTreeSet<&'a iroha_data_model::peer::Peer>,
+    allow_config_update: bool,
 }
 
 impl<'a> PeerEnv<'a> {
@@ -177,6 +178,7 @@ impl<'a> PeerEnv<'a> {
                 .iter()
                 .filter(|&peer| peer.id().public_key() != public_key)
                 .collect(),
+            allow_config_update: true,
         }
     }
 }
@@ -605,22 +607,31 @@ impl<'a> DockerCompose<'a> {
 
 #[cfg(test)]
 mod tests {
+    use iroha_config::base::env::MockEnv;
+    use serde_json::Value;
+
     use super::*;
     use crate::{BASE_PORT_API, BASE_PORT_P2P};
 
-    impl<'a> From<PeerEnv<'a>> for iroha_config::base::env::MockEnv {
+    fn mock_env_from_json(mut value: Value) -> MockEnv {
+        let allow_value = value.get_mut("ALLOW_CONFIG_UPDATE").unwrap();
+        let allow_bool = allow_value.as_bool().unwrap();
+        *allow_value = Value::String(allow_bool.to_string());
+        let map = serde_json::from_value(value).expect("should be deserializable into a map");
+        MockEnv::with_map(map)
+    }
+
+    impl<'a> From<PeerEnv<'a>> for MockEnv {
         fn from(env: PeerEnv<'a>) -> Self {
-            let json = serde_json::to_string(&env).expect("should be serializable");
-            let map = serde_json::from_str(&json).expect("should be deserializable into a map");
-            Self::with_map(map)
+            let value = serde_json::to_value(&env).expect("should be serializable");
+            mock_env_from_json(value)
         }
     }
 
-    impl<'a> From<GenesisEnv<'a>> for iroha_config::base::env::MockEnv {
+    impl<'a> From<GenesisEnv<'a>> for MockEnv {
         fn from(env: GenesisEnv<'a>) -> Self {
-            let json = serde_json::to_string(&env).expect("should be serializable");
-            let map = serde_json::from_str(&json).expect("should be deserializable into a map");
-            Self::with_map(map)
+            let value = serde_json::to_value(&env).expect("should be serializable");
+            mock_env_from_json(value)
         }
     }
 

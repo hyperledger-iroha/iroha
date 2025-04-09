@@ -482,6 +482,9 @@ pub struct Torii {
     /// The upper limit of the number of live queries for a single user.
     #[config(default = "defaults::torii::QUERY_STORE_CAPACITY_PER_USER")]
     pub query_store_capacity_per_user: NonZeroUsize,
+    /// Allow runtime configuration update via POST /configuration
+    #[config(env = "ALLOW_CONFIG_UPDATE", default)]
+    pub allow_config_update: bool,
 }
 
 impl Torii {
@@ -489,6 +492,7 @@ impl Torii {
         let torii = actual::Torii {
             address: self.address,
             max_content_len: self.max_content_len,
+            allow_config_update: self.allow_config_update,
         };
 
         let query = actual::LiveQueryStore {

@@ -61,6 +61,7 @@ pub struct Torii {
     transaction_max_content_len: Bytes<u64>,
     address: WithOrigin<SocketAddr>,
     state: Arc<State>,
+    config_update_policy: ConfigUpdatePolicy,
     #[cfg(feature = "telemetry")]
     metrics_reporter: MetricsReporter,
 }
@@ -77,6 +78,7 @@ impl Torii {
         query_service: LiveQueryStoreHandle,
         kura: Arc<Kura>,
         state: Arc<State>,
+        config_update_policy: ConfigUpdatePolicy,
         #[cfg(feature = "telemetry")] metrics_reporter: MetricsReporter,
     ) -> Self {
         Self {
@@ -87,6 +89,7 @@ impl Torii {
             query_service,
             kura,
             state,
+            config_update_policy,
             #[cfg(feature = "telemetry")]
             metrics_reporter,
             address: config.address,
@@ -103,7 +106,7 @@ impl Torii {
                 uri::CONFIGURATION,
                 get({
                     let kiso = self.kiso.clone();
-                    move || routing::handle_get_configuration(kiso)
+                    move || async move { routing::handle_get_configuration(&kiso).await }
                 }),
             )
             .route(
@@ -213,7 +216,10 @@ impl Torii {
                 uri::CONFIGURATION,
                 post({
                     let kiso = self.kiso.clone();
-                    move |Json(config): Json<_>| routing::handle_post_configuration(kiso, config)
+                    let policy = self.config_update_policy;
+                    move |Json(config): Json<_>| async move {
+                        routing::handle_post_configuration(&kiso, config, policy).await
+                    }
                 }),
             );
 
@@ -304,6 +310,8 @@ pub enum Error {
     StatusFailure(#[source] eyre::Report),
     /// Failure caused by configuration subsystem
     ConfigurationFailure(#[from] KisoError),
+    /// Configuration updates are not allowed (see: https://docs.iroha.tech/reference/peer-config/params.html#param-torii-allow-config-update)
+    ConfigurationUpdateForbidden,
     /// Failed to find status segment by provided path
     StatusSegmentNotFound(#[source] eyre::Report),
     /// Failed to start Torii
@@ -338,6 +346,7 @@ impl Error {
             #[cfg(feature = "profiling")]
             Pprof(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ConfigurationFailure(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ConfigurationUpdateForbidden => StatusCode::FORBIDDEN,
             StartServer | FailedExit => unreachable!("these never occur during request handling"),
         }
     }
@@ -377,6 +386,15 @@ impl Error {
 
 /// Result type
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Specify policy for the `POST /configuration` endpoint
+#[derive(Copy, Clone)]
+pub enum ConfigUpdatePolicy {
+    /// Allow access
+    Allow,
+    /// Forbid access
+    Forbid,
+}
 
 #[cfg(test)]
 mod tests {
