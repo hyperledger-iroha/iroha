@@ -186,6 +186,7 @@ pub struct TransactionGossiper {
 pub struct Torii {
     pub address: WithOrigin<SocketAddr>,
     pub max_content_len: Bytes<u64>,
+    pub allow_config_update: bool,
 }
 
 /// Complete configuration needed to start regular telemetry.
