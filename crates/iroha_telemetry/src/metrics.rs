@@ -86,7 +86,7 @@ pub struct Status {
     pub blocks_non_empty: u64,
     /// Time (since block creation) it took for the latest block to be committed by _this_ peer
     #[codec(compact)]
-    pub last_block_commit_time_ms: u64,
+    pub commit_time_ms: u64,
     /// Number of approved transactions
     #[codec(compact)]
     pub txs_approved: u64,
@@ -110,7 +110,7 @@ impl<T: Deref<Target = Metrics>> From<&T> for Status {
             peers: val.connected_peers.get(),
             blocks: val.block_height.get(),
             blocks_non_empty: val.block_height_non_empty.get(),
-            last_block_commit_time_ms: val.last_block_commit_time_ms.get(),
+            commit_time_ms: val.last_commit_time_ms.get(),
             txs_approved: val.txs.with_label_values(&["accepted"]).get(),
             txs_rejected: val.txs.with_label_values(&["rejected"]).get(),
             uptime: Uptime(Duration::from_millis(val.uptime_since_genesis_ms.get())),
@@ -134,9 +134,9 @@ pub struct Metrics {
     /// Number of committed non-empty blocks
     pub block_height_non_empty: IntCounter,
     /// Time (since block creation) it took for the latest block to reach _this_ peer
-    pub last_block_commit_time_ms: GenericGauge<AtomicU64>,
+    pub last_commit_time_ms: GenericGauge<AtomicU64>,
     /// Block commit time trends
-    pub block_commit_time_ms: Histogram,
+    pub commit_time_ms: Histogram,
     /// Number of currently connected peers excluding the reporting peer
     pub connected_peers: GenericGauge<AtomicU64>,
     /// Uptime of the network, starting from commit of the genesis block
@@ -209,17 +209,14 @@ impl Default for Metrics {
             "Current count of non-empty blocks",
         )
         .expect("Infallible");
-        let last_block_commit_time_ms = GenericGauge::new(
-            "last_block_commit_time_ms",
+        let last_commit_time_ms = GenericGauge::new(
+            "last_commit_time_ms",
             "Time (since block creation) it took for the latest block to be committed by this peer",
         )
         .expect("Infallible");
-        let block_commit_time_ms = Histogram::with_opts(
-            HistogramOpts::new(
-                "block_commit_time_ms",
-                "Average block commit time on this peer",
-            )
-            .buckets(prometheus::exponential_buckets(100.0, 4.0, 5).expect("inputs are valid")),
+        let commit_time_ms = Histogram::with_opts(
+            HistogramOpts::new("commit_time_ms", "Average block commit time on this peer")
+                .buckets(prometheus::exponential_buckets(100.0, 4.0, 5).expect("inputs are valid")),
         )
         .expect("Infallible");
         let connected_peers = GenericGauge::new(
@@ -264,8 +261,8 @@ impl Default for Metrics {
             tx_amounts,
             block_height,
             block_height_non_empty,
-            last_block_commit_time_ms,
-            block_commit_time_ms,
+            last_commit_time_ms,
+            commit_time_ms,
             connected_peers,
             uptime_since_genesis_ms,
             domains,
@@ -281,8 +278,8 @@ impl Default for Metrics {
             txs,
             block_height,
             block_height_non_empty,
-            last_block_commit_time_ms,
-            block_commit_time_ms,
+            last_commit_time_ms,
+            commit_time_ms,
             connected_peers,
             uptime_since_genesis_ms,
             domains,
@@ -337,7 +334,7 @@ mod test {
             peers: 4,
             blocks: 5,
             blocks_non_empty: 3,
-            last_block_commit_time_ms: 130,
+            commit_time_ms: 130,
             txs_approved: 31,
             txs_rejected: 3,
             uptime: Uptime(Duration::new(5, 937_000_000)),
@@ -358,7 +355,7 @@ mod test {
               "peers": 4,
               "blocks": 5,
               "blocks_non_empty": 3,
-              "last_block_commit_time_ms": 130,
+              "commit_time_ms": 130,
               "txs_approved": 31,
               "txs_rejected": 3,
               "uptime": {

@@ -3073,6 +3073,7 @@ dependencies = [
  "displaydoc",
  "error-stack",
  "executor_custom_data_model",
+ "expect-test",
  "eyre",
  "futures-util",
  "hex",
