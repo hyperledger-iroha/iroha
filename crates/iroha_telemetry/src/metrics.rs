@@ -374,7 +374,6 @@ mod test {
         let bytes = value.encode();
 
         let actual = hex::encode_upper(bytes);
-        // TODO: update docs
         // CAUTION: if this is outdated, make sure to update the documentation:
         // https://docs.iroha.tech/reference/torii-endpoints.html#status
         let expected = expect_test::expect!["10140C09027C0C14407CD9370848"];
