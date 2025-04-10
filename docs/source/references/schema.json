@@ -5280,6 +5280,10 @@
         "type": "Compact<u64>"
       },
       {
+        "name": "commit_time_ms",
+        "type": "Compact<u64>"
+      },
+      {
         "name": "txs_approved",
         "type": "Compact<u64>"
       },

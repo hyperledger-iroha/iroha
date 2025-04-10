@@ -69,7 +69,7 @@ impl Telemetry {
         let report = BlockCommitReport::new(block_header, &self.time_source);
         #[allow(clippy::cast_precision_loss)]
         self.metrics
-            .block_commit_time_ms
+            .commit_time_ms
             .observe(report.commit_time.as_millis() as f64);
 
         // This function is called from within the main loop.
@@ -118,6 +118,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn sync(&mut self) {
         self.metrics
             .connected_peers
@@ -166,17 +167,20 @@ impl Actor {
                 }
 
                 if block_index == last_reported_block.height {
+                    // for some reason, using `debug_assert!(..)` doesn't work here
+                    // in release build Rust complains about the absent `.hash` field (feature gated via
+                    // `debug_assertions`), which doesn't make sense - the whole statement should be feature-gated too
                     #[cfg(debug_assertions)]
-                    if block.hash() != last_reported_block.hash {
-                        panic!(
-                            "BUG: Reported block hash is different (reported {}, actual {})",
-                            last_reported_block.hash,
-                            block.hash()
-                        );
-                    }
+                    assert_eq!(
+                        block.hash(),
+                        last_reported_block.hash,
+                        "BUG: Reported block hash is different (reported {}, actual {})",
+                        last_reported_block.hash,
+                        block.hash()
+                    );
                     #[allow(clippy::cast_precision_loss)]
                     self.metrics
-                        .last_block_commit_time_ms
+                        .last_commit_time_ms
                         .set(last_reported_block.commit_time.as_millis() as u64);
                 }
             }
@@ -470,7 +474,7 @@ mod tests {
         let metrics = sut.telemetry.metrics().await;
 
         assert_eq!(metrics.block_height.get(), 0);
-        assert_eq!(metrics.last_block_commit_time_ms.get(), 0);
+        assert_eq!(metrics.last_commit_time_ms.get(), 0);
         assert_eq!(metrics.domains.get(), 0);
         assert_eq!(metrics.connected_peers.get(), 0);
     }
@@ -507,8 +511,9 @@ mod tests {
         let metrics = sut.telemetry.metrics().await;
         assert_eq!(metrics.block_height.get(), 1);
         assert_eq!(metrics.block_height_non_empty.get(), 1);
-        assert_eq!(metrics.last_block_commit_time_ms.get(), 0); // zero for genesis
-                                                                // For some reason, tx is rejected (doesn't really matter)
+        assert_eq!(metrics.last_commit_time_ms.get(), 0); // zero for genesis
+
+        // For some reason, the tx is rejected (doesn't really matter)
         assert_eq!(metrics.txs.with_label_values(&["accepted"]).get(), 0);
         assert_eq!(metrics.txs.with_label_values(&["rejected"]).get(), 1);
         assert_eq!(metrics.txs.with_label_values(&["total"]).get(), 1);
@@ -522,7 +527,7 @@ mod tests {
         let metrics = sut.telemetry.metrics().await;
         assert_eq!(metrics.block_height.get(), 2);
         assert_eq!(metrics.block_height_non_empty.get(), 2);
-        assert_eq!(metrics.last_block_commit_time_ms.get(), 150 - CORRECTION);
+        assert_eq!(metrics.last_commit_time_ms.get(), 150 - CORRECTION);
         assert_eq!(metrics.txs.with_label_values(&["accepted"]).get(), 0);
         assert_eq!(metrics.txs.with_label_values(&["rejected"]).get(), 2);
         assert_eq!(metrics.txs.with_label_values(&["total"]).get(), 2);
@@ -536,14 +541,14 @@ mod tests {
         // old data
         assert_eq!(metrics.block_height.get(), 2);
         assert_eq!(metrics.block_height_non_empty.get(), 2);
-        assert_eq!(metrics.last_block_commit_time_ms.get(), 150 - CORRECTION);
+        assert_eq!(metrics.last_commit_time_ms.get(), 150 - CORRECTION);
 
         sut.report_commit_block(block.as_ref().header()).await;
 
         let metrics = sut.telemetry.metrics().await;
         assert_eq!(metrics.block_height.get(), 3);
         assert_eq!(metrics.block_height_non_empty.get(), 3);
-        assert_eq!(metrics.last_block_commit_time_ms.get(), 170 - CORRECTION);
+        assert_eq!(metrics.last_commit_time_ms.get(), 170 - CORRECTION);
     }
 
     #[test]

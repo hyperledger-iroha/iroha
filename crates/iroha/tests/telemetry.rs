@@ -1,5 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
+use expect_test::expect;
 use iroha_data_model::{isi::Log, peer::Peer, Identifiable, Level};
 use iroha_test_network::NetworkBuilder;
 
@@ -29,46 +33,40 @@ impl MetricsReader {
         };
         *value
     }
+
+    fn keys(&self) -> impl Iterator<Item = &String> {
+        self.map.keys()
+    }
 }
 
 #[test]
 fn commit_time() -> eyre::Result<()> {
     let (network, rt) = NetworkBuilder::new()
         .with_peers(4)
-        .with_default_pipeline_time()
+        // We want to get status after genesis, _before_ an empty block
+        // A larger block time helps to hit this window in CI
+        .with_pipeline_time(Duration::from_secs(10))
         .start_blocking()?;
 
     // genesis commit time must be zero
     for client in network.peers().iter().map(|x| x.client()) {
         let status = client.get_status()?;
-        assert_eq!(status.last_block_commit_time_ms, 0);
+        assert_eq!(status.commit_time_ms, 0);
     }
+
+    // empty block
+    rt.block_on(network.ensure_blocks_with(|x| x.total == 2))?;
 
     network
         .client()
         .submit_blocking(Log::new(Level::INFO, "mewo".to_owned()))?;
-    rt.block_on(network.ensure_blocks(2))?;
 
-    let mut met_producer = false;
     for client in network.peers().iter().map(|x| x.client()) {
         let status = client.get_status()?;
-
-        if status.last_block_commit_time_ms == 0 {
-            assert!(
-                !met_producer,
-                "only one peer can have zero propagation time - the leader one"
-            );
-            assert!(
-                status.last_block_commit_time_ms > 0,
-                "leader cannot immediately commit the block"
-            );
-            met_producer = true;
-        } else {
-            assert!(
-                status.last_block_commit_time_ms > 0,
-                "very unlikely the block could be propagated so fast"
-            );
-        }
+        assert!(
+            status.commit_time_ms > 0,
+            "No peer can commit block immediately, even the leader one"
+        );
     }
 
     Ok(())
@@ -84,6 +82,50 @@ async fn misc_measurements() -> eyre::Result<()> {
         .await?;
     println!("{metrics}");
     let metrics = MetricsReader::new(&metrics);
+
+    let keys = metrics.keys().collect::<std::collections::BTreeSet<_>>();
+    expect![[r#"
+        {
+            "accounts{domain=\"garden_of_live_flowers\"}",
+            "accounts{domain=\"genesis\"}",
+            "accounts{domain=\"wonderland\"}",
+            "block_height",
+            "block_height_non_empty",
+            "commit_time_ms_bucket{le=\"+Inf\"}",
+            "commit_time_ms_bucket{le=\"100\"}",
+            "commit_time_ms_bucket{le=\"1600\"}",
+            "commit_time_ms_bucket{le=\"25600\"}",
+            "commit_time_ms_bucket{le=\"400\"}",
+            "commit_time_ms_bucket{le=\"6400\"}",
+            "commit_time_ms_count",
+            "commit_time_ms_sum",
+            "connected_peers",
+            "domains",
+            "dropped_messages",
+            "last_commit_time_ms",
+            "queue_size",
+            "tx_amount_bucket{le=\"+Inf\"}",
+            "tx_amount_bucket{le=\"-10\"}",
+            "tx_amount_bucket{le=\"-1000\"}",
+            "tx_amount_bucket{le=\"-100000\"}",
+            "tx_amount_bucket{le=\"-10000000\"}",
+            "tx_amount_bucket{le=\"-1000000000\"}",
+            "tx_amount_bucket{le=\"0\"}",
+            "tx_amount_bucket{le=\"10\"}",
+            "tx_amount_bucket{le=\"1000\"}",
+            "tx_amount_bucket{le=\"100000\"}",
+            "tx_amount_bucket{le=\"10000000\"}",
+            "tx_amount_bucket{le=\"1000000000\"}",
+            "tx_amount_count",
+            "tx_amount_sum",
+            "txs{type=\"accepted\"}",
+            "txs{type=\"rejected\"}",
+            "txs{type=\"total\"}",
+            "uptime_since_genesis_ms",
+            "view_changes",
+        }
+    "#]]
+    .assert_debug_eq(&keys);
 
     // genesis measurements
     assert_eq!(metrics.get("tx_amount_sum"), 57.0);
