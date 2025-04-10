@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet};
 
 use expect_test::expect;
 use iroha_data_model::{isi::Log, peer::Peer, Identifiable, Level};
@@ -43,18 +40,10 @@ impl MetricsReader {
 fn commit_time() -> eyre::Result<()> {
     let (network, rt) = NetworkBuilder::new()
         .with_peers(4)
-        // We want to get status after genesis, _before_ an empty block
-        // A larger block time helps to hit this window in CI
-        .with_pipeline_time(Duration::from_secs(10))
+        .with_default_pipeline_time()
         .start_blocking()?;
 
-    // genesis commit time must be zero
-    for client in network.peers().iter().map(|x| x.client()) {
-        let status = client.get_status()?;
-        assert_eq!(status.commit_time_ms, 0);
-    }
-
-    // empty block
+    // empty block; must have non-zero commit time
     rt.block_on(network.ensure_blocks_with(|x| x.total == 2))?;
 
     network

@@ -47,6 +47,7 @@ use tokio::{
     time::timeout,
 };
 use toml::Table;
+use tracing::{error, info, info_span, warn, Instrument};
 
 const INSTANT_PIPELINE_TIME: Duration = Duration::from_millis(500);
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
@@ -101,6 +102,23 @@ fn tempdir_in() -> Option<impl AsRef<Path>> {
 
     ENV.get_or_init(|| std::env::var(TEMPDIR_IN_ENV).map(PathBuf::from).ok())
         .as_ref()
+}
+
+fn init_logger() {
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+    static ONCE: OnceLock<()> = OnceLock::new();
+
+    ONCE.get_or_init(|| {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::from("debug"))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .pretty()
+                    .with_timer(tracing_subscriber::fmt::time::uptime()),
+            )
+            .init();
+    });
 }
 
 /// Network of peers
@@ -239,7 +257,7 @@ impl Network {
             .await
             .wrap_err_with(|| eyre!("expected to reach height={height}"))?;
 
-        eprintln!("network reached height={height}");
+        info!(%height, "network sync height");
 
         Ok(self)
     }
@@ -411,6 +429,8 @@ impl NetworkBuilder {
     /// Resolves when all peers are running and have committed genesis block.
     /// See [`Network::start_all`].
     pub async fn start(self) -> Result<Network> {
+        init_logger();
+
         let network = self.build();
         network.start_all().await;
         Ok(network)
@@ -485,6 +505,7 @@ pub enum PeerLifecycleEvent {
 /// When dropped, aborts the child process (if it is running).
 #[derive(Clone, Debug)]
 pub struct NetworkPeer {
+    span: tracing::Span,
     id: Peer,
     key_pair: KeyPair,
     dir: Arc<TempDir>,
@@ -501,6 +522,9 @@ pub struct NetworkPeer {
 impl NetworkPeer {
     /// Generate a random peer
     pub fn generate() -> Self {
+        init_logger();
+
+        let mnemonic = petname::petname(2, "_").unwrap();
         let key_pair = KeyPair::random();
         let port_p2p = AllocatedPort::new();
         let port_api = AllocatedPort::new();
@@ -521,7 +545,18 @@ impl NetworkPeer {
         let (events, _rx) = broadcast::channel(32);
         let (block_height, _rx) = watch::channel(None);
 
+        let span = info_span!("peer", mnemonic);
+        span.in_scope(|| {
+            info!(
+                dir=%temp_dir.path().display(),
+                port_p2p=%port_p2p,
+                port_api=%port_api,
+                "Generated peer",
+            )
+        });
+
         let result = Self {
+            span,
             id,
             key_pair,
             dir: temp_dir,
@@ -534,17 +569,7 @@ impl NetworkPeer {
             port_api: Arc::new(port_api),
         };
 
-        eprintln!(
-            "{} generated peer, dir: {}",
-            result.log_prefix(),
-            result.dir.path().display()
-        );
-
         result
-    }
-
-    fn log_prefix(&self) -> String {
-        format!("[PEER p2p: {}, api: {}]", self.port_p2p, self.port_api)
     }
 
     /// Spawn the child process.
@@ -559,13 +584,14 @@ impl NetworkPeer {
     /// # Panics
     /// If peer was not started.
     pub async fn start(&self, config: Table, genesis: Option<&GenesisBlock>) {
+        init_logger();
+
         let mut run_guard = self.run.lock().await;
         assert!(run_guard.is_none(), "already running");
 
         let run_num = self.runs_count.fetch_add(1, Ordering::Relaxed) + 1;
-
-        let log_prefix = self.log_prefix();
-        eprintln!("{log_prefix} starting (run #{run_num})");
+        let span = info_span!(parent: &self.span, "peer_run", run_num);
+        span.in_scope(|| info!("Starting"));
 
         let mut config = config
             .clone()
@@ -638,12 +664,12 @@ impl NetworkPeer {
             });
         }
         {
-            let log_prefix = log_prefix.clone();
+            let span = span.clone();
             let output = child.stderr.take().unwrap();
             let path = self.dir.path().join(format!("run-{run_num}-stderr.log"));
             tasks.spawn(async move {
                 let mut in_memory = PeerStderrBuffer {
-                    log_prefix,
+                    span,
                     buffer: String::new(),
                 };
                 let mut lines = BufReader::new(output).lines();
@@ -662,80 +688,84 @@ impl NetworkPeer {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let peer_exit = PeerExit {
             child,
-            log_prefix: log_prefix.clone(),
+            span: span.clone(),
             is_running: self.is_running.clone(),
             events: self.events.clone(),
             block_height: self.block_height.clone(),
         };
-        tasks.spawn(async move {
-            if let Err(err) = peer_exit.monitor(shutdown_rx).await {
-                eprintln!("something went very bad during peer exit monitoring: {err}");
-                panic!()
+        tasks.spawn(
+            async move {
+                if let Err(err) = peer_exit.monitor(shutdown_rx).await {
+                    error!("something went very bad during peer exit monitoring: {err}");
+                    panic!()
+                }
             }
-        });
+            .instrument(span.clone()),
+        );
 
         {
-            let log_prefix = log_prefix.clone();
-            let log_prefix_status = log_prefix.clone();
             let client = self.client();
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
-            tasks.spawn(async move {
-                let status_client = client.clone();
-                let status = backoff::future::retry(
-                    ExponentialBackoffBuilder::new()
-                        .with_initial_interval(Duration::from_millis(50))
-                        .with_max_interval(Duration::from_secs(1))
-                        .with_max_elapsed_time(None)
-                        .build(),
-                    move || {
-                        let client = status_client.clone();
-                        let log_prefix_status = log_prefix_status.clone();
-                        async move {
-                            let status = spawn_blocking(move || client.get_status())
-                                .await
-                                .expect("should not panic");
-                            if let Err(err) = &status {
-                                eprintln!("{log_prefix_status} get status failed: {err}")
-                            };
-                            Ok(status?)
-                        }
-                    },
-                )
-                .await
-                .expect("there is no max elapsed time");
-                let mut block_height = BlockHeight::from(status);
-                let _ = events_tx.send(PeerLifecycleEvent::ServerStarted);
-                let _ = block_height_tx.send_replace(Some(block_height));
-                eprintln!("{log_prefix} server started, {status:?}");
-
-                let mut blocks = client
-                    .listen_for_blocks_async(NonZero::new(block_height.total + 1).unwrap())
+            tasks.spawn(
+                async move {
+                    let status_client = client.clone();
+                    let status = backoff::future::retry(
+                        ExponentialBackoffBuilder::new()
+                            .with_initial_interval(Duration::from_millis(50))
+                            .with_max_interval(Duration::from_secs(1))
+                            .with_max_elapsed_time(None)
+                            .build(),
+                        move || {
+                            let client = status_client.clone();
+                            // let log_prefix_status = log_prefix_status.clone();
+                            async move {
+                                let status = spawn_blocking(move || client.get_status())
+                                    .await
+                                    .expect("should not panic");
+                                if let Err(err) = &status {
+                                    warn!("get status failed: {err}")
+                                };
+                                Ok(status?)
+                            }
+                        },
+                    )
                     .await
-                    .unwrap_or_else(|err| {
-                        eprintln!("{log_prefix} failed to subscribe to blocks: {err}");
-                        panic!("cannot proceed")
-                    });
+                    .expect("there is no max elapsed time");
+                    let mut block_height = BlockHeight::from(status);
+                    let _ = events_tx.send(PeerLifecycleEvent::ServerStarted);
+                    let _ = block_height_tx.send_replace(Some(block_height));
+                    info!(?status, "server started");
 
-                while let Some(Ok(block)) = blocks.next().await {
-                    let height = block.header().height().get();
-                    let is_empty = block.header().transactions_hash().is_none();
-                    assert_eq!(height, block_height.total + 1);
-                    block_height.total += 1;
-                    if !is_empty {
-                        block_height.non_empty += 1;
-                    }
+                    let mut blocks = client
+                        .listen_for_blocks_async(NonZero::new(block_height.total + 1).unwrap())
+                        .await
+                        .unwrap_or_else(|err| {
+                            error!(%err, "failed to subscribe to blocks");
+                            panic!("cannot proceed")
+                        });
 
-                    eprintln!("{log_prefix} {block_height:?}");
-                    block_height_tx.send_modify(|x| {
-                        if x.is_some() {
-                            *x = Some(block_height);
+                    while let Some(Ok(block)) = blocks.next().await {
+                        let height = block.header().height().get();
+                        let is_empty = block.header().transactions_hash().is_none();
+                        assert_eq!(height, block_height.total + 1);
+                        block_height.total += 1;
+                        if !is_empty {
+                            block_height.non_empty += 1;
                         }
-                        // if none - peer already terminated
-                    });
+
+                        info!(?block_height, "received block");
+                        block_height_tx.send_modify(|x| {
+                            if x.is_some() {
+                                *x = Some(block_height);
+                            }
+                            // if none - peer already terminated
+                        });
+                    }
+                    warn!("blocks stream is closed");
                 }
-                eprintln!("{log_prefix} blocks stream is closed");
-            });
+                .instrument(span),
+            );
         }
 
         *run_guard = Some(PeerRun {
@@ -888,24 +918,23 @@ impl PartialEq for NetworkPeer {
 ///
 /// Used to avoid loss of useful data in case of task abortion before it is printed directly.
 struct PeerStderrBuffer {
-    log_prefix: String,
+    span: tracing::Span,
     buffer: String,
 }
 
 impl Drop for PeerStderrBuffer {
     fn drop(&mut self) {
         if !self.buffer.is_empty() {
-            eprintln!(
-                "{} STDERR:\n=======\n{}======= END OF STDERR",
-                self.log_prefix, self.buffer
-            );
+            self.span.in_scope(|| {
+                info!("STDERR:\n=======\n{}======= END OF STDERR", self.buffer);
+            });
         }
     }
 }
 
 struct PeerExit {
     child: Child,
-    log_prefix: String,
+    span: tracing::Span,
     is_running: Arc<AtomicBool>,
     events: broadcast::Sender<PeerLifecycleEvent>,
     block_height: watch::Sender<Option<BlockHeight>>,
@@ -918,7 +947,7 @@ impl PeerExit {
             _ = shutdown => self.shutdown_or_kill().await?,
         };
 
-        eprintln!("{} {status}", self.log_prefix);
+        self.span.in_scope(|| info!(%status, "Peer terminated"));
         let _ = self.events.send(PeerLifecycleEvent::Terminated { status });
         self.is_running.store(false, Ordering::Relaxed);
         self.block_height.send_modify(|x| *x = None);
@@ -930,7 +959,7 @@ impl PeerExit {
         use nix::{sys::signal, unistd::Pid};
         const TIMEOUT: Duration = Duration::from_secs(5);
 
-        eprintln!("{} sending SIGTERM", self.log_prefix);
+        self.span.in_scope(|| info!("sending SIGTERM"));
         signal::kill(
             Pid::from_raw(self.child.id().ok_or(eyre!("race condition"))? as i32),
             signal::Signal::SIGTERM,
@@ -938,13 +967,11 @@ impl PeerExit {
         .wrap_err("failed to send SIGTERM")?;
 
         if let Ok(status) = timeout(TIMEOUT, self.child.wait()).await {
-            eprintln!("{} exited gracefully", self.log_prefix);
+            self.span.in_scope(|| info!("exited gracefully"));
             return status.wrap_err("wait failure");
         };
-        eprintln!(
-            "{} process didn't terminate after {TIMEOUT:?}, killing",
-            self.log_prefix
-        );
+        self.span
+            .in_scope(|| warn!("process didn't terminate after {TIMEOUT:?}, killing"));
         timeout(TIMEOUT, async move {
             self.child.kill().await.expect("not a recoverable failure");
             self.child.wait().await
