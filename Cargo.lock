@@ -3093,6 +3093,7 @@ checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 name = "iroha"
 version = "2.0.0-rc.1.0"
 dependencies = [
+ "assertables",
  "attohttpc",
  "base64 0.22.1",
  "derive_more",
@@ -3109,6 +3110,7 @@ dependencies = [
  "iroha_logger",
  "iroha_primitives",
  "iroha_telemetry",
+ "iroha_test_samples",
  "iroha_torii_const",
  "iroha_version",
  "parity-scale-codec",
@@ -3116,6 +3118,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-tungstenite 0.21.0",
