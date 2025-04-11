@@ -1,0 +1,35 @@
+[package]
+name = "integration_tests"
+edition = "2021"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+iroha_config = { workspace = true }
+iroha_config_base = { workspace = true }
+iroha_primitives = { workspace = true }
+iroha_telemetry = { workspace = true }
+iroha_data_model = { workspace = true, features = ["http"] }
+iroha_executor_data_model = { workspace = true }
+
+eyre = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+derive_more = { workspace = true }
+parity-scale-codec = { workspace = true, default-features = false, features = ["derive"] }
+futures-util = "0.3.30"
+nonzero_ext = { workspace = true }
+iroha = { workspace = true }
+iroha_test_samples = { workspace = true }
+iroha_test_network = { workspace = true }
+
+mint_rose_trigger_data_model = { path = "../data_model/samples/mint_rose_trigger_data_model" }
+executor_custom_data_model = { path = "../data_model/samples/executor_custom_data_model" }
+
+reqwest = { version = "0.12.7", features = ["json"] }
+hex = { workspace = true }
+assert_matches = "1.5.0"
