@@ -97,6 +97,7 @@ impl MockEnv {
     }
 
     /// Set a variable
+    #[must_use]
     pub fn set(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.map.insert(key.into(), value.into());
         self

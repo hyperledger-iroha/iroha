@@ -28,7 +28,7 @@ use tokio::runtime::Runtime;
 struct Args {
     /// Path to the configuration file.
     ///
-    /// If not provided, `iroha` will try to find `client.toml` file.
+    /// By default, `iroha` will try to read `client.toml` file, but would proceed if it is not found.
     #[arg(short, long, value_name("PATH"))]
     config: Option<PathBuf>,
     /// Print configuration details to stderr
