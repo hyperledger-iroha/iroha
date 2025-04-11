@@ -104,6 +104,8 @@ jobs:
           mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
       - name: Install irohad
         run: which irohad || cargo install --path crates/irohad --locked
+      - name: Install iroha
+        run: which iroha || cargo install --path crates/iroha_cli --locked
       - name: Test with no default features
         id: test_no_features
         run: >
