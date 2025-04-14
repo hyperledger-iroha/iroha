@@ -327,10 +327,14 @@ impl Error {
 
         match self {
             Query(e) => Self::query_status_code(e),
-            AcceptTransaction(_) => StatusCode::BAD_REQUEST,
+            AcceptTransaction(err) => match err {
+                iroha_core::tx::AcceptTransactionFail::SignatureVerification(_) => StatusCode::UNAUTHORIZED,
+                iroha_core::tx::AcceptTransactionFail::UnexpectedGenesisAccountSignature => StatusCode::FORBIDDEN,
+                _ => StatusCode::BAD_REQUEST,
+            },
             Config(_) | StatusSegmentNotFound(_) => StatusCode::NOT_FOUND,
             PushIntoQueue(err) => match **err {
-                queue::Error::Full => StatusCode::INTERNAL_SERVER_ERROR,
+                queue::Error::Full => StatusCode::SERVICE_UNAVAILABLE,
                 _ => StatusCode::BAD_REQUEST,
             },
             #[cfg(feature = "telemetry")]
