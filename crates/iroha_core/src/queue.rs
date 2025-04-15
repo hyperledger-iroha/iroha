@@ -579,6 +579,49 @@ pub mod tests {
     }
 
     #[test]
+    async fn push_expired_tx_already_in_blockchain() {
+        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction)
+        };
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let mut tx =
+            TransactionBuilder::new_with_time_source(chain_id.clone(), alice_id, &time_source);
+        tx.set_ttl(Duration::from_millis(100));
+        let tx = tx.sign(alice_keypair.private_key());
+        let tx = AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_limits)
+            .expect("Failed to accept Transaction.");
+
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        state_block
+            .transactions
+            .insert(tx.as_ref().hash(), nonzero!(1_usize));
+        state_block.commit();
+        let queue = Queue::test(config_factory(), &time_source);
+        time_handle.advance(Duration::from_secs(100));
+        assert!(matches!(
+            queue.push(tx, state.view()),
+            Err(Failure {
+                err: Error::InBlockchain,
+                ..
+            })
+        ));
+        assert_eq!(queue.txs.len(), 0);
+    }
+
+    #[test]
     async fn get_tx_drop_if_in_blockchain() {
         let max_txs_in_block = nonzero!(2_usize);
         let kura = Kura::blank_kura_for_testing();
