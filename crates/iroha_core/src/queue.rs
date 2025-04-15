@@ -79,7 +79,7 @@ pub struct Failure {
 }
 
 /// Will remove transaction from the queue on drop.
-/// See [`Queue::remove_stale_transaction`] for details.
+/// See [`Queue::remove_transaction`] for details.
 pub struct TransactionGuard {
     tx: AcceptedTransaction,
     queue: Arc<Queue>,
@@ -95,7 +95,7 @@ impl Deref for TransactionGuard {
 
 impl Drop for TransactionGuard {
     fn drop(&mut self) {
-        self.queue.remove_stale_transaction(&self.tx);
+        self.queue.remove_transaction(&self.tx);
     }
 }
 
@@ -172,10 +172,10 @@ impl Queue {
     }
 
     fn check_tx(&self, tx: &AcceptedTransaction, state_view: &StateView) -> Result<(), Error> {
-        if self.is_expired(tx) {
-            Err(Error::Expired)
-        } else if tx.is_in_blockchain(state_view) {
+        if tx.is_in_blockchain(state_view) {
             Err(Error::InBlockchain)
+        } else if self.is_expired(tx) {
+            Err(Error::Expired)
         } else {
             Ok(())
         }
@@ -351,19 +351,10 @@ impl Queue {
     /// 3. When transaction is removed from [`Sumeragi::transaction_cache`]
     ///    (either because it was expired, or because transaction is commited to blockchain),
     ///    we should remove transaction from [`Queue::accepted_tx`].
-    fn remove_stale_transaction(&self, tx: &AcceptedTransaction) {
+    fn remove_transaction(&self, tx: &AcceptedTransaction) {
         let removed = self.txs.remove(&tx.as_ref().hash());
         if removed.is_some() {
             self.decrease_per_user_tx_count(tx.as_ref().authority());
-
-            if self.is_expired(tx) {
-                let event = TransactionEvent {
-                    hash: tx.as_ref().hash(),
-                    block_height: None,
-                    status: TransactionStatus::Expired,
-                };
-                let _ = self.events_sender.send(event.into());
-            }
         }
     }
 
