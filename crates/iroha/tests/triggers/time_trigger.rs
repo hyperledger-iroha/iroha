@@ -131,7 +131,7 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
         test_client.submit(sample_isi)?;
 
         // Waiting for empty block to be committed
-        std::thread::sleep(network.pipeline_time());
+        std::thread::sleep(2*network.pipeline_time());
 
         let new_value = get_asset_value(&test_client, asset_id.clone());
         assert_eq!(new_value, prev_value.checked_add(numeric!(2)).unwrap());
