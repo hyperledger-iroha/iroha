@@ -555,7 +555,7 @@ impl NetworkPeer {
             )
         });
 
-        let result = Self {
+        Self {
             span,
             id,
             key_pair,
@@ -567,9 +567,7 @@ impl NetworkPeer {
             block_height,
             port_p2p: Arc::new(port_p2p),
             port_api: Arc::new(port_api),
-        };
-
-        result
+        }
     }
 
     /// Spawn the child process.
