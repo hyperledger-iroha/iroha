@@ -59,3 +59,4 @@ tungstenite = { workspace = true }
 
 [dev-dependencies]
 http-body-util = "0.1.2"
+serde_json = { workspace = true }

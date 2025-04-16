@@ -183,7 +183,7 @@ mod tests {
         const WATCH_LAG_MILLIS: u64 = 30;
 
         let mut config = test_config();
-        config.logger.level = INIT_LOG_LEVEL.into();
+        config.logger.level = INIT_LOG_LEVEL;
         let (kiso, _) = KisoHandle::start(config);
 
         let mut recv = kiso
@@ -197,7 +197,7 @@ mod tests {
 
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
-                level: NEW_LOG_LEVEL.into(),
+                level: NEW_LOG_LEVEL,
                 filter: Some("trace,trace,trace".parse().unwrap()),
             },
         })
@@ -210,7 +210,7 @@ mod tests {
             .expect("Watcher should not be closed");
 
         let value = recv.borrow_and_update().clone();
-        assert_eq!(value.level, NEW_LOG_LEVEL.into());
+        assert_eq!(value.level, NEW_LOG_LEVEL);
         assert_eq!(format!("{}", value.filter.unwrap()), "trace,trace,trace");
     }
 }
