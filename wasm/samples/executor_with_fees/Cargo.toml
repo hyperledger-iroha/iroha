@@ -1,0 +1,24 @@
+[package]
+name = "iroha_fees_executor"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ['cdylib']
+
+[dependencies]
+iroha_executor.workspace = true
+iroha_executor_data_model.workspace = true
+fees_executor_data_model = { path = "../../../data_model/fees_executor" }
+iroha_schema.workspace = true
+iroha_data_model.workspace = true
+
+serde_json.workspace = true
+serde.workspace = true
+thiserror = { version = "2.0.11", default-features = false }
+
+panic-halt.workspace = true
+dlmalloc.workspace = true
