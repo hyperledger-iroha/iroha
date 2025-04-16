@@ -1,9 +1,6 @@
-use iroha::{
-    client::Client,
-    data_model::{prelude::*, query::trigger::FindTriggers},
-};
-use iroha_test_network::*;
-use iroha_test_samples::gen_account_in;
+use iroha::{client::Client, data_model::query::trigger::FindTriggers};
+
+use super::*;
 
 fn find_trigger(iroha: &Client, trigger_id: &TriggerId) -> Option<Trigger> {
     iroha

@@ -28,6 +28,40 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            #[cfg(feature = "prediction")]
+            {
+                use iroha_tree::{fuzzy_node, readset, state, state::WorldState};
+
+                let object = self.object.clone();
+                let id = object.id;
+                let condition = match state::tr::ConditionV::try_from(object.action.filter) {
+                    Ok(con) => con,
+                    Err(msg) => return Err(Error::Conversion(msg.to_string())),
+                };
+                let executable = match state::tr::ExecutableV::try_from((
+                    object.action.authority,
+                    object.action.executable,
+                )) {
+                    Ok(exe) => exe,
+                    Err(node_conflict) => {
+                        return Err(Error::Conversion(format!(
+                            "failed to fold instructions into changeset: {node_conflict:?}"
+                        )));
+                    }
+                };
+                let entry = state::tr::TriggerEntry::new(&id, &condition, &executable);
+                let state_view = {
+                    let readset =
+                        readset::ReadSet::from_iter([fuzzy_node!(Trigger, None, readset::UnitR)]);
+                    state_transaction.load(&readset)
+                };
+                if entry.leads_to_event_loop(&state_view) {
+                    return Err(Error::InvariantViolation(format!(
+                        "trigger registration leads to event loop: {entry:?}"
+                    )));
+                }
+            }
+
             let new_trigger = self.object;
 
             if !new_trigger.action.filter.mintable() {

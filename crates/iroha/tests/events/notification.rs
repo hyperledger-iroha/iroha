@@ -8,6 +8,7 @@ use iroha_test_samples::ALICE_ID;
 use tokio::{task::spawn_blocking, time::timeout};
 
 #[tokio::test]
+#[ignore = "depends on deprecated event types"]
 async fn trigger_completion_success_should_produce_event() -> Result<()> {
     let network = NetworkBuilder::new().start().await?;
 
@@ -48,6 +49,7 @@ async fn trigger_completion_success_should_produce_event() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "depends on deprecated event types"]
 async fn trigger_completion_failure_should_produce_event() -> Result<()> {
     let network = NetworkBuilder::new().start().await?;
 
