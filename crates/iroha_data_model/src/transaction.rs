@@ -12,7 +12,7 @@ use derive_more::{DebugCustom, Display};
 use iroha_crypto::{Signature, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
-#[cfg(all(feature = "std"))]
+#[cfg(feature = "std")]
 use iroha_primitives::time::TimeSource;
 use iroha_schema::IntoSchema;
 use iroha_version::{declare_versioned, version};
@@ -317,7 +317,7 @@ impl TransactionBuilder {
     /// Construct [`Self`], using the time from [`TimeSource`]
     // we don't want to expose this to non-tests
     #[inline]
-    #[cfg(all(feature = "std"))]
+    #[cfg(feature = "std")]
     pub fn new_with_time_source(
         chain_id: ChainId,
         authority: AccountId,
