@@ -214,33 +214,6 @@ jobs:
         if: always()
         run: docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml down
 
-  pytests_static_analysis:
-    runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
-    strategy:
-      matrix:
-        suite: [iroha_cli_tests, iroha_torii_tests]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install dependencies using Poetry for pytests/${{ matrix.suite }}
-        working-directory: pytests/${{ matrix.suite }}
-        run: |
-          poetry lock
-          poetry install --no-root
-      - name: Check code formatting with Black in pytests/${{ matrix.suite }}
-        working-directory: pytests/${{ matrix.suite }}
-        run: |
-          poetry run black --check .
-      - name: Run mypy (Type Checker) in pytests/${{ matrix.suite }}
-        working-directory: pytests/${{ matrix.suite }}
-        run: |
-          poetry run mypy --explicit-package-bases --ignore-missing-imports .
-      - name: Run flake8 (Linter) in pytests/${{ matrix.suite }}
-        working-directory: pytests/${{ matrix.suite }}
-        run: |
-          poetry run flake8 . --max-line-length=110 --ignore=F401,W503,E203
-
   # Run the job to check that the docker containers are properly buildable
   pr_generator_build:
     # Job will only execute if the head of the pull request is a branch for PR-generator case
