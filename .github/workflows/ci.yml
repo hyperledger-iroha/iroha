@@ -26,6 +26,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "pre-build" # to differentiate from the "build" cache
+          cache-on-failure: "true"
+          workspaces: ".\n./wasm"
       - name: Build
         run: ./scripts/build_wasm.sh
       - name: Upload all built WASMs
@@ -366,7 +371,7 @@ jobs:
           path: ${{ env.WASM_TARGET_DIR }}
       - name: Move executor.wasm
         run: |
-          mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
+          mv ${{ env.WASM_TARGET_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
       - name: Build iroha_wasm_test_runner (release)
         run: cargo build --bin iroha_wasm_test_runner --release
       - name: Run smart contract tests on WebAssembly VM
