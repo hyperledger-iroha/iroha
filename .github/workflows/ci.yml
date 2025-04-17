@@ -62,6 +62,11 @@ jobs:
       LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "build" # to differentiate from the "pre-build" cache
+          cache-on-failure: "true"
+          workspaces: ".\n./wasm"
       - uses: taiki-e/install-action@nextest
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Download wasm
@@ -154,6 +159,7 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@v3
         with:
+          version: latest
           install: true
       - name: Build and tag Docker images
         uses: docker/build-push-action@v6
@@ -252,7 +258,6 @@ jobs:
           context: .
 
   check_pr_title:
-    name: Check PR title
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -372,8 +377,8 @@ jobs:
       - name: Move executor.wasm
         run: |
           mv ${{ env.WASM_TARGET_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
-      - name: Build iroha_wasm_test_runner (release)
-        run: cargo build --bin iroha_wasm_test_runner --release
+      - name: Install iroha_wasm_test_runner
+        run: which iroha_wasm_test_runner || cargo install --path crates/iroha_wasm_test_runner --locked
       - name: Run smart contract tests on WebAssembly VM
         working-directory: crates/iroha_smart_contract
         run: mold --run cargo test -p iroha_smart_contract -p iroha_smart_contract_utils --release --tests --target wasm32-unknown-unknown --no-fail-fast --quiet

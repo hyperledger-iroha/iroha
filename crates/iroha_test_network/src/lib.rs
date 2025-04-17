@@ -58,14 +58,17 @@ fn iroha_bin() -> impl AsRef<Path> {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
 
     PATH.get_or_init(|| {
-        if let Ok(path) = which::which("irohad") {
+        let result = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/release/irohad")
+            .canonicalize();
+
+        if let Ok(path) = result {
             path
         } else {
             eprintln!(
-                "ERROR: could not locate `irohad` binary in $PATH\n  \
+                "ERROR: could not locate `target/release/irohad` binary\n  \
                 It is required to run `iroha_test_network`.\n  \
-                The easiest way to satisfy this is to run:\n\n    \
-                cargo install --path ./crates/irohad --locked"
+                The easiest way to satisfy this is to run: \"cargo build --release\""
             );
             panic!("could not proceed without `irohad`, see the message above");
         }
