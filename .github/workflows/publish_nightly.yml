@@ -1,4 +1,4 @@
-name: I2::Dev::Nightly::Publish
+name: publish_nightly
 
 on: workflow_dispatch
 
