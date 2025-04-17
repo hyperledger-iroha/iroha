@@ -339,8 +339,6 @@ jobs:
           path: lints
           pattern: report-*
           merge-multiple: true
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: SonarQube
         uses: SonarSource/sonarqube-scan-action@v5.0.0
         env:
