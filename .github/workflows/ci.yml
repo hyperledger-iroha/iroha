@@ -21,11 +21,16 @@ env:
 jobs:
   pre_build:
     runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        if: steps.prep-cache.outputs.cache-hit != 'true'
+        with:
+          cache: 'false'
+          toolchain: 'nightly-2024-09-09'
+          target: 'wasm32-unknown-unknown'
+          components: 'rust-src,clippy,rustfmt,llvm-tools-preview'
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "pre-build" # to differentiate from the "build" cache
@@ -40,13 +45,17 @@ jobs:
           path: ${{ env.WASM_TARGET_DIR }}
           retention-days: 1
 
-  # Formatting does not require any compilation
   format:
     runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        if: steps.prep-cache.outputs.cache-hit != 'true'
+        with:
+          cache: 'false'
+          toolchain: 'nightly-2024-09-09'
+          target: 'wasm32-unknown-unknown'
+          components: 'rust-src,clippy,rustfmt,llvm-tools-preview'
       - name: Format
         run: cargo fmt --all -- --check
       - name: Format (wasm)
