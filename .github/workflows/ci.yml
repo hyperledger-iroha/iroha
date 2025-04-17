@@ -30,7 +30,6 @@ jobs:
           cache: 'false'
           toolchain: 'nightly-2024-09-09'
           target: 'wasm32-unknown-unknown'
-          components: 'rust-src,clippy,rustfmt,llvm-tools-preview'
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "pre-build" # to differentiate from the "build" cache
@@ -55,7 +54,7 @@ jobs:
           cache: 'false'
           toolchain: 'nightly-2024-09-09'
           target: 'wasm32-unknown-unknown'
-          components: 'rust-src,clippy,rustfmt,llvm-tools-preview'
+          components: 'rustfmt'
       - name: Format
         run: cargo fmt --all -- --check
       - name: Format (wasm)
