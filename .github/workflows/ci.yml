@@ -84,8 +84,14 @@ jobs:
           mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
       - name: Clippy (all features)
         run: cargo clippy --all-targets --workspace --benches --tests --examples --all-features --quiet --message-format=json | tee clippy.json
-      - name: Build irohad (release)
-        run: cargo build --release --bin irohad
+      - name: Build irohad, iroha, kagami (release)
+        run: cargo build --release --bin irohad --bin iroha --bin kagami
+      - name: Consistency
+        run: |
+          ./scripts/tests/consistency.sh genesis
+          ./scripts/tests/consistency.sh schema
+          ./scripts/tests/consistency.sh cli-help
+          ./scripts/tests/consistency.sh docker-compose
       - name: Test (full)
         id: test
         run: >
@@ -99,12 +105,6 @@ jobs:
           --branch --no-report
       - name: Documentation
         run: cargo doc --no-deps --quiet
-      - name: Consistency
-        run: |
-          ./scripts/tests/consistency.sh genesis
-          ./scripts/tests/consistency.sh schema
-          ./scripts/tests/consistency.sh cli-help
-          ./scripts/tests/consistency.sh docker-compose
       - name: Generate lcov report
         run: cargo llvm-cov report --doctests --ignore-filename-regex 'iroha_cli|iroha_torii' --lcov --output-path lcov.info
       - name: Upload lcov report
