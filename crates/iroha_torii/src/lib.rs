@@ -120,7 +120,7 @@ impl Torii {
                 uri::PEERS,
                 get({
                     let peers = self.online_peers.clone();
-                    move || async move { routing::handle_peers(&peers).await }
+                    move || async move { routing::handle_peers(&peers) }
                 }),
             );
 

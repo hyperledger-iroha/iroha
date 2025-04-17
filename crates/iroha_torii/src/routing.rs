@@ -295,7 +295,9 @@ pub async fn handle_metrics(telemetry: &Telemetry) -> Result<String> {
         .map_err(Error::Prometheus)
 }
 
-pub async fn handle_peers(online_peers: &OnlinePeersProvider) -> Response {
+pub fn handle_peers(online_peers: &OnlinePeersProvider) -> Response {
+    // Caution: this short `.get` done frequently might cause the writer part to block, thus
+    // blocking the P2P module
     let data = online_peers.get();
     axum::Json(data).into_response()
 }
