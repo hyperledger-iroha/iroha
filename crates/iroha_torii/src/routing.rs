@@ -6,6 +6,8 @@ use axum::extract::ws::WebSocket;
 #[cfg(feature = "telemetry")]
 use eyre::{eyre, WrapErr};
 use iroha_config::client_api::{ConfigGetDTO, ConfigUpdateDTO};
+#[cfg(feature = "telemetry")]
+use iroha_core::telemetry::Telemetry;
 use iroha_core::{query::store::LiveQueryStoreHandle, smartcontracts::query::ValidQueryRequest};
 use iroha_data_model::{
     self,
@@ -285,39 +287,31 @@ pub async fn profiling_not_implemented() -> impl IntoResponse {
 }
 
 #[cfg(feature = "telemetry")]
-fn update_metrics_gracefully(metrics_reporter: &MetricsReporter) {
-    if let Err(error) = metrics_reporter.update_metrics() {
-        iroha_logger::error!(%error, "Error while calling `metrics_reporter::update_metrics`.");
-    }
-}
-
-#[cfg(feature = "telemetry")]
-pub fn handle_metrics(metrics_reporter: &MetricsReporter) -> Result<String> {
-    update_metrics_gracefully(metrics_reporter);
-    metrics_reporter
+pub async fn handle_metrics(telemetry: &Telemetry) -> Result<String> {
+    telemetry
         .metrics()
+        .await
         .try_to_string()
         .map_err(Error::Prometheus)
 }
 
-#[cfg(feature = "telemetry")]
-pub fn handle_peers(metrics_reporter: &MetricsReporter) -> Response {
-    update_metrics_gracefully(metrics_reporter);
-    let peers = metrics_reporter.online_peers();
-    axum::Json(peers).into_response()
+pub fn handle_peers(online_peers: &OnlinePeersProvider) -> Response {
+    // Caution: this short `.get` done frequently might cause the writer part to block, thus
+    // blocking the P2P module
+    let data = online_peers.get();
+    axum::Json(data).into_response()
 }
 
 #[cfg(feature = "telemetry")]
 #[allow(clippy::unnecessary_wraps)]
-pub fn handle_status(
-    metrics_reporter: &MetricsReporter,
-    accept: Option<impl AsRef<[u8]>>,
+pub async fn handle_status(
+    telemetry: &Telemetry,
+    accept: Option<axum::http::HeaderValue>,
     tail: Option<&str>,
 ) -> Result<Response> {
     use eyre::ContextCompat;
 
-    update_metrics_gracefully(metrics_reporter);
-    let status = Status::from(&metrics_reporter.metrics());
+    let status = Status::from(&telemetry.metrics().await);
 
     if let Some(tail) = tail {
         // TODO: This probably can be optimised to elide the full
