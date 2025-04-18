@@ -241,7 +241,7 @@ jobs:
             ./scripts/test_env.py cleanup
             ./scripts/test_env.py setup
       - name: Terminate test network
-        run: ./scripts/test_env.py
+        run: ./scripts/test_env.py cleanup
 
   # Run the job to check that the docker containers are properly buildable
   pr_generator_build:
