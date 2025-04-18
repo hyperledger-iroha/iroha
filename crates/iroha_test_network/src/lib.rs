@@ -54,23 +54,28 @@ const PEER_START_TIMEOUT: Duration = Duration::from_secs(30);
 const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 
+const IROHAD_ENV: &str = "TEST_NETWORK_IROHAD";
+
 fn iroha_bin() -> impl AsRef<Path> {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
 
     PATH.get_or_init(|| {
-        let result = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/release/irohad")
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../");
+        let result = std::env::var(IROHAD_ENV)
+            .map_or_else(
+                |_err| root.join("target/release/irohad"),
+                |path| root.join(path),
+            )
             .canonicalize();
 
         if let Ok(path) = result {
             path
         } else {
-            eprintln!(
-                "ERROR: could not locate `target/release/irohad` binary\n  \
+            panic!(
+                "could not locate irohad binary\n  \
                 It is required to run `iroha_test_network`.\n  \
-                The easiest way to satisfy this is to run: \"cargo build --release\""
+                Run \"cargo build --release\" or set \"{IROHAD_ENV}\""
             );
-            panic!("could not proceed without `irohad`, see the message above");
         }
     })
 }
