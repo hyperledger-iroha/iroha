@@ -185,10 +185,7 @@ jobs:
     needs: pre_build
     runs-on: ubuntu-latest
     env:
-      TEST_DIR: "tmp/test"
-      IROHA_BIN: "bins/iroha"
       IROHA_CONTAINER: "defaults-irohad0-1"
-      # for test_env.py
       BIN_IROHAD: bins/irohad
       BIN_IROHA: bins/iroha
       BIN_KAGAMI: bins/kagami
@@ -230,8 +227,9 @@ jobs:
       - name: Run client pytests
         uses: nick-fields/retry@v3
         env:
-          TMP_DIR: ../../${{ env.TEST_DIR }}
-          IROHA_CLI_BINARY: ${{ env.IROHA_BIN }}
+          # created by test_env.py
+          TMP_DIR: ../../test
+          IROHA_CLI_BINARY: iroha
           IROHA_CLI_CONFIG: client.toml
         with:
           timeout_minutes: 10
