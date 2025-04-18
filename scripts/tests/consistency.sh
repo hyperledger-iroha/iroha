@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
 # Makes possible to set e.g. `BIN_KAGAMI=target/release/kagami` without running cargo
