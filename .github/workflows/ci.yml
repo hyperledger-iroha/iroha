@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # FIXME: it caches well for binaries build, but seems to ignore wasm32 target
       - uses: Swatinem/rust-cache@v2
         with:
           # prefix-key: "pre-build" # to differentiate from the "build" cache
@@ -73,7 +74,7 @@ jobs:
           ./scripts/tests/consistency.sh cli-help
           ./scripts/tests/consistency.sh docker-compose
 
-  fmt_clippy:
+  fmt:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,22 +84,12 @@ jobs:
           cache: "false"
           toolchain: "nightly-2024-09-09"
           target: "wasm32-unknown-unknown"
-          components: "rustfmt,clippy"
+          components: "rustfmt"
       - name: Format
         run: cargo fmt --all -- --check
       - name: Format (wasm)
         working-directory: wasm
         run: cargo fmt --all -- --check
-      - name: Clippy (all targets, all features)
-        run: cargo clippy --all-targets --all-features --quiet --message-format=json | tee clippy.json
-      - name: Clippy (wasm) (all targets, all features)
-        working-directory: wasm
-        run: cargo clippy --all-targets --all-features --quiet
-      - name: Upload clippy report artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: report-clippy
-          path: clippy.json
 
   test:
     runs-on: [self-hosted, Linux, iroha2]
@@ -131,18 +122,26 @@ jobs:
         with:
           name: bins
           paht: bins
+      - name: Clippy (all targets, all features)
+        # pipefall makes `tee` forward error exit status of clippy
+        run: |
+          set -o pipefall
+          cargo clippy --all-targets --all-features --quiet --message-format=json | tee clippy.json
       - name: Test (full)
+        if: always()
         id: test
         run: >
           mold --run cargo llvm-cov nextest
           --locked
           --branch --no-report
       - name: Test (doc)
+        if: always()
         id: test-doc
         run: >
           mold --run cargo llvm-cov --doc
           --branch --no-report
       - name: Documentation
+        if: always()
         run: cargo doc --no-deps --quiet
       - name: Generate lcov report
         run: cargo llvm-cov report --doctests --ignore-filename-regex 'iroha_cli|iroha_torii' --lcov --output-path lcov.info
@@ -164,6 +163,12 @@ jobs:
           name: test_network_runs
           path: ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
           retention-days: 3
+      - name: Upload clippy report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-clippy
+          path: clippy.json
 
   docker_compose_and_pytests:
     needs: pre_build
