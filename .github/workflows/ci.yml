@@ -116,7 +116,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
-          workspaces: ".\n./wasm"
       - uses: taiki-e/install-action@nextest
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Download WASMs
@@ -187,9 +186,6 @@ jobs:
         with:
           python-version: 3.11.12
       - uses: abatilo/actions-poetry@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          version: "0.6.14"
       - name: Download WAMSs
         uses: actions/download-artifact@v4
         with:
@@ -230,7 +226,7 @@ jobs:
           max_attempts: 5
           command: |
             cd pytests/iroha_cli_tests
-            ${{ env.POETRY_PATH }} run pytest
+            poetry run pytest
           on_retry_command: |
             ./scripts/test_env.py cleanup
             ./scripts/test_env.py setup
