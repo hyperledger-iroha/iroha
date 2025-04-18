@@ -70,7 +70,8 @@ build() {
     mkdir -p "$TARGET_DIR/$1"
     for name in ${NAMES[@]}; do
         out_file="$TARGET_DIR/$1/$name.wasm"
-        cargo run --bin kagami -- wasm build "$CARGO_DIR/$1/$name" --profile=$PROFILE --out-file "$out_file"
+        # Using `--release` to re-use prebuilt release kagami in  CI
+        cargo run --bin kagami --release -- wasm build "$CARGO_DIR/$1/$name" --profile=$PROFILE --out-file "$out_file"
     done
 
     echo "profile = \"${PROFILE}\"" > "$TARGET_DIR/build_config.toml"
