@@ -367,7 +367,7 @@ jobs:
           fail: true
 
   sonarqube_defectdojo:
-    needs: [test, fmt_clippy]
+    needs: test
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2024-09-09
