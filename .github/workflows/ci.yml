@@ -185,20 +185,15 @@ jobs:
     needs: pre_build
     runs-on: ubuntu-latest
     env:
-      PYTHON_VERSION: 3.11
-      POETRY_PATH: "/root/.local/bin/poetry"
       IROHA_CONTAINER: "defaults-irohad0-1"
       BIN_IROHAD: bins/irohad
       BIN_IROHA: bins/iroha
       BIN_KAGAMI: bins/kagami
     steps:
       - uses: actions/checkout@v4
-      - name: Install Python and Poetry
-        run: |
-          yum install -y python${{ env.PYTHON_VERSION }} python${{ env.PYTHON_VERSION }}-devel
-          curl -sSL https://install.python-poetry.org | python3 -
-          echo 'export PATH="${{ env.POETRY_PATH }}:$PATH"' >> /etc/profile
-          source /etc/profile
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.11.12
       - uses: abatilo/actions-poetry@v4
       - name: Download WAMSs
         uses: actions/download-artifact@v4
