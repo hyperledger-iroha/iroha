@@ -102,6 +102,19 @@ jobs:
           cache-on-failure: "true"
       - name: Clippy (all targets, all features)
         run: cargo clippy --all-targets --all-features --quiet
+      # TODO: upload clippy artifact?
+
+  doc:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Documentation (all features)
+        run: cargo doc --no-deps --quiet --all-features
 
   test:
     runs-on: [self-hosted, Linux, iroha2]
@@ -145,8 +158,6 @@ jobs:
         run: >
           mold --run cargo llvm-cov --doc
           --branch --no-report
-      - name: Documentation
-        run: cargo doc --no-deps --quiet
       - name: Generate lcov report
         run: cargo llvm-cov report --doctests --ignore-filename-regex 'iroha_cli|iroha_torii' --lcov --output-path lcov.info
       - name: Upload lcov report
@@ -167,7 +178,6 @@ jobs:
           name: test_network_runs
           path: ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
           retention-days: 3
-      # TODO: upload clippy artifact?
 
   pytests:
     needs: pre_build
