@@ -55,6 +55,8 @@ jobs:
 
   consistency:
     runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
     needs: pre_build
     steps:
       - uses: actions/checkout@v4
