@@ -1,18 +1,17 @@
 name: ci_pytests_static
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - '**.py'
+      - "**.py"
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - '**.py'
+      - "**.py"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 
 jobs:
   check:
@@ -21,7 +20,7 @@ jobs:
       image: hyperledger/iroha2-ci:nightly-2024-09-09
     strategy:
       matrix:
-        suite: [ iroha_cli_tests, iroha_torii_tests ]
+        suite: [iroha_cli_tests, iroha_torii_tests]
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies using Poetry for pytests/${{ matrix.suite }}
