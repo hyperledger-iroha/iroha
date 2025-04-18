@@ -121,10 +121,7 @@ jobs:
           name: bins
           paht: bins
       - name: Clippy (all targets, all features)
-        # pipefall makes `tee` forward error exit status of clippy
-        run: |
-          set -o pipefall
-          cargo clippy --all-targets --all-features --quiet --message-format=json | tee clippy.json
+        run: cargo clippy --all-targets --all-features --quiet
       - name: Test (full)
         if: always()
         id: test
@@ -161,12 +158,7 @@ jobs:
           name: test_network_runs
           path: ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
           retention-days: 3
-      - name: Upload clippy report artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: report-clippy
-          path: clippy.json
+      # TODO: upload clippy artifact?
 
   pytests:
     needs: pre_build
