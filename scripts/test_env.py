@@ -22,6 +22,12 @@ import tomli_w
 SWARM_CONFIGS_DIRECTORY = pathlib.Path("defaults")
 SHARED_CONFIG_FILE_NAME = "config.base.toml"
 
+BIN_ENV_MAP = {
+    "irohad": "BIN_IROHAD",
+    "iroha": "BIN_IROHA",
+    "kagami": "BIN_KAGAMI",
+}
+
 class Network:
     """
     A network of bootstrapped peers to run on bare metal.
@@ -163,6 +169,14 @@ def pos_int(arg):
         raise argparse.ArgumentTypeError(f"Argument {arg} must be a positive integer")
 
 def copy_or_prompt_build_bin(bin_name: str, root_dir: pathlib.Path, target_dir: pathlib.Path):
+    if bin_name not in BIN_ENV_MAP:
+        raise f"Unknown binary: {bin_name}"
+    
+    env = os.getenv(BIN_ENV_MAP[bin_name])
+    if env:
+        shutil.copy2(root_dir / env, target_dir)
+        return
+
     bin_path = root_dir / "target/debug" / bin_name
     try:
         shutil.copy2(bin_path, target_dir)
