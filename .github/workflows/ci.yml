@@ -126,20 +126,17 @@ jobs:
       - name: Clippy (all targets, all features)
         run: cargo clippy --all-targets --all-features --quiet
       - name: Test (full)
-        if: always()
         id: test
         run: >
           mold --run cargo llvm-cov nextest
           --locked
           --branch --no-report
       - name: Test (doc)
-        if: always()
         id: test-doc
         run: >
           mold --run cargo llvm-cov --doc
           --branch --no-report
       - name: Documentation
-        if: always()
         run: cargo doc --no-deps --quiet
       - name: Generate lcov report
         run: cargo llvm-cov report --doctests --ignore-filename-regex 'iroha_cli|iroha_torii' --lcov --output-path lcov.info
