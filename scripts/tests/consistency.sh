@@ -1,25 +1,30 @@
 #!/bin/sh
 set -e
 
+# Makes possible to set e.g. `BIN_KAGAMI=target/release/kagami` without running cargo
+bin_kagami="${BIN_KAGAMI:-cargo run --release --bin kagami --}"
+bin_iroha="${BIN_IROHA:-cargo run --release --bin iroha --}"
+
 case $1 in
     "genesis")
-        cargo run --release --bin kagami -- genesis generate --executor executor.wasm --wasm-dir libs --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4 | diff - defaults/genesis.json || {
-            echo 'Please re-generate the default genesis with `cargo run --release --bin kagami -- genesis --executor executor.wasm --wasm-dir libs --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4 > ./defaults/genesis.json`'
+        eval "$bin_kagami genesis generate --executor executor.wasm --wasm-dir libs --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4" \
+            | diff - defaults/genesis.json || {
+            echo "Please re-generate the default genesis with `$bin_kagami genesis --executor executor.wasm --wasm-dir libs --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4 > ./defaults/genesis.json`"
             echo 'The assumption here is that the authority of the default genesis transaction is `iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID`'
             exit 1
         };;
     "schema")
-        cargo run --release --bin kagami -- schema | diff - docs/source/references/schema.json || {
-            echo 'Please re-generate schema with `cargo run --release --bin kagami -- schema > docs/source/references/schema.json`'
+        eval "$bin_kagami schema" | diff - docs/source/references/schema.json || {
+            echo "Please re-generate schema with `$bin_kagami schema > docs/source/references/schema.json`"
             exit 1
         };;
     "cli-help")
-        cargo run --release --bin iroha -- markdown-help | diff - crates/iroha_cli/CommandLineHelp.md || {
-            echo 'Please re-generate command-line help with `cargo run --bin iroha -- markdown-help > crates/iroha_cli/CommandLineHelp.md`'
+        eval "$bin_iroha markdown-help" | diff - crates/iroha_cli/CommandLineHelp.md || {
+            echo "Please re-generate command-line help with `$bin_iroha markdown-help > crates/iroha_cli/CommandLineHelp.md`"
             exit 1
         }
-        cargo run --release --bin kagami -- markdown-help | diff - crates/iroha_kagami/CommandLineHelp.md || {
-            echo 'Please re-generate command-line help with `cargo run --bin kagami -- markdown-help > crates/iroha_kagami/CommandLineHelp.md`'
+        eval "$bin_kagami markdown-help" | diff - crates/iroha_kagami/CommandLineHelp.md || {
+            echo "Please re-generate command-line help with `$bin_kagami -- markdown-help > crates/iroha_kagami/CommandLineHelp.md`"
             exit 1
         }
         ;;
@@ -35,15 +40,15 @@ case $1 in
         }
 
         command_base_for_single() {
-            echo "cargo run --release --bin kagami -- swarm -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
+            echo "$bin_kagami swarm -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
         }
 
         command_base_for_multiple_local() {
-            echo "cargo run --release --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
+            echo "$bin_kagami swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b ."
         }
 
         command_base_for_default() {
-            echo "cargo run --release --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev"
+            echo "$bin_kagami swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev"
         }
 
 
