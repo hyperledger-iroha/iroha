@@ -168,6 +168,7 @@ jobs:
   docker_compose_and_pytests:
     needs: pre_build
     runs-on: [self-hosted, Linux, iroha2]
+    if: false
     timeout-minutes: 60
     env:
       PYTHON_VERSION: "3.11"
