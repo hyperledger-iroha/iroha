@@ -7,6 +7,13 @@ TARGET_DIR="$CARGO_DIR/target/prebuilt"
 PROFILE="release"
 SHOW_HELP=false
 
+# Makes possible to set `BIN_KAGAMI=target/release/kagami` without running cargo
+if [ -n "$BIN_KAGAMI" ]; then
+    bin_kagami=("$BIN_KAGAMI")
+else
+    bin_kagami=(cargo run --release --bin kagami --)
+fi
+
 main() {
     targets=()
     
@@ -70,8 +77,7 @@ build() {
     mkdir -p "$TARGET_DIR/$1"
     for name in ${NAMES[@]}; do
         out_file="$TARGET_DIR/$1/$name.wasm"
-        # Using `--release` to re-use prebuilt release kagami in  CI
-        cargo run --bin kagami --release -- wasm build "$CARGO_DIR/$1/$name" --profile=$PROFILE --out-file "$out_file"
+        "${bin_kagami[@]}" wasm build "$CARGO_DIR/$1/$name" --profile=$PROFILE --out-file "$out_file"
     done
 
     echo "profile = \"${PROFILE}\"" > "$TARGET_DIR/build_config.toml"
