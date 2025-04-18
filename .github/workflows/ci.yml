@@ -360,8 +360,9 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         with:
           args: >
-            -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
             -Dcommunity.rust.lcov.reportPaths=lints/lcov.info
+          # TODO: include?
+          # -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
       - name: DefectDojo
         id: defectdojo
         uses: C4tWithShell/defectdojo-action@1.0.6
