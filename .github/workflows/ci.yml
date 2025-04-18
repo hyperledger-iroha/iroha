@@ -98,7 +98,7 @@ jobs:
           name: report-clippy
           path: clippy.json
 
-  build:
+  test:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2024-09-09
@@ -359,7 +359,7 @@ jobs:
           fail: true
 
   sonarqube_defectdojo:
-    needs: build
+    needs: [test, fmt_clippy]
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2024-09-09
