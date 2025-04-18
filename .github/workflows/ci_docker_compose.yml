@@ -19,6 +19,28 @@ env:
   WASM_TARGET_DIR: wasm/target/prebuilt
 
 jobs:
+  # this is a partial copy from `ci.yaml`
+  pre_build:
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # FIXME: it caches well for binaries build, but seems to ignore wasm32 target
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          workspaces: ".\n./wasm -> wasm32-unknown-unknown"
+      - name: Build WASMs
+        run: ./scripts/build_wasm.sh
+      - name: Upload WASMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: ${{ env.WASM_TARGET_DIR }}
+          retention-days: 1
+
   test:
     needs: pre_build
     runs-on: [self-hosted, Linux, iroha2]
