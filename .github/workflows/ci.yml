@@ -68,6 +68,7 @@ jobs:
           BIN_KAGAMI: bins/kagami
           BIN_IROHA: bins/iroha
         run: |
+          chmod +x -R bins
           ./scripts/tests/consistency.sh genesis
           ./scripts/tests/consistency.sh schema
           ./scripts/tests/consistency.sh cli-help
@@ -119,7 +120,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bins
-          paht: bins
+          path: bins
+      - name: Make binaries executable
+        run: chmod +x -R bins
       - name: Clippy (all targets, all features)
         run: cargo clippy --all-targets --all-features --quiet
       - name: Test (full)
@@ -164,8 +167,6 @@ jobs:
     needs: pre_build
     runs-on: [self-hosted, Linux, iroha2]
     env:
-      # PYTHON_VERSION: "3.11"
-      # POETRY_PATH: "/root/.local/bin/poetry"
       TEST_DIR: "tmp/test"
       IROHA_BIN: "bins/iroha"
       IROHA_CONTAINER: "defaults-irohad0-1"
@@ -177,7 +178,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.11
+          python-version: 3.11.12
       - uses: abatilo/actions-poetry@v4        
       - uses: astral-sh/setup-uv@v5
         with:
@@ -196,6 +197,8 @@ jobs:
         with:
           name: bins
           path: bins
+      - name: Make binaries executable
+        run: chmod +x -R bins
       - name: Install test_env deps globally
         run: pip install tomli-w
       - name: Run test env
