@@ -81,7 +81,7 @@ jobs:
           cache: "false"
           toolchain: "nightly-2024-09-09"
           target: "wasm32-unknown-unknown"
-          components: "rustfmt"
+          components: "rustfmt,clippy"
       - name: Format
         run: cargo fmt --all -- --check
       - name: Format (wasm)
