@@ -1,4 +1,4 @@
-name: I2::Custom::Publish
+name: publish_custom
 
 on:
   workflow_dispatch:
