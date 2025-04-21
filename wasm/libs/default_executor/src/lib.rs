@@ -6,7 +6,7 @@
 extern crate panic_halt;
 
 use dlmalloc::GlobalDlmalloc;
-use iroha_executor::{data_model::block::BlockHeader, prelude::*};
+use iroha_executor::prelude::*;
 
 #[global_allocator]
 static ALLOC: GlobalDlmalloc = GlobalDlmalloc;
@@ -23,17 +23,6 @@ struct Executor {
     verdict: Result,
 }
 
-impl Executor {
-    fn ensure_genesis(curr_block: BlockHeader) {
-        if !curr_block.is_genesis() {
-            dbg_panic!(
-                "Default Executor is intended to be used only in genesis. \
-                 Write your own executor if you need to upgrade executor on existing chain.",
-            );
-        }
-    }
-}
-
 /// Migrate previous executor to the current version.
 /// Called by Iroha once just before upgrading executor.
 ///
@@ -44,7 +33,6 @@ impl Executor {
 /// If `migrate()` entrypoint fails then the whole `Upgrade` instruction
 /// will be denied and previous executor will stay unchanged.
 #[iroha_executor::migrate]
-fn migrate(host: Iroha, context: Context) {
-    Executor::ensure_genesis(context.curr_block);
+fn migrate(host: Iroha, _context: Context) {
     DataModelBuilder::with_default_permissions().build_and_set(&host);
 }
