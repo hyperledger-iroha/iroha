@@ -26,7 +26,6 @@ macro_rules! data_event {
                 serde::Serialize,
                 iroha_schema::IntoSchema,
             )]
-            #[non_exhaustive]
             #[ffi_type]
             $item
         }
@@ -103,7 +102,6 @@ mod asset {
     pub use self::model::*;
     use super::*;
 
-    type AssetMetadataChanged = MetadataChanged<AssetId>;
     type AssetDefinitionMetadataChanged = MetadataChanged<AssetDefinitionId>;
 
     data_event! {
@@ -116,10 +114,6 @@ mod asset {
             Added(AssetChanged),
             #[has_origin(asset_changed => &asset_changed.asset)]
             Removed(AssetChanged),
-            #[has_origin(metadata_changed => &metadata_changed.target)]
-            MetadataInserted(AssetMetadataChanged),
-            #[has_origin(metadata_changed => &metadata_changed.target)]
-            MetadataRemoved(AssetMetadataChanged),
         }
     }
 
@@ -625,7 +619,6 @@ mod executor {
             iroha_schema::IntoSchema,
             EventSet,
         )]
-        #[non_exhaustive]
         #[ffi_type(opaque)]
         #[serde(untagged)] // Unaffected by #3330, as single unit variant
         #[repr(transparent)]

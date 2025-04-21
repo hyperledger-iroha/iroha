@@ -5,7 +5,7 @@
 use axum::extract::ws::WebSocket;
 #[cfg(feature = "telemetry")]
 use eyre::{eyre, WrapErr};
-use iroha_config::client_api::ConfigDTO;
+use iroha_config::client_api::{ConfigGetDTO, ConfigUpdateDTO};
 use iroha_core::{query::store::LiveQueryStoreHandle, smartcontracts::query::ValidQueryRequest};
 use iroha_data_model::{
     self,
@@ -83,7 +83,7 @@ pub async fn handle_schema() -> axum::Json<iroha_schema::MetaMap> {
 }
 
 #[iroha_futures::telemetry_future]
-pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<axum::Json<ConfigDTO>> {
+pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<axum::Json<ConfigGetDTO>> {
     let dto = kiso.get_dto().await?;
     Ok(axum::Json(dto))
 }
@@ -91,7 +91,7 @@ pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<axum::Json<Con
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_configuration(
     kiso: KisoHandle,
-    value: ConfigDTO,
+    value: ConfigUpdateDTO,
 ) -> Result<impl IntoResponse> {
     kiso.update_with_dto(value).await?;
     Ok((StatusCode::ACCEPTED, ()))
@@ -255,6 +255,33 @@ pub async fn handle_version(state: Arc<State>) -> String {
         .expect("Genesis not applied. Nothing we can do. Solve the issue and rerun.")
         .version()
         .to_string()
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub async fn telemetry_not_implemented() -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "This endpoint is not available on this version of \"irohad\", \
+          as it was compiled without the \"telemetry\" feature flag",
+    )
+}
+
+#[cfg(not(feature = "schema"))]
+pub async fn schema_not_implemented() -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "This endpoint is not available on this version of \"irohad\", \
+          as it was compiled without the \"schema-endpoint\" feature flag",
+    )
+}
+
+#[cfg(not(feature = "profiling"))]
+pub async fn profiling_not_implemented() -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "This endpoint is not available on this version of \"irohad\", \
+          as it was compiled without the \"profiling-endpoint\" feature flag",
+    )
 }
 
 #[cfg(feature = "telemetry")]

@@ -144,7 +144,7 @@ pub fn ffi(input: TokenStream) -> TokenStream {
 }
 
 // TODO: ffi_type(`local`) is a workaround for https://github.com/rust-lang/rust/issues/48214
-// because some derived types cannot derive `NonLocal` othwerise. Should be removed in future
+// because some derived types cannot derive `NonLocal` otherwise. Should be removed in future
 /// Derive implementations of traits required to convert to and from an FFI-compatible type
 ///
 /// # Attributes
@@ -173,7 +173,7 @@ pub fn ffi(input: TokenStream) -> TokenStream {
 /// NOTE: This attribute is likely to be removed in future versions
 ///
 /// * `#[ffi_type(unsafe {robust_non_owning})]`
-/// when a type contains a raw pointer (e.g. `*const T`/*mut T`) it's not possible to figure out
+/// when a type contains a raw pointer (e.g. `*const T`/`*mut T`) it's not possible to figure out
 /// whether it carries ownership of the data pointed to. Place this attribute on the field to
 /// indicate pointer doesn't own the data and is robust in the type. Alternatively, if the type
 /// is carrying ownership mark entire type as opaque with `#[ffi_type(opaque)]`. If the type

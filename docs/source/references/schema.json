@@ -620,16 +620,6 @@
         "tag": "Removed",
         "discriminant": 3,
         "type": "AssetChanged"
-      },
-      {
-        "tag": "MetadataInserted",
-        "discriminant": 4,
-        "type": "MetadataChanged<AssetId>"
-      },
-      {
-        "tag": "MetadataRemoved",
-        "discriminant": 5,
-        "type": "MetadataChanged<AssetId>"
       }
     ]
   },
@@ -664,14 +654,6 @@
         {
           "name": "Removed",
           "mask": 8
-        },
-        {
-          "name": "MetadataInserted",
-          "mask": 16
-        },
-        {
-          "name": "MetadataRemoved",
-          "mask": 32
         }
       ]
     }
@@ -812,7 +794,7 @@
       },
       {
         "name": "transactions_hash",
-        "type": "HashOf<MerkleTree<SignedTransaction>>"
+        "type": "Option<HashOf<MerkleTree<SignedTransaction>>>"
       },
       {
         "name": "creation_time_ms",
@@ -1096,14 +1078,6 @@
       }
     ]
   },
-  "CanRegisterAssetWithDefinition": {
-    "Struct": [
-      {
-        "name": "asset_definition",
-        "type": "AssetDefinitionId"
-      }
-    ]
-  },
   "CanRegisterDomain": null,
   "CanRegisterNft": {
     "Struct": [
@@ -1155,14 +1129,6 @@
     ]
   },
   "CanUnregisterAssetDefinition": {
-    "Struct": [
-      {
-        "name": "asset_definition",
-        "type": "AssetDefinitionId"
-      }
-    ]
-  },
-  "CanUnregisterAssetWithDefinition": {
     "Struct": [
       {
         "name": "asset_definition",
@@ -1267,6 +1233,9 @@
     "Int": "Compact"
   },
   "Compact<u32>": {
+    "Int": "Compact"
+  },
+  "Compact<u64>": {
     "Int": "Compact"
   },
   "CompoundPredicate<Account>": {
@@ -2787,22 +2756,6 @@
       }
     ]
   },
-  "MetadataChanged<AssetId>": {
-    "Struct": [
-      {
-        "name": "target",
-        "type": "AssetId"
-      },
-      {
-        "name": "key",
-        "type": "Name"
-      },
-      {
-        "name": "value",
-        "type": "Json"
-      }
-    ]
-  },
   "MetadataChanged<DomainId>": {
     "Struct": [
       {
@@ -3448,6 +3401,9 @@
   },
   "Option<HashOf<BlockHeader>>": {
     "Option": "HashOf<BlockHeader>"
+  },
+  "Option<HashOf<MerkleTree<SignedTransaction>>>": {
+    "Option": "HashOf<MerkleTree<SignedTransaction>>"
   },
   "Option<HashOf<SignedTransaction>>": {
     "Option": "HashOf<SignedTransaction>"
@@ -5025,7 +4981,12 @@
     ]
   },
   "SignedBlockPredicateAtom": {
-    "Enum": []
+    "Enum": [
+      {
+        "tag": "IsEmpty",
+        "discriminant": 0
+      }
+    ]
   },
   "SignedBlockProjection<PredicateMarker>": {
     "Enum": [
@@ -5301,6 +5262,42 @@
       {
         "name": "sort_by_metadata_key",
         "type": "Option<Name>"
+      }
+    ]
+  },
+  "Status": {
+    "Struct": [
+      {
+        "name": "peers",
+        "type": "Compact<u64>"
+      },
+      {
+        "name": "blocks",
+        "type": "Compact<u64>"
+      },
+      {
+        "name": "blocks_non_empty",
+        "type": "Compact<u64>"
+      },
+      {
+        "name": "txs_approved",
+        "type": "Compact<u64>"
+      },
+      {
+        "name": "txs_rejected",
+        "type": "Compact<u64>"
+      },
+      {
+        "name": "uptime",
+        "type": "Uptime"
+      },
+      {
+        "name": "view_changes",
+        "type": "Compact<u32>"
+      },
+      {
+        "name": "queue_size",
+        "type": "Compact<u64>"
       }
     ]
   },
@@ -6021,6 +6018,12 @@
         "name": "executor",
         "type": "Executor"
       }
+    ]
+  },
+  "Uptime": {
+    "Tuple": [
+      "Compact<u64>",
+      "u32"
     ]
   },
   "ValidationFail": {

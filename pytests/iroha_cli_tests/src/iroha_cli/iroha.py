@@ -114,9 +114,27 @@ class Iroha(IrohaCli):
 
             asset_definitions = {}
             for asset_def in asset_defs:
-                type_ = asset_def.get("type")
-                if type_:
-                    asset_definitions[asset_def["id"]] = type_
+                asset_definitions[asset_def["id"]] = asset_def
             return asset_definitions
+        else:
+            return {}
+
+    def nfts(self) -> Dict[str, str]:
+        """
+        Retrieve NFTs from the Iroha network
+        and return them as map where ids are keys and value types are values
+
+        :return: Dict of NFTs ids with there value type.
+        :rtype: Dict[str, str]
+        """
+        self._execute_command("nft")
+
+        if self.stdout is not None:
+            nfts_json = json.loads(self.stdout)
+
+            nfts = {}
+            for nft in nfts_json:
+                nfts[nft["id"]] = nft
+            return nfts
         else:
             return {}
