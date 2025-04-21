@@ -241,23 +241,46 @@ class IrohaCli:
         self.execute()
         return self
 
-    def asset_definition(self, asset: str, domain: str, type_: str):
+    def asset_definition(self, asset: str, domain: str, scale: Optional[int] = None):
         """
-        Executes the 'definition' command for the given asset, domain, and value type.
+        Executes the 'definition' command for the given asset, domain, and numeric scale.
 
         :param asset: The asset to be defined.
         :type asset: str
         :param domain: The domain of the asset.
         :type domain: str
-        :param type_: The value type of the asset.
-        :type type_: str
+        :param scale: The numeric scale of the asset.
+        :type scale: int
         :return: The current IrohaCli object.
         :rtype: IrohaCli
         """
         self.command.insert(2, "definition")
         self.command.insert(2, "asset")
         self.command.append("--id=" + asset + "#" + domain)
-        self.command.append("--type=" + type_)
+        if scale is not None:
+            self.command.append("--scale=" + str(scale))
+        self.execute()
+        return self
+
+    def nft(self, nft: str, domain: str, content: str = "{}"):
+        """
+        Executes the 'nft' command for the given nft, domain, and content.
+
+        :param nft: Name of the nft
+        :type nft: str
+        :param domain: The domain of the MFT.
+        :type domain: str
+        :param content: The content of the NFT (JSON-serialized object of key-values).
+        :type content: str
+        :return: The current IrohaCli object.
+        :rtype: IrohaCli
+        """
+        self.command.insert(2, "nft")
+        self.command.append("--id=" + nft + "$" + domain)
+
+        # Padding `content` as stdin
+        self.command = ["echo", content, "|"] + self.command
+
         self.execute()
         return self
 
@@ -296,7 +319,7 @@ class IrohaCli:
         """
         self._execute_pipe(
             ["cat", temp_file_path],
-            [self.BASE_PATH] + self.BASE_FLAGS + ["json", "transaction"],
+            [self.BASE_PATH] + self.BASE_FLAGS + ["transaction", "stdin"],
         )
 
     def register_trigger(self, account):

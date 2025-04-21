@@ -263,12 +263,14 @@ impl Sumeragi {
                     };
 
                     if block.as_ref().errors().next().is_some() {
-                        error!(
-                            peer_id=%self.peer,
-                            role=%self.role(),
-                            "Genesis contains invalid transactions"
-                        );
-
+                        for error in block.as_ref().errors() {
+                            error!(
+                                peer_id=%self.peer,
+                                role=%self.role(),
+                                ?error,
+                                "Invalid transaction in genesis"
+                            );
+                        }
                         continue;
                     }
 
@@ -880,9 +882,15 @@ impl Sumeragi {
         let view_change_in_progress = self.topology.view_change_index() > 0;
         let block_time = state.world.view().parameters.sumeragi.block_time();
         let deadline_reached = self.round_start_time.elapsed() > block_time;
-        let tx_cache_non_empty = !self.transaction_cache.is_empty();
 
-        if tx_cache_full || tx_cache_non_empty && (view_change_in_progress || deadline_reached) {
+        let tx_cache_non_empty = !self.transaction_cache.is_empty();
+        let prev_block_is_empty = state
+            .view()
+            .latest_block()
+            .map_or(true, |block| block.is_empty());
+        let block_expected = tx_cache_non_empty || !prev_block_is_empty;
+
+        if tx_cache_full || block_expected && (view_change_in_progress || deadline_reached) {
             let transactions = self
                 .transaction_cache
                 .iter()
@@ -1149,7 +1157,12 @@ pub(crate) fn run(
         );
 
         // We broadcast our view change suggestion after having processed the latest from others inside `receive_network_packet`
-        let block_expected = !sumeragi.transaction_cache.is_empty();
+        let tx_cache_non_empty = !sumeragi.transaction_cache.is_empty();
+        let prev_block_is_empty = state_view
+            .latest_block()
+            .map_or(true, |block| block.is_empty());
+        let block_expected = tx_cache_non_empty || !prev_block_is_empty;
+
         let view_change_in_progress = view_change_index > 0;
         if (block_expected || view_change_in_progress)
             && last_view_change_time.elapsed() > view_change_time

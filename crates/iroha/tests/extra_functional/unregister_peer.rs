@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use assert_matches::assert_matches;
 use eyre::Result;
 use iroha::{
     client::Client,
@@ -106,7 +105,7 @@ async fn find_asset(
     .find(|asset| asset.id().definition() == asset_definition)
     .expect("asset should be there");
 
-    assert_matches!(asset.value(), AssetValue::Numeric(quantity) => Ok(*quantity))
+    Ok(*asset.value())
 }
 
 async fn mint(

@@ -75,6 +75,8 @@ pub struct World {
     pub(crate) asset_definitions: Storage<AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
     pub(crate) assets: Storage<AssetId, Asset>,
+    /// Non fungible assets.
+    pub(crate) nfts: Storage<NftId, Nft>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: Storage<RoleId, Role>,
     /// Permission tokens of an account.
@@ -103,6 +105,8 @@ pub struct WorldBlock<'world> {
     pub(crate) asset_definitions: StorageBlock<'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
     pub(crate) assets: StorageBlock<'world, AssetId, Asset>,
+    /// Registered NFTs.
+    pub(crate) nfts: StorageBlock<'world, NftId, Nft>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageBlock<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -134,6 +138,8 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
     pub(crate) assets: StorageTransaction<'block, 'world, AssetId, Asset>,
+    /// Registered NFTs.
+    pub(crate) nfts: StorageTransaction<'block, 'world, NftId, Nft>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageTransaction<'block, 'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -172,6 +178,8 @@ pub struct WorldView<'world> {
     pub(crate) asset_definitions: StorageView<'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
     pub(crate) assets: StorageView<'world, AssetId, Asset>,
+    /// Registered NFTs.
+    pub(crate) nfts: StorageView<'world, NftId, Nft>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageView<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -357,6 +365,7 @@ impl World {
             accounts: self.accounts.block(),
             asset_definitions: self.asset_definitions.block(),
             assets: self.assets.block(),
+            nfts: self.nfts.block(),
             roles: self.roles.block(),
             account_permissions: self.account_permissions.block(),
             account_roles: self.account_roles.block(),
@@ -376,6 +385,7 @@ impl World {
             accounts: self.accounts.block_and_revert(),
             asset_definitions: self.asset_definitions.block_and_revert(),
             assets: self.assets.block_and_revert(),
+            nfts: self.nfts.block_and_revert(),
             roles: self.roles.block_and_revert(),
             account_permissions: self.account_permissions.block_and_revert(),
             account_roles: self.account_roles.block_and_revert(),
@@ -395,6 +405,7 @@ impl World {
             accounts: self.accounts.view(),
             asset_definitions: self.asset_definitions.view(),
             assets: self.assets.view(),
+            nfts: self.nfts.view(),
             roles: self.roles.view(),
             account_permissions: self.account_permissions.view(),
             account_roles: self.account_roles.view(),
@@ -414,6 +425,7 @@ pub trait WorldReadOnly {
     fn accounts(&self) -> &impl StorageReadOnly<AccountId, Account>;
     fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition>;
     fn assets(&self) -> &impl StorageReadOnly<AssetId, Asset>;
+    fn nfts(&self) -> &impl StorageReadOnly<NftId, Nft>;
     fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
     fn account_permissions(&self) -> &impl StorageReadOnly<AccountId, Permissions>;
     fn account_roles(&self) -> &impl StorageReadOnly<RoleIdWithOwner, ()>;
@@ -635,6 +647,49 @@ pub trait WorldReadOnly {
     fn asset_total_amount(&self, definition_id: &AssetDefinitionId) -> Result<Numeric, FindError> {
         Ok(self.asset_definition(definition_id)?.total_quantity)
     }
+
+    // NFT-related methods
+
+    /// Get `Nft` immutable view.
+    ///
+    /// # Errors
+    /// - NFT entry not found
+    fn nft(&self, nft_id: &NftId) -> Result<Nft, FindError> {
+        self.nfts()
+            .get(nft_id)
+            .ok_or_else(|| FindError::Nft(nft_id.clone()))
+            .cloned()
+    }
+
+    /// Returns reference for NFTs map
+    #[inline]
+    fn nfts_iter(&self) -> impl Iterator<Item = &Nft> {
+        self.nfts().iter().map(|(_, nft)| nft)
+    }
+
+    /// Iterate NFTs in domain
+    #[allow(clippy::type_complexity)]
+    fn nfts_in_domain_iter<'slf>(
+        &'slf self,
+        id: &DomainId,
+    ) -> core::iter::Map<RangeIter<'slf, NftId, Nft>, fn((&'slf NftId, &'slf Nft)) -> &'slf Nft>
+    {
+        self.nfts()
+            .range::<dyn AsNftIdDomainCompare>(NftByDomainBounds::new(id))
+            .map(|(_, ad)| ad)
+    }
+
+    // Role-related methods
+
+    /// Get `Role` and return reference to it.
+    ///
+    /// # Errors
+    /// Fails if there is no role
+    fn role(&self, id: &RoleId) -> Result<&Role, FindError> {
+        self.roles()
+            .get(id)
+            .ok_or_else(|| FindError::Role(id.clone()))
+    }
 }
 
 macro_rules! impl_world_ro {
@@ -657,6 +712,9 @@ macro_rules! impl_world_ro {
             }
             fn assets(&self) -> &impl StorageReadOnly<AssetId, Asset> {
                 &self.assets
+            }
+            fn nfts(&self) -> &impl StorageReadOnly<NftId, Nft> {
+                &self.nfts
             }
             fn roles(&self) -> &impl StorageReadOnly<RoleId, Role> {
                 &self.roles
@@ -694,6 +752,7 @@ impl<'world> WorldBlock<'world> {
             accounts: self.accounts.transaction(),
             asset_definitions: self.asset_definitions.transaction(),
             assets: self.assets.transaction(),
+            nfts: self.nfts.transaction(),
             roles: self.roles.transaction(),
             account_permissions: self.account_permissions.transaction(),
             account_roles: self.account_roles.transaction(),
@@ -717,6 +776,7 @@ impl<'world> WorldBlock<'world> {
             accounts,
             asset_definitions,
             assets,
+            nfts,
             roles,
             account_permissions,
             account_roles,
@@ -732,6 +792,7 @@ impl<'world> WorldBlock<'world> {
         account_roles.commit();
         account_permissions.commit();
         roles.commit();
+        nfts.commit();
         assets.commit();
         asset_definitions.commit();
         accounts.commit();
@@ -752,6 +813,7 @@ impl WorldTransaction<'_, '_> {
             accounts,
             asset_definitions,
             assets,
+            nfts,
             roles,
             account_permissions,
             account_roles,
@@ -766,6 +828,7 @@ impl WorldTransaction<'_, '_> {
         account_roles.apply();
         account_permissions.apply();
         roles.apply();
+        nfts.apply();
         assets.apply();
         asset_definitions.apply();
         accounts.apply();
@@ -858,7 +921,7 @@ impl WorldTransaction<'_, '_> {
     pub fn asset_or_insert(
         &mut self,
         asset_id: &AssetId,
-        default_asset_value: impl Into<AssetValue>,
+        default_asset_value: impl Into<Numeric>,
     ) -> Result<&mut Asset, Error> {
         self.domain(&asset_id.definition.domain)?;
         self.asset_definition(&asset_id.definition)?;
@@ -951,6 +1014,16 @@ impl WorldTransaction<'_, '_> {
         });
 
         Ok(())
+    }
+
+    /// Get mutable reference to [`Nft`]
+    ///
+    /// # Errors
+    /// If NFT not found
+    pub fn nft_mut(&mut self, id: &NftId) -> Result<&mut Nft, FindError> {
+        self.nfts
+            .get_mut(id)
+            .ok_or_else(|| FindError::Nft(id.clone()))
     }
 
     /// Set executor data model.
@@ -1705,6 +1778,60 @@ mod range_bounds {
         trait: AsAssetDefinitionIdDomainCompare
     }
 
+    /// `DomainId` wrapper for fetching NFTs belonging to a domain from the global store
+    #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
+    pub struct NftIdDomainCompare<'a> {
+        domain_id: &'a DomainId,
+        name: MinMaxExt<&'a Name>,
+    }
+
+    /// Bounds for range quired over NFTs by domain
+    pub struct NftByDomainBounds<'a> {
+        start: NftIdDomainCompare<'a>,
+        end: NftIdDomainCompare<'a>,
+    }
+
+    impl<'a> NftByDomainBounds<'a> {
+        /// Create range bounds for range quires over NFTs by domain
+        pub fn new(domain_id: &'a DomainId) -> Self {
+            Self {
+                start: NftIdDomainCompare {
+                    domain_id,
+                    name: MinMaxExt::Min,
+                },
+                end: NftIdDomainCompare {
+                    domain_id,
+                    name: MinMaxExt::Max,
+                },
+            }
+        }
+    }
+
+    impl<'a> RangeBounds<dyn AsNftIdDomainCompare + 'a> for NftByDomainBounds<'a> {
+        fn start_bound(&self) -> Bound<&(dyn AsNftIdDomainCompare + 'a)> {
+            Bound::Excluded(&self.start)
+        }
+
+        fn end_bound(&self) -> Bound<&(dyn AsNftIdDomainCompare + 'a)> {
+            Bound::Excluded(&self.end)
+        }
+    }
+
+    impl AsNftIdDomainCompare for NftId {
+        fn as_key(&self) -> NftIdDomainCompare<'_> {
+            NftIdDomainCompare {
+                domain_id: &self.domain,
+                name: (&self.name).into(),
+            }
+        }
+    }
+
+    impl_as_dyn_key! {
+        target: NftId,
+        key: NftIdDomainCompare<'_>,
+        trait: AsNftIdDomainCompare
+    }
+
     /// `AccountId` wrapper for fetching assets beloning to an account from the global store
     #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone)]
     pub struct AssetIdAccountCompare<'a> {
@@ -1858,6 +1985,7 @@ pub(crate) mod deserialize {
                     let mut accounts = None;
                     let mut asset_definitions = None;
                     let mut assets = None;
+                    let mut nfts = None;
                     let mut roles = None;
                     let mut account_permissions = None;
                     let mut account_roles = None;
@@ -1884,6 +2012,9 @@ pub(crate) mod deserialize {
                             }
                             "assets" => {
                                 assets = Some(map.next_value()?);
+                            }
+                            "nfts" => {
+                                nfts = Some(map.next_value()?);
                             }
                             "roles" => {
                                 roles = Some(map.next_value()?);
@@ -1922,6 +2053,7 @@ pub(crate) mod deserialize {
                         asset_definitions: asset_definitions
                             .ok_or_else(|| serde::de::Error::missing_field("asset_definitions"))?,
                         assets: assets.ok_or_else(|| serde::de::Error::missing_field("assets"))?,
+                        nfts: nfts.ok_or_else(|| serde::de::Error::missing_field("nfts"))?,
                         roles: roles.ok_or_else(|| serde::de::Error::missing_field("roles"))?,
                         account_permissions: account_permissions.ok_or_else(|| {
                             serde::de::Error::missing_field("account_permissions")
@@ -2221,7 +2353,7 @@ mod tests {
         let assets = accounts
             .into_iter()
             .zip(asset_definitions)
-            .map(|(account, asset_definiton)| AssetId::new(asset_definiton, account))
+            .map(|(account, asset_definition)| AssetId::new(asset_definition, account))
             .map(|asset| (asset, ()));
 
         let map: Storage<_, _> = assets.collect();

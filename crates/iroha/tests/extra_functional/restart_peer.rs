@@ -59,7 +59,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     .into_iter()
     .find(|asset| *asset.id().definition() == asset_definition_id)
     .expect("Asset not found");
-    assert_eq!(AssetValue::Numeric(quantity), *asset.value());
+    assert_eq!(quantity, *asset.value());
 
     Ok(())
 }

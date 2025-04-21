@@ -6,15 +6,19 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path ./wasm/Cargo.toml --all -- --check
 # lints
 cargo clippy --workspace --benches --tests --examples --all-features
+cargo clippy --workspace --benches --tests --examples --all-features --manifest-path ./wasm/Cargo.toml
 # TODO: fails, re-enable
 # cargo clippy --workspace --benches --tests --examples --no-default-features
 # update the default genesis, assuming the transaction authority is `iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID`
 cargo run --bin kagami -- genesis generate --executor executor.wasm --wasm-dir libs --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4 > ./defaults/genesis.json
 # update schema
 cargo run --bin kagami -- schema > ./docs/source/references/schema.json
+# update command-line help
+cargo run --bin iroha -- markdown-help > ./crates/iroha_cli/CommandLineHelp.md
+cargo run --bin kagami -- markdown-help > ./crates/iroha_kagami/CommandLineHelp.md
 # update docker compose files
-cargo run --bin iroha_swarm -- -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.single.yml -F
-cargo run --bin iroha_swarm -- -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.local.yml -F
-cargo run --bin iroha_swarm -- -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev -o ./defaults/docker-compose.yml -F
+cargo run --bin kagami -- swarm -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.single.yml -F
+cargo run --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.local.yml -F
+cargo run --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev -o ./defaults/docker-compose.yml -F
 # stage updates
-git add ./defaults/genesis.json ./docs/source/references/schema.json ./defaults/docker-compose.single.yml ./defaults/docker-compose.local.yml ./defaults/docker-compose.yml
+git add ./defaults/genesis.json ./docs/source/references/schema.json ./crates/iroha_cli/CommandLineHelp.md ./defaults/docker-compose.single.yml ./defaults/docker-compose.local.yml ./defaults/docker-compose.yml

@@ -45,6 +45,8 @@ impl PeersGossiperHandle {
 
 /// Actor which gossips peers addresses.
 pub struct PeersGossiper {
+    /// Id of the current peer
+    peer_id: PeerId,
     /// Peers provided at startup
     initial_peers: BTreeMap<PeerId, SocketAddr>,
     /// Peers received via gossiping from other peers
@@ -68,6 +70,7 @@ pub struct PeersGossiper {
 impl PeersGossiper {
     /// Start actor.
     pub fn start(
+        peer_id: PeerId,
         trusted_peers: TrustedPeers,
         network: IrohaNetwork,
         shutdown_signal: ShutdownSignal,
@@ -78,6 +81,7 @@ impl PeersGossiper {
             .map(|peer| (peer.id, peer.address))
             .collect();
         let gossiper = Self {
+            peer_id,
             initial_peers,
             gossip_peers: BTreeMap::new(),
             current_topology: BTreeSet::new(),
@@ -120,6 +124,7 @@ impl PeersGossiper {
                 }
                 () = self.network.wait_online_peers_update(|_| ()) => {
                     self.gossip_peers();
+                    self.network_update_peers_addresses();
                 }
                 Some((peers_gossip, peer)) = message_receiver.recv() => {
                     self.handle_peers_gossip(peers_gossip, &peer);
@@ -175,15 +180,16 @@ impl PeersGossiper {
 
         let mut peers = Vec::new();
         for (id, address) in &self.initial_peers {
-            if !online_peers_ids.contains(id) {
-                peers.push((id.clone(), address.clone()));
-            }
+            peers.push((id.clone(), address.clone()));
         }
         for (id, addresses) in &self.gossip_peers {
-            if !online_peers_ids.contains(id) {
-                peers.push((id.clone(), choose_address_majority_rule(addresses)));
-            }
+            peers.push((id.clone(), choose_address_majority_rule(addresses)));
         }
+
+        let peers = peers
+            .into_iter()
+            .filter(|(id, _)| !online_peers_ids.contains(id) && id != &self.peer_id)
+            .collect();
 
         let update = UpdatePeers(peers);
         self.network.update_peers_addresses(update);

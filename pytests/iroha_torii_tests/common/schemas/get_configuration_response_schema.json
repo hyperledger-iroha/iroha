@@ -2,16 +2,78 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",
     "properties": {
+        "public_key": {
+            "type": "string"
+        },
         "logger": {
             "type": "object",
             "properties": {
                 "level": {
                     "type": "string",
-                    "enum": ["trace", "debug", "info", "warn", "error"]
+                    "enum": [
+                        "TRACE",
+                        "DEBUG",
+                        "INFO",
+                        "WARN",
+                        "ERROR"
+                    ]
+                },
+                "filter": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
                 }
             },
-            "required": ["level"]
+            "required": [
+                "level",
+                "filter"
+            ]
+        },
+        "network": {
+            "type": "object",
+            "properties": {
+                "block_gossip_size": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "block_gossip_period_ms": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "transaction_gossip_size": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "transaction_gossip_period_ms": {
+                    "type": "integer",
+                    "minimum": 1
+                }
+            },
+            "required": [
+                "block_gossip_size",
+                "block_gossip_period_ms",
+                "transaction_gossip_size",
+                "transaction_gossip_period_ms"
+            ]
+        },
+        "queue": {
+            "type": "object",
+            "properties": {
+                "capacity": {
+                    "type": "integer",
+                    "minimum": 1
+                }
+            },
+            "required": [
+                "capacity"
+            ]
         }
     },
-    "required": ["logger"]
+    "required": [
+        "public_key",
+        "logger",
+        "network",
+        "queue"
+    ]
 }

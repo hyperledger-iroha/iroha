@@ -26,7 +26,6 @@ macro_rules! data_event {
                 serde::Serialize,
                 iroha_schema::IntoSchema,
             )]
-            #[non_exhaustive]
             #[ffi_type]
             $item
         }
@@ -103,7 +102,6 @@ mod asset {
     pub use self::model::*;
     use super::*;
 
-    type AssetMetadataChanged = MetadataChanged<AssetId>;
     type AssetDefinitionMetadataChanged = MetadataChanged<AssetDefinitionId>;
 
     data_event! {
@@ -116,10 +114,6 @@ mod asset {
             Added(AssetChanged),
             #[has_origin(asset_changed => &asset_changed.asset)]
             Removed(AssetChanged),
-            #[has_origin(metadata_changed => &metadata_changed.target)]
-            MetadataInserted(AssetMetadataChanged),
-            #[has_origin(metadata_changed => &metadata_changed.target)]
-            MetadataRemoved(AssetMetadataChanged),
         }
     }
 
@@ -164,7 +158,7 @@ mod asset {
         #[ffi_type]
         pub struct AssetChanged {
             pub asset: AssetId,
-            pub amount: AssetValue,
+            pub amount: Numeric,
         }
 
         /// [`Self`] represents updated total asset quantity.
@@ -209,6 +203,61 @@ mod asset {
         pub struct AssetDefinitionOwnerChanged {
             /// Id of asset definition being updated
             pub asset_definition: AssetDefinitionId,
+            /// Id of new owning account
+            pub new_owner: AccountId,
+        }
+    }
+}
+
+mod nft {
+    //! This module contains `NftEvent` and its impls
+
+    use iroha_data_model_derive::model;
+
+    pub use self::model::*;
+    use super::*;
+
+    type NftMetadataChanged = MetadataChanged<NftId>;
+
+    data_event! {
+        #[has_origin(origin = Nft)]
+        pub enum NftEvent {
+            #[has_origin(nft => nft.id())]
+            Created(Nft),
+            Deleted(NftId),
+            #[has_origin(metadata_changed => &metadata_changed.target)]
+            MetadataInserted(NftMetadataChanged),
+            #[has_origin(metadata_changed => &metadata_changed.target)]
+            MetadataRemoved(NftMetadataChanged),
+            #[has_origin(ownership_changed => &ownership_changed.nft)]
+            OwnerChanged(NftOwnerChanged),
+        }
+    }
+
+    #[model]
+    mod model {
+        use super::*;
+
+        /// Event indicates that owner of the [`Nft`] is changed
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Getters,
+            Decode,
+            Encode,
+            Deserialize,
+            Serialize,
+            IntoSchema,
+        )]
+        #[getset(get = "pub")]
+        #[ffi_type]
+        pub struct NftOwnerChanged {
+            /// Id of NFT being updated
+            pub nft: NftId,
             /// Id of new owning account
             pub new_owner: AccountId,
         }
@@ -390,6 +439,8 @@ mod domain {
             Deleted(DomainId),
             #[has_origin(asset_definition_event => &asset_definition_event.origin().domain)]
             AssetDefinition(AssetDefinitionEvent),
+            #[has_origin(nft_event => &nft_event.origin().domain)]
+            Nft(NftEvent),
             #[has_origin(account_event => &account_event.origin().domain)]
             Account(AccountEvent),
             #[has_origin(metadata_changed => &metadata_changed.target)]
@@ -568,7 +619,6 @@ mod executor {
             iroha_schema::IntoSchema,
             EventSet,
         )]
-        #[non_exhaustive]
         #[ffi_type(opaque)]
         #[serde(untagged)] // Unaffected by #3330, as single unit variant
         #[repr(transparent)]
@@ -627,6 +677,12 @@ impl From<AssetEvent> for DataEvent {
     }
 }
 
+impl From<NftEvent> for DataEvent {
+    fn from(value: NftEvent) -> Self {
+        DomainEvent::Nft(value).into()
+    }
+}
+
 impl DataEvent {
     /// Return the domain id of [`Event`]
     pub fn domain(&self) -> Option<&DomainId> {
@@ -669,6 +725,7 @@ pub mod prelude {
         config::{ConfigurationEvent, ConfigurationEventSet, ParameterChanged},
         domain::{DomainEvent, DomainEventSet, DomainOwnerChanged},
         executor::{ExecutorEvent, ExecutorEventSet, ExecutorUpgrade},
+        nft::{NftEvent, NftEventSet, NftOwnerChanged},
         peer::{PeerEvent, PeerEventSet},
         role::{RoleEvent, RoleEventSet, RolePermissionChanged},
         trigger::{TriggerEvent, TriggerEventSet, TriggerNumberOfExecutionsChanged},

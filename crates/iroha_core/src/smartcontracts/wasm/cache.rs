@@ -10,10 +10,13 @@ use crate::{
     state::StateTransaction,
 };
 
-/// Executor related things (linker initialization, module instantiation, memory free)
-/// takes significant amount of time in case of single peer transactions handling.
-/// (https://github.com/hyperledger/iroha/issues/3716#issuecomment-2348417005).
-/// So this cache is used to share `Store` and `Instance` for different transaction validation.
+/// Enables the reuse of `Store` and `Instance` across multiple transaction validations.
+///
+/// # Context
+///
+/// Executor-related operations (such as linker initialization, module instantiation, and memory deallocation)
+/// can significantly impact performance when handling transactions. This issue is discussed in
+/// [#3716](https://github.com/hyperledger-iroha/iroha/issues/3716#issuecomment-2348417005).
 #[derive(Default)]
 pub struct WasmCache<'world, 'block, 'state> {
     cache: Option<RuntimeFull<ExecuteTransaction<'world, 'block, 'state>>>,

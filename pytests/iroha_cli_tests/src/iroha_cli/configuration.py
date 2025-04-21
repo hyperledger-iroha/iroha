@@ -56,7 +56,7 @@ class Config:
                 "No configuration loaded. Use load() method to load the configuration."
             )
 
-        if self.port_min >= self.port_max:
+        if self.port_min > self.port_max:
             raise ValueError("port_min must be less than port_max.")
 
         os.makedirs(peer_configs_dir, exist_ok=True)

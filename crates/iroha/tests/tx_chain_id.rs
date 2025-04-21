@@ -19,10 +19,10 @@ fn send_tx_with_different_chain_id() {
     let create_receiver_account = Register::account(Account::new(receiver_id.clone()));
     let register_asset_definition =
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
-    let register_asset = Register::asset(Asset::new(
-        AssetId::new(asset_definition_id.clone(), sender_id.clone()),
+    let register_asset = Mint::asset_numeric(
         numeric!(10),
-    ));
+        AssetId::new(asset_definition_id.clone(), sender_id.clone()),
+    );
     test_client
         .submit_all_blocking::<InstructionBox>([
             create_sender_account.into(),

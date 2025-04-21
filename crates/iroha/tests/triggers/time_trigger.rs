@@ -43,7 +43,7 @@ fn mint_asset_after_3_sec() -> Result<()> {
     let init_quantity = test_client
         .query(FindAssets)
         .filter_with(|asset| asset.id.eq(asset_id.clone()))
-        .select_with(|asset| asset.value.numeric)
+        .select_with(|asset| asset.value)
         .execute_single()?;
 
     let start_time = curr_time();
@@ -69,7 +69,7 @@ fn mint_asset_after_3_sec() -> Result<()> {
     let after_registration_quantity = test_client
         .query(FindAssets)
         .filter_with(|asset| asset.id.eq(asset_id.clone()))
-        .select_with(|asset| asset.value.numeric)
+        .select_with(|asset| asset.value)
         .execute_single()?;
     assert_eq!(init_quantity, after_registration_quantity);
 
@@ -80,7 +80,7 @@ fn mint_asset_after_3_sec() -> Result<()> {
     let after_wait_quantity = test_client
         .query(FindAssets)
         .filter_with(|asset| asset.id.eq(asset_id.clone()))
-        .select_with(|asset| asset.value.numeric)
+        .select_with(|asset| asset.value)
         .execute_single()?;
     // Schedule is in the past now so trigger is executed
     assert_eq!(
@@ -102,8 +102,6 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
     let account_id = ALICE_ID.clone();
     let asset_id = AssetId::new(asset_definition_id, account_id.clone());
 
-    let mut prev_value = get_asset_value(&test_client, asset_id.clone());
-
     // Start listening BEFORE submitting any transaction not to miss any block committed event
     let event_listener = get_block_committed_event_listener(&test_client)?;
 
@@ -119,11 +117,11 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
     ));
     test_client.submit(register_trigger)?;
 
-    for _ in event_listener.take(CHECKS_COUNT) {
-        let new_value = get_asset_value(&test_client, asset_id.clone());
-        assert_eq!(new_value, prev_value.checked_add(Numeric::ONE).unwrap());
-        prev_value = new_value;
+    // Waiting for empty block to be committed
+    std::thread::sleep(network.pipeline_time());
 
+    let mut prev_value = get_asset_value(&test_client, asset_id.clone());
+    for _ in event_listener.take(CHECKS_COUNT) {
         // ISI just to create a new block
         let sample_isi = SetKeyValue::account(
             account_id.clone(),
@@ -131,6 +129,13 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
             "value".parse::<Json>()?,
         );
         test_client.submit(sample_isi)?;
+
+        // Waiting for empty block to be committed
+        std::thread::sleep(network.pipeline_time());
+
+        let new_value = get_asset_value(&test_client, asset_id.clone());
+        assert_eq!(new_value, prev_value.checked_add(numeric!(2)).unwrap());
+        prev_value = new_value;
     }
 
     Ok(())
@@ -199,15 +204,15 @@ fn mint_nft_for_every_user_every_1_sec() -> Result<()> {
     // Checking results
     for account_id in accounts {
         let start_pattern = "nft_number_";
-        let end_pattern = format!("_for_{}#{}", account_id.signatory(), account_id.domain());
-        let assets = test_client
-            .query(FindAssets::new())
-            .filter_with(|asset| asset.id.account.eq(account_id.clone()))
+        let end_pattern = format!("_for_{}${}", account_id.signatory(), account_id.domain());
+        let nfts = test_client
+            .query(FindNfts::new())
+            .filter_with(|nft| nft.owned_by.eq(account_id.clone()))
             .execute_all()?;
-        let count: u64 = assets
+        let count: u64 = nfts
             .into_iter()
-            .filter(|asset| {
-                let s = asset.id().definition().to_string();
+            .filter(|nft| {
+                let s = nft.id().to_string();
                 s.starts_with(start_pattern) && s.ends_with(&end_pattern)
             })
             .count()

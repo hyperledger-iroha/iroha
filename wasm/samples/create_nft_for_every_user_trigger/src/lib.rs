@@ -1,4 +1,4 @@
-//! Smartcontract which creates new nft for every user
+//! Smartcontract which creates new NFT for every user
 #![no_std]
 
 extern crate alloc;
@@ -45,37 +45,32 @@ fn main(host: Iroha, context: Context) {
         metadata.insert(name, true);
 
         let nft_id = generate_new_nft_id(&host, account.id());
-        let nft_definition = AssetDefinition::store(nft_id.clone())
-            .mintable_once()
-            .with_metadata(metadata);
-        let account_nft_id = AssetId::new(nft_id, account.id().clone());
-        let account_nft = Asset::new(account_nft_id, Metadata::default());
-
-        host.submit(&Register::asset_definition(nft_definition))
+        let register_nft = Register::nft(Nft::new(nft_id.clone(), metadata));
+        let transfer_nft = Transfer::nft(context.authority.clone(), nft_id, account.id().clone());
+        host.submit_all::<InstructionBox>(&[register_nft.into(), transfer_nft.into()])
             .dbg_unwrap();
-        host.submit(&Register::asset(account_nft)).dbg_unwrap();
     }
 
     iroha_trigger::log::info!("Smart contract executed successfully");
 }
 
-fn generate_new_nft_id(host: &Iroha, account_id: &AccountId) -> AssetDefinitionId {
-    let assets = host
-        .query(FindAssets)
-        .filter_with(|asset| asset.id.account.eq(account_id.clone()))
+fn generate_new_nft_id(host: &Iroha, account_id: &AccountId) -> NftId {
+    let nfts = host
+        .query(FindNfts)
+        .filter_with(|nft| nft.owned_by.eq(account_id.clone()))
         .execute()
         .dbg_unwrap();
 
-    let new_number = assets
+    let new_number = nfts
         .map(|res| res.dbg_unwrap())
-        .filter(|asset| asset.id().definition().to_string().starts_with("nft_"))
+        .filter(|nft| nft.id().to_string().starts_with("nft_"))
         .count()
         .checked_add(1)
         .dbg_unwrap();
     iroha_trigger::log::debug!(&format!("New number: {}", new_number));
 
     format!(
-        "nft_number_{}_for_{}#{}",
+        "nft_number_{}_for_{}${}",
         new_number,
         account_id.signatory(),
         account_id.domain()

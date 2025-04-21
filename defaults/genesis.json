@@ -59,7 +59,9 @@
       "Register": {
         "AssetDefinition": {
           "id": "rose#wonderland",
-          "type": "Numeric",
+          "spec": {
+            "scale": null
+          },
           "mintable": "Infinitely",
           "logo": null,
           "metadata": {}
@@ -87,7 +89,9 @@
       "Register": {
         "AssetDefinition": {
           "id": "cabbage#garden_of_live_flowers",
-          "type": "Numeric",
+          "spec": {
+            "scale": null
+          },
           "mintable": "Infinitely",
           "logo": null,
           "metadata": {}

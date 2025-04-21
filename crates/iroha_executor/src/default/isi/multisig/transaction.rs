@@ -1,7 +1,6 @@
 //! Validation and execution logic of instructions for multisig transactions
 
 use alloc::{collections::btree_set::BTreeSet, vec};
-use core::num::NonZeroU64;
 
 use iroha_smart_contract::data_model::query::error::QueryExecutionFail;
 
@@ -189,15 +188,13 @@ fn proposal_value<V: Execute + Visit + ?Sized>(
         .map_err(metadata_conversion_error)
 }
 
-fn now_ms<V: Execute + Visit + ?Sized>(executor: &V) -> NonZeroU64 {
+fn now_ms<V: Execute + Visit + ?Sized>(executor: &V) -> u64 {
     executor
         .context()
         .curr_block
         .creation_time()
         .as_millis()
         .try_into()
-        .ok()
-        .and_then(NonZeroU64::new)
         .dbg_expect("shouldn't overflow within 584942417 years")
 }
 

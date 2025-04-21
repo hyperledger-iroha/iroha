@@ -8,7 +8,7 @@ use std::collections::btree_map;
 
 use derive_more::{Constructor, DebugCustom, Display};
 use iroha_data_model_derive::{model, IdEqOrdHash};
-use iroha_primitives::numeric::{Numeric, NumericSpec, NumericSpecParseError};
+use iroha_primitives::numeric::{Numeric, NumericSpec};
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,6 @@ pub type AssetTotalQuantityMap = btree_map::BTreeMap<AssetDefinitionId, Numeric>
 #[model]
 mod model {
     use getset::{CopyGetters, Getters};
-    use iroha_macro::FromVariant;
 
     use super::*;
 
@@ -106,16 +105,15 @@ mod model {
         Serialize,
         IntoSchema,
     )]
-    #[display(fmt = "{id} {type_}{mintable}")]
+    #[display(fmt = "{id} {spec}{mintable}")]
     #[allow(clippy::multiple_inherent_impl)]
     #[ffi_type]
     pub struct AssetDefinition {
         /// An Identification of the [`AssetDefinition`].
         pub id: AssetDefinitionId,
-        /// Type of [`AssetValue`]
+        /// Numeric spec of [`AssetValue`]
         #[getset(get_copy = "pub")]
-        #[serde(rename = "type")]
-        pub type_: AssetType,
+        pub spec: NumericSpec,
         /// Is the asset mintable
         #[getset(get_copy = "pub")]
         pub mintable: Mintable,
@@ -127,9 +125,7 @@ mod model {
         /// The account that owns this asset. Usually the [`Account`] that registered it.
         #[getset(get = "pub")]
         pub owned_by: AccountId,
-        /// The total amount of this asset in existence.
-        ///
-        /// For numeric assets - it is the sum of all asset values. For store assets - it is the count of all assets.
+        /// The total amount of this asset in existence (sum of all asset values).
         #[getset(get_copy = "pub")]
         pub total_quantity: Numeric,
     }
@@ -155,83 +151,27 @@ mod model {
         pub id: AssetId,
         /// Asset's Quantity.
         #[getset(get = "pub")]
-        pub value: AssetValue,
+        pub value: Numeric,
     }
 
     /// Builder which can be submitted in a transaction to create a new [`AssetDefinition`]
     #[derive(
         Debug, Display, Clone, IdEqOrdHash, Decode, Encode, Deserialize, Serialize, IntoSchema,
     )]
-    #[display(fmt = "{id} {mintable}{type_}")]
+    #[display(fmt = "{id} {mintable}{spec}")]
     #[serde(rename = "AssetDefinition")]
     #[ffi_type]
     pub struct NewAssetDefinition {
         /// The identification associated with the asset definition builder.
         pub id: AssetDefinitionId,
-        /// The type value associated with the asset definition builder.
-        #[serde(rename = "type")]
-        pub type_: AssetType,
+        /// The numeric spec associated with the asset definition builder.
+        pub spec: NumericSpec,
         /// The mintablility associated with the asset definition builder.
         pub mintable: Mintable,
         /// IPFS link to the [`AssetDefinition`] logo
         pub logo: Option<IpfsPath>,
         /// Metadata associated with the asset definition builder.
         pub metadata: Metadata,
-    }
-    /// Asset's inner value type.
-    #[derive(
-        Debug,
-        Display,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Decode,
-        Encode,
-        DeserializeFromStr,
-        SerializeDisplay,
-        IntoSchema,
-    )]
-    #[ffi_type]
-    #[repr(u8)]
-    pub enum AssetType {
-        /// Asset's qualitative value.
-        #[display(fmt = "{_0}")]
-        Numeric(NumericSpec),
-        /// Asset's key-value structured data.
-        #[display(fmt = "Store")]
-        Store,
-    }
-
-    /// Asset's inner value.
-    #[derive(
-        Debug,
-        Display,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        FromVariant,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
-    )]
-    #[ffi_type]
-    pub enum AssetValue {
-        /// Asset's qualitative value.
-        #[display(fmt = "{_0}")]
-        Numeric(
-            #[skip_from]
-            #[skip_try_from]
-            Numeric,
-        ),
-        /// Asset's key-value structured data.
-        Store(Metadata),
     }
 
     /// An assets mintability scheme. `Infinitely` means elastic
@@ -268,37 +208,19 @@ mod model {
     }
 }
 
-/// Error occurred while parsing `AssetType`
-#[derive(Debug, displaydoc::Display, Clone)]
-#[cfg_attr(feature = "std", derive(thiserror::Error))]
-#[repr(u8)]
-pub enum AssetTypeParseError {
-    /// `AssetType` should be either `Store` or `Numeric`
-    WrongVariant,
-    /// Error occurred while parsing `Numeric` variant: {_0}
-    Numeric(#[cfg_attr(feature = "std", source)] NumericSpecParseError),
-}
-
 impl AssetDefinition {
     /// Construct builder for [`AssetDefinition`] identifiable by [`Id`].
     #[must_use]
     #[inline]
-    pub fn new(id: AssetDefinitionId, type_: AssetType) -> <Self as Registered>::With {
-        <Self as Registered>::With::new(id, type_)
+    pub fn new(id: AssetDefinitionId, spec: NumericSpec) -> <Self as Registered>::With {
+        <Self as Registered>::With::new(id, spec)
     }
 
     /// Construct builder for [`AssetDefinition`] identifiable by [`Id`].
     #[must_use]
     #[inline]
     pub fn numeric(id: AssetDefinitionId) -> <Self as Registered>::With {
-        <Self as Registered>::With::new(id, AssetType::Numeric(NumericSpec::default()))
-    }
-
-    /// Construct builder for [`AssetDefinition`] identifiable by [`Id`].
-    #[must_use]
-    #[inline]
-    pub fn store(id: AssetDefinitionId) -> <Self as Registered>::With {
-        <Self as Registered>::With::new(id, AssetType::Store)
+        <Self as Registered>::With::new(id, NumericSpec::default())
     }
 }
 
@@ -314,7 +236,7 @@ impl AssetId {
 
 impl Asset {
     /// Constructor
-    pub fn new(id: AssetId, value: impl Into<AssetValue>) -> <Self as Registered>::With {
+    pub fn new(id: AssetId, value: impl Into<Numeric>) -> <Self as Registered>::With {
         Self {
             id,
             value: value.into(),
@@ -324,10 +246,10 @@ impl Asset {
 
 impl NewAssetDefinition {
     /// Create a [`NewAssetDefinition`], reserved for internal use.
-    fn new(id: AssetDefinitionId, type_: AssetType) -> Self {
+    fn new(id: AssetDefinitionId, spec: NumericSpec) -> Self {
         Self {
             id,
-            type_,
+            spec,
             mintable: Mintable::Infinitely,
             logo: None,
             metadata: Metadata::default(),
@@ -361,29 +283,6 @@ impl NewAssetDefinition {
 impl HasMetadata for AssetDefinition {
     fn metadata(&self) -> &Metadata {
         &self.metadata
-    }
-}
-
-impl AssetValue {
-    /// Returns the asset type as a string.
-    pub const fn type_(&self) -> AssetType {
-        match *self {
-            Self::Numeric(numeric) => AssetType::Numeric(NumericSpec::fractional(numeric.scale())),
-            Self::Store(_) => AssetType::Store,
-        }
-    }
-    /// Returns true if this value is zero, false if it contains [`Metadata`] or positive value
-    pub const fn is_zero_value(&self) -> bool {
-        match *self {
-            Self::Numeric(q) => q.is_zero(),
-            Self::Store(_) => false,
-        }
-    }
-}
-
-impl<T: Into<Numeric>> From<T> for AssetValue {
-    fn from(value: T) -> Self {
-        Self::Numeric(value.into())
     }
 }
 
@@ -454,21 +353,6 @@ impl FromStr for AssetId {
     }
 }
 
-impl FromStr for AssetType {
-    type Err = AssetTypeParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Store" => Ok(Self::Store),
-            s if s.starts_with("Numeric") => s
-                .parse::<NumericSpec>()
-                .map(Self::Numeric)
-                .map_err(AssetTypeParseError::Numeric),
-            _ => Err(AssetTypeParseError::WrongVariant),
-        }
-    }
-}
-
 impl HasMetadata for NewAssetDefinition {
     fn metadata(&self) -> &Metadata {
         &self.metadata
@@ -486,8 +370,7 @@ impl Registered for AssetDefinition {
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{
-        Asset, AssetDefinition, AssetDefinitionId, AssetId, AssetType, AssetValue, Mintable,
-        NewAssetDefinition,
+        Asset, AssetDefinition, AssetDefinitionId, AssetId, Mintable, NewAssetDefinition,
     };
 }
 

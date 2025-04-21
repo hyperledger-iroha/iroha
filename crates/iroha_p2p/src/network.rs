@@ -231,6 +231,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     current_conn_id: ConnectionId,
     /// Current topology
     current_topology: HashSet<PeerId>,
+    /// Peers which are not yet connected, but should.
+    ///
     /// Can have two addresses for same `PeerId`.
     /// * One initially provided via config
     /// * Second received from other peers via gossiping
@@ -352,7 +354,6 @@ impl<T: Pload, K: Kex, E: Enc> NetworkBase<T, K, E> {
     fn set_current_peers_addresses(&mut self, UpdatePeers(peers): UpdatePeers) {
         debug!(?peers, "Network receive new peers addresses");
         self.current_peers_addresses = peers;
-        self.update_topology()
     }
 
     fn update_topology(&mut self) {

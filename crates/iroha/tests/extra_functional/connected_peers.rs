@@ -72,9 +72,21 @@ async fn connected_peers_with_f(faults: usize) -> Result<()> {
     .await?;
     assert_peers_status(randomized_peers.iter().copied(), 2, n_peers as u64 - 2).await;
 
+    // Wait for peer to disconnect
+    timeout(network.sync_timeout(), async {
+        loop {
+            let status = removed_peer.status().await?;
+            if status.peers == 0 {
+                break;
+            }
+        }
+        Ok::<(), eyre::Report>(())
+    })
+    .await??;
+
     let status = removed_peer.status().await?;
     // Peer might have been disconnected before getting the block
-    assert_matches!(status.blocks, 1 | 2);
+    assert_matches!(status.blocks_non_empty, 1 | 2);
     assert_eq!(status.peers, 0);
 
     // Re-register the peer: committed with f = `faults` - 1 then `status.peers` increments
@@ -112,7 +124,7 @@ async fn assert_peers_status(
                 peer.peer_id()
             );
             assert_eq!(
-                status.blocks,
+                status.blocks_non_empty,
                 expected_blocks,
                 "expected blocks for {}",
                 peer.peer_id()

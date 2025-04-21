@@ -132,9 +132,9 @@ pub mod multisig {
         /// Proposal contents
         pub instructions: Vec<InstructionBox>,
         /// Time in milliseconds at which the proposal was made
-        pub proposed_at_ms: NonZeroU64,
+        pub proposed_at_ms: u64,
         /// Time in milliseconds at which the proposal will expire
-        pub expires_at_ms: NonZeroU64,
+        pub expires_at_ms: u64,
         /// List of approvers of the proposal so far
         pub approvals: BTreeSet<AccountId>,
         /// In case this proposal is some relaying approval, indicates if it has executed or not

@@ -7,6 +7,7 @@ use iroha_data_model::{
     query::{QueryResponse, SignedQuery},
 };
 use iroha_schema::prelude::*;
+use iroha_telemetry::metrics::Status;
 
 macro_rules! types {
     ($($t:ty),+ $(,)?) => {
@@ -30,7 +31,7 @@ macro_rules! types {
 
 /// Builds the schema for the current state of Iroha.
 ///
-/// You should only include the top-level types, because other types
+/// You should only include the top-level types because other types
 /// shall be included recursively.
 pub fn build_schemas() -> MetaMap {
     use iroha_data_model::prelude::*;
@@ -77,17 +78,17 @@ pub fn build_schemas() -> MetaMap {
         permission::asset_definition::CanUnregisterAssetDefinition,
         permission::asset_definition::CanModifyAssetDefinitionMetadata,
 
-        permission::asset::CanRegisterAssetWithDefinition,
-        permission::asset::CanUnregisterAssetWithDefinition,
         permission::asset::CanMintAssetWithDefinition,
         permission::asset::CanBurnAssetWithDefinition,
         permission::asset::CanTransferAssetWithDefinition,
-        permission::asset::CanRegisterAsset,
-        permission::asset::CanUnregisterAsset,
         permission::asset::CanMintAsset,
         permission::asset::CanBurnAsset,
         permission::asset::CanTransferAsset,
-        permission::asset::CanModifyAssetMetadata,
+
+        permission::nft::CanRegisterNft,
+        permission::nft::CanUnregisterNft,
+        permission::nft::CanTransferNft,
+        permission::nft::CanModifyNftMetadata,
 
         permission::parameter::CanSetParameters,
         permission::role::CanManageRoles,
@@ -109,6 +110,9 @@ pub fn build_schemas() -> MetaMap {
         // Genesis file - used by SDKs to generate the genesis block
         // TODO: IMO it could/should be removed from the schema
         iroha_genesis::RawGenesisTransaction,
+
+        // It is exposed via Torii
+        Status
     }
 }
 
@@ -156,12 +160,6 @@ types!(
     AssetPredicateAtom,
     AssetProjection<PredicateMarker>,
     AssetProjection<SelectorMarker>,
-    AssetTransferBox,
-    AssetType,
-    AssetValue,
-    AssetValuePredicateAtom,
-    AssetValueProjection<PredicateMarker>,
-    AssetValueProjection<SelectorMarker>,
     BTreeMap<AccountId, u8>,
     BTreeMap<CustomParameterId, CustomParameter>,
     BTreeMap<Name, Json>,
@@ -192,6 +190,7 @@ types!(
     Box<CompoundPredicate<BlockHeader>>,
     Box<CompoundPredicate<CommittedTransaction>>,
     Box<CompoundPredicate<Domain>>,
+    Box<CompoundPredicate<Nft>>,
     Box<CompoundPredicate<PeerId>>,
     Box<CompoundPredicate<Permission>>,
     Box<CompoundPredicate<RoleId>>,
@@ -214,6 +213,7 @@ types!(
     CompoundPredicate<BlockHeader>,
     CompoundPredicate<CommittedTransaction>,
     CompoundPredicate<Domain>,
+    CompoundPredicate<Nft>,
     CompoundPredicate<PeerId>,
     CompoundPredicate<Permission>,
     CompoundPredicate<RoleId>,
@@ -271,6 +271,7 @@ types!(
     FindDomains,
     FindError,
     FindExecutorDataModel,
+    FindNfts,
     FindParameters,
     FindPeers,
     FindPermissionsByAccountId,
@@ -312,8 +313,8 @@ types!(
     Metadata,
     MetadataChanged<AccountId>,
     MetadataChanged<AssetDefinitionId>,
-    MetadataChanged<AssetId>,
     MetadataChanged<DomainId>,
+    MetadataChanged<NftId>,
     MetadataChanged<TriggerId>,
     MetadataPredicateAtom,
     MetadataProjection<PredicateMarker>,
@@ -325,14 +326,27 @@ types!(
     MintBox,
     MintabilityError,
     Mintable,
-    Mismatch<AssetType>,
+    Mismatch<NumericSpec>,
     Name,
     NameProjection<PredicateMarker>,
     NameProjection<SelectorMarker>,
     NewAccount,
     NewAssetDefinition,
     NewDomain,
+    NewNft,
     NewRole,
+    Nft,
+    NftEvent,
+    NftEventFilter,
+    NftEventSet,
+    NftId,
+    NftIdPredicateAtom,
+    NftIdProjection<PredicateMarker>,
+    NftIdProjection<SelectorMarker>,
+    NftOwnerChanged,
+    NftPredicateAtom,
+    NftProjection<PredicateMarker>,
+    NftProjection<SelectorMarker>,
     NonZeroU16,
     NonZeroU32,
     NonZeroU64,
@@ -348,9 +362,11 @@ types!(
     Option<DomainId>,
     Option<ForwardCursor>,
     Option<HashOf<BlockHeader>>,
+    Option<HashOf<MerkleTree<SignedTransaction>>>,
     Option<HashOf<SignedTransaction>>,
     Option<IpfsPath>,
     Option<Name>,
+    Option<NftId>,
     Option<NonZeroU32>,
     Option<NonZeroU64>,
     Option<Option<NonZeroU64>>,
@@ -404,6 +420,7 @@ types!(
     QueryWithFilter<FindBlockHeaders>,
     QueryWithFilter<FindBlocks>,
     QueryWithFilter<FindDomains>,
+    QueryWithFilter<FindNfts>,
     QueryWithFilter<FindPeers>,
     QueryWithFilter<FindPermissionsByAccountId>,
     QueryWithFilter<FindRoleIds>,
@@ -413,17 +430,17 @@ types!(
     QueryWithFilter<FindTriggers>,
     QueryWithParams,
     Register<Account>,
-    Register<Asset>,
     Register<AssetDefinition>,
     Register<Domain>,
+    Register<Nft>,
     Register<Peer>,
     Register<Role>,
     Register<Trigger>,
     RegisterBox,
     RemoveKeyValue<Account>,
-    RemoveKeyValue<Asset>,
     RemoveKeyValue<AssetDefinition>,
     RemoveKeyValue<Domain>,
+    RemoveKeyValue<Nft>,
     RemoveKeyValue<Trigger>,
     RemoveKeyValueBox,
     Repeats,
@@ -450,6 +467,7 @@ types!(
     SelectorTuple<BlockHeader>,
     SelectorTuple<CommittedTransaction>,
     SelectorTuple<Domain>,
+    SelectorTuple<Nft>,
     SelectorTuple<PeerId>,
     SelectorTuple<Permission>,
     SelectorTuple<RoleId>,
@@ -458,9 +476,9 @@ types!(
     SelectorTuple<TriggerId>,
     SelectorTuple<Trigger>,
     SetKeyValue<Account>,
-    SetKeyValue<Asset>,
     SetKeyValue<AssetDefinition>,
     SetKeyValue<Domain>,
+    SetKeyValue<Nft>,
     SetKeyValue<Trigger>,
     SetKeyValueBox,
     SetParameter,
@@ -489,6 +507,7 @@ types!(
     SocketAddrV4,
     SocketAddrV6,
     Sorting,
+    Status,
     String,
     StringPredicateAtom,
     SumeragiParameter,
@@ -514,7 +533,7 @@ types!(
     TransactionStatus,
     Transfer<Account, AssetDefinitionId, Account>,
     Transfer<Account, DomainId, Account>,
-    Transfer<Asset, Metadata, Account>,
+    Transfer<Account, NftId, Account>,
     Transfer<Asset, Numeric, Account>,
     TransferBox,
     Trigger,
@@ -535,14 +554,15 @@ types!(
     TriggerProjection<SelectorMarker>,
     TypeError,
     Unregister<Account>,
-    Unregister<Asset>,
     Unregister<AssetDefinition>,
     Unregister<Domain>,
+    Unregister<Nft>,
     Unregister<Peer>,
     Unregister<Role>,
     Unregister<Trigger>,
     UnregisterBox,
     Upgrade,
+    Uptime,
     ValidationFail,
     Vec<Account>,
     Vec<AccountId>,
@@ -551,7 +571,6 @@ types!(
     Vec<AssetId>,
     Vec<AssetDefinition>,
     Vec<AssetDefinitionId>,
-    Vec<AssetValue>,
     Vec<BlockHeader>,
     Vec<BlockSignature>,
     Vec<CommittedTransaction>,
@@ -561,6 +580,7 @@ types!(
     Vec<CompoundPredicate<BlockHeader>>,
     Vec<CompoundPredicate<CommittedTransaction>>,
     Vec<CompoundPredicate<Domain>>,
+    Vec<CompoundPredicate<Nft>>,
     Vec<CompoundPredicate<PeerId>>,
     Vec<CompoundPredicate<Permission>>,
     Vec<CompoundPredicate<RoleId>>,
@@ -574,6 +594,9 @@ types!(
     Vec<GenesisWasmTrigger>,
     Vec<InstructionBox>,
     Vec<Json>,
+    Vec<Nft>,
+    Vec<NftId>,
+    Vec<NftProjection<SelectorMarker>>,
     Vec<Parameter>,
     Vec<PeerId>,
     Vec<Permission>,
@@ -676,6 +699,7 @@ pub mod complete_data_model {
         json::Json,
     };
     pub use iroha_schema::Compact;
+    pub use iroha_telemetry::metrics::{Status, Uptime};
 }
 
 #[cfg(test)]
@@ -707,6 +731,7 @@ mod tests {
         map_all_schema_types!(insert_into_test_map);
 
         insert_into_test_map!(Compact<u128>);
+        insert_into_test_map!(Compact<u64>);
         insert_into_test_map!(Compact<u32>);
 
         insert_into_test_map!(iroha_executor_data_model::permission::peer::CanManagePeers);
@@ -728,12 +753,6 @@ mod tests {
         );
         insert_into_test_map!(iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata);
         insert_into_test_map!(
-            iroha_executor_data_model::permission::asset::CanRegisterAssetWithDefinition
-        );
-        insert_into_test_map!(
-            iroha_executor_data_model::permission::asset::CanUnregisterAssetWithDefinition
-        );
-        insert_into_test_map!(
             iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition
         );
         insert_into_test_map!(
@@ -742,12 +761,14 @@ mod tests {
         insert_into_test_map!(
             iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition
         );
-        insert_into_test_map!(iroha_executor_data_model::permission::asset::CanRegisterAsset);
-        insert_into_test_map!(iroha_executor_data_model::permission::asset::CanUnregisterAsset);
         insert_into_test_map!(iroha_executor_data_model::permission::asset::CanMintAsset);
         insert_into_test_map!(iroha_executor_data_model::permission::asset::CanBurnAsset);
         insert_into_test_map!(iroha_executor_data_model::permission::asset::CanTransferAsset);
-        insert_into_test_map!(iroha_executor_data_model::permission::asset::CanModifyAssetMetadata);
+
+        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanRegisterNft);
+        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanUnregisterNft);
+        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanTransferNft);
+        insert_into_test_map!(iroha_executor_data_model::permission::nft::CanModifyNftMetadata);
 
         insert_into_test_map!(iroha_executor_data_model::permission::parameter::CanSetParameters);
         insert_into_test_map!(iroha_executor_data_model::permission::role::CanManageRoles);

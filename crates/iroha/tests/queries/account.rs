@@ -24,10 +24,6 @@ fn find_accounts_with_asset() -> Result<()> {
         .execute_single()?;
 
     assert_eq!(received_asset_definition.id(), asset_definition.id());
-    assert!(matches!(
-        received_asset_definition.type_(),
-        AssetType::Numeric(_)
-    ));
 
     let accounts: [AccountId; 5] = [
         ALICE_ID.clone(),
@@ -63,10 +59,7 @@ fn find_accounts_with_asset() -> Result<()> {
         .execute_single()?;
 
     assert_eq!(received_asset_definition.id(), asset_definition.id());
-    assert_eq!(
-        received_asset_definition.type_(),
-        AssetType::Numeric(NumericSpec::default()),
-    );
+    assert_eq!(received_asset_definition.spec(), NumericSpec::default());
 
     let found_accounts = test_client
         .query(FindAccountsWithAsset::new(definition_id))

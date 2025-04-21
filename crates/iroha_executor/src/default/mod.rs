@@ -7,11 +7,7 @@ pub use account::{
     visit_register_account, visit_remove_account_key_value, visit_set_account_key_value,
     visit_unregister_account,
 };
-pub use asset::{
-    visit_burn_asset_numeric, visit_mint_asset_numeric, visit_register_asset,
-    visit_remove_asset_key_value, visit_set_asset_key_value, visit_transfer_asset_numeric,
-    visit_transfer_asset_store, visit_unregister_asset,
-};
+pub use asset::{visit_burn_asset_numeric, visit_mint_asset_numeric, visit_transfer_asset_numeric};
 pub use asset_definition::{
     visit_register_asset_definition, visit_remove_asset_definition_key_value,
     visit_set_asset_definition_key_value, visit_transfer_asset_definition,
@@ -25,6 +21,10 @@ pub use executor::visit_upgrade;
 use iroha_smart_contract::data_model::{prelude::*, visit::Visit};
 pub use isi::visit_custom_instruction;
 pub use log::visit_log;
+pub use nft::{
+    visit_register_nft, visit_remove_nft_key_value, visit_set_nft_key_value, visit_transfer_nft,
+    visit_unregister_nft,
+};
 pub use parameter::visit_set_parameter;
 pub use peer::{visit_register_peer, visit_unregister_peer};
 pub use permission::{visit_grant_account_permission, visit_revoke_account_permission};
@@ -308,12 +308,6 @@ pub mod domain {
             AnyPermission::CanModifyAssetDefinitionMetadata(permission) => {
                 permission.asset_definition.domain() == domain_id
             }
-            AnyPermission::CanRegisterAssetWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
-            }
-            AnyPermission::CanUnregisterAssetWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
-            }
             AnyPermission::CanMintAssetWithDefinition(permission) => {
                 permission.asset_definition.domain() == domain_id
             }
@@ -322,15 +316,6 @@ pub mod domain {
             }
             AnyPermission::CanTransferAssetWithDefinition(permission) => {
                 permission.asset_definition.domain() == domain_id
-            }
-            AnyPermission::CanRegisterAsset(permission) => permission.owner.domain() == domain_id,
-            AnyPermission::CanUnregisterAsset(permission) => {
-                permission.asset.definition().domain() == domain_id
-                    || permission.asset.account().domain() == domain_id
-            }
-            AnyPermission::CanModifyAssetMetadata(permission) => {
-                permission.asset.definition().domain() == domain_id
-                    || permission.asset.account().domain() == domain_id
             }
             AnyPermission::CanMintAsset(permission) => {
                 permission.asset.definition().domain() == domain_id
@@ -344,6 +329,10 @@ pub mod domain {
                 permission.asset.definition().domain() == domain_id
                     || permission.asset.account().domain() == domain_id
             }
+            AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
+            AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
+            AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,
+            AnyPermission::CanModifyNftMetadata(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanUnregisterAccount(permission) => {
                 permission.account.domain() == domain_id
             }
@@ -503,13 +492,6 @@ pub mod account {
             AnyPermission::CanModifyAccountMetadata(permission) => {
                 permission.account == *account_id
             }
-            AnyPermission::CanRegisterAsset(permission) => permission.owner == *account_id,
-            AnyPermission::CanUnregisterAsset(permission) => {
-                permission.asset.account() == account_id
-            }
-            AnyPermission::CanModifyAssetMetadata(permission) => {
-                permission.asset.account() == account_id
-            }
             AnyPermission::CanMintAsset(permission) => permission.asset.account() == account_id,
             AnyPermission::CanBurnAsset(permission) => permission.asset.account() == account_id,
             AnyPermission::CanTransferAsset(permission) => permission.asset.account() == account_id,
@@ -526,11 +508,13 @@ pub mod account {
             | AnyPermission::CanRegisterAssetDefinition(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
-            | AnyPermission::CanRegisterAssetWithDefinition(_)
-            | AnyPermission::CanUnregisterAssetWithDefinition(_)
             | AnyPermission::CanMintAssetWithDefinition(_)
             | AnyPermission::CanBurnAssetWithDefinition(_)
             | AnyPermission::CanTransferAssetWithDefinition(_)
+            | AnyPermission::CanRegisterNft(_)
+            | AnyPermission::CanUnregisterNft(_)
+            | AnyPermission::CanTransferNft(_)
+            | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_) => false,
@@ -729,12 +713,6 @@ pub mod asset_definition {
             AnyPermission::CanModifyAssetDefinitionMetadata(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
-            AnyPermission::CanRegisterAssetWithDefinition(permission) => {
-                &permission.asset_definition == asset_definition_id
-            }
-            AnyPermission::CanUnregisterAssetWithDefinition(permission) => {
-                &permission.asset_definition == asset_definition_id
-            }
             AnyPermission::CanMintAssetWithDefinition(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
@@ -743,12 +721,6 @@ pub mod asset_definition {
             }
             AnyPermission::CanTransferAssetWithDefinition(permission) => {
                 &permission.asset_definition == asset_definition_id
-            }
-            AnyPermission::CanUnregisterAsset(permission) => {
-                permission.asset.definition() == asset_definition_id
-            }
-            AnyPermission::CanModifyAssetMetadata(permission) => {
-                permission.asset.definition() == asset_definition_id
             }
             AnyPermission::CanMintAsset(permission) => {
                 permission.asset.definition() == asset_definition_id
@@ -760,7 +732,6 @@ pub mod asset_definition {
                 permission.asset.definition() == asset_definition_id
             }
             AnyPermission::CanUnregisterAccount(_)
-            | AnyPermission::CanRegisterAsset(_)
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
@@ -773,6 +744,10 @@ pub mod asset_definition {
             | AnyPermission::CanModifyDomainMetadata(_)
             | AnyPermission::CanRegisterAccount(_)
             | AnyPermission::CanRegisterAssetDefinition(_)
+            | AnyPermission::CanRegisterNft(_)
+            | AnyPermission::CanUnregisterNft(_)
+            | AnyPermission::CanTransferNft(_)
+            | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_) => false,
@@ -783,104 +758,18 @@ pub mod asset_definition {
 pub mod asset {
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-        CanModifyAssetMetadata, CanRegisterAsset, CanRegisterAssetWithDefinition, CanTransferAsset,
-        CanTransferAssetWithDefinition, CanUnregisterAsset, CanUnregisterAssetWithDefinition,
+        CanTransferAsset, CanTransferAssetWithDefinition,
     };
-    use iroha_smart_contract::data_model::{
-        asset::AssetValue, isi::BuiltInInstruction, metadata::Metadata,
-    };
+    use iroha_smart_contract::data_model::isi::BuiltInInstruction;
     use iroha_smart_contract_utils::Encode;
 
     use super::*;
     use crate::permission::{asset::is_asset_owner, asset_definition::is_asset_definition_owner};
 
-    pub fn visit_register_asset<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &Register<Asset>,
-    ) {
-        let asset = isi.object();
-
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        match is_asset_definition_owner(
-            asset.id().definition(),
-            &executor.context().authority,
-            executor.host(),
-        ) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
-        }
-        let can_register_assets_with_definition_token = CanRegisterAssetWithDefinition {
-            asset_definition: asset.id().definition().clone(),
-        };
-        if can_register_assets_with_definition_token
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-        let can_register_user_asset_token = CanRegisterAsset {
-            owner: asset.id().account().clone(),
-        };
-        if can_register_user_asset_token.is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-
-        deny!(
-            executor,
-            "Can't register assets with definitions registered by other accounts"
-        );
-    }
-
-    pub fn visit_unregister_asset<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &Unregister<Asset>,
-    ) {
-        let asset_id = isi.object();
-
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
-        }
-        match is_asset_definition_owner(
-            asset_id.definition(),
-            &executor.context().authority,
-            executor.host(),
-        ) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
-        }
-        let can_unregister_assets_with_definition_token = CanUnregisterAssetWithDefinition {
-            asset_definition: asset_id.definition().clone(),
-        };
-        if can_unregister_assets_with_definition_token
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-        let can_unregister_user_asset_token = CanUnregisterAsset {
-            asset: asset_id.clone(),
-        };
-        if can_unregister_user_asset_token
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't unregister asset from another account");
-    }
-
     fn execute_mint_asset<V, Q>(executor: &mut V, isi: &Mint<Q, Asset>)
     where
         V: Execute + Visit + ?Sized,
-        Q: Into<AssetValue>,
+        Q: Into<Numeric>,
         Mint<Q, Asset>: BuiltInInstruction + Encode,
     {
         let asset_id = isi.destination();
@@ -927,7 +816,7 @@ pub mod asset {
     fn execute_burn_asset<V, Q>(executor: &mut V, isi: &Burn<Q, Asset>)
     where
         V: Execute + Visit + ?Sized,
-        Q: Into<AssetValue>,
+        Q: Into<Numeric>,
         Burn<Q, Asset>: BuiltInInstruction + Encode,
     {
         let asset_id = isi.destination();
@@ -973,12 +862,10 @@ pub mod asset {
         execute_burn_asset(executor, isi);
     }
 
-    fn execute_transfer_asset<V, Q>(executor: &mut V, isi: &Transfer<Asset, Q, Account>)
-    where
-        V: Execute + Visit + ?Sized,
-        Q: Into<AssetValue>,
-        Transfer<Asset, Q, Account>: BuiltInInstruction + Encode,
-    {
+    pub fn visit_transfer_asset_numeric<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &Transfer<Asset, Numeric, Account>,
+    ) {
         let asset_id = isi.source();
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
@@ -1015,40 +902,41 @@ pub mod asset {
 
         deny!(executor, "Can't transfer assets of another account");
     }
+}
 
-    pub fn visit_transfer_asset_numeric<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &Transfer<Asset, Numeric, Account>,
-    ) {
-        execute_transfer_asset(executor, isi);
-    }
+pub mod nft {
+    use iroha_executor_data_model::permission::nft::{
+        CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
+    };
+    use iroha_smart_contract_utils::Encode;
 
-    pub fn visit_transfer_asset_store<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &Transfer<Asset, Metadata, Account>,
-    ) {
-        execute_transfer_asset(executor, isi);
-    }
+    use super::*;
+    use crate::{
+        data_model::isi::BuiltInInstruction,
+        permission::{
+            account::is_account_owner,
+            nft::{is_nft_full_owner, is_nft_weak_owner},
+            revoke_permissions,
+        },
+    };
 
-    pub fn visit_set_asset_key_value<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &SetKeyValue<Asset>,
-    ) {
-        let asset_id = isi.object();
+    pub fn visit_register_nft<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Register<Nft>) {
+        let domain_id = isi.object().id().domain();
 
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
+        match crate::permission::domain::is_domain_owner(
+            domain_id,
+            &executor.context().authority,
+            executor.host(),
+        ) {
             Err(err) => deny!(executor, err),
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
         }
 
-        let can_set_key_value_in_user_asset_token = CanModifyAssetMetadata {
-            asset: asset_id.clone(),
+        let can_register_nft_in_domain_token = CanRegisterNft {
+            domain: domain_id.clone(),
         };
-        if can_set_key_value_in_user_asset_token
+        if can_register_nft_in_domain_token
             .is_owned_by(&executor.context().authority, executor.host())
         {
             execute!(executor, isi);
@@ -1056,36 +944,125 @@ pub mod asset {
 
         deny!(
             executor,
-            "Can't set value to the asset metadata of another account"
+            "Can't register NFT in a domain owned by another account"
         );
     }
 
-    pub fn visit_remove_asset_key_value<V: Execute + Visit + ?Sized>(
+    pub fn visit_unregister_nft<V: Execute + Visit + ?Sized>(
         executor: &mut V,
-        isi: &RemoveKeyValue<Asset>,
+        isi: &Unregister<Nft>,
     ) {
-        let asset_id = isi.object();
+        let nft_id = isi.object();
+
+        if executor.context().curr_block.is_genesis()
+            || match is_nft_full_owner(nft_id, &executor.context().authority, executor.host()) {
+                Err(err) => deny!(executor, err),
+                Ok(is_owner) => is_owner,
+            }
+            || {
+                let can_unregister_token = CanUnregisterNft {
+                    nft: nft_id.clone(),
+                };
+                can_unregister_token.is_owned_by(&executor.context().authority, executor.host())
+            }
+        {
+            let err = revoke_permissions(executor, |permission| {
+                is_permission_nft_associated(permission, nft_id)
+            });
+            if let Err(err) = err {
+                deny!(executor, err);
+            }
+
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't unregister NFT in a domain owned by another account"
+        );
+    }
+
+    fn is_permission_nft_associated(permission: &Permission, nft_id: &NftId) -> bool {
+        use AnyPermission::*;
+        let Ok(permission) = AnyPermission::try_from(permission) else {
+            return false;
+        };
+        match permission {
+            CanUnregisterNft(permission) => &permission.nft == nft_id,
+            CanTransferNft(permission) => &permission.nft == nft_id,
+            CanModifyNftMetadata(permission) => &permission.nft == nft_id,
+            _ => false,
+        }
+    }
+
+    pub fn visit_transfer_nft<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &Transfer<Account, NftId, Account>,
+    ) {
+        let source_id = isi.source();
+        let nft_id = isi.object();
 
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        match is_asset_owner(asset_id, &executor.context().authority, executor.host()) {
+        match is_account_owner(source_id, &executor.context().authority, executor.host()) {
             Err(err) => deny!(executor, err),
             Ok(true) => execute!(executor, isi),
             Ok(false) => {}
         }
-        let can_remove_key_value_in_user_asset_token = CanModifyAssetMetadata {
-            asset: asset_id.clone(),
+        match is_nft_weak_owner(nft_id, &executor.context().authority, executor.host()) {
+            Err(err) => deny!(executor, err),
+            Ok(true) => execute!(executor, isi),
+            Ok(false) => {}
+        }
+
+        let can_transfer_nft_token = CanTransferNft {
+            nft: nft_id.clone(),
         };
-        if can_remove_key_value_in_user_asset_token
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
+        if can_transfer_nft_token.is_owned_by(&executor.context().authority, executor.host()) {
+            execute!(executor, isi);
+        }
+
+        deny!(executor, "Can't transfer NFT of another account");
+    }
+
+    pub fn visit_set_nft_key_value<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetKeyValue<Nft>,
+    ) {
+        execute_modify_nft_key_value(executor, isi.object(), isi);
+    }
+
+    pub fn visit_remove_nft_key_value<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RemoveKeyValue<Nft>,
+    ) {
+        execute_modify_nft_key_value(executor, isi.object(), isi);
+    }
+
+    fn execute_modify_nft_key_value<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        nft_id: &NftId,
+        isi: &(impl BuiltInInstruction + Encode),
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        match is_nft_full_owner(nft_id, &executor.context().authority, executor.host()) {
+            Err(err) => deny!(executor, err),
+            Ok(true) => execute!(executor, isi),
+            Ok(false) => {}
+        }
+
+        let can_modify_nft_token = CanModifyNftMetadata {
+            nft: nft_id.clone(),
+        };
+        if can_modify_nft_token.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
 
         deny!(
             executor,
-            "Can't remove value from the asset metadata of another account"
+            "Can't modify NFT from domain owned by another account"
         );
     }
 }
@@ -1540,19 +1517,18 @@ pub mod trigger {
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
-            | AnyPermission::CanRegisterAssetWithDefinition(_)
-            | AnyPermission::CanUnregisterAssetWithDefinition(_)
-            | AnyPermission::CanRegisterAsset(_)
-            | AnyPermission::CanUnregisterAsset(_)
             | AnyPermission::CanMintAssetWithDefinition(_)
             | AnyPermission::CanBurnAssetWithDefinition(_)
             | AnyPermission::CanTransferAssetWithDefinition(_)
-            | AnyPermission::CanModifyAssetMetadata(_)
             | AnyPermission::CanMintAsset(_)
             | AnyPermission::CanBurnAsset(_)
             | AnyPermission::CanTransferAsset(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageRoles(_)
+            | AnyPermission::CanRegisterNft(_)
+            | AnyPermission::CanUnregisterNft(_)
+            | AnyPermission::CanTransferNft(_)
+            | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanUpgradeExecutor(_) => false,
         }
     }

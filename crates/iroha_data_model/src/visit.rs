@@ -60,6 +60,7 @@ pub trait Visit {
         visit_find_accounts(&QueryWithFilter<FindAccounts>),
         visit_find_assets(&QueryWithFilter<FindAssets>),
         visit_find_assets_definitions(&QueryWithFilter<FindAssetsDefinitions>),
+        visit_find_nfts(&QueryWithFilter<FindNfts>),
         visit_find_roles(&QueryWithFilter<FindRoles>),
         visit_find_role_ids(&QueryWithFilter<FindRoleIds>),
         visit_find_permissions_by_account_id(&QueryWithFilter<FindPermissionsByAccountId>),
@@ -77,7 +78,7 @@ pub trait Visit {
         visit_register_domain(&Register<Domain>),
         visit_register_account(&Register<Account>),
         visit_register_asset_definition(&Register<AssetDefinition>),
-        visit_register_asset(&Register<Asset>),
+        visit_register_nft(&Register<Nft>),
         visit_register_role(&Register<Role>),
         visit_register_trigger(&Register<Trigger>),
 
@@ -86,7 +87,7 @@ pub trait Visit {
         visit_unregister_domain(&Unregister<Domain>),
         visit_unregister_account(&Unregister<Account>),
         visit_unregister_asset_definition(&Unregister<AssetDefinition>),
-        visit_unregister_asset(&Unregister<Asset>),
+        visit_unregister_nft(&Unregister<Nft>),
         // TODO: Need to allow role creator to unregister it somehow
         visit_unregister_role(&Unregister<Role>),
         visit_unregister_trigger(&Unregister<Trigger>),
@@ -102,21 +103,21 @@ pub trait Visit {
         // Visit TransferBox
         visit_transfer_asset_definition(&Transfer<Account, AssetDefinitionId, Account>),
         visit_transfer_asset_numeric(&Transfer<Asset, Numeric, Account>),
-        visit_transfer_asset_store(&Transfer<Asset, Metadata, Account>),
+        visit_transfer_nft(&Transfer<Account, NftId, Account>),
         visit_transfer_domain(&Transfer<Account, DomainId, Account>),
 
         // Visit SetKeyValueBox
         visit_set_domain_key_value(&SetKeyValue<Domain>),
         visit_set_account_key_value(&SetKeyValue<Account>),
         visit_set_asset_definition_key_value(&SetKeyValue<AssetDefinition>),
-        visit_set_asset_key_value(&SetKeyValue<Asset>),
+        visit_set_nft_key_value(&SetKeyValue<Nft>),
         visit_set_trigger_key_value(&SetKeyValue<Trigger>),
 
         // Visit RemoveKeyValueBox
         visit_remove_domain_key_value(&RemoveKeyValue<Domain>),
         visit_remove_account_key_value(&RemoveKeyValue<Account>),
         visit_remove_asset_definition_key_value(&RemoveKeyValue<AssetDefinition>),
-        visit_remove_asset_key_value(&RemoveKeyValue<Asset>),
+        visit_remove_nft_key_value(&RemoveKeyValue<Nft>),
         visit_remove_trigger_key_value(&RemoveKeyValue<Trigger>),
 
         // Visit GrantBox
@@ -171,6 +172,7 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query: &QueryWithPar
         visit_find_accounts(FindAccounts),
         visit_find_assets(FindAssets),
         visit_find_assets_definitions(FindAssetsDefinitions),
+        visit_find_nfts(FindNfts),
         visit_find_roles(FindRoles),
         visit_find_role_ids(FindRoleIds),
         visit_find_permissions_by_account_id(FindPermissionsByAccountId),
@@ -228,7 +230,7 @@ pub fn visit_register<V: Visit + ?Sized>(visitor: &mut V, isi: &RegisterBox) {
         RegisterBox::Domain(obj) => visitor.visit_register_domain(obj),
         RegisterBox::Account(obj) => visitor.visit_register_account(obj),
         RegisterBox::AssetDefinition(obj) => visitor.visit_register_asset_definition(obj),
-        RegisterBox::Asset(obj) => visitor.visit_register_asset(obj),
+        RegisterBox::Nft(obj) => visitor.visit_register_nft(obj),
         RegisterBox::Role(obj) => visitor.visit_register_role(obj),
         RegisterBox::Trigger(obj) => visitor.visit_register_trigger(obj),
     }
@@ -240,7 +242,7 @@ pub fn visit_unregister<V: Visit + ?Sized>(visitor: &mut V, isi: &UnregisterBox)
         UnregisterBox::Domain(obj) => visitor.visit_unregister_domain(obj),
         UnregisterBox::Account(obj) => visitor.visit_unregister_account(obj),
         UnregisterBox::AssetDefinition(obj) => visitor.visit_unregister_asset_definition(obj),
-        UnregisterBox::Asset(obj) => visitor.visit_unregister_asset(obj),
+        UnregisterBox::Nft(obj) => visitor.visit_unregister_nft(obj),
         UnregisterBox::Role(obj) => visitor.visit_unregister_role(obj),
         UnregisterBox::Trigger(obj) => visitor.visit_unregister_trigger(obj),
     }
@@ -264,10 +266,8 @@ pub fn visit_transfer<V: Visit + ?Sized>(visitor: &mut V, isi: &TransferBox) {
     match isi {
         TransferBox::Domain(obj) => visitor.visit_transfer_domain(obj),
         TransferBox::AssetDefinition(obj) => visitor.visit_transfer_asset_definition(obj),
-        TransferBox::Asset(transfer_asset) => match transfer_asset {
-            AssetTransferBox::Numeric(obj) => visitor.visit_transfer_asset_numeric(obj),
-            AssetTransferBox::Store(obj) => visitor.visit_transfer_asset_store(obj),
-        },
+        TransferBox::Asset(obj) => visitor.visit_transfer_asset_numeric(obj),
+        TransferBox::Nft(obj) => visitor.visit_transfer_nft(obj),
     }
 }
 
@@ -276,7 +276,7 @@ pub fn visit_set_key_value<V: Visit + ?Sized>(visitor: &mut V, isi: &SetKeyValue
         SetKeyValueBox::Domain(obj) => visitor.visit_set_domain_key_value(obj),
         SetKeyValueBox::Account(obj) => visitor.visit_set_account_key_value(obj),
         SetKeyValueBox::AssetDefinition(obj) => visitor.visit_set_asset_definition_key_value(obj),
-        SetKeyValueBox::Asset(obj) => visitor.visit_set_asset_key_value(obj),
+        SetKeyValueBox::Nft(obj) => visitor.visit_set_nft_key_value(obj),
         SetKeyValueBox::Trigger(obj) => visitor.visit_set_trigger_key_value(obj),
     }
 }
@@ -288,7 +288,7 @@ pub fn visit_remove_key_value<V: Visit + ?Sized>(visitor: &mut V, isi: &RemoveKe
         RemoveKeyValueBox::AssetDefinition(obj) => {
             visitor.visit_remove_asset_definition_key_value(obj)
         }
-        RemoveKeyValueBox::Asset(obj) => visitor.visit_remove_asset_key_value(obj),
+        RemoveKeyValueBox::Nft(obj) => visitor.visit_remove_nft_key_value(obj),
         RemoveKeyValueBox::Trigger(obj) => visitor.visit_remove_trigger_key_value(obj),
     }
 }
@@ -323,14 +323,14 @@ leaf_visitors! {
     visit_unregister_account(&Unregister<Account>),
     visit_set_account_key_value(&SetKeyValue<Account>),
     visit_remove_account_key_value(&RemoveKeyValue<Account>),
-    visit_register_asset(&Register<Asset>),
-    visit_unregister_asset(&Unregister<Asset>),
+    visit_register_nft(&Register<Nft>),
+    visit_unregister_nft(&Unregister<Nft>),
     visit_mint_asset_numeric(&Mint<Numeric, Asset>),
     visit_burn_asset_numeric(&Burn<Numeric, Asset>),
     visit_transfer_asset_numeric(&Transfer<Asset, Numeric, Account>),
-    visit_transfer_asset_store(&Transfer<Asset, Metadata, Account>),
-    visit_set_asset_key_value(&SetKeyValue<Asset>),
-    visit_remove_asset_key_value(&RemoveKeyValue<Asset>),
+    visit_transfer_nft(&Transfer<Account, NftId, Account>),
+    visit_set_nft_key_value(&SetKeyValue<Nft>),
+    visit_remove_nft_key_value(&RemoveKeyValue<Nft>),
     visit_set_trigger_key_value(&SetKeyValue<Trigger>),
     visit_remove_trigger_key_value(&RemoveKeyValue<Trigger>),
     visit_register_asset_definition(&Register<AssetDefinition>),
@@ -372,6 +372,7 @@ leaf_visitors! {
     visit_find_accounts(&QueryWithFilter<FindAccounts>),
     visit_find_assets(&QueryWithFilter<FindAssets>),
     visit_find_assets_definitions(&QueryWithFilter<FindAssetsDefinitions>),
+    visit_find_nfts(&QueryWithFilter<FindNfts>),
     visit_find_roles(&QueryWithFilter<FindRoles>),
     visit_find_role_ids(&QueryWithFilter<FindRoleIds>),
     visit_find_permissions_by_account_id(&QueryWithFilter<FindPermissionsByAccountId>),

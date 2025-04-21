@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [2.0.0-rc.1.3] - 2025-03-07
+
+### Added
+
+- finalize non-empty blocks by allowing empty blocks after them (#5320)
+
+## [2.0.0-rc.1.2] - 2025-02-25
+
+### Fixed
+
+- re-registered peers are now correctly reflected in the peer list (#5327)
+
+## [2.0.0-rc.1.1] - 2025-02-12
+
+### Added
+
+- add `iroha transaction get` and other important commands (#5289)
+
 ## [2.0.0-rc.1.0] - 2024-12-06
 
 ### Added
