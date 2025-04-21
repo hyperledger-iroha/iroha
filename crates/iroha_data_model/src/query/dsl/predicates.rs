@@ -8,11 +8,12 @@ use iroha_primitives::{json::Json, numeric::Numeric};
 
 use crate::{
     account::{Account, AccountId},
-    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId, AssetValue},
+    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::{BlockHeader, SignedBlock},
     domain::{Domain, DomainId},
     metadata::Metadata,
     name::Name,
+    nft::{Nft, NftId},
     parameter::Parameter,
     peer::PeerId,
     permission::Permission,
@@ -20,12 +21,12 @@ use crate::{
         dsl::{
             type_descriptions::{
                 AccountIdPrototype, AccountPrototype, ActionPrototype, AssetDefinitionIdPrototype,
-                AssetDefinitionPrototype, AssetIdPrototype, AssetPrototype, AssetValuePrototype,
+                AssetDefinitionPrototype, AssetIdPrototype, AssetPrototype,
                 BlockHeaderHashPrototype, BlockHeaderPrototype, CommittedTransactionPrototype,
                 DomainIdPrototype, DomainPrototype, JsonPrototype, MetadataPrototype,
-                NamePrototype, NumericPrototype, ParameterPrototype, PeerIdPrototype,
-                PermissionPrototype, PublicKeyPrototype, RoleIdPrototype, RolePrototype,
-                SignedBlockPrototype, SignedTransactionPrototype, StringPrototype,
+                NamePrototype, NftIdPrototype, NftPrototype, NumericPrototype, ParameterPrototype,
+                PeerIdPrototype, PermissionPrototype, PublicKeyPrototype, RoleIdPrototype,
+                RolePrototype, SignedBlockPrototype, SignedTransactionPrototype, StringPrototype,
                 TransactionErrorPrototype, TransactionHashPrototype, TriggerIdPrototype,
                 TriggerPrototype,
             },
@@ -279,12 +280,6 @@ impl_predicate_atom! {
     // asset
     AssetDefinitionPredicateAtom(_input: AssetDefinition) [AssetDefinitionPrototype] {}
     AssetPredicateAtom(_input: Asset) [AssetPrototype] {}
-    AssetValuePredicateAtom(input: AssetValue) [AssetValuePrototype] {
-        /// Checks if the asset value is numeric
-        IsNumeric [is_numeric] => matches!(input, AssetValue::Numeric(_)),
-        /// Checks if the asset value is a store
-        IsStore [is_store] => matches!(input, AssetValue::Store(_)),
-    }
     AssetIdPredicateAtom(input: AssetId) [AssetIdPrototype] {
         /// Checks if the input is equal to the expected value.
         Equals(expected: AssetId) [eq] => input == expected,
@@ -294,13 +289,23 @@ impl_predicate_atom! {
         Equals(expected: AssetDefinitionId) [eq] => input == expected,
     }
 
+    // NFT
+    NftPredicateAtom(_input: Nft) [NftPrototype] {}
+    NftIdPredicateAtom(input: NftId) [NftIdPrototype] {
+        /// Checks if the input is equal to the expected value.
+        Equals(expected: NftId) [eq] => input == expected,
+    }
+
     // block
     BlockHeaderHashPredicateAtom(input: HashOf<BlockHeader>) [BlockHeaderHashPrototype] {
         /// Checks if the input is equal to the expected value.
         Equals(expected: HashOf<BlockHeader>) [eq] => input == expected,
     }
     BlockHeaderPredicateAtom(_input: BlockHeader) [BlockHeaderPrototype] {}
-    SignedBlockPredicateAtom(_input: SignedBlock) [SignedBlockPrototype] {}
+    SignedBlockPredicateAtom(input: SignedBlock) [SignedBlockPrototype] {
+        /// Checks if the block is empty (has no transactions)
+        IsEmpty [is_empty] => input.is_empty(),
+    }
     TransactionHashPredicateAtom(input: HashOf<SignedTransaction>) [TransactionHashPrototype] {
         /// Checks if the input is equal to the expected value.
         Equals(expected: HashOf<SignedTransaction>) [eq] => input == expected,
@@ -349,10 +354,10 @@ pub mod prelude {
     pub use super::{
         AccountIdPredicateAtom, AccountPredicateAtom, ActionPredicateAtom,
         AssetDefinitionIdPredicateAtom, AssetDefinitionPredicateAtom, AssetIdPredicateAtom,
-        AssetPredicateAtom, AssetValuePredicateAtom, BlockHeaderHashPredicateAtom,
-        BlockHeaderPredicateAtom, CommittedTransactionPredicateAtom, DomainIdPredicateAtom,
-        DomainPredicateAtom, JsonPredicateAtom, MetadataPredicateAtom, NumericPredicateAtom,
-        ParameterPredicateAtom, PeerIdPredicateAtom, PermissionPredicateAtom,
+        AssetPredicateAtom, BlockHeaderHashPredicateAtom, BlockHeaderPredicateAtom,
+        CommittedTransactionPredicateAtom, DomainIdPredicateAtom, DomainPredicateAtom,
+        JsonPredicateAtom, MetadataPredicateAtom, NftIdPredicateAtom, NftPredicateAtom,
+        NumericPredicateAtom, ParameterPredicateAtom, PeerIdPredicateAtom, PermissionPredicateAtom,
         PublicKeyPredicateAtom, RoleIdPredicateAtom, RolePredicateAtom, SignedBlockPredicateAtom,
         SignedTransactionPredicateAtom, StringPredicateAtom, TransactionErrorPredicateAtom,
         TransactionHashPredicateAtom, TriggerIdPredicateAtom, TriggerPredicateAtom,

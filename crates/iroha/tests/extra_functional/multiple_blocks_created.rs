@@ -86,10 +86,9 @@ async fn multiple_blocks_created() -> Result<()> {
     // ensuring all have the same total
     sleep(Duration::from_secs(2)).await;
     println!("all peers should have total={total}");
-    let expected_value = AssetValue::Numeric(Numeric::new(total, 0));
+    let expected_value = Numeric::new(total, 0);
     for peer in network.peers() {
         let client = peer.client();
-        let expected_value = expected_value.clone();
         let account_id = account_id.clone();
         let definition = asset_definition_id.clone();
         let assets = spawn_blocking(move || {

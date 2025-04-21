@@ -41,6 +41,7 @@ pub mod ipfs;
 pub mod isi;
 pub mod metadata;
 pub mod name;
+pub mod nft;
 pub mod parameter;
 pub mod peer;
 pub mod permission;
@@ -71,20 +72,20 @@ mod seal {
         SetKeyValue<Domain>,
         SetKeyValue<AssetDefinition>,
         SetKeyValue<Account>,
-        SetKeyValue<Asset>,
+        SetKeyValue<Nft>,
         SetKeyValue<Trigger>,
 
         RemoveKeyValue<Domain>,
         RemoveKeyValue<AssetDefinition>,
         RemoveKeyValue<Account>,
-        RemoveKeyValue<Asset>,
+        RemoveKeyValue<Nft>,
         RemoveKeyValue<Trigger>,
 
         Register<Peer>,
         Register<Domain>,
         Register<Account>,
         Register<AssetDefinition>,
-        Register<Asset>,
+        Register<Nft>,
         Register<Role>,
         Register<Trigger>,
 
@@ -92,7 +93,7 @@ mod seal {
         Unregister<Domain>,
         Unregister<Account>,
         Unregister<AssetDefinition>,
-        Unregister<Asset>,
+        Unregister<Nft>,
         Unregister<Role>,
         Unregister<Trigger>,
 
@@ -105,7 +106,7 @@ mod seal {
         Transfer<Account, DomainId, Account>,
         Transfer<Account, AssetDefinitionId, Account>,
         Transfer<Asset, Numeric, Account>,
-        Transfer<Asset, Metadata, Account>,
+        Transfer<Account, NftId, Account>,
 
         Grant<Permission, Account>,
         Grant<RoleId, Account>,
@@ -126,6 +127,7 @@ mod seal {
         FindAccountsWithAsset,
         FindAssets,
         FindAssetsDefinitions,
+        FindNfts,
         FindDomains,
         FindPeers,
         FindBlocks,
@@ -254,6 +256,9 @@ mod model {
         /// [`AssetId`](`asset::AssetId`) variant.
         #[display(fmt = "{_0}")]
         AssetId(asset::AssetId),
+        /// [`NftId`](`nft::NftId`) variant.
+        #[display(fmt = "{_0}")]
+        NftId(nft::NftId),
         /// [`PeerId`](`peer::PeerId`) variant.
         PeerId(peer::PeerId),
         /// [`TriggerId`](trigger::TriggerId) variant.
@@ -484,8 +489,8 @@ pub mod prelude {
     pub use super::{
         account::prelude::*, asset::prelude::*, domain::prelude::*, events::prelude::*,
         executor::prelude::*, isi::prelude::*, metadata::prelude::*, name::prelude::*,
-        parameter::prelude::*, peer::prelude::*, permission::prelude::*, query::prelude::*,
-        role::prelude::*, transaction::prelude::*, trigger::prelude::*, ChainId, EnumTryAsError,
-        HasMetadata, IdBox, Identifiable, ValidationFail,
+        nft::prelude::*, parameter::prelude::*, peer::prelude::*, permission::prelude::*,
+        query::prelude::*, role::prelude::*, transaction::prelude::*, trigger::prelude::*, ChainId,
+        EnumTryAsError, HasMetadata, IdBox, Identifiable, ValidationFail,
     };
 }

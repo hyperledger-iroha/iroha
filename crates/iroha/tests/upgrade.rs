@@ -219,7 +219,7 @@ fn executor_custom_instructions_simple() -> Result<()> {
         client
             .query(FindAssets)
             .filter_with(|asset| asset.id.eq(bob_rose.clone()))
-            .select_with(|asset| asset.value.numeric)
+            .select_with(|asset| asset.value)
             .execute_single()?,
         Numeric::from(1u32)
     );
@@ -236,7 +236,7 @@ fn executor_custom_instructions_simple() -> Result<()> {
         client
             .query(FindAssets)
             .filter_with(|asset| asset.id.eq(bob_rose))
-            .select_with(|asset| asset.value.numeric)
+            .select_with(|asset| asset.value)
             .execute_single()?,
         Numeric::from(2u32)
     );
@@ -269,7 +269,7 @@ fn executor_custom_instructions_complex() -> Result<()> {
         client
             .query(FindAssets)
             .filter_with(|asset| asset.id.eq(bob_rose.clone()))
-            .select_with(|asset| asset.value.numeric)
+            .select_with(|asset| asset.value)
             .execute_single()?,
         Numeric::from(6u32)
     );
@@ -296,7 +296,7 @@ fn executor_custom_instructions_complex() -> Result<()> {
         client
             .query(FindAssets)
             .filter_with(|asset| asset.id.eq(bob_rose.clone()))
-            .select_with(|asset| asset.value.numeric)
+            .select_with(|asset| asset.value)
             .execute_single()?,
         Numeric::from(5u32)
     );
@@ -308,7 +308,7 @@ fn executor_custom_instructions_complex() -> Result<()> {
         client
             .query(FindAssets)
             .filter_with(|asset| asset.id.eq(bob_rose.clone()))
-            .select_with(|asset| asset.value.numeric)
+            .select_with(|asset| asset.value)
             .execute_single()?,
         Numeric::from(5u32)
     );
@@ -414,7 +414,7 @@ fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
     if !profile.is_optimized() {
         client.submit_all_blocking::<InstructionBox>([InstructionBox::SetParameter(
             SetParameter::new(Parameter::Executor(SmartContractParameter::Fuel(
-                std::num::NonZeroU64::new(80_000_000_u64).expect("Fuel must be positive."),
+                std::num::NonZeroU64::new(90_000_000_u64).expect("Fuel must be positive."),
             ))),
         )])?;
     }

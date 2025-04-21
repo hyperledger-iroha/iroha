@@ -109,18 +109,6 @@ pub mod asset {
     use super::*;
 
     permission! {
-        pub struct CanRegisterAssetWithDefinition {
-            pub asset_definition: AssetDefinitionId,
-        }
-    }
-
-    permission! {
-        pub struct CanUnregisterAssetWithDefinition {
-            pub asset_definition: AssetDefinitionId,
-        }
-    }
-
-    permission! {
         pub struct CanMintAssetWithDefinition {
             pub asset_definition: AssetDefinitionId,
         }
@@ -135,18 +123,6 @@ pub mod asset {
     permission! {
         pub struct CanTransferAssetWithDefinition {
             pub asset_definition: AssetDefinitionId,
-        }
-    }
-
-    permission! {
-        pub struct CanRegisterAsset {
-            pub owner: AccountId,
-        }
-    }
-
-    permission! {
-        pub struct CanUnregisterAsset {
-            pub asset: AssetId,
         }
     }
 
@@ -167,10 +143,32 @@ pub mod asset {
             pub asset: AssetId,
         }
     }
+}
+
+pub mod nft {
+    use super::*;
 
     permission! {
-        pub struct CanModifyAssetMetadata {
-            pub asset: AssetId,
+        pub struct CanRegisterNft {
+            pub domain: DomainId,
+        }
+    }
+
+    permission! {
+        pub struct CanUnregisterNft {
+            pub nft: NftId,
+        }
+    }
+
+    permission! {
+        pub struct CanTransferNft {
+            pub nft: NftId,
+        }
+    }
+
+    permission! {
+        pub struct CanModifyNftMetadata {
+            pub nft: NftId,
         }
     }
 }

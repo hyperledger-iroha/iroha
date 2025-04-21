@@ -9,7 +9,7 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 
 ENV PATH=$POETRY_HOME/bin:$PATH
 
-RUN pacman -Syu rustup mold musl rust-musl openssl libgit2 jq \
+RUN pacman -Syu rustup mold musl rust-musl openssl libgit2 jq unzip \
     git docker docker-buildx docker-compose \
     python python-pip --noconfirm --disable-download-timeout && \
     curl -sSL https://install.python-poetry.org | python3 -

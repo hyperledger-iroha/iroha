@@ -3,6 +3,7 @@ This module contains the AssetDefinition and Asset classes.
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -14,13 +15,13 @@ class AssetDefinition:
     :type name: str
     :param domain: The domain of the asset definition.
     :type domain: str
-    :param type_: The value type of the asset definition.
-    :type type_: str
+    :param scale: The numeric scale of the asset definition.
+    :type scale: int
     """
 
     name: str
     domain: str
-    type_: str
+    scale: Optional[int] = None
 
     def __repr__(self):
         return f"{self.name}#{self.domain}"

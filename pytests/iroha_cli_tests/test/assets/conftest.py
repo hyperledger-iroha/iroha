@@ -9,12 +9,9 @@ from .. import (
     GIVEN_public_key,
     GIVEN_numeric_asset_for_account,
     GIVEN_numeric_value,
-    GIVEN_numeric_type,
     GIVEN_registered_account,
-    GIVEN_registered_asset_definition_with_numeric_type,
-    GIVEN_registered_asset_definition_with_store_type,
+    GIVEN_registered_asset_definition,
     GIVEN_registered_domain,
-    GIVEN_store_type,
     before_all,
     before_each,
 )

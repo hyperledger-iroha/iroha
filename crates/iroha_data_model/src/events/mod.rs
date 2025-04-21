@@ -240,6 +240,7 @@ mod conversions {
         AccountEventFilter          => DataEventFilter => EventFilterBox,
         AssetEventFilter            => DataEventFilter => EventFilterBox,
         AssetDefinitionEventFilter  => DataEventFilter => EventFilterBox,
+        NftEventFilter              => DataEventFilter => EventFilterBox,
         TriggerEventFilter          => DataEventFilter => EventFilterBox,
         RoleEventFilter             => DataEventFilter => EventFilterBox,
         ConfigurationEventFilter    => DataEventFilter => EventFilterBox,

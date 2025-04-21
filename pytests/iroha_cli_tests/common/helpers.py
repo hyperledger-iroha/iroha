@@ -136,6 +136,14 @@ def fake_asset_name():
     return word[:3].upper()
 
 
+def fake_nft_name():
+    """
+    Generate a fake NFT name.
+    """
+    word = fake.word()
+    return word[:3].upper()
+
+
 def not_existing_name():
     """
     Generate a non-existing name.

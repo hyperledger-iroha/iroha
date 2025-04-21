@@ -56,10 +56,17 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha asset mint`↴](#iroha-asset-mint)
 * [`iroha asset burn`↴](#iroha-asset-burn)
 * [`iroha asset transfer`↴](#iroha-asset-transfer)
-* [`iroha asset transferkvs`↴](#iroha-asset-transferkvs)
-* [`iroha asset getkv`↴](#iroha-asset-getkv)
-* [`iroha asset setkv`↴](#iroha-asset-setkv)
-* [`iroha asset removekv`↴](#iroha-asset-removekv)
+* [`iroha nft`↴](#iroha-nft)
+* [`iroha nft get`↴](#iroha-nft-get)
+* [`iroha nft list`↴](#iroha-nft-list)
+* [`iroha nft list all`↴](#iroha-nft-list-all)
+* [`iroha nft list filter`↴](#iroha-nft-list-filter)
+* [`iroha nft register`↴](#iroha-nft-register)
+* [`iroha nft unregister`↴](#iroha-nft-unregister)
+* [`iroha nft transfer`↴](#iroha-nft-transfer)
+* [`iroha nft getkv`↴](#iroha-nft-getkv)
+* [`iroha nft setkv`↴](#iroha-nft-setkv)
+* [`iroha nft removekv`↴](#iroha-nft-removekv)
 * [`iroha peer`↴](#iroha-peer)
 * [`iroha peer list`↴](#iroha-peer-list)
 * [`iroha peer list all`↴](#iroha-peer-list-all)
@@ -126,6 +133,7 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
 * `domain` — Read and write domains
 * `account` — Read and write accounts
 * `asset` — Read and write assets
+* `nft` — Read and write NFTs
 * `peer` — Read and write peers
 * `events` — Subscribe to events: state changes, transaction/block/trigger progress
 * `blocks` — Subscribe to blocks
@@ -575,10 +583,6 @@ Read and write assets
 * `mint` — Increase the quantity of an asset
 * `burn` — Decrease the quantity of an asset
 * `transfer` — Transfer an asset between accounts
-* `transferkvs` — Transfer a key-value store between accounts
-* `getkv` — Retrieve a value from the key-value store
-* `setkv` — Create or update a key-value entry using JSON5 input from stdin
-* `removekv` — Delete an entry from the key-value store
 
 
 
@@ -652,13 +656,13 @@ Retrieve details of a specific asset definition
 
 Register an asset definition
 
-**Usage:** `iroha asset definition register [OPTIONS] --id <ID> --type <TYPE>`
+**Usage:** `iroha asset definition register [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
 * `-m`, `--mint-once` — Disables minting after the first instance
-* `-t`, `--type <TYPE>` — Data type stored in the asset
+* `-s`, `--scale <SCALE>` — Numeric scale of the asset. No value means unconstrained
 
 
 
@@ -830,55 +834,148 @@ Transfer an asset between accounts
 
 
 
-## `iroha asset transferkvs`
+## `iroha nft`
 
-Transfer a key-value store between accounts
+Read and write NFTs
 
-**Usage:** `iroha asset transferkvs --id <ID> --to <TO>`
+**Usage:** `iroha nft <COMMAND>`
+
+###### **Subcommands:**
+
+* `get` — Retrieve details of a specific NFT
+* `list` — List NFTs
+* `register` — Register NFT with content provided from stdin in JSON5 format
+* `unregister` — Unregister NFT
+* `transfer` — Transfer ownership of NFT
+* `getkv` — Get a value from NFT
+* `setkv` — Create or update a key-value entry of NFT using JSON5 input from stdin
+* `removekv` — Remove a key-value entry from NFT
+
+
+
+## `iroha nft get`
+
+Retrieve details of a specific NFT
+
+**Usage:** `iroha nft get --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
+* `-i`, `--id <ID>` — NFT in the format "name$domain"
+
+
+
+## `iroha nft list`
+
+List NFTs
+
+**Usage:** `iroha nft list <COMMAND>`
+
+###### **Subcommands:**
+
+* `all` — List all IDs, or full entries when `--verbose` is specified
+* `filter` — Filter by a given predicate
+
+
+
+## `iroha nft list all`
+
+List all IDs, or full entries when `--verbose` is specified
+
+**Usage:** `iroha nft list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs
+
+
+
+## `iroha nft list filter`
+
+Filter by a given predicate
+
+**Usage:** `iroha nft list filter <PREDICATE>`
+
+###### **Arguments:**
+
+* `<PREDICATE>` — Filtering condition specified as a JSON5 string
+
+
+
+## `iroha nft register`
+
+Register NFT with content provided from stdin in JSON5 format
+
+**Usage:** `iroha nft register --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — NFT in the format "name$domain"
+
+
+
+## `iroha nft unregister`
+
+Unregister NFT
+
+**Usage:** `iroha nft unregister --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — NFT in the format "name$domain"
+
+
+
+## `iroha nft transfer`
+
+Transfer ownership of NFT
+
+**Usage:** `iroha nft transfer --id <ID> --from <FROM> --to <TO>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — NFT in the format "name$domain"
+* `-f`, `--from <FROM>` — Source account, in the format "multihash@domain"
 * `-t`, `--to <TO>` — Destination account, in the format "multihash@domain"
 
 
 
-## `iroha asset getkv`
+## `iroha nft getkv`
 
-Retrieve a value from the key-value store
+Get a value from NFT
 
-**Usage:** `iroha asset getkv --id <ID> --key <KEY>`
-
-###### **Options:**
-
-* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
-* `-k`, `--key <KEY>` — Key for retrieving the corresponding value
-
-
-
-## `iroha asset setkv`
-
-Create or update a key-value entry using JSON5 input from stdin
-
-**Usage:** `iroha asset setkv --id <ID> --key <KEY>`
+**Usage:** `iroha nft getkv --id <ID> --key <KEY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
-* `-k`, `--key <KEY>` — Key for retrieving the corresponding value
+* `-i`, `--id <ID>` — NFT in the format "name$domain"
+* `-k`, `--key <KEY>`
 
 
 
-## `iroha asset removekv`
+## `iroha nft setkv`
 
-Delete an entry from the key-value store
+Create or update a key-value entry of NFT using JSON5 input from stdin
 
-**Usage:** `iroha asset removekv --id <ID> --key <KEY>`
+**Usage:** `iroha nft setkv --id <ID> --key <KEY>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset in the format "asset##account@domain" or "asset#another_domain#account@domain"
-* `-k`, `--key <KEY>` — Key for retrieving the corresponding value
+* `-i`, `--id <ID>` — NFT in the format "name$domain"
+* `-k`, `--key <KEY>`
+
+
+
+## `iroha nft removekv`
+
+Remove a key-value entry from NFT
+
+**Usage:** `iroha nft removekv --id <ID> --key <KEY>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — NFT in the format "name$domain"
+* `-k`, `--key <KEY>`
 
 
 

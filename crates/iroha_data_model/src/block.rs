@@ -56,8 +56,9 @@ mod model {
         #[getset(get_copy = "pub")]
         pub prev_block_hash: Option<HashOf<BlockHeader>>,
         /// Hash of merkle tree root of transactions' hashes.
+        /// None if no transactions (empty block).
         #[getset(get_copy = "pub")]
-        pub transactions_hash: HashOf<MerkleTree<SignedTransaction>>,
+        pub transactions_hash: Option<HashOf<MerkleTree<SignedTransaction>>>,
         /// Creation timestamp (unix time in milliseconds).
         #[getset(skip)]
         pub creation_time_ms: u64,
@@ -229,6 +230,13 @@ impl SignedBlock {
         block.payload.transactions.iter()
     }
 
+    /// Check if block is empty (has no transactions)
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        let SignedBlock::V1(block) = self;
+        block.payload.transactions.is_empty()
+    }
+
     /// Collection of rejection reasons for every transaction if exists
     ///
     /// # Warning
@@ -325,12 +333,12 @@ impl SignedBlock {
             .map(SignedTransaction::hash)
             .collect::<MerkleTree<_>>()
             .hash()
-            .expect("Tree is not empty");
+            .expect("Genesis block must have transactions");
         let creation_time_ms = Self::get_genesis_block_creation_time(&transactions);
         let header = BlockHeader {
             height: nonzero!(1_u64),
             prev_block_hash: None,
-            transactions_hash,
+            transactions_hash: Some(transactions_hash),
             creation_time_ms,
             view_change_index: 0,
         };
@@ -357,7 +365,7 @@ impl SignedBlock {
             .iter()
             .map(SignedTransaction::creation_time)
             .max()
-            .expect("INTERNAL BUG: Block empty");
+            .expect("INTERNAL BUG: Genesis block is empty");
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap();
@@ -423,8 +431,7 @@ mod candidate {
                 .iter()
                 .map(SignedTransaction::hash)
                 .collect::<MerkleTree<_>>()
-                .hash()
-                .ok_or("Block is empty")?;
+                .hash();
 
             if expected_txs_hash != actual_txs_hash {
                 return Err("Transactions' hash incorrect");

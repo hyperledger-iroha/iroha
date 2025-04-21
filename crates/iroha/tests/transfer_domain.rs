@@ -5,9 +5,10 @@ use iroha::{
 };
 use iroha_executor_data_model::permission::{
     account::CanUnregisterAccount,
-    asset::CanUnregisterAsset,
+    asset::CanTransferAsset,
     asset_definition::{CanRegisterAssetDefinition, CanUnregisterAssetDefinition},
     domain::CanUnregisterDomain,
+    nft::{CanRegisterNft, CanUnregisterNft},
     trigger::CanUnregisterTrigger,
 };
 use iroha_test_network::*;
@@ -202,7 +203,6 @@ fn domain_owner_asset_permissions() -> Result<()> {
     let kingdom_id: DomainId = "kingdom".parse()?;
     let (bob_id, bob_keypair) = gen_account_in("kingdom");
     let coin_id: AssetDefinitionId = "coin#kingdom".parse()?;
-    let store_id: AssetDefinitionId = "store#kingdom".parse()?;
 
     // "alice@wonderland" is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
@@ -217,42 +217,73 @@ fn domain_owner_asset_permissions() -> Result<()> {
 
     // register asset definitions by "bob@kingdom" so he is owner of it
     let coin = AssetDefinition::numeric(coin_id.clone());
-    let store = AssetDefinition::store(store_id.clone());
     let transaction = TransactionBuilder::new(network.chain_id(), bob_id.clone())
-        .with_instructions([
-            Register::asset_definition(coin),
-            Register::asset_definition(store),
-        ])
+        .with_instructions([Register::asset_definition(coin)])
         .sign(bob_keypair.private_key());
     test_client.submit_transaction_blocking(&transaction)?;
 
-    // check that "alice@wonderland" as owner of domain can register and unregister assets in her domain
-    let bob_coin_id = AssetId::new(coin_id, bob_id.clone());
-    let bob_coin = Asset::new(bob_coin_id.clone(), 30_u32);
-    test_client.submit_blocking(Register::asset(bob_coin))?;
-    test_client.submit_blocking(Unregister::asset(bob_coin_id.clone()))?;
-
     // check that "alice@wonderland" as owner of domain can burn, mint and transfer assets in her domain
+    let bob_coin_id = AssetId::new(coin_id, bob_id.clone());
     test_client.submit_blocking(Mint::asset_numeric(10u32, bob_coin_id.clone()))?;
     test_client.submit_blocking(Burn::asset_numeric(5u32, bob_coin_id.clone()))?;
-    test_client.submit_blocking(Transfer::asset_numeric(bob_coin_id, 5u32, alice_id))?;
-
-    // check that "alice@wonderland" as owner of domain can edit metadata of store asset in her domain
-    let key: Name = "key".parse()?;
-    let value = Json::new("value");
-    let bob_store_id = AssetId::new(store_id, bob_id.clone());
-    test_client.submit_blocking(SetKeyValue::asset(bob_store_id.clone(), key.clone(), value))?;
-    test_client.submit_blocking(RemoveKeyValue::asset(bob_store_id.clone(), key))?;
+    test_client.submit_blocking(Transfer::asset_numeric(bob_coin_id.clone(), 5u32, alice_id))?;
 
     // check that "alice@wonderland" as owner of domain can grant and revoke asset related permissions in her domain
-    let permission = CanUnregisterAsset {
-        asset: bob_store_id,
+    let permission = CanTransferAsset { asset: bob_coin_id };
+    test_client.submit_blocking(Grant::account_permission(
+        permission.clone(),
+        bob_id.clone(),
+    ))?;
+    test_client.submit_blocking(Revoke::account_permission(permission, bob_id))?;
+
+    Ok(())
+}
+
+#[test]
+fn domain_owner_nft_permissions() -> Result<()> {
+    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let test_client = network.client();
+
+    let kingdom_id: DomainId = "kingdom".parse()?;
+    let (bob_id, bob_keypair) = gen_account_in("kingdom");
+    let nft_id: NftId = "nft$kingdom".parse()?;
+
+    // "alice@wonderland" is owner of "kingdom" domain
+    let kingdom = Domain::new(kingdom_id.clone());
+    test_client.submit_blocking(Register::domain(kingdom))?;
+
+    let bob = Account::new(bob_id.clone());
+    test_client.submit_blocking(Register::account(bob))?;
+
+    // Grant permission to register NFT to "bob@kingdom"
+    let permission = CanRegisterNft { domain: kingdom_id };
+    test_client.submit_blocking(Grant::account_permission(permission, bob_id.clone()))?;
+
+    // register NFT by "bob@kingdom" so he is owner of it
+    let nft = Nft::new(nft_id.clone(), Metadata::default());
+    let transaction = TransactionBuilder::new(network.chain_id(), bob_id.clone())
+        .with_instructions([Register::nft(nft.clone())])
+        .sign(bob_keypair.private_key());
+    test_client.submit_transaction_blocking(&transaction)?;
+
+    // check that "alice@wonderland" as owner of domain can edit metadata of NFT in her domain
+    let key: Name = "key".parse()?;
+    let value = Json::new("value");
+    test_client.submit_blocking(SetKeyValue::nft(nft_id.clone(), key.clone(), value))?;
+    test_client.submit_blocking(RemoveKeyValue::nft(nft_id.clone(), key))?;
+
+    // check that "alice@wonderland" as owner of domain can grant and revoke NFT related permissions in her domain
+    let permission = CanUnregisterNft {
+        nft: nft_id.clone(),
     };
     test_client.submit_blocking(Grant::account_permission(
         permission.clone(),
         bob_id.clone(),
     ))?;
     test_client.submit_blocking(Revoke::account_permission(permission, bob_id))?;
+
+    // check that "alice@wonderland" as owner of domain can unregister NFT in her domain
+    test_client.submit_blocking(Unregister::nft(nft_id.clone()))?;
 
     Ok(())
 }
