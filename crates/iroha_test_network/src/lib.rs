@@ -27,7 +27,7 @@ use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 use iroha_data_model::{
     events::pipeline::BlockEventFilter,
     isi::InstructionBox,
-    parameter::{SumeragiParameter, SumeragiParameters},
+    parameter::{SmartContractParameter, SumeragiParameter, SumeragiParameters},
     ChainId,
 };
 use iroha_genesis::GenesisBlock;
@@ -80,6 +80,25 @@ fn tempdir_in() -> Option<impl AsRef<Path>> {
 
     ENV.get_or_init(|| std::env::var(TEMPDIR_IN_ENV).map(PathBuf::from).ok())
         .as_ref()
+}
+
+pub fn upgrade_executor_isi(executor: impl AsRef<str>) -> impl Iterator<Item = InstructionBox> {
+    let upgrade_executor = InstructionBox::Upgrade(Upgrade::new(Executor::new(
+        iroha_test_samples::load_sample_wasm(executor),
+    )));
+    let profile = iroha_test_samples::load_wasm_build_profile();
+
+    let mut isi = vec![];
+    if !profile.is_optimized() {
+        isi.push(InstructionBox::SetParameter(SetParameter::new(
+            Parameter::Executor(SmartContractParameter::Fuel(
+                std::num::NonZeroU64::new(90_000_000_u64).expect("Fuel must be positive."),
+            )),
+        )));
+    }
+
+    isi.push(upgrade_executor);
+    isi.into_iter()
 }
 
 /// Network of peers
@@ -309,6 +328,11 @@ impl NetworkBuilder {
     /// Append an instruction to genesis.
     pub fn with_genesis_instruction(mut self, isi: impl Into<InstructionBox>) -> Self {
         self.extra_isi.push(isi.into());
+        self
+    }
+
+    pub fn with_executor(mut self, executor: impl AsRef<str>) -> Self {
+        self.extra_isi.extend(upgrade_executor_isi(executor));
         self
     }
 

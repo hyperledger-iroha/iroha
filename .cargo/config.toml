@@ -1,0 +1,2 @@
+[env]
+DEFAULT_FEES_CONFIG_PATH = { value = "defaults/fees_config.json", relative = true }

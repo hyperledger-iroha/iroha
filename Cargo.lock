@@ -1667,6 +1667,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "486f806e73c5707928240ddc295403b1b93c96a02038563881c4a2fd84b81ac4"
 
 [[package]]
+name = "fees_executor_data_model"
+version = "2.0.0-rc.1.0"
+dependencies = [
+ "derive_more",
+ "iroha_data_model",
+ "iroha_executor",
+ "iroha_executor_data_model",
+ "iroha_schema",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3074,6 +3087,7 @@ dependencies = [
  "error-stack",
  "executor_custom_data_model",
  "eyre",
+ "fees_executor_data_model",
  "futures-util",
  "hex",
  "http 1.1.0",
