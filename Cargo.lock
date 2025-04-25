@@ -3069,6 +3069,7 @@ dependencies = [
  "attohttpc",
  "base64 0.22.1",
  "color-eyre",
+ "criterion",
  "derive_more",
  "displaydoc",
  "error-stack",
@@ -3106,6 +3107,13 @@ dependencies = [
  "trybuild",
  "tungstenite 0.21.0",
  "url",
+]
+
+[[package]]
+name = "iroha_authorizer"
+version = "2.0.0-rc.1.0"
+dependencies = [
+ "iroha_tree",
 ]
 
 [[package]]
@@ -3222,6 +3230,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_telemetry",
  "iroha_test_samples",
+ "iroha_tree",
  "iroha_version",
  "iroha_wasm_codec",
  "mv",
@@ -3819,6 +3828,20 @@ name = "iroha_torii_const"
 version = "2.0.0-rc.1.0"
 dependencies = [
  "iroha_primitives",
+]
+
+[[package]]
+name = "iroha_tree"
+version = "2.0.0-rc.1.0"
+dependencies = [
+ "derive_more",
+ "hashbrown 0.15.1",
+ "iroha_data_model",
+ "iroha_executor_data_model",
+ "iroha_logger",
+ "parity-scale-codec",
+ "serde_json",
+ "serde_with",
 ]
 
 [[package]]

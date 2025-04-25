@@ -19,6 +19,8 @@ workspace = true
 
 [features]
 default = ["telemetry", "schema-endpoint"]
+# Abstract instructions, events, and event filters into a generic structure to simulate possible execution paths.
+prediction = ["default", "iroha_core/prediction"]
 
 # Support lightweight telemetry, including diagnostics
 telemetry = ["iroha_telemetry", "iroha_core/telemetry", "iroha_torii/telemetry"]

@@ -72,9 +72,9 @@ mod model {
     )]
     pub struct PeerEventFilter {
         /// If specified matches only events originating from this peer
-        pub(super) id_matcher: Option<super::PeerId>,
+        pub id_matcher: Option<super::PeerId>,
         /// Matches only event from this set
-        pub(super) event_set: PeerEventSet,
+        pub event_set: PeerEventSet,
     }
 
     /// An event filter for [`DomainEvent`]s
@@ -94,9 +94,9 @@ mod model {
     )]
     pub struct DomainEventFilter {
         /// If specified matches only events originating from this domain
-        pub(super) id_matcher: Option<super::DomainId>,
+        pub id_matcher: Option<super::DomainId>,
         /// Matches only event from this set
-        pub(super) event_set: DomainEventSet,
+        pub event_set: DomainEventSet,
     }
 
     /// An event filter for [`AccountEvent`]s
@@ -116,9 +116,9 @@ mod model {
     )]
     pub struct AccountEventFilter {
         /// If specified matches only events originating from this account
-        pub(super) id_matcher: Option<super::AccountId>,
+        pub id_matcher: Option<super::AccountId>,
         /// Matches only event from this set
-        pub(super) event_set: AccountEventSet,
+        pub event_set: AccountEventSet,
     }
 
     /// An event filter for [`AssetEvent`]s
@@ -138,9 +138,9 @@ mod model {
     )]
     pub struct AssetEventFilter {
         /// If specified matches only events originating from this asset
-        pub(super) id_matcher: Option<super::AssetId>,
+        pub id_matcher: Option<super::AssetId>,
         /// Matches only event from this set
-        pub(super) event_set: AssetEventSet,
+        pub event_set: AssetEventSet,
     }
 
     /// An event filter for [`AssetDefinitionEvent`]s
@@ -160,9 +160,9 @@ mod model {
     )]
     pub struct AssetDefinitionEventFilter {
         /// If specified matches only events originating from this asset definition
-        pub(super) id_matcher: Option<super::AssetDefinitionId>,
+        pub id_matcher: Option<super::AssetDefinitionId>,
         /// Matches only event from this set
-        pub(super) event_set: AssetDefinitionEventSet,
+        pub event_set: AssetDefinitionEventSet,
     }
 
     /// An event filter for [`NftEvent`]s
@@ -182,9 +182,9 @@ mod model {
     )]
     pub struct NftEventFilter {
         /// If specified matches only events originating from this NFT
-        pub(super) id_matcher: Option<NftId>,
+        pub id_matcher: Option<NftId>,
         /// Matches only event from this set
-        pub(super) event_set: NftEventSet,
+        pub event_set: NftEventSet,
     }
 
     /// An event filter for [`TriggerEvent`]s
@@ -204,9 +204,9 @@ mod model {
     )]
     pub struct TriggerEventFilter {
         /// If specified matches only events originating from this trigger
-        pub(super) id_matcher: Option<super::TriggerId>,
+        pub id_matcher: Option<super::TriggerId>,
         /// Matches only event from this set
-        pub(super) event_set: TriggerEventSet,
+        pub event_set: TriggerEventSet,
     }
 
     /// An event filter for [`RoleEvent`]s
@@ -226,9 +226,9 @@ mod model {
     )]
     pub struct RoleEventFilter {
         /// If specified matches only events originating from this role
-        pub(super) id_matcher: Option<super::RoleId>,
+        pub id_matcher: Option<super::RoleId>,
         /// Matches only event from this set
-        pub(super) event_set: RoleEventSet,
+        pub event_set: RoleEventSet,
     }
 
     /// An event filter for [`ConfigurationEvent`]s
@@ -248,7 +248,7 @@ mod model {
     )]
     pub struct ConfigurationEventFilter {
         /// Matches only event from this set
-        pub(super) event_set: ConfigurationEventSet,
+        pub event_set: ConfigurationEventSet,
     }
 
     /// An event filter for [`ExecutorEvent`].
@@ -269,7 +269,7 @@ mod model {
     pub struct ExecutorEventFilter {
         // executor is a global entity, so no id here
         /// Matches only event from this set
-        pub(super) event_set: ExecutorEventSet,
+        pub event_set: ExecutorEventSet,
     }
 }
 

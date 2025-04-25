@@ -47,6 +47,9 @@ tls-rustls-webpki-roots = [
     "tungstenite/rustls-tls-webpki-roots",
 ]
 
+# Abstract instructions, events, and event filters into a generic structure to simulate possible execution paths.
+prediction = []
+
 [dependencies]
 iroha_config = { workspace = true }
 iroha_config_base = { workspace = true }
@@ -97,3 +100,9 @@ hex = { workspace = true }
 assertables = { workspace = true }
 trybuild = { workspace = true }
 assert_matches = "1.5.0"
+criterion = { workspace = true }
+
+[[bench]]
+name = "one_block"
+harness = false
+path = "benches/one_block.rs"

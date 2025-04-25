@@ -247,7 +247,7 @@ impl ToTokens for EventSetEnum {
                 /// Decomposes an `EventSet` into a vector of basis `EventSet`s, each containing a single event
                 ///
                 /// Each of the event set in the vector will be equal to some of the associated constants for the `EventSet`
-                fn decompose(&self) -> Vec<Self> {
+                pub fn decompose(&self) -> Vec<Self> {
                     let mut result = Vec::new();
 
                     #(if self.contains(#flag_idents) {

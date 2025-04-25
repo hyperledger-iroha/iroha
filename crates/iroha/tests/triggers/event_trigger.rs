@@ -1,9 +1,6 @@
 use eyre::Result;
-use iroha::data_model::prelude::*;
-use iroha_test_network::*;
-use iroha_test_samples::ALICE_ID;
 
-use crate::triggers::get_asset_value;
+use super::*;
 
 #[test]
 fn test_mint_asset_when_new_asset_definition_created() -> Result<()> {

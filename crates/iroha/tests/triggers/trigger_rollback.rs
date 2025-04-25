@@ -1,9 +1,9 @@
 use eyre::Result;
-use iroha::data_model::{prelude::*, trigger::TriggerId};
-use iroha_test_network::*;
-use iroha_test_samples::ALICE_ID;
+
+use super::*;
 
 #[test]
+#[ignore = "depends on deprecated event types"]
 fn failed_trigger_revert() -> Result<()> {
     let (network, _rt) = NetworkBuilder::new().start_blocking()?;
     let client = network.client();

@@ -1,0 +1,18 @@
+[package]
+name = "iroha_authorizer"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+iroha_tree = { workspace = true }
+
+[lints]
+workspace = true

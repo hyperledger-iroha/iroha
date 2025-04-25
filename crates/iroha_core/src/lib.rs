@@ -14,6 +14,8 @@ pub mod smartcontracts;
 pub mod snapshot;
 pub mod state;
 pub mod sumeragi;
+#[cfg(feature = "prediction")]
+pub mod tree;
 pub mod tx;
 
 use core::time::Duration;
