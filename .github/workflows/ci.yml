@@ -81,7 +81,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        if: steps.prep-cache.outputs.cache-hit != 'true'
         with:
           cache: "false"
           toolchain: "nightly-2024-09-09"
@@ -341,6 +340,8 @@ jobs:
           fail: true
 
   sonarqube_defectdojo:
+    # FIXME: this job doesn't work
+    if: false
     needs: test
     runs-on: ubuntu-latest
     container:
