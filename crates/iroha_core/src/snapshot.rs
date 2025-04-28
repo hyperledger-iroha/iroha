@@ -254,6 +254,7 @@ mod tests {
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::peer::PeerId;
+    use nonzero_ext::nonzero;
     use tempfile::tempdir;
     use tokio::test;
 
@@ -354,7 +355,10 @@ mod tests {
         let peer_key_pair = KeyPair::random();
         let peer_id = PeerId::new(peer_key_pair.public_key().clone());
         let topology = Topology::new(vec![peer_id]);
-        let valid_block = ValidBlock::new_dummy(peer_key_pair.private_key());
+        let valid_block =
+            ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
+                header.height = nonzero!(1u64);
+            });
         let committed_block = valid_block
             .clone()
             .commit(&topology)
@@ -371,7 +375,7 @@ mod tests {
 
         let valid_block =
             ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.height = header.height.checked_add(1).unwrap();
+                header.height = nonzero!(2u64);
             });
         let committed_block = valid_block
             .clone()
@@ -412,7 +416,10 @@ mod tests {
         let peer_key_pair = KeyPair::random();
         let peer_id = PeerId::new(peer_key_pair.public_key().clone());
         let topology = Topology::new(vec![peer_id]);
-        let valid_block = ValidBlock::new_dummy(peer_key_pair.private_key());
+        let valid_block =
+            ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
+                header.height = nonzero!(1u64);
+            });
         let committed_block = valid_block
             .clone()
             .commit(&topology)
@@ -429,7 +436,7 @@ mod tests {
 
         let valid_block =
             ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.height = header.height.checked_add(1).unwrap();
+                header.height = nonzero!(2u64);
             });
         let committed_block = valid_block
             .clone()
@@ -448,7 +455,7 @@ mod tests {
         // This case imitate situation when snapshot was created for block which later is discarded as soft-fork
         let valid_block =
             ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.height = header.height.checked_add(1).unwrap();
+                header.height = nonzero!(2u64);
                 header.view_change_index += 1;
             });
         let committed_block = valid_block

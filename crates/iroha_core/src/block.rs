@@ -342,11 +342,14 @@ mod valid {
 
     use commit::CommittedBlock;
     use iroha_data_model::{account::AccountId, events::pipeline::PipelineEventBox, ChainId};
-    use mv::storage::StorageReadOnly;
 
     use super::*;
     use crate::{
-        smartcontracts::wasm::cache::WasmCache, state::StateBlock, sumeragi::network_topology::Role,
+        smartcontracts::wasm::cache::WasmCache,
+        state::{
+            storage_transactions::TransactionsReadOnly, StateBlock, StateReadOnlyWithTransactions,
+        },
+        sumeragi::network_topology::Role,
     };
 
     /// Block that was validated and accepted
@@ -521,7 +524,7 @@ mod valid {
             block: &SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
-            state: &impl StateReadOnly,
+            state: &impl StateReadOnlyWithTransactions,
             soft_fork: bool,
         ) -> Result<(), BlockValidationError> {
             let expected_block_height = if soft_fork {

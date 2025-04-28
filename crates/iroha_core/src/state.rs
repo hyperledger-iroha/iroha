@@ -57,8 +57,13 @@ use crate::{
         },
         wasm, Execute,
     },
+    state::storage_transactions::{
+        TransactionsBlock, TransactionsReadOnly, TransactionsStorage, TransactionsView,
+    },
     Peers,
 };
+
+pub(crate) mod storage_transactions;
 
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
@@ -204,7 +209,7 @@ pub struct State {
     // TODO: Cell is redundant here since block_hashes is very easy to rollback by just popping the last element
     pub block_hashes: Cell<Vec<HashOf<BlockHeader>>>,
     /// Hashes of transactions mapped onto block height where they stored
-    pub transactions: Storage<HashOf<SignedTransaction>, NonZeroUsize>,
+    pub transactions: TransactionsStorage,
     /// Topology used to commit latest block
     pub commit_topology: Cell<Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -236,7 +241,7 @@ pub struct StateBlock<'state> {
     /// Blockchain.
     pub block_hashes: CellBlock<'state, Vec<HashOf<BlockHeader>>>,
     /// Hashes of transactions mapped onto block height where they stored
-    pub transactions: StorageBlock<'state, HashOf<SignedTransaction>, NonZeroUsize>,
+    pub transactions: TransactionsBlock<'state>,
     /// Topology used to commit latest block
     pub commit_topology: CellBlock<'state, Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -263,8 +268,6 @@ pub struct StateTransaction<'block, 'state> {
     pub world: WorldTransaction<'block, 'state>,
     /// Blockchain.
     pub block_hashes: CellTransaction<'block, 'state, Vec<HashOf<BlockHeader>>>,
-    /// Hashes of transactions mapped onto block height where they stored
-    pub transactions: StorageTransaction<'block, 'state, HashOf<SignedTransaction>, NonZeroUsize>,
     /// Topology used to commit latest block
     pub commit_topology: CellTransaction<'block, 'state, Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -290,7 +293,7 @@ pub struct StateView<'state> {
     /// Blockchain.
     pub block_hashes: CellView<'state, Vec<HashOf<BlockHeader>>>,
     /// Hashes of transactions mapped onto block height where they stored
-    pub transactions: StorageView<'state, HashOf<SignedTransaction>, NonZeroUsize>,
+    pub transactions: TransactionsView<'state>,
     /// Topology used to commit latest block
     pub commit_topology: CellView<'state, Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -1137,7 +1140,7 @@ impl State {
     ) -> Self {
         Self {
             world,
-            transactions: Storage::new(),
+            transactions: TransactionsStorage::new(),
             commit_topology: Cell::new(Vec::new()),
             prev_commit_topology: Cell::new(Vec::new()),
             block_hashes: Cell::new(Vec::new()),
@@ -1255,7 +1258,6 @@ impl State {
 pub trait StateReadOnly {
     fn world(&self) -> &impl WorldReadOnly;
     fn block_hashes(&self) -> &[HashOf<BlockHeader>];
-    fn transactions(&self) -> &impl StorageReadOnly<HashOf<SignedTransaction>, NonZeroUsize>;
     fn commit_topology(&self) -> &[PeerId];
     fn prev_commit_topology(&self) -> &[PeerId];
     fn engine(&self) -> &wasmtime::Engine;
@@ -1332,12 +1334,6 @@ pub trait StateReadOnly {
             opt
         }
     }
-
-    /// Check if [`SignedTransaction`] is already committed
-    #[inline]
-    fn has_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
-        self.transactions().get(&hash).is_some()
-    }
 }
 
 macro_rules! impl_state_ro {
@@ -1348,9 +1344,6 @@ macro_rules! impl_state_ro {
             }
             fn block_hashes(&self) -> &[HashOf<BlockHeader>] {
                 &self.block_hashes
-            }
-            fn transactions(&self) -> &impl StorageReadOnly<HashOf<SignedTransaction>, NonZeroUsize> {
-                &self.transactions
             }
             fn commit_topology(&self) -> &[PeerId] {
                 &self.commit_topology
@@ -1379,13 +1372,40 @@ impl_state_ro! {
     StateBlock<'_>, StateTransaction<'_, '_>, StateView<'_>
 }
 
+/// Separate trait for either [`State`] or [`StateBlock`].
+///
+/// `transactions` map consumes >80% RAM of iroha, so they should be optimized.
+/// And it would be easier to optimize if less methods are needed to be supported.
+/// (`StateTransaction` anyway doesn't need `transactions` map)
+pub trait StateReadOnlyWithTransactions: StateReadOnly {
+    /// Returns transactions map
+    fn transactions(&self) -> &impl TransactionsReadOnly;
+
+    /// Check if [`SignedTransaction`] is already committed
+    #[inline]
+    fn has_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
+        self.transactions().get(&hash).is_some()
+    }
+}
+
+impl StateReadOnlyWithTransactions for StateView<'_> {
+    fn transactions(&self) -> &impl TransactionsReadOnly {
+        &self.transactions
+    }
+}
+
+impl StateReadOnlyWithTransactions for StateBlock<'_> {
+    fn transactions(&self) -> &impl TransactionsReadOnly {
+        &self.transactions
+    }
+}
+
 impl<'state> StateBlock<'state> {
     /// Create struct to store changes during transaction or trigger execution
     pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
         StateTransaction {
             world: self.world.trasaction(),
             block_hashes: self.block_hashes.transaction(),
-            transactions: self.transactions.transaction(),
             commit_topology: self.commit_topology.transaction(),
             prev_commit_topology: self.prev_commit_topology.transaction(),
             engine: self.engine,
@@ -1486,13 +1506,12 @@ impl<'state> StateBlock<'state> {
             .height
             .try_into()
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
-        block
+        let transactions = block
             .as_ref()
             .transactions()
             .map(SignedTransaction::hash)
-            .for_each(|tx_hash| {
-                self.transactions.insert(tx_hash, block_height);
-            });
+            .collect();
+        self.transactions.insert_block(transactions, block_height);
 
         self.world.triggers.handle_time_event(time_event);
 
@@ -1592,14 +1611,12 @@ impl StateTransaction<'_, '_> {
         let Self {
             world,
             block_hashes,
-            transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
             ..
         } = self;
         prev_committed_topology.apply();
         committed_topology.apply();
-        transactions.apply();
         block_hashes.apply();
         world.apply();
     }
