@@ -308,6 +308,8 @@ jobs:
           fail: true
 
   sonarqube:
+    # FIXME: https://github.com/hyperledger-iroha/iroha/issues/5403
+    if: false
     needs: test
     runs-on: ubuntu-latest
     container:
