@@ -33,18 +33,18 @@ jobs:
           args: >
             -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
             -Dcommunity.rust.lcov.reportPaths=lints/lcov.info
-      - name: DefectDojo
-        id: defectdojo
-        uses: C4tWithShell/defectdojo-action@1.0.6
-        with:
-          token: ${{ secrets.DEFECTOJO_TOKEN }}
-          defectdojo_url: ${{ secrets.DEFECTOJO_URL }}
-          product_type: iroha2
-          engagement: ${{ github.ref_name }}
-          tools: "SonarQube API Import,Github Vulnerability Scan"
-          sonar_projectKey: hyperledger:iroha
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          github_repository: ${{ github.repository }}
-          product: ${{ github.repository }}
-          environment: Test
-          reports: '{"Github Vulnerability Scan": "github.json"}'
+      # - name: DefectDojo
+      #   id: defectdojo
+      #   uses: C4tWithShell/defectdojo-action@1.0.6
+      #   with:
+      #     token: ${{ secrets.DEFECTOJO_TOKEN }}
+      #     defectdojo_url: ${{ secrets.DEFECTOJO_URL }}
+      #     product_type: iroha2
+      #     engagement: ${{ github.ref_name }}
+      #     tools: "SonarQube API Import,Github Vulnerability Scan"
+      #     sonar_projectKey: hyperledger:iroha
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
+      #     github_repository: ${{ github.repository }}
+      #     product: ${{ github.repository }}
+      #     environment: Test
+      #     reports: '{"Github Vulnerability Scan": "github.json"}'
