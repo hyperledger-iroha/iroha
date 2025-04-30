@@ -48,11 +48,11 @@ fn correct_pagination_assets_after_creating_new_one() {
         if missing_indices.contains(&i) {
             missing_tester_assets.push(asset.clone());
             missing_register_asset_definitions.push(Register::asset_definition(asset_definition));
-            missing_register_assets.push(Mint::asset_numeric(1u32, asset.id));
+            missing_register_assets.push(Mint::asset_numeric(1u32, asset.id().clone()));
         } else {
             tester_assets.push(asset.clone());
             register_asset_definitions.push(Register::asset_definition(asset_definition));
-            register_assets.push(Mint::asset_numeric(1u32, asset.id));
+            register_assets.push(Mint::asset_numeric(1u32, asset.id().clone()));
         }
     }
     register_asset_definitions.shuffle(&mut thread_rng());

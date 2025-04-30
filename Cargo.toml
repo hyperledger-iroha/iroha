@@ -197,7 +197,8 @@ clippy.wildcard_dependencies = "deny"
 resolver = "2"
 members = [
     "crates/*",
-    "data_model/samples/*"
+    "data_model/samples/*",
+    "integration_tests"
 ]
 
 [profile.deploy]
