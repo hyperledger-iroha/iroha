@@ -2475,9 +2475,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.6"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "524e8ac6999421f49a846c2d4411f337e53497d8ec55d67753beffa43c5d9205"
+checksum = "5017294ff4bb30944501348f6f8e42e6ad28f42c8bbef7a74029aff064a4e3c2"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -2725,7 +2725,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
- "h2 0.4.6",
+ "h2 0.4.8",
  "http 1.1.0",
  "http-body 1.0.1",
  "httparse",
@@ -2739,18 +2739,18 @@ dependencies = [
 
 [[package]]
 name = "hyper-rustls"
-version = "0.27.3"
+version = "0.27.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08afdbb5c31130e3034af566421053ab03787c640246a446327f550d11bcb333"
+checksum = "2d191583f3da1305256f22463b9bb0471acad48a4e534a5218b9963e9c1f59b2"
 dependencies = [
  "futures-util",
  "http 1.1.0",
  "hyper 1.5.0",
  "hyper-util",
- "rustls 0.23.16",
+ "rustls 0.23.23",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.0",
+ "tokio-rustls 0.26.2",
  "tower-service",
 ]
 
@@ -3055,46 +3055,66 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration_tests"
+version = "0.0.0"
+dependencies = [
+ "assert_matches",
+ "derive_more",
+ "executor_custom_data_model",
+ "eyre",
+ "futures-util",
+ "hex",
+ "iroha",
+ "iroha_config",
+ "iroha_config_base",
+ "iroha_data_model",
+ "iroha_executor_data_model",
+ "iroha_primitives",
+ "iroha_telemetry",
+ "iroha_test_network",
+ "iroha_test_samples",
+ "mint_rose_trigger_data_model",
+ "nonzero_ext",
+ "parity-scale-codec",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "ipnet"
-version = "2.10.1"
+version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
+checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 
 [[package]]
 name = "iroha"
 version = "2.0.0-rc.1.0"
 dependencies = [
- "assert_matches",
  "assertables",
  "attohttpc",
  "base64 0.22.1",
- "color-eyre",
  "derive_more",
  "displaydoc",
  "error-stack",
- "executor_custom_data_model",
  "eyre",
  "futures-util",
- "hex",
  "http 1.1.0",
  "iroha_config",
  "iroha_config_base",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
- "iroha_genesis",
  "iroha_logger",
  "iroha_primitives",
  "iroha_telemetry",
- "iroha_test_network",
  "iroha_test_samples",
  "iroha_torii_const",
  "iroha_version",
- "mint_rose_trigger_data_model",
- "nonzero_ext",
  "parity-scale-codec",
  "rand",
- "reqwest",
  "serde",
  "serde_json",
  "serde_with",
@@ -3103,7 +3123,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.21.0",
  "toml",
- "trybuild",
  "tungstenite 0.21.0",
  "url",
 ]
@@ -5195,7 +5214,7 @@ dependencies = [
  "encoding_rs",
  "futures-core",
  "futures-util",
- "h2 0.4.6",
+ "h2 0.4.8",
  "http 1.1.0",
  "http-body 1.0.1",
  "http-body-util",
@@ -5319,9 +5338,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.16"
+version = "0.23.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eee87ff5d9b36712a58574e12e9f0ea80f915a5b0ac518d322b24a465617925e"
+checksum = "47796c98c480fce5406ef69d1c76378375492c3b0a0de587be0c1d9feb12f395"
 dependencies = [
  "once_cell",
  "rustls-pki-types",
@@ -6225,12 +6244,11 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
-version = "0.26.0"
+version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c7bc40d0e5a97695bb96e27995cd3a08538541b0a846f65bba7a359f36700d4"
+checksum = "8e727b36a1a0e8b74c376ac2211e40c2c8af09fb4013c60d910495810f008e9b"
 dependencies = [
- "rustls 0.23.16",
- "rustls-pki-types",
+ "rustls 0.23.23",
  "tokio",
 ]
 
