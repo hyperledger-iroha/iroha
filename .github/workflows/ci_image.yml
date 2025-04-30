@@ -1,4 +1,4 @@
-name: ci_image
+name: Build iroha2-ci image
 
 on:
   workflow_dispatch:

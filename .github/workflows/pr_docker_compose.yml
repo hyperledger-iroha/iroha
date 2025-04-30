@@ -1,10 +1,6 @@
-name: ci_docker_compose
+name: Pull Request CI (Docker Compose)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "defaults"
   pull_request:
     branches: [main]
     paths:

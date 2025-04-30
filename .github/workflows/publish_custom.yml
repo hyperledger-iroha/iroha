@@ -1,4 +1,4 @@
-name: publish_custom
+name: Publish (custom)
 
 on:
   workflow_dispatch:

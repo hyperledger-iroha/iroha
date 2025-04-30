@@ -1,9 +1,6 @@
-name: ci_pytests_static
+name: Pull Request CI (Python Static Analysis)
+
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**.py"
   pull_request:
     branches: [main]
     paths:
