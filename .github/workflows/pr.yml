@@ -242,38 +242,6 @@ jobs:
       - name: Terminate test network
         run: ./scripts/test_env.py cleanup
 
-  # Run the job to check that the docker containers are properly buildable
-  pr_generator_build:
-    # Job will only execute if the head of the pull request is a branch for PR-generator case
-    if: startsWith(github.head_ref, 'iroha2-pr-deploy/')
-    runs-on: [self-hosted, Linux, iroha2]
-    container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
-    steps:
-      - uses: actions/checkout@v4
-      - name: Login to Soramitsu Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: docker.soramitsu.co.jp
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_TOKEN }}
-      - name: Set up Docker Buildx
-        id: buildx
-        if: always()
-        uses: docker/setup-buildx-action@v2
-        with:
-          install: true
-      - name: Build and push iroha:dev image
-        uses: docker/build-push-action@v6
-        if: always()
-        with:
-          push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha:dev-${{ github.event.pull_request.head.sha }}
-          labels: commit=${{ github.sha }}
-          build-args: TAG=dev
-          # This context specification is required
-          context: .
-
   check_pr_title:
     runs-on: ubuntu-latest
     permissions:
@@ -340,8 +308,6 @@ jobs:
           fail: true
 
   sonarqube_defectdojo:
-    # FIXME: this job doesn't work
-    if: false
     needs: test
     runs-on: ubuntu-latest
     container:
@@ -364,21 +330,6 @@ jobs:
             -Dcommunity.rust.lcov.reportPaths=lints/lcov.info
           # TODO: include?
           # -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
-      - name: DefectDojo
-        id: defectdojo
-        uses: C4tWithShell/defectdojo-action@1.0.6
-        with:
-          token: ${{ secrets.DEFECTOJO_TOKEN }}
-          defectdojo_url: ${{ secrets.DEFECTOJO_URL }}
-          product_type: iroha2
-          engagement: ${{ github.ref_name }}
-          tools: "SonarQube API Import,Github Vulnerability Scan"
-          sonar_projectKey: hyperledger:iroha
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          github_repository: ${{ github.repository }}
-          product: ${{ github.repository }}
-          environment: Test
-          reports: '{"Github Vulnerability Scan": "github.json"}'
 
   test_wasm:
     runs-on: ubuntu-latest
