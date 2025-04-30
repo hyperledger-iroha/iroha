@@ -242,7 +242,7 @@ jobs:
       - name: Terminate test network
         run: ./scripts/test_env.py cleanup
 
-  check_pr_title:
+  check_title:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -307,7 +307,7 @@ jobs:
           args: "'**/*.rs' ." # Check rust source and default text files
           fail: true
 
-  sonarqube_defectdojo:
+  sonarqube:
     needs: test
     runs-on: ubuntu-latest
     container:
