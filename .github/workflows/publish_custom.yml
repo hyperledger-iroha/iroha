@@ -3,8 +3,8 @@ name: Publish (custom)
 on:
   workflow_dispatch:
     inputs:
-      PROFILER_NAME:
-        description: "Profiler value (profiling/glibc/alpine) as the image tag part"
+      image_type:
+        description: "Type of the image to build"
         required: true
         type: choice
         options:
@@ -12,17 +12,13 @@ on:
           - glibc
           - alpine
         default: glibc
-      CHECKOUT_REF:
+      checkout_ref:
         description: "The branch, tag or SHA to checkout"
         required: true
         type: string
         default: main
 
 env:
-  IROHA2_PROFILE: profiling
-  IROHA2_RUSTFLAGS: -C force-frame-pointers=on
-  IROHA2_FEATURES: profiling
-  IROHA2_CARGOFLAGS: -Z build-std
   DEFAULTS_DIR: defaults
   WASM_TARGET_DIR: wasm/target/prebuilt
 
@@ -35,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.CHECKOUT_REF }}
+          ref: ${{ github.event.inputs.checkout_ref }}
       - name: Build wasm libs
         run: ./scripts/build_wasm.sh libs
       - name: Upload wasm libs to reuse in other jobs
@@ -45,16 +41,15 @@ jobs:
           path: ${{ env.WASM_TARGET_DIR }}/libs
           retention-days: 1
 
-  registry-profiling-image:
-    if: ${{ inputs.PROFILER_NAME == 'profiling' }}
-    runs-on: [self-hosted, Linux, iroha2]
+  image:
     needs: build_wasm_libs
+    runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2024-09-09
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.CHECKOUT_REF }}
+          ref: ${{ github.event.inputs.checkout_ref }}
       - name: Download wasm libs
         uses: actions/download-artifact@v4
         with:
@@ -62,12 +57,6 @@ jobs:
           path: ${{ env.DEFAULTS_DIR }}/libs
       - name: Move the default executor
         run: mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
-      - name: Get the release tag
-        run: |
-          RELEASE_VERSION=${{ github.ref_name }}
-          PREFIX='v'
-          TAG=${RELEASE_VERSION#$PREFIX}
-          echo "TAG=$TAG" >>$GITHUB_ENV
       - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -83,94 +72,48 @@ jobs:
         if: always()
         uses: docker/setup-buildx-action@v3
         with:
+          version: latest
           install: true
-      - name: Build and push iroha2-profiling image
+
+      # glibc
+      - name: Build and push iroha:glibc image
         uses: docker/build-push-action@v6
-        if: always()
+        if: ${{ inputs.image_type == 'glibc' }}
         with:
           push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha:${{ env.TAG }}-${{ inputs.PROFILER_NAME }}-${{ github.sha }}
+          tags: docker.soramitsu.co.jp/iroha2/iroha:glibc-${{ github.sha }}
+          labels: commit=${{ github.sha }}
+          context: .
+
+      # Profiling
+      - name: Get the release tag
+        if: ${{ inputs.image_type == 'profiling' }}
+        run: |
+          RELEASE_VERSION=${{ github.ref_name }}
+          PREFIX='v'
+          TAG=${RELEASE_VERSION#$PREFIX}
+          echo "TAG=$TAG" >>$GITHUB_ENV
+      - name: Build and push iroha:profiling-tag-sha image
+        uses: docker/build-push-action@v6
+        if: ${{ inputs.image_type == 'profiling' }}
+        with:
+          push: true
+          tags: docker.soramitsu.co.jp/iroha2/iroha:profiling-${{ env.TAG }}-${{ github.sha }}
           labels: commit=${{ github.sha }}
           build-args: |
-            "PROFILE=${{ env.IROHA2_PROFILE }}"
-            "RUSTFLAGS=${{ env.IROHA2_RUSTFLAGS }}"
-            "FEATURES=${{ env.IROHA2_FEATURES }}"
-            "CARGOFLAGS=${{ env.IROHA2_CARGOFLAGS }}"
+            "PROFILE=profiling"
+            "RUSTFLAGS=-C force-frame-pointers=on"
+            "FEATURES=profiling"
+            "CARGOFLAGS=-Z build-std"
           context: .
 
-  registry-glibc-image:
-    if: ${{ inputs.PROFILER_NAME == 'glibc' }}
-    runs-on: [self-hosted, Linux, iroha2]
-    needs: build_wasm_libs
-    container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.CHECKOUT_REF }}
-      - name: Download wasm libs
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm-libs
-          path: ${{ env.DEFAULTS_DIR }}/libs
-      - name: Move the default executor
-        run: mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
-      - name: Login to Soramitsu Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: docker.soramitsu.co.jp
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_TOKEN }}
-      - name: Set up Docker Buildx
-        id: buildx
-        if: always()
-        uses: docker/setup-buildx-action@v3
-        with:
-          install: true
-      - name: Build and push iroha2-glibc image
+      # Alpine (difference from glibc is the use of Dockerfile.musl)
+      - name: Build and push iroha:alpine-sha image
         uses: docker/build-push-action@v6
-        if: always()
+        if: ${{ inputs.image_type == 'alpine' }}
         with:
           push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha:${{ inputs.PROFILER_NAME }}-${{ github.sha }}
-          labels: commit=${{ github.sha }}
-          context: .
-
-  registry-alpine-image:
-    if: ${{ inputs.PROFILER_NAME == 'alpine' }}
-    runs-on: [self-hosted, Linux, iroha2]
-    needs: build_wasm_libs
-    container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.CHECKOUT_REF }}
-      - name: Download wasm libs
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm-libs
-          path: ${{ env.DEFAULTS_DIR }}/libs
-      - name: Move the default executor
-        run: mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
-      - name: Login to Soramitsu Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: docker.soramitsu.co.jp
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_TOKEN }}
-      - name: Set up Docker Buildx
-        id: buildx
-        if: always()
-        uses: docker/setup-buildx-action@v3
-        with:
-          install: true
-      - name: Build and push iroha2-alpine-sha image
-        uses: docker/build-push-action@v6
-        if: always()
-        with:
-          push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha:${{ inputs.PROFILER_NAME }}-${{ github.sha }}
+          tags: docker.soramitsu.co.jp/iroha2/iroha:alpine-${{ github.sha }}
           labels: commit=${{ github.sha }}
           file: Dockerfile.musl
           context: .
