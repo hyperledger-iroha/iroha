@@ -28,32 +28,6 @@ jobs:
           name: wasm-libs
           path: ${{ env.WASM_TARGET_DIR }}/libs
 
-  trigger_python_sdk:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger python SDK tests
-        run: |
-          curl -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.REPO_ACCESS_TOKEN }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/hyperledger-iroha/iroha-python/dispatches \
-            -d '{"event_type":"dispatch-event"}'
-
-  trigger_java_sdk:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger java SDK tests
-        run: |
-          curl -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.REPO_ACCESS_TOKEN }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/hyperledger-iroha/iroha-java/dispatches \
-            -d '{"event_type":"allure-upload-trigger"}'
-
   dev_image:
     runs-on: [self-hosted, Linux, iroha2]
     container:
@@ -97,3 +71,26 @@ jobs:
           labels: commit=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  trigger_sdk_tests:
+    runs-on: ubuntu-latest
+    needs: dev_image
+    steps:
+      - name: Trigger Iroha Python tests
+        run: |
+          curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.REPO_ACCESS_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/hyperledger-iroha/iroha-python/dispatches \
+            -d '{"event_type":"dispatch-event"}'
+      - name: Trigger Iroha Java tests
+        run: |
+          curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.REPO_ACCESS_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/hyperledger-iroha/iroha-java/dispatches \
+            -d '{"event_type":"allure-upload-trigger"}'
