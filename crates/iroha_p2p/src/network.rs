@@ -9,10 +9,7 @@ use std::{
 use futures::{stream::FuturesUnordered, StreamExt};
 use iroha_config::parameters::actual::Network as Config;
 use iroha_crypto::KeyPair;
-use iroha_data_model::{
-    prelude::{Peer, PeerId},
-    Identifiable,
-};
+use iroha_data_model::prelude::{Peer, PeerId};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use iroha_primitives::addr::SocketAddr;
@@ -254,7 +251,6 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
 
 impl<T: Pload, K: Kex, E: Enc> NetworkBase<T, K, E> {
     /// [`Self`] task.
-    #[log(skip(self, shutdown_signal), fields(listen_addr=%self.listen_addr, public_key=%self.key_pair.public_key()))]
     async fn run(mut self, shutdown_signal: ShutdownSignal) {
         // TODO: probably should be configuration parameter
         let mut update_topology_interval = tokio::time::interval(Duration::from_millis(1000));

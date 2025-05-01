@@ -99,7 +99,7 @@ mod model {
         Serialize,
         IntoSchema,
     )]
-    pub(crate) struct TransactionPayload {
+    pub struct TransactionPayload {
         /// Unique id of the blockchain. Used for simple replay attack protection.
         pub chain: ChainId,
         /// Account ID of transaction creator.

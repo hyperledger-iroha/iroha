@@ -112,7 +112,7 @@ mod test {
                 .public_key()
                 .clone(),
             logger: Logger {
-                level: Level::TRACE.into(),
+                level: Level::TRACE,
                 filter: None,
             },
             network: Network {

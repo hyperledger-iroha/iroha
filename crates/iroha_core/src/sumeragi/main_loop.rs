@@ -87,6 +87,7 @@ impl Sumeragi {
             data: NetworkMessage::SumeragiBlock(Box::new(packet)),
             peer_id: peer.clone(),
         };
+        trace!(?post, "Posting a packet");
         self.network.post(post);
     }
 
@@ -107,6 +108,7 @@ impl Sumeragi {
         let broadcast = iroha_p2p::Broadcast {
             data: NetworkMessage::SumeragiBlock(Box::new(msg.into())),
         };
+        trace!(?broadcast, "Broadcasting a packet");
         self.network.broadcast(broadcast);
     }
 
@@ -138,23 +140,19 @@ impl Sumeragi {
         let mut should_sleep = true;
         for _ in 0..MAX_CONTROL_MSG_IN_A_ROW {
             match self.control_message_receiver.try_recv() {
-                Ok(msg) => {
+                Ok(ControlFlowMessage::ViewChangeProof(proof)) => {
                     should_sleep = false;
-                    if let Err(error) = view_change_proof_chain.insert_proof(
-                        msg.view_change_proof,
-                        &self.topology,
-                        latest_block,
-                    ) {
+                    trace!("Inserting a proof into the view change proof chain");
+                    if let Err(error) =
+                        view_change_proof_chain.insert_proof(proof, &self.topology, latest_block)
+                    {
                         trace!(%error, "Failed to add proof into view change proof chain")
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     return Err(ReceiveNetworkPacketError::ChannelDisconnected)
                 }
-                Err(err) => {
-                    trace!(%err, "Failed to receive control message");
-                    break;
-                }
+                Err(mpsc::TryRecvError::Empty) => break,
             }
         }
 
@@ -179,8 +177,7 @@ impl Sumeragi {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     return Err(ReceiveNetworkPacketError::ChannelDisconnected)
                 }
-                Err(err) => {
-                    trace!(%err, "Failed to receive message");
+                Err(mpsc::TryRecvError::Empty) => {
                     return Ok(None);
                 }
             };
@@ -1180,6 +1177,7 @@ pub(crate) fn run(
                         peer_id=%sumeragi.peer,
                         role=%sumeragi.role(),
                         block=%block.as_ref().hash(),
+                        %view_change_index,
                         "Block not committed in due time, requesting view change..."
                     );
                 } else {
@@ -1189,6 +1187,7 @@ pub(crate) fn run(
                     warn!(
                         peer_id=%sumeragi.peer,
                         role=%sumeragi.role(),
+                        %view_change_index,
                         "No block produced in due time, requesting view change..."
                     );
                 }
@@ -1213,7 +1212,7 @@ pub(crate) fn run(
                         view_change_proof_chain.get_proof_for_view_change(view_change_index)
                     })
             {
-                let msg = ControlFlowMessage::new(latest_verified_proof);
+                let msg = ControlFlowMessage::ViewChangeProof(latest_verified_proof);
                 sumeragi.broadcast_control_flow_packet(msg);
             }
 
@@ -1223,7 +1222,7 @@ pub(crate) fn run(
             if let Some(proof_for_current_view_change_index) =
                 view_change_proof_chain.get_proof_for_view_change(view_change_index)
             {
-                let msg = ControlFlowMessage::new(proof_for_current_view_change_index);
+                let msg = ControlFlowMessage::ViewChangeProof(proof_for_current_view_change_index);
                 sumeragi.broadcast_control_flow_packet(msg);
             }
 
