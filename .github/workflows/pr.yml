@@ -301,11 +301,8 @@ jobs:
       - name: Link Checker
         id: lychee
         uses: lycheeverse/lychee-action@v2
-        env:
-          # this can help to avoid rate limiting when checking GitHub links
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: "'**/*.rs' ." # Check rust source and default text files
+          args: "--retry-wait-time 5 '**/*.rs' ."
           fail: true
 
   sonarqube:
