@@ -258,8 +258,6 @@ jobs:
 
       - name: Post error comment
         uses: marocchino/sticky-pull-request-comment@v2
-        # When the previous step fails, the workflow would stop. By adding this
-        # condition you can continue the execution with the populated error message.
         if: always() && (steps.lint_pr_title.outputs.error_message != null)
         with:
           header: pr-title-lint-error
@@ -303,6 +301,9 @@ jobs:
       - name: Link Checker
         id: lychee
         uses: lycheeverse/lychee-action@v2
+        env:
+          # this can help to avoid rate limiting when checking GitHub links
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: "'**/*.rs' ." # Check rust source and default text files
           fail: true
