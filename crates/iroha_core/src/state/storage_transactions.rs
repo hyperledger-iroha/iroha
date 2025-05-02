@@ -96,6 +96,7 @@ mod view {
     use super::*;
 
     /// Consistent view of the storage at the certain version
+    #[derive(Serialize)]
     pub struct TransactionsView<'storage> {
         pub(super) latest_block: Option<Arc<BlockInfo>>,
         /// Some transactions may be added to the map after `Self` is created,
@@ -153,7 +154,7 @@ mod block {
             };
             assert!(
                 self.current_block.is_none(),
-                "Should add block transactions only once"
+                "`TransactionsBlock::insert_block()` must be called only once"
             );
             self.current_block = Some(Arc::new(block_info));
         }
@@ -169,19 +170,32 @@ mod block {
             let previous_block = &self.latest_block_ref.load();
             let previous_block = previous_block.as_ref();
 
-            // Check previous and current block height consistency
-            //
-            // Note that in production `current_block` must be not `None`.
-            // We support `None` case here for tests,
-            // in which `.block()` + `.commit()` is used to populate store,
-            // without actually adding block with transactions.
-            #[cfg(debug_assertions)]
-            if let Some(current_block) = &self.current_block {
-                let current_height = current_block.height.get();
-                let previous_height = previous_block.map_or(0, |b| b.height.get());
-                let addition = usize::from(!self.revert);
-                debug_assert_eq!(previous_height + addition, current_height);
-            }
+            let previous_height = previous_block.map_or(0, |b| b.height.get());
+            let addition = usize::from(!self.revert);
+            let expected_current_height = previous_height + addition;
+
+            #[allow(clippy::option_if_let_else)]
+            let current_block = match self.current_block {
+                Some(current_block) => {
+                    let current_height = current_block.height.get();
+                    debug_assert_eq!(expected_current_height, current_height);
+                    current_block
+                }
+                None => {
+                    #[cfg(not(debug_assertions))]
+                    panic!("`TransactionsBlock::insert_block()` was not called");
+
+                    // Note that in production `current_block` must be not `None`.
+                    // We support `None` case here for tests,
+                    // in which `.block()` + `.commit()` is used to populate store,
+                    // without actually adding block with transactions.
+                    #[cfg(debug_assertions)]
+                    Arc::new(BlockInfo {
+                        transactions: HashSet::new(),
+                        height: NonZeroUsize::new(expected_current_height).unwrap(),
+                    })
+                }
+            };
 
             if !self.revert {
                 if let Some(previous_block) = previous_block {
@@ -191,7 +205,7 @@ mod block {
                 }
             }
 
-            self.latest_block_ref.store(self.current_block);
+            self.latest_block_ref.store(Some(current_block));
         }
     }
 
@@ -229,11 +243,7 @@ mod serialization {
         where
             S: serde::Serializer,
         {
-            #[derive(Serialize)]
-            struct Storage<'a> {
-                latest_block: Option<Arc<BlockInfo>>,
-                blocks: &'a DashMap<Key, Value>,
-            }
+            let view = self.view();
 
             // Note that some new entries may be added to `blocks` during serialization.
             // We will filter such entries later during deserialization.
@@ -241,12 +251,8 @@ mod serialization {
             // * Clone `blocks`, filter, then serialize
             //   Bad approach, will have 2x peak memory usage
             // * Write custom serialization with filtration
-            //   (using `serializer.serialize_map()`
-            let storage = Storage {
-                latest_block: self.latest_block.load_full(),
-                blocks: &self.blocks,
-            };
-            storage.serialize(serializer)
+            //   (using `serializer.serialize_map()`)
+            view.serialize(serializer)
         }
     }
 
@@ -278,5 +284,182 @@ mod serialization {
                 write_lock: Mutex::new(()),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn random_hash() -> Key {
+        use rand::Rng;
+        let bytes = rand::thread_rng().gen();
+        let hash = iroha_crypto::Hash::prehashed(bytes);
+        HashOf::from_untyped_unchecked(hash)
+    }
+
+    fn get_keys<const N: usize>() -> [Key; N] {
+        [(); N].map(|()| random_hash())
+    }
+
+    fn get_values<const N: usize>() -> [Value; N] {
+        let mut i = 0;
+        [(); N].map(|()| {
+            i += 1;
+            NonZeroUsize::new(i).unwrap()
+        })
+    }
+
+    fn insert_keys(block: &mut TransactionsBlock, keys: &[Key], value: Value) {
+        let keys = keys.iter().copied().collect();
+        block.insert_block(keys, value);
+    }
+
+    #[test]
+    fn get() {
+        let [k0, k1, k2, k3, k4] = get_keys();
+        let [v1, v2, v3] = get_values();
+
+        let storage = TransactionsStorage::new();
+        let view0 = storage.view();
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[k0, k1, k2], v1);
+            block.commit()
+        }
+        let view1 = storage.view();
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[k0, k1, k3], v2);
+            block.commit()
+        }
+        let view2 = storage.view();
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[k1, k4], v3);
+            block.commit()
+        }
+        let view3 = storage.view();
+
+        assert_eq!(view0.get(&k0), None);
+        assert_eq!(view0.get(&k1), None);
+        assert_eq!(view0.get(&k2), None);
+        assert_eq!(view0.get(&k3), None);
+
+        assert_eq!(view1.get(&k0), Some(v1));
+        assert_eq!(view1.get(&k1), Some(v1));
+        assert_eq!(view1.get(&k2), Some(v1));
+        assert_eq!(view1.get(&k3), None);
+
+        assert_eq!(view2.get(&k0), Some(v2));
+        assert_eq!(view2.get(&k1), Some(v2));
+        assert_eq!(view2.get(&k2), Some(v1));
+        assert_eq!(view2.get(&k3), Some(v2));
+        assert_eq!(view2.get(&k4), None);
+
+        assert_eq!(view3.get(&k0), Some(v2));
+        assert_eq!(view3.get(&k1), Some(v3));
+        assert_eq!(view3.get(&k2), Some(v1));
+        assert_eq!(view3.get(&k3), Some(v2));
+        assert_eq!(view3.get(&k4), Some(v3));
+    }
+
+    #[test]
+    fn revert() {
+        let [k0] = get_keys();
+        let [v1, v2] = get_values();
+
+        let storage = TransactionsStorage::new();
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[k0], v1);
+            block.commit()
+        }
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[k0], v2);
+            block.commit()
+        }
+        let view1 = storage.view();
+
+        {
+            let block = storage.block_and_revert();
+            block.commit();
+        }
+        let view2 = storage.view();
+
+        // View is persistent so revert is not visible
+        assert_eq!(view1.get(&k0), Some(v2));
+        // Revert is visible in the view created after revert was applied
+        assert_eq!(view2.get(&k0), Some(v1));
+    }
+
+    #[test]
+    fn serialization() {
+        fn assert_views_equal(view1: &TransactionsView, view2: &TransactionsView, keys: &[Key]) {
+            for key in keys {
+                let value1 = view1.get(key);
+                let value2 = view2.get(key);
+                assert_eq!(value1, value2);
+            }
+        }
+        fn check_view(view1: &TransactionsView, keys: &[Key]) {
+            let json = serde_json::to_string(&view1).unwrap();
+            let storage2: TransactionsStorage = serde_json::from_str(&json).unwrap();
+            let view2 = storage2.view();
+            assert_views_equal(view1, &view2, keys);
+        }
+        fn check_views(views: &[TransactionsView], keys: &[Key]) {
+            for view in views {
+                check_view(view, keys);
+            }
+        }
+
+        let keys = get_keys();
+        let [k0, k1, k2, k3, k4] = keys;
+        let [v1, v2, v3] = get_values();
+
+        let mut views = Vec::new();
+
+        let storage = TransactionsStorage::new();
+        views.push(storage.view());
+        check_views(&views, &keys);
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[k0, k1, k2], v1);
+            block.commit()
+        }
+        views.push(storage.view());
+        check_views(&views, &keys);
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[k0, k1, k3], v2);
+            block.commit()
+        }
+        views.push(storage.view());
+        check_views(&views, &keys);
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[k1, k4], v3);
+            block.commit()
+        }
+        views.push(storage.view());
+        check_views(&views, &keys);
+
+        {
+            let mut block = storage.block_and_revert();
+            insert_keys(&mut block, &[k2], v3);
+            block.commit()
+        }
+        views.push(storage.view());
+        check_views(&views, &keys);
     }
 }
