@@ -1,9 +1,9 @@
-name: I2::Release::Publish
+name: Publish (v2* release)
 
 on:
   push:
     tags:
-      - 'v2*'
+      - "v2*"
 
 env:
   CARGO_TERM_COLOR: always

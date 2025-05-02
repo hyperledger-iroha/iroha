@@ -1,0 +1,95 @@
+name: Pull Request CI (Docker Compose)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "defaults"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEFAULTS_DIR: defaults
+  WASM_TARGET_DIR: wasm/target/prebuilt
+
+jobs:
+  # this is a partial copy from `ci.yaml`
+  pre_build:
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # FIXME: it caches well for binaries build, but seems to ignore wasm32 target
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          workspaces: ".\n./wasm -> wasm32-unknown-unknown"
+      - name: Build WASMs
+        run: ./scripts/build_wasm.sh
+      - name: Upload WASMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: ${{ env.WASM_TARGET_DIR }}
+          retention-days: 1
+
+  test:
+    needs: pre_build
+    runs-on: [self-hosted, Linux, iroha2]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Download WASMs
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm
+          path: ${{ env.WASM_TARGET_DIR }}
+      - name: Move wasm libs
+        run: |
+          mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
+      - name: Set up Docker buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          version: latest
+          install: true
+      - name: Build and tag Docker images
+        uses: docker/build-push-action@v6
+        if: always()
+        with:
+          context: .
+          load: true
+          tags: |
+            hyperledger/iroha:local
+            hyperledger/iroha:dev
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Test docker-compose.single.yml
+        run: |
+          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml up --wait || {
+            echo "docker-compose failed. Logs:";
+            docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml logs --tail="all";
+            exit 1;
+          }
+          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.single.yml down
+      - name: Test docker-compose.local.yml
+        run: |
+          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml up --wait || {
+            echo "docker-compose failed. Logs:";
+            docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml logs --tail="all";
+            exit 1;
+          }
+          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.local.yml down
+      - name: Test docker-compose.yml
+        run: |
+          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml up --wait || {
+            echo "docker-compose failed. Logs:";
+            docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml logs --tail="all";
+            exit 1;
+          }
+          docker compose -f ${{ env.DEFAULTS_DIR }}/docker-compose.yml down

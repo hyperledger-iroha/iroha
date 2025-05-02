@@ -1,0 +1,354 @@
+name: Pull Request CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  IROHA_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"
+  DEFAULTS_DIR: defaults
+  WASM_TARGET_DIR: wasm/target/prebuilt
+  TEST_NETWORK_TMP_DIR: /tmp
+  NEXTEST_PROFILE: ci
+
+jobs:
+  pre_build:
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # FIXME: it caches well for binaries build, but seems to ignore wasm32 target
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          workspaces: ".\n./wasm -> wasm32-unknown-unknown"
+      - name: Build binaries (irohad, iroha, kagami) (release)
+        run: |
+          cargo build --release --bin irohad --bin iroha --bin kagami
+          mkdir target/release/pre_build
+          mv target/release/irohad target/release/iroha target/release/kagami target/release/pre_build
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: bins
+          path: target/release/pre_build
+          retention-days: 1
+      - name: Build WASMs
+        env:
+          BIN_KAGAMI: target/release/pre_build/kagami
+        run: ./scripts/build_wasm.sh
+      - name: Upload WASMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: ${{ env.WASM_TARGET_DIR }}
+          retention-days: 1
+
+  consistency:
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
+    needs: pre_build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: bins
+          path: bins
+      - name: Check
+        env:
+          BIN_KAGAMI: bins/kagami
+          BIN_IROHA: bins/iroha
+        run: |
+          chmod +x -R bins
+          ./scripts/tests/consistency.sh genesis
+          ./scripts/tests/consistency.sh schema
+          ./scripts/tests/consistency.sh cli-help
+          ./scripts/tests/consistency.sh docker-compose
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: "false"
+          toolchain: "nightly-2024-09-09"
+          target: "wasm32-unknown-unknown"
+          components: "rustfmt"
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Format (wasm)
+        working-directory: wasm
+        run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Clippy (all targets, all features)
+        run: cargo clippy --all-targets --all-features --quiet
+      # TODO: upload clippy artifact?
+
+  doc:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Documentation (all features)
+        run: cargo doc --no-deps --quiet --all-features
+
+  test:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
+    needs: pre_build
+    env:
+      LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
+      TEST_NETWORK_IROHAD: bins/irohad
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Download WASMs
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm
+          path: ${{ env.WASM_TARGET_DIR }}
+      - name: Move WASM libs
+        run: |
+          mv ${{ env.WASM_TARGET_DIR }}/libs ${{ env.DEFAULTS_DIR }}/libs
+          mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: bins
+          path: bins
+      - name: Make binaries executable
+        run: chmod +x -R bins
+      - name: Test (full)
+        id: test
+        run: >
+          mold --run cargo llvm-cov nextest
+          --locked
+          --branch --no-report
+      - name: Test (doc)
+        id: test-doc
+        run: >
+          mold --run cargo llvm-cov --doc
+          --branch --no-report
+      - name: Generate lcov report
+        run: cargo llvm-cov report --doctests --ignore-filename-regex 'iroha_cli|iroha_torii' --lcov --output-path lcov.info
+      - name: Upload lcov report
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-coverage
+          path: lcov.info
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@v2.3.6
+        with:
+          file: lcov.info
+          format: lcov
+          github-token: ${{ github.token }}
+      - name: Upload test network artifacts
+        if: failure() && (steps.test.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: test_network_runs
+          path: ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
+          retention-days: 3
+
+  pytests:
+    needs: pre_build
+    runs-on: ubuntu-latest
+    env:
+      IROHA_CONTAINER: "defaults-irohad0-1"
+      BIN_IROHAD: bins/irohad
+      BIN_IROHA: bins/iroha
+      BIN_KAGAMI: bins/kagami
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.11.12
+      - uses: abatilo/actions-poetry@v4
+      - name: Download WAMSs
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm
+          path: ${{ env.WASM_TARGET_DIR }}
+      - name: Move wasm libs
+        run: |
+          mv ${{ env.WASM_TARGET_DIR }}/libs ${{ env.DEFAULTS_DIR }}/libs
+          mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: bins
+          path: bins
+      - name: Make binaries executable
+        run: chmod +x -R bins
+      - name: Install test_env deps globally
+        run: pip install tomli-w
+      - name: Run test env
+        run: ./scripts/test_env.py setup
+      - name: Install Torii pytest dependencies
+        working-directory: pytests/iroha_torii_tests
+        run: poetry install --no-root
+      - name: Run Torii pytests
+        working-directory: pytests/iroha_torii_tests
+        run: poetry run pytest
+      - name: Install client pytest dependencies
+        working-directory: pytests/iroha_cli_tests
+        run: poetry install --no-root
+      - name: Run client pytests
+        uses: nick-fields/retry@v3
+        env:
+          # created by test_env.py
+          TMP_DIR: ../../test
+          IROHA_CLI_BINARY: iroha
+          IROHA_CLI_CONFIG: client.toml
+        with:
+          timeout_minutes: 10
+          max_attempts: 5
+          command: |
+            cd pytests/iroha_cli_tests
+            poetry run pytest
+          on_retry_command: |
+            ./scripts/test_env.py cleanup
+            ./scripts/test_env.py setup
+      - name: Terminate test network
+        run: ./scripts/test_env.py cleanup
+
+  check_title:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check conventional commits
+        uses: amannn/action-semantic-pull-request@v5
+        id: lint_pr_title
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          validateSingleCommit: true
+          validateSingleCommitMatchesPrTitle: true
+
+      - name: Post error comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: always() && (steps.lint_pr_title.outputs.error_message != null)
+        with:
+          header: pr-title-lint-error
+          message: |
+            Hey there and thank you for opening this pull request! 👋🏼
+
+            We require pull request titles to follow the [Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/), and it looks like your proposed title needs to be adjusted.
+
+            Details:
+
+            ```
+            ${{ steps.lint_pr_title.outputs.error_message }}
+            ```
+
+      # Delete a previous comment when the issue has been resolved
+      - name: Delete error comment
+        if: ${{ steps.lint_pr_title.outputs.error_message == null }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-title-lint-error
+          delete: true
+
+  check_config_label:
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - id: label-the-PR
+        uses: actions/labeler@v5
+      - uses: mshick/add-pr-comment@v2
+        if: contains(steps.label-the-PR.outputs.all-labels, 'config-changes')
+        with:
+          message: |
+            @BAStos525
+
+  check_links:
+    runs-on: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Link Checker
+        id: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: "'**/*.rs' ."
+          # We want to have a report, but it is not a hard error
+          fail: false
+
+  sonarqube:
+    # FIXME: https://github.com/hyperledger-iroha/iroha/issues/5403
+    if: false
+    needs: test
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download clippy and lcov artifact reports
+        uses: actions/download-artifact@v4
+        with:
+          path: lints
+          pattern: report-*
+          merge-multiple: true
+      - name: SonarQube
+        uses: SonarSource/sonarqube-scan-action@v5.0.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dcommunity.rust.lcov.reportPaths=lints/lcov.info
+          # TODO: include?
+          # -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
+
+  test_wasm:
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2024-09-09
+    needs: pre_build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download wasm
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm
+          path: ${{ env.WASM_TARGET_DIR }}
+      - name: Move executor.wasm
+        run: |
+          mv ${{ env.WASM_TARGET_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
+      - name: Install iroha_wasm_test_runner
+        run: which iroha_wasm_test_runner || cargo install --path crates/iroha_wasm_test_runner --locked
+      - name: Run smart contract tests on WebAssembly VM
+        working-directory: crates/iroha_smart_contract
+        run: mold --run cargo test -p iroha_smart_contract -p iroha_smart_contract_utils --release --tests --target wasm32-unknown-unknown --no-fail-fast --quiet

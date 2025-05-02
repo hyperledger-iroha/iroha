@@ -1,40 +1,23 @@
-name: I2::Dev::Static
+name: Pull Request CI (Python Static Analysis)
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - '**.rs'
-      - '**.json'
-      - '**.toml'
-      - '.github/workflows/iroha2-dev-pr-static.yml'
-      - '**.py'
+      - "**.py"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  DEFAULTS_DIR: defaults
-
 jobs:
-  smart_contracts_analysis:
-    runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
-    steps:
-      - uses: actions/checkout@v4
-      - name: cargo fmt (wasm)
-        working-directory: wasm
-        run: cargo fmt --all -- --check
-
-  python_static_analysis:
+  check:
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2024-09-09
     strategy:
       matrix:
-        suite: [ iroha_cli_tests, iroha_torii_tests ]
+        suite: [iroha_cli_tests, iroha_torii_tests]
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies using Poetry for pytests/${{ matrix.suite }}

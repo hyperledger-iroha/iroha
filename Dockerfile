@@ -16,7 +16,7 @@ ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
-RUN RUSTFLAGS="${RUSTFLAGS}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}"
+RUN RUSTFLAGS="${RUSTFLAGS}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}" --bin irohad --bin iroha --bin kagami
 
 # final image
 FROM debian:bookworm-slim
