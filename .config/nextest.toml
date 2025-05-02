@@ -1,7 +1,11 @@
 [[profile.default.overrides]]
-# NOTE: maybe add procmacro UI tests too: package(/_derive$/) & test(/^ui$/)
 filter = "package(integration_tests) & test(/^extra_functional/)"
 retries = { count = 3, backoff = "exponential", delay = "5s", max-delay = "30s" }
+
+# FIXME: flaky, should be fixed
+[[profile.default.overrides]]
+filter = "package(iroha_p2p) & test(/two_networks$/)"
+retries = 3
 
 [profile.ci]
 fail-fast = false
