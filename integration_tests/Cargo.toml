@@ -33,3 +33,5 @@ executor_custom_data_model = { path = "../data_model/samples/executor_custom_dat
 reqwest = { version = "0.12.7", features = ["json"] }
 hex = { workspace = true }
 assert_matches = "1.5.0"
+expect-test = { workspace = true }
+

@@ -32,13 +32,14 @@ use mv::{
     },
 };
 use nonzero_ext::nonzero;
-use parking_lot::Mutex;
 use range_bounds::*;
 use serde::{
     de::{DeserializeSeed, MapAccess, Visitor},
     Deserializer, Serialize,
 };
 
+#[cfg(feature = "telemetry")]
+use crate::telemetry::StateTelemetry;
 use crate::{
     block::CommittedBlock,
     executor::Executor,
@@ -218,10 +219,11 @@ pub struct State {
     /// Handle to the [`LiveQueryStore`].
     #[serde(skip)]
     pub query_handle: LiveQueryStoreHandle,
-    /// Temporary metrics buffer of amounts of any asset that has been transacted.
-    /// TODO: this should be done through events
+    /// State telemetry
+    // TODO: this should be done through events
+    #[cfg(feature = "telemetry")]
     #[serde(skip)]
-    pub new_tx_amounts: Arc<Mutex<Vec<f64>>>,
+    pub telemetry: StateTelemetry,
     /// Lock to prevent getting inconsistent view of the state
     #[serde(skip)]
     view_lock: parking_lot::RwLock<()>,
@@ -246,9 +248,9 @@ pub struct StateBlock<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`].
     pub query_handle: &'state LiveQueryStoreHandle,
-    /// Temporary metrics buffer of amounts of any asset that has been transacted.
-    /// TODO: this should be done through events
-    pub new_tx_amounts: &'state Mutex<Vec<f64>>,
+    /// State telemetry
+    #[cfg(feature = "telemetry")]
+    pub telemetry: &'state StateTelemetry,
     /// Lock to prevent getting inconsistent view of the state
     view_lock: &'state parking_lot::RwLock<()>,
 
@@ -274,9 +276,9 @@ pub struct StateTransaction<'block, 'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`].
     pub query_handle: &'state LiveQueryStoreHandle,
-    /// Temporary metrics buffer of amounts of any asset that has been transacted.
-    /// TODO: this should be done through events
-    pub new_tx_amounts: &'state Mutex<Vec<f64>>,
+    /// State telemetry
+    #[cfg(feature = "telemetry")]
+    pub telemetry: &'state StateTelemetry,
 
     pub(crate) curr_block: BlockHeader,
 }
@@ -300,9 +302,9 @@ pub struct StateView<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`].
     pub query_handle: &'state LiveQueryStoreHandle,
-    /// Temporary metrics buffer of amounts of any asset that has been transacted.
-    /// TODO: this should be done through events
-    pub new_tx_amounts: &'state Mutex<Vec<f64>>,
+    /// State telemetry
+    #[cfg(feature = "telemetry")]
+    pub telemetry: &'state StateTelemetry,
 }
 
 impl World {
@@ -1125,22 +1127,73 @@ impl Drop for TransactionEventBuffer<'_> {
 }
 
 impl State {
-    /// Construct [`State`] with given [`World`].
     #[must_use]
     #[inline]
-    pub fn new(world: World, kura: Arc<Kura>, query_handle: LiveQueryStoreHandle) -> Self {
+    fn new_inner(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    ) -> Self {
         Self {
             world,
             transactions: Storage::new(),
             commit_topology: Cell::new(Vec::new()),
             prev_commit_topology: Cell::new(Vec::new()),
             block_hashes: Cell::new(Vec::new()),
-            new_tx_amounts: Arc::new(Mutex::new(Vec::new())),
             engine: wasm::create_engine(),
             kura,
             query_handle,
+            #[cfg(feature = "telemetry")]
+            telemetry,
             view_lock: parking_lot::RwLock::new(()),
         }
+    }
+
+    /// Construct [`State`] with given [`World`].
+    #[must_use]
+    #[inline]
+    #[cfg(not(test))]
+    pub fn new(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    ) -> Self {
+        Self::new_inner(
+            world,
+            kura,
+            query_handle,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+        )
+    }
+
+    /// _(test only)_ Create state with mock telemetry (depends on features)
+    #[must_use]
+    #[inline]
+    #[cfg(test)]
+    pub fn new(world: World, kura: Arc<Kura>, query_handle: LiveQueryStoreHandle) -> Self {
+        Self::new_inner(
+            world,
+            kura,
+            query_handle,
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+    }
+
+    /// _(test only)_ Create state with telemetry
+    #[must_use]
+    #[inline]
+    #[cfg(all(test, feature = "telemetry"))]
+    pub fn with_telemetry(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        telemetry: StateTelemetry,
+    ) -> Self {
+        Self::new_inner(world, kura, query_handle, telemetry)
     }
 
     /// Create structure to execute a block
@@ -1154,7 +1207,8 @@ impl State {
             engine: &self.engine,
             kura: &self.kura,
             query_handle: &self.query_handle,
-            new_tx_amounts: &self.new_tx_amounts,
+            #[cfg(feature = "telemetry")]
+            telemetry: &self.telemetry,
             view_lock: &self.view_lock,
             curr_block,
         }
@@ -1171,7 +1225,8 @@ impl State {
             engine: &self.engine,
             kura: &self.kura,
             query_handle: &self.query_handle,
-            new_tx_amounts: &self.new_tx_amounts,
+            #[cfg(feature = "telemetry")]
+            telemetry: &self.telemetry,
             view_lock: &self.view_lock,
             curr_block,
         }
@@ -1189,7 +1244,8 @@ impl State {
             engine: &self.engine,
             kura: &self.kura,
             query_handle: &self.query_handle,
-            new_tx_amounts: &self.new_tx_amounts,
+            #[cfg(feature = "telemetry")]
+            telemetry: &self.telemetry,
         }
     }
 }
@@ -1205,7 +1261,8 @@ pub trait StateReadOnly {
     fn engine(&self) -> &wasmtime::Engine;
     fn kura(&self) -> &Kura;
     fn query_handle(&self) -> &LiveQueryStoreHandle;
-    fn new_tx_amounts(&self) -> &Mutex<Vec<f64>>;
+    #[cfg(feature = "telemetry")]
+    fn metrics(&self) -> &StateTelemetry;
 
     /// Get a reference to the block one before the latest block.
     /// Returns None if at least 2 blocks are not committed.
@@ -1310,8 +1367,9 @@ macro_rules! impl_state_ro {
             fn query_handle(&self) -> &LiveQueryStoreHandle {
                 &self.query_handle
             }
-            fn new_tx_amounts(&self) -> &Mutex<Vec<f64>> {
-                &self.new_tx_amounts
+            #[cfg(feature = "telemetry")]
+            fn metrics(&self) -> &StateTelemetry {
+                &self.telemetry
             }
         }
     )*};
@@ -1333,7 +1391,8 @@ impl<'state> StateBlock<'state> {
             engine: self.engine,
             kura: self.kura,
             query_handle: self.query_handle,
-            new_tx_amounts: self.new_tx_amounts,
+            #[cfg(feature = "telemetry")]
+            telemetry: self.telemetry,
             curr_block: self.curr_block,
         }
     }
@@ -2095,6 +2154,9 @@ pub(crate) mod deserialize {
         pub kura: Arc<Kura>,
         /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
         pub query_handle: LiveQueryStoreHandle,
+        #[cfg(feature = "telemetry")]
+        /// Handle to the metrics actor
+        pub telemetry: StateTelemetry,
     }
 
     impl<'de> DeserializeSeed<'de> for KuraSeed {
@@ -2166,8 +2228,9 @@ pub(crate) mod deserialize {
                         })?,
                         kura: self.loader.kura,
                         query_handle: self.loader.query_handle,
+                        #[cfg(feature = "telemetry")]
+                        telemetry: self.loader.telemetry,
                         engine,
-                        new_tx_amounts: Arc::new(Mutex::new(Vec::new())),
                         view_lock: parking_lot::RwLock::new(()),
                     })
                 }

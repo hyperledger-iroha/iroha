@@ -35,16 +35,16 @@ fn too_big_fetch_size_is_not_allowed() {
 
 #[test]
 fn find_blocks_reversed() -> eyre::Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, rt) = NetworkBuilder::new().start_blocking()?;
     let client = network.client();
 
     // Waiting for empty block to be committed
-    std::thread::sleep(network.pipeline_time());
+    rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 2).await })?;
 
     client.submit_blocking(Register::domain(Domain::new("domain1".parse()?)))?;
 
     // Waiting for empty block to be committed
-    std::thread::sleep(network.pipeline_time());
+    rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 4).await })?;
 
     let blocks = client.query(FindBlocks).execute_all()?;
     assert_eq!(blocks.len(), 4);

@@ -264,6 +264,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
     Ok(())
 }
 
+// TODO: refine error handling; check the actual STDERR printed with the expected error
 #[test]
 #[should_panic(expected = "a peer exited unexpectedly")]
 fn grant_unexisting_role_in_genesis_fail() {

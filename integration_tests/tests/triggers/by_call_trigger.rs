@@ -80,8 +80,11 @@ fn execute_trigger_should_produce_event() -> Result<()> {
 
 #[test]
 fn infinite_recursion_should_produce_one_call_per_block() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, rt) = NetworkBuilder::new().start_blocking()?;
     let test_client = network.client();
+
+    // Waiting for empty block to be committed
+    rt.block_on(async { network.ensure_blocks_with(|x| x.total == 2).await })?;
 
     let asset_definition_id = "rose#wonderland".parse()?;
     let account_id = ALICE_ID.clone();
@@ -97,10 +100,13 @@ fn infinite_recursion_should_produce_one_call_per_block() -> Result<()> {
     let register_trigger = build_register_trigger_isi(asset_id.account(), instructions);
     test_client.submit_blocking(register_trigger)?;
 
+    // Waiting for empty block to be committed
+    rt.block_on(async { network.ensure_blocks_with(|x| x.total == 4).await })?;
+
     test_client.submit_blocking(call_trigger)?;
 
     // Waiting for empty block to be committed
-    thread::sleep(network.pipeline_time());
+    rt.block_on(async { network.ensure_blocks_with(|x| x.total == 6).await })?;
 
     let new_value = get_asset_value(&test_client, asset_id);
     assert_eq!(new_value, prev_value.checked_add(numeric!(2)).unwrap());
@@ -110,7 +116,7 @@ fn infinite_recursion_should_produce_one_call_per_block() -> Result<()> {
 
 #[test]
 fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, rt) = NetworkBuilder::new().start_blocking()?;
     let test_client = network.client();
 
     let asset_definition_id = "rose#wonderland".parse()?;
@@ -133,7 +139,8 @@ fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<()> {
                 .under_authority(account_id.clone()),
         ),
     ));
-    test_client.submit(register_bad_trigger)?;
+    test_client.submit_blocking(register_bad_trigger)?;
+    rt.block_on(async { network.ensure_blocks_with(|x| x.total == 4).await })?;
 
     // Registering normal trigger
     let trigger_id = TRIGGER_NAME.parse()?;
@@ -149,15 +156,14 @@ fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<()> {
         ),
     ));
     test_client.submit_blocking(register_trigger)?;
+    rt.block_on(async { network.ensure_blocks_with(|x| x.total == 6).await })?;
 
     // Saving current asset value
     let prev_asset_value = get_asset_value(&test_client, asset_id.clone());
 
     // Executing bad trigger
     test_client.submit_blocking(ExecuteTrigger::new(bad_trigger_id))?;
-
-    // Waiting for empty block to be committed
-    thread::sleep(network.pipeline_time());
+    rt.block_on(async { network.ensure_blocks_with(|x| x.total == 8).await })?;
 
     // Checking results
     let new_asset_value = get_asset_value(&test_client, asset_id);
