@@ -302,8 +302,9 @@ jobs:
         id: lychee
         uses: lycheeverse/lychee-action@v2
         with:
-          args: "--retry-wait-time 5 '**/*.rs' ."
-          fail: true
+          args: "'**/*.rs' ."
+          # We want to have a report, but it is not a hard error
+          fail: false
 
   sonarqube:
     # FIXME: https://github.com/hyperledger-iroha/iroha/issues/5403
