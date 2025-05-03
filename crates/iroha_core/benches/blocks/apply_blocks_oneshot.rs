@@ -27,5 +27,5 @@ fn main() {
     }
     iroha_logger::info!("Starting...");
     let bench = StateApplyBlocks::setup(rt.handle());
-    StateApplyBlocks::measure(&bench).expect("Failed to execute benchmark");
+    StateApplyBlocks::measure(&bench);
 }

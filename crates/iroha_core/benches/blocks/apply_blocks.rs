@@ -2,7 +2,6 @@
 mod common;
 
 use common::*;
-use eyre::Result;
 use iroha_core::{
     block::CommittedBlock, prelude::*, state::State, sumeragi::network_topology::Topology,
 };
@@ -84,14 +83,12 @@ impl StateApplyBlocks {
             blocks,
             topology,
         }: &Self,
-    ) -> Result<()> {
+    ) {
         for (block, i) in blocks.iter().zip(1..) {
             let mut state_block = state.block(block.as_ref().header());
-            let _events = state_block.apply(block, topology.as_ref().to_owned())?;
+            let _events = state_block.apply(block, topology.as_ref().to_owned());
             state_block.commit();
             assert_eq!(state.view().height(), i);
         }
-
-        Ok(())
     }
 }

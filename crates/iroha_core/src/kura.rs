@@ -1163,7 +1163,7 @@ mod tests {
 
             let mut state_block = state.block(unverified_block.header());
             let block = unverified_block
-                .categorize(&mut state_block)
+                .validate_and_record_transactions(&mut state_block)
                 .unpack(|_| {})
                 .commit(&topology)
                 .unpack(|_| {})
@@ -1183,7 +1183,7 @@ mod tests {
 
             let mut state_block = state.block_and_revert(unverified_block_soft_fork.header());
             let block_soft_fork = unverified_block_soft_fork
-                .categorize(&mut state_block)
+                .validate_and_record_transactions(&mut state_block)
                 .unpack(|_| {})
                 .commit(&topology)
                 .unpack(|_| {})
@@ -1204,7 +1204,7 @@ mod tests {
 
             let mut state_block = state.block(unverified_block_next.header());
             let block_next = unverified_block_next
-                .categorize(&mut state_block)
+                .validate_and_record_transactions(&mut state_block)
                 .unpack(|_| {})
                 .commit(&topology)
                 .unpack(|_| {})

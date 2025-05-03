@@ -439,7 +439,7 @@ mod tests {
         fn commit_block(&self, block: NewBlock) -> CommittedBlock {
             let mut state_block = self.state.block(block.header());
             let block = block
-                .categorize(&mut state_block)
+                .validate_and_record_transactions(&mut state_block)
                 .unpack(|_| {})
                 .commit(&self.topology)
                 .unpack(|_| {})
