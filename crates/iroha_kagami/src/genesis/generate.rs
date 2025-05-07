@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use color_eyre::eyre::WrapErr as _;
 use iroha_data_model::{isi::InstructionBox, parameter::Parameters, prelude::*};
 use iroha_executor_data_model::permission::{
-    domain::CanRegisterDomain, parameter::CanSetParameters, peer::CanManagePeers,
+    domain::CanRegisterDomain, parameter::CanSetParameters,
 };
 use iroha_genesis::{
     GenesisBuilder, GenesisWasmAction, GenesisWasmTrigger, RawGenesisTransaction, GENESIS_DOMAIN_ID,
@@ -144,61 +144,72 @@ pub fn generate_default(
         grant_permission_to_register_domains.into(),
     ];
 
-    for isi in instructions
-        .into_iter()
-        .chain(extension_from_test_genesis())
-    {
+    for isi in instructions {
         builder = builder.append_instruction(isi);
     }
 
-    let airdrop = GenesisWasmTrigger::new(
-        "airdrop".parse().unwrap(),
-        GenesisWasmAction::new(
-            "trigger_airdrop.wasm",
-            Repeats::Indefinitely,
-            ALICE_ID.clone(),
-            AccountEventFilter::new().for_events(AccountEventSet::Created),
-        ),
-    );
-    builder = builder.append_wasm_trigger(airdrop);
+    builder = extend_for_testnet(builder);
 
     Ok(builder.build_raw())
 }
 
-/// For testnet only
-fn extension_from_test_genesis() -> impl Iterator<Item = InstructionBox> {
+fn extend_for_testnet(mut builder: GenesisBuilder) -> GenesisBuilder {
     use iroha_executor_data_model::permission::{
         asset::CanMintAssetWithDefinition, domain::CanUnregisterDomain,
-        executor::CanUpgradeExecutor, role::CanManageRoles,
+        executor::CanUpgradeExecutor, peer::CanManagePeers, role::CanManageRoles,
     };
 
-    let rose_definition_id = "rose#wonderland".parse::<AssetDefinitionId>().unwrap();
-    let grant_modify_rose_permission = Grant::account_permission(
-        CanMintAssetWithDefinition {
-            asset_definition: rose_definition_id.clone(),
-        },
-        ALICE_ID.clone(),
-    );
-    let grant_manage_peers_permission = Grant::account_permission(CanManagePeers, ALICE_ID.clone());
-    let grant_manage_roles_permission = Grant::account_permission(CanManageRoles, ALICE_ID.clone());
-    let grant_unregister_wonderland_domain = Grant::account_permission(
+    // iroha_test_network::config::genesis
+    for extension_from_test_genesis in [
+        CanUpgradeExecutor.into(),
+        CanManagePeers.into(),
+        CanManageRoles.into(),
         CanUnregisterDomain {
             domain: "wonderland".parse().unwrap(),
-        },
-        ALICE_ID.clone(),
-    );
-    let grant_upgrade_executor_permission =
-        Grant::account_permission(CanUpgradeExecutor, ALICE_ID.clone());
-
-    [
-        grant_modify_rose_permission,
-        grant_manage_peers_permission,
-        grant_manage_roles_permission,
-        grant_unregister_wonderland_domain,
-        grant_upgrade_executor_permission,
+        }
+        .into(),
+        CanMintAssetWithDefinition {
+            asset_definition: "rose#wonderland".parse().unwrap(),
+        }
+        .into(),
     ]
     .into_iter()
-    .map(Into::into)
+    .map(|permission: Permission| Grant::account_permission(permission, ALICE_ID.clone()))
+    {
+        builder = builder.append_instruction(extension_from_test_genesis);
+    }
+
+    for trigger_on_account_creation in [
+        ("airdrop", "trigger_airdrop.wasm"),
+        ("default_roles", "trigger_default_roles.wasm"),
+    ]
+    .into_iter()
+    .map(|(id, executable)| {
+        GenesisWasmTrigger::new(
+            id.parse().unwrap(),
+            GenesisWasmAction::new(
+                executable,
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                AccountEventFilter::new().for_events(AccountEventSet::Created),
+            ),
+        )
+    }) {
+        builder = builder.append_wasm_trigger(trigger_on_account_creation)
+    }
+
+    for other_prerequisite in [Register::role(
+        Role::new("volunteers".parse().unwrap(), ALICE_ID.clone())
+            .add_permission(CanRegisterDomain),
+    )
+    .into()]
+    .into_iter()
+    .map(|instruction: InstructionBox| instruction)
+    {
+        builder = builder.append_instruction(other_prerequisite);
+    }
+
+    builder
 }
 
 fn generate_synthetic(
