@@ -8,6 +8,8 @@ use iroha_p2p::UpdateTopology;
 use tracing::{span, Level};
 
 use super::{view_change::ProofBuilder, *};
+#[cfg(feature = "telemetry")]
+use crate::telemetry::Telemetry;
 use crate::{
     block::*, peers_gossiper::PeersGossiperHandle, queue::TransactionGuard,
     sumeragi::tracing::instrument,
@@ -45,9 +47,9 @@ pub struct Sumeragi {
     /// sumeragi is more dependent on the code that is internal to the
     /// subsystem.
     pub transaction_cache: Vec<TransactionGuard>,
-    /// Metrics for reporting number of view changes in current round
+    /// Telemetry handle to report view changes and block commits
     #[cfg(feature = "telemetry")]
-    pub view_changes_metric: iroha_telemetry::metrics::ViewChangesGauge,
+    pub telemetry: Telemetry,
 
     /// Was there a commit in previous round?
     pub was_commit: bool,
@@ -85,6 +87,7 @@ impl Sumeragi {
             data: NetworkMessage::SumeragiBlock(Box::new(packet)),
             peer_id: peer.clone(),
         };
+        trace!(?post, "Posting a packet");
         self.network.post(post);
     }
 
@@ -105,6 +108,7 @@ impl Sumeragi {
         let broadcast = iroha_p2p::Broadcast {
             data: NetworkMessage::SumeragiBlock(Box::new(msg.into())),
         };
+        trace!(?broadcast, "Broadcasting a packet");
         self.network.broadcast(broadcast);
     }
 
@@ -136,23 +140,19 @@ impl Sumeragi {
         let mut should_sleep = true;
         for _ in 0..MAX_CONTROL_MSG_IN_A_ROW {
             match self.control_message_receiver.try_recv() {
-                Ok(msg) => {
+                Ok(ControlFlowMessage::ViewChangeProof(proof)) => {
                     should_sleep = false;
-                    if let Err(error) = view_change_proof_chain.insert_proof(
-                        msg.view_change_proof,
-                        &self.topology,
-                        latest_block,
-                    ) {
+                    trace!("Inserting a proof into the view change proof chain");
+                    if let Err(error) =
+                        view_change_proof_chain.insert_proof(proof, &self.topology, latest_block)
+                    {
                         trace!(%error, "Failed to add proof into view change proof chain")
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     return Err(ReceiveNetworkPacketError::ChannelDisconnected)
                 }
-                Err(err) => {
-                    trace!(%err, "Failed to receive control message");
-                    break;
-                }
+                Err(mpsc::TryRecvError::Empty) => break,
             }
         }
 
@@ -177,8 +177,7 @@ impl Sumeragi {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     return Err(ReceiveNetworkPacketError::ChannelDisconnected)
                 }
-                Err(err) => {
-                    trace!(%err, "Failed to receive message");
+                Err(mpsc::TryRecvError::Empty) => {
                     return Ok(None);
                 }
             };
@@ -365,6 +364,9 @@ impl Sumeragi {
 
         let block_hash = block.as_ref().hash();
         let block_height = block.as_ref().header().height();
+        #[cfg(feature = "telemetry")]
+        self.telemetry
+            .report_block_commit_blocking(block.as_ref().header());
         Strategy::kura_store_block(&self.kura, block);
 
         // Commit new block making it's effect visible for the rest of application
@@ -1115,8 +1117,8 @@ pub(crate) fn run(
         );
         #[cfg(feature = "telemetry")]
         sumeragi
-            .view_changes_metric
-            .set(sumeragi.topology.view_change_index() as u64);
+            .telemetry
+            .set_view_changes(sumeragi.topology.view_change_index() as u64);
 
         if let Some(message) = {
             let (msg, sleep) = match sumeragi.receive_network_packet(
@@ -1175,6 +1177,7 @@ pub(crate) fn run(
                         peer_id=%sumeragi.peer,
                         role=%sumeragi.role(),
                         block=%block.as_ref().hash(),
+                        %view_change_index,
                         "Block not committed in due time, requesting view change..."
                     );
                 } else {
@@ -1184,6 +1187,7 @@ pub(crate) fn run(
                     warn!(
                         peer_id=%sumeragi.peer,
                         role=%sumeragi.role(),
+                        %view_change_index,
                         "No block produced in due time, requesting view change..."
                     );
                 }
@@ -1208,7 +1212,7 @@ pub(crate) fn run(
                         view_change_proof_chain.get_proof_for_view_change(view_change_index)
                     })
             {
-                let msg = ControlFlowMessage::new(latest_verified_proof);
+                let msg = ControlFlowMessage::ViewChangeProof(latest_verified_proof);
                 sumeragi.broadcast_control_flow_packet(msg);
             }
 
@@ -1218,7 +1222,7 @@ pub(crate) fn run(
             if let Some(proof_for_current_view_change_index) =
                 view_change_proof_chain.get_proof_for_view_change(view_change_index)
             {
-                let msg = ControlFlowMessage::new(proof_for_current_view_change_index);
+                let msg = ControlFlowMessage::ViewChangeProof(proof_for_current_view_change_index);
                 sumeragi.broadcast_control_flow_packet(msg);
             }
 
@@ -1250,8 +1254,8 @@ pub(crate) fn run(
         );
         #[cfg(feature = "telemetry")]
         sumeragi
-            .view_changes_metric
-            .set(sumeragi.topology.view_change_index() as u64);
+            .telemetry
+            .set_view_changes(sumeragi.topology.view_change_index() as u64);
 
         if sumeragi.role() == Role::Leader && voting_block.is_none() {
             sumeragi.try_create_block(&state, &mut voting_block);

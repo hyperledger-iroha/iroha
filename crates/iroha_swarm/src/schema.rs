@@ -1,7 +1,5 @@
 //! Docker Compose schema.
 
-use iroha_data_model::Identifiable;
-
 use crate::{path, peer, ImageSettings, PeerSettings};
 
 mod serde_impls;

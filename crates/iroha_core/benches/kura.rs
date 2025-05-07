@@ -31,7 +31,13 @@ async fn measure_block_size_for_n_executors(n_executors: u32) {
     let (kura, _) = iroha_core::kura::Kura::new(&cfg).unwrap();
     let _thread_handle = iroha_core::kura::Kura::start(kura.clone(), ShutdownSignal::new());
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new(
+        World::new(),
+        kura,
+        query_handle,
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
+    );
 
     let (alice_id, alice_keypair) = gen_account_in("test");
     let (bob_id, _bob_keypair) = gen_account_in("test");

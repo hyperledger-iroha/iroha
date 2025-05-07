@@ -24,7 +24,6 @@ mod model {
 
     /// Peer's identification.
     ///
-    /// Equality is tested by `public_key` field only.
     /// Each peer should have a unique public key.
     #[derive(
         DebugCustom,
@@ -74,6 +73,7 @@ mod model {
         #[getset(get = "pub")]
         pub address: SocketAddr,
         /// Peer Identification.
+        #[getset(get = "pub")]
         pub id: PeerId,
     }
 }

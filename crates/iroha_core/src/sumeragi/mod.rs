@@ -28,6 +28,8 @@ pub mod network_topology;
 pub mod view_change;
 
 use self::{message::*, view_change::ProofChain};
+#[cfg(feature = "telemetry")]
+use crate::telemetry::Telemetry;
 use crate::{
     kura::Kura, peers_gossiper::PeersGossiperHandle, prelude::*, queue::Queue, EventsSender,
     IrohaNetwork, NetworkMessage,
@@ -37,10 +39,9 @@ use crate::{
 #[derive(Clone)]
 pub struct SumeragiHandle {
     peer: Peer,
-    /// Counter for amount of dropped messages by sumeragi
     #[cfg(feature = "telemetry")]
-    dropped_messages_metric: iroha_telemetry::metrics::DroppedMessagesCounter,
-    // Should be dropped after `_thread_handle` to prevent sumeargi thread from panicking
+    telemetry: Telemetry,
+    // Should be dropped after `_thread_handle` to prevent sumeragi thread from panicking
     control_message_sender: mpsc::SyncSender<ControlFlowMessage>,
     message_sender: mpsc::SyncSender<BlockMessage>,
 }
@@ -48,10 +49,10 @@ pub struct SumeragiHandle {
 impl SumeragiHandle {
     /// Deposit a sumeragi control flow network message.
     pub fn incoming_control_flow_message(&self, msg: ControlFlowMessage) {
-        trace!(ty = "ViewChangeProofChain", "Incoming message");
+        trace!(?msg, "Incoming control flow message");
         if let Err(error) = self.control_message_sender.try_send(msg) {
             #[cfg(feature = "telemetry")]
-            self.dropped_messages_metric.inc();
+            self.telemetry.inc_dropped_messages();
 
             error!(
                 peer_id=%self.peer,
@@ -65,20 +66,11 @@ impl SumeragiHandle {
     /// Deposit a sumeragi network message.
     pub fn incoming_block_message(&self, msg: impl Into<BlockMessage>) {
         let msg = msg.into();
-        let (ty, block) = match &msg {
-            BlockMessage::BlockCommitted(BlockCommitted { hash, .. }) => ("BlockCommitted", *hash),
-            BlockMessage::BlockCreated(BlockCreated { block }) => ("BlockCreated", block.hash()),
-            BlockMessage::BlockSigned(BlockSigned { hash, .. }) => ("BlockSigned", *hash),
-            BlockMessage::BlockSyncUpdate(BlockSyncUpdate { block }) => {
-                trace!(ty="BlockSyncUpdate", block=%block.hash(), "Incoming message");
-                ("BlockSyncUpdate", block.hash())
-            }
-        };
-        trace!(ty, %block, "Incoming message");
+        trace!(?msg, "Incoming block message");
 
         if let Err(error) = self.message_sender.try_send(msg) {
             #[cfg(feature = "telemetry")]
-            self.dropped_messages_metric.inc();
+            self.telemetry.inc_dropped_messages();
 
             error!(
                 peer_id=%self.peer,
@@ -153,11 +145,7 @@ impl SumeragiStartArgs {
             genesis_network,
             block_count: BlockCount(block_count),
             #[cfg(feature = "telemetry")]
-                metrics:
-                SumeragiMetrics {
-                    view_changes,
-                    dropped_messages,
-                },
+                telemetry: metrics,
         } = self;
 
         let (control_message_sender, control_message_receiver) = mpsc::sync_channel(100);
@@ -225,7 +213,7 @@ impl SumeragiStartArgs {
             topology,
             transaction_cache: Vec::new(),
             #[cfg(feature = "telemetry")]
-            view_changes_metric: view_changes,
+            telemetry: metrics.clone(),
             was_commit: false,
             round_start_time: Instant::now(),
         };
@@ -243,10 +231,10 @@ impl SumeragiStartArgs {
         (
             SumeragiHandle {
                 peer,
-                #[cfg(feature = "telemetry")]
-                dropped_messages_metric: dropped_messages,
                 control_message_sender,
                 message_sender,
+                #[cfg(feature = "telemetry")]
+                telemetry: metrics,
             },
             child,
         )
@@ -303,15 +291,7 @@ pub struct SumeragiStartArgs {
     pub genesis_network: GenesisWithPubKey,
     pub block_count: BlockCount,
     #[cfg(feature = "telemetry")]
-    pub metrics: SumeragiMetrics,
-}
-
-/// Relevant sumeragi metrics
-pub struct SumeragiMetrics {
-    /// Number of view changes in current round
-    pub view_changes: iroha_telemetry::metrics::ViewChangesGauge,
-    /// Amount of dropped messages by sumeragi
-    pub dropped_messages: iroha_telemetry::metrics::DroppedMessagesCounter,
+    pub telemetry: Telemetry,
 }
 
 /// Optional genesis paired with genesis public key for verification

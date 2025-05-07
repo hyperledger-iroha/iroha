@@ -46,6 +46,8 @@ fn build_test_and_transient_state() -> State {
         },
         kura,
         query_handle,
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
     );
 
     {
@@ -183,7 +185,13 @@ fn sign_blocks(criterion: &mut Criterion) {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(World::new(), kura, query_handle);
+    let state = State::new(
+        World::new(),
+        kura,
+        query_handle,
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
+    );
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
