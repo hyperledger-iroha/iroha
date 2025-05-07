@@ -64,6 +64,7 @@ nonzero_ext = { workspace = true }
 
 uuid = { version = "1.10.0", features = ["v4"] }
 indexmap = "2.2.6"
+arc-swap = "1.7.1"
 
 [dev-dependencies]
 iroha_executor_data_model = { workspace = true }

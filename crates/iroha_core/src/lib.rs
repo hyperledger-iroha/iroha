@@ -6,7 +6,6 @@ pub mod executor;
 pub mod gossiper;
 pub mod kiso;
 pub mod kura;
-pub mod metrics;
 pub mod peers_gossiper;
 pub mod query;
 pub mod queue;
@@ -14,6 +13,8 @@ pub mod smartcontracts;
 pub mod snapshot;
 pub mod state;
 pub mod sumeragi;
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
 pub mod tx;
 
 use core::time::Duration;

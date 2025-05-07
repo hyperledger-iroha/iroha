@@ -32,13 +32,14 @@ use mv::{
     },
 };
 use nonzero_ext::nonzero;
-use parking_lot::Mutex;
 use range_bounds::*;
 use serde::{
     de::{DeserializeSeed, MapAccess, Visitor},
     Deserializer, Serialize,
 };
 
+#[cfg(feature = "telemetry")]
+use crate::telemetry::StateTelemetry;
 use crate::{
     block::CommittedBlock,
     executor::Executor,
@@ -56,8 +57,13 @@ use crate::{
         },
         wasm, Execute,
     },
+    state::storage_transactions::{
+        TransactionsBlock, TransactionsReadOnly, TransactionsStorage, TransactionsView,
+    },
     Peers,
 };
+
+pub(crate) mod storage_transactions;
 
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
@@ -203,7 +209,7 @@ pub struct State {
     // TODO: Cell is redundant here since block_hashes is very easy to rollback by just popping the last element
     pub block_hashes: Cell<Vec<HashOf<BlockHeader>>>,
     /// Hashes of transactions mapped onto block height where they stored
-    pub transactions: Storage<HashOf<SignedTransaction>, NonZeroUsize>,
+    pub transactions: TransactionsStorage,
     /// Topology used to commit latest block
     pub commit_topology: Cell<Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -218,10 +224,11 @@ pub struct State {
     /// Handle to the [`LiveQueryStore`].
     #[serde(skip)]
     pub query_handle: LiveQueryStoreHandle,
-    /// Temporary metrics buffer of amounts of any asset that has been transacted.
-    /// TODO: this should be done through events
+    /// State telemetry
+    // TODO: this should be done through events
+    #[cfg(feature = "telemetry")]
     #[serde(skip)]
-    pub new_tx_amounts: Arc<Mutex<Vec<f64>>>,
+    pub telemetry: StateTelemetry,
     /// Lock to prevent getting inconsistent view of the state
     #[serde(skip)]
     view_lock: parking_lot::RwLock<()>,
@@ -234,7 +241,7 @@ pub struct StateBlock<'state> {
     /// Blockchain.
     pub block_hashes: CellBlock<'state, Vec<HashOf<BlockHeader>>>,
     /// Hashes of transactions mapped onto block height where they stored
-    pub transactions: StorageBlock<'state, HashOf<SignedTransaction>, NonZeroUsize>,
+    pub transactions: TransactionsBlock<'state>,
     /// Topology used to commit latest block
     pub commit_topology: CellBlock<'state, Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -246,9 +253,9 @@ pub struct StateBlock<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`].
     pub query_handle: &'state LiveQueryStoreHandle,
-    /// Temporary metrics buffer of amounts of any asset that has been transacted.
-    /// TODO: this should be done through events
-    pub new_tx_amounts: &'state Mutex<Vec<f64>>,
+    /// State telemetry
+    #[cfg(feature = "telemetry")]
+    pub telemetry: &'state StateTelemetry,
     /// Lock to prevent getting inconsistent view of the state
     view_lock: &'state parking_lot::RwLock<()>,
 
@@ -261,8 +268,6 @@ pub struct StateTransaction<'block, 'state> {
     pub world: WorldTransaction<'block, 'state>,
     /// Blockchain.
     pub block_hashes: CellTransaction<'block, 'state, Vec<HashOf<BlockHeader>>>,
-    /// Hashes of transactions mapped onto block height where they stored
-    pub transactions: StorageTransaction<'block, 'state, HashOf<SignedTransaction>, NonZeroUsize>,
     /// Topology used to commit latest block
     pub commit_topology: CellTransaction<'block, 'state, Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -274,9 +279,9 @@ pub struct StateTransaction<'block, 'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`].
     pub query_handle: &'state LiveQueryStoreHandle,
-    /// Temporary metrics buffer of amounts of any asset that has been transacted.
-    /// TODO: this should be done through events
-    pub new_tx_amounts: &'state Mutex<Vec<f64>>,
+    /// State telemetry
+    #[cfg(feature = "telemetry")]
+    pub telemetry: &'state StateTelemetry,
 
     pub(crate) curr_block: BlockHeader,
 }
@@ -288,7 +293,7 @@ pub struct StateView<'state> {
     /// Blockchain.
     pub block_hashes: CellView<'state, Vec<HashOf<BlockHeader>>>,
     /// Hashes of transactions mapped onto block height where they stored
-    pub transactions: StorageView<'state, HashOf<SignedTransaction>, NonZeroUsize>,
+    pub transactions: TransactionsView<'state>,
     /// Topology used to commit latest block
     pub commit_topology: CellView<'state, Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -300,9 +305,9 @@ pub struct StateView<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`].
     pub query_handle: &'state LiveQueryStoreHandle,
-    /// Temporary metrics buffer of amounts of any asset that has been transacted.
-    /// TODO: this should be done through events
-    pub new_tx_amounts: &'state Mutex<Vec<f64>>,
+    /// State telemetry
+    #[cfg(feature = "telemetry")]
+    pub telemetry: &'state StateTelemetry,
 }
 
 impl World {
@@ -1125,22 +1130,73 @@ impl Drop for TransactionEventBuffer<'_> {
 }
 
 impl State {
-    /// Construct [`State`] with given [`World`].
     #[must_use]
     #[inline]
-    pub fn new(world: World, kura: Arc<Kura>, query_handle: LiveQueryStoreHandle) -> Self {
+    fn new_inner(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    ) -> Self {
         Self {
             world,
-            transactions: Storage::new(),
+            transactions: TransactionsStorage::new(),
             commit_topology: Cell::new(Vec::new()),
             prev_commit_topology: Cell::new(Vec::new()),
             block_hashes: Cell::new(Vec::new()),
-            new_tx_amounts: Arc::new(Mutex::new(Vec::new())),
             engine: wasm::create_engine(),
             kura,
             query_handle,
+            #[cfg(feature = "telemetry")]
+            telemetry,
             view_lock: parking_lot::RwLock::new(()),
         }
+    }
+
+    /// Construct [`State`] with given [`World`].
+    #[must_use]
+    #[inline]
+    #[cfg(not(test))]
+    pub fn new(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    ) -> Self {
+        Self::new_inner(
+            world,
+            kura,
+            query_handle,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+        )
+    }
+
+    /// _(test only)_ Create state with mock telemetry (depends on features)
+    #[must_use]
+    #[inline]
+    #[cfg(test)]
+    pub fn new(world: World, kura: Arc<Kura>, query_handle: LiveQueryStoreHandle) -> Self {
+        Self::new_inner(
+            world,
+            kura,
+            query_handle,
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+    }
+
+    /// _(test only)_ Create state with telemetry
+    #[must_use]
+    #[inline]
+    #[cfg(all(test, feature = "telemetry"))]
+    pub fn with_telemetry(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        telemetry: StateTelemetry,
+    ) -> Self {
+        Self::new_inner(world, kura, query_handle, telemetry)
     }
 
     /// Create structure to execute a block
@@ -1154,7 +1210,8 @@ impl State {
             engine: &self.engine,
             kura: &self.kura,
             query_handle: &self.query_handle,
-            new_tx_amounts: &self.new_tx_amounts,
+            #[cfg(feature = "telemetry")]
+            telemetry: &self.telemetry,
             view_lock: &self.view_lock,
             curr_block,
         }
@@ -1171,7 +1228,8 @@ impl State {
             engine: &self.engine,
             kura: &self.kura,
             query_handle: &self.query_handle,
-            new_tx_amounts: &self.new_tx_amounts,
+            #[cfg(feature = "telemetry")]
+            telemetry: &self.telemetry,
             view_lock: &self.view_lock,
             curr_block,
         }
@@ -1189,7 +1247,8 @@ impl State {
             engine: &self.engine,
             kura: &self.kura,
             query_handle: &self.query_handle,
-            new_tx_amounts: &self.new_tx_amounts,
+            #[cfg(feature = "telemetry")]
+            telemetry: &self.telemetry,
         }
     }
 }
@@ -1199,13 +1258,13 @@ impl State {
 pub trait StateReadOnly {
     fn world(&self) -> &impl WorldReadOnly;
     fn block_hashes(&self) -> &[HashOf<BlockHeader>];
-    fn transactions(&self) -> &impl StorageReadOnly<HashOf<SignedTransaction>, NonZeroUsize>;
     fn commit_topology(&self) -> &[PeerId];
     fn prev_commit_topology(&self) -> &[PeerId];
     fn engine(&self) -> &wasmtime::Engine;
     fn kura(&self) -> &Kura;
     fn query_handle(&self) -> &LiveQueryStoreHandle;
-    fn new_tx_amounts(&self) -> &Mutex<Vec<f64>>;
+    #[cfg(feature = "telemetry")]
+    fn metrics(&self) -> &StateTelemetry;
 
     /// Get a reference to the block one before the latest block.
     /// Returns None if at least 2 blocks are not committed.
@@ -1275,12 +1334,6 @@ pub trait StateReadOnly {
             opt
         }
     }
-
-    /// Check if [`SignedTransaction`] is already committed
-    #[inline]
-    fn has_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
-        self.transactions().get(&hash).is_some()
-    }
 }
 
 macro_rules! impl_state_ro {
@@ -1291,9 +1344,6 @@ macro_rules! impl_state_ro {
             }
             fn block_hashes(&self) -> &[HashOf<BlockHeader>] {
                 &self.block_hashes
-            }
-            fn transactions(&self) -> &impl StorageReadOnly<HashOf<SignedTransaction>, NonZeroUsize> {
-                &self.transactions
             }
             fn commit_topology(&self) -> &[PeerId] {
                 &self.commit_topology
@@ -1310,8 +1360,9 @@ macro_rules! impl_state_ro {
             fn query_handle(&self) -> &LiveQueryStoreHandle {
                 &self.query_handle
             }
-            fn new_tx_amounts(&self) -> &Mutex<Vec<f64>> {
-                &self.new_tx_amounts
+            #[cfg(feature = "telemetry")]
+            fn metrics(&self) -> &StateTelemetry {
+                &self.telemetry
             }
         }
     )*};
@@ -1321,19 +1372,47 @@ impl_state_ro! {
     StateBlock<'_>, StateTransaction<'_, '_>, StateView<'_>
 }
 
+/// Separate trait for either [`State`] or [`StateBlock`].
+///
+/// `transactions` map consumes >80% RAM of iroha, so they should be optimized.
+/// And it would be easier to optimize if less methods are needed to be supported.
+/// (`StateTransaction` anyway doesn't need `transactions` map)
+pub trait StateReadOnlyWithTransactions: StateReadOnly {
+    /// Returns transactions map
+    fn transactions(&self) -> &impl TransactionsReadOnly;
+
+    /// Check if [`SignedTransaction`] is already committed
+    #[inline]
+    fn has_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
+        self.transactions().get(&hash).is_some()
+    }
+}
+
+impl StateReadOnlyWithTransactions for StateView<'_> {
+    fn transactions(&self) -> &impl TransactionsReadOnly {
+        &self.transactions
+    }
+}
+
+impl StateReadOnlyWithTransactions for StateBlock<'_> {
+    fn transactions(&self) -> &impl TransactionsReadOnly {
+        &self.transactions
+    }
+}
+
 impl<'state> StateBlock<'state> {
     /// Create struct to store changes during transaction or trigger execution
     pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
         StateTransaction {
             world: self.world.trasaction(),
             block_hashes: self.block_hashes.transaction(),
-            transactions: self.transactions.transaction(),
             commit_topology: self.commit_topology.transaction(),
             prev_commit_topology: self.prev_commit_topology.transaction(),
             engine: self.engine,
             kura: self.kura,
             query_handle: self.query_handle,
-            new_tx_amounts: self.new_tx_amounts,
+            #[cfg(feature = "telemetry")]
+            telemetry: self.telemetry,
             curr_block: self.curr_block,
         }
     }
@@ -1427,13 +1506,12 @@ impl<'state> StateBlock<'state> {
             .height
             .try_into()
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
-        block
+        let transactions = block
             .as_ref()
             .transactions()
             .map(SignedTransaction::hash)
-            .for_each(|tx_hash| {
-                self.transactions.insert(tx_hash, block_height);
-            });
+            .collect();
+        self.transactions.insert_block(transactions, block_height);
 
         self.world.triggers.handle_time_event(time_event);
 
@@ -1533,14 +1611,12 @@ impl StateTransaction<'_, '_> {
         let Self {
             world,
             block_hashes,
-            transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
             ..
         } = self;
         prev_committed_topology.apply();
         committed_topology.apply();
-        transactions.apply();
         block_hashes.apply();
         world.apply();
     }
@@ -2095,6 +2171,9 @@ pub(crate) mod deserialize {
         pub kura: Arc<Kura>,
         /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
         pub query_handle: LiveQueryStoreHandle,
+        #[cfg(feature = "telemetry")]
+        /// Handle to the metrics actor
+        pub telemetry: StateTelemetry,
     }
 
     impl<'de> DeserializeSeed<'de> for KuraSeed {
@@ -2166,8 +2245,9 @@ pub(crate) mod deserialize {
                         })?,
                         kura: self.loader.kura,
                         query_handle: self.loader.query_handle,
+                        #[cfg(feature = "telemetry")]
+                        telemetry: self.loader.telemetry,
                         engine,
-                        new_tx_amounts: Arc::new(Mutex::new(Vec::new())),
                         view_lock: parking_lot::RwLock::new(()),
                     })
                 }

@@ -95,7 +95,7 @@ fn mint_asset_after_3_sec() -> Result<()> {
 fn pre_commit_trigger_should_be_executed() -> Result<()> {
     const CHECKS_COUNT: usize = 5;
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, rt) = NetworkBuilder::new().start_blocking()?;
     let test_client = network.client();
 
     let asset_definition_id = "rose#wonderland".parse().expect("Valid");
@@ -118,10 +118,10 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
     test_client.submit(register_trigger)?;
 
     // Waiting for empty block to be committed
-    std::thread::sleep(network.pipeline_time());
+    rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 4).await })?;
 
     let mut prev_value = get_asset_value(&test_client, asset_id.clone());
-    for _ in event_listener.take(CHECKS_COUNT) {
+    for (i, _) in event_listener.take(CHECKS_COUNT).enumerate() {
         // ISI just to create a new block
         let sample_isi = SetKeyValue::account(
             account_id.clone(),
@@ -131,7 +131,11 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
         test_client.submit(sample_isi)?;
 
         // Waiting for empty block to be committed
-        std::thread::sleep(network.pipeline_time());
+        rt.block_on(async {
+            network
+                .ensure_blocks_with(|x| x.total >= 6 + (i as u64) * 2)
+                .await
+        })?;
 
         let new_value = get_asset_value(&test_client, asset_id.clone());
         assert_eq!(new_value, prev_value.checked_add(numeric!(2)).unwrap());

@@ -17,7 +17,7 @@ use iroha_logger::{trace, warn};
 use iroha_primitives::time::TimeSource;
 use thiserror::Error;
 
-use crate::{prelude::*, EventsSender};
+use crate::{prelude::*, state::StateReadOnlyWithTransactions, EventsSender};
 
 impl AcceptedTransaction {
     // TODO: We should have another type of transaction like `CheckedTransaction` in the type system?
@@ -574,7 +574,7 @@ pub mod tests {
         let mut state_block = state.block(block_header);
         state_block
             .transactions
-            .insert(tx.as_ref().hash(), nonzero!(1_usize));
+            .insert_block_with_single_tx(tx.as_ref().hash(), nonzero!(1_usize));
         state_block.commit();
         let queue = Queue::test(config_factory(), &time_source);
         assert!(matches!(
@@ -604,7 +604,7 @@ pub mod tests {
         let mut state_block = state.block(block_header);
         state_block
             .transactions
-            .insert(tx.as_ref().hash(), nonzero!(1_usize));
+            .insert_block_with_single_tx(tx.as_ref().hash(), nonzero!(1_usize));
         state_block.commit();
         assert_eq!(
             queue
@@ -775,15 +775,18 @@ pub mod tests {
             let queue = Arc::clone(&queue);
 
             thread::spawn(move || {
+                let mut height = nonzero!(1usize);
                 while start_time.elapsed() < run_for {
-                    for tx in queue.collect_transactions_for_block(&state.view(), max_txs_in_block)
-                    {
-                        let mut state_block = state.block(block_header);
-                        state_block
-                            .transactions
-                            .insert(tx.as_ref().hash(), nonzero!(1_usize));
-                        state_block.commit();
-                    }
+                    let mut state_block = state.block(block_header);
+                    let transactions = queue
+                        .collect_transactions_for_block(&state.view(), max_txs_in_block)
+                        .into_iter()
+                        .map(|tx| tx.as_ref().hash())
+                        .collect();
+                    state_block.transactions.insert_block(transactions, height);
+                    height = height.checked_add(1).unwrap();
+                    state_block.commit();
+
                     // Simulate random small delays
                     let delay = Duration::from_millis(rand::thread_rng().gen_range(0..25));
                     thread::sleep(delay);
@@ -869,12 +872,14 @@ pub mod tests {
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
-        for transaction in transactions {
-            // Put transaction hashes into state as if they were in the blockchain
-            state_block
-                .transactions
-                .insert(transaction.as_ref().hash(), nonzero!(1_usize));
-        }
+        // Put transaction hashes into state as if they were in the blockchain
+        let transaction_hashes = transactions
+            .into_iter()
+            .map(|tx| tx.as_ref().hash())
+            .collect();
+        state_block
+            .transactions
+            .insert_block(transaction_hashes, nonzero!(1_usize));
         state_block.commit();
         // Cleanup transactions
         let transactions = queue.collect_transactions_for_block(&state.view(), nonzero!(10_usize));

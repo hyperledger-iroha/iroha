@@ -1346,6 +1346,7 @@ dependencies = [
  "lock_api",
  "once_cell",
  "parking_lot_core",
+ "serde",
 ]
 
 [[package]]
@@ -3061,6 +3062,7 @@ dependencies = [
  "assert_matches",
  "derive_more",
  "executor_custom_data_model",
+ "expect-test",
  "eyre",
  "futures-util",
  "hex",
@@ -3093,14 +3095,17 @@ checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 name = "iroha"
 version = "2.0.0-rc.1.0"
 dependencies = [
+ "assert_matches",
  "assertables",
  "attohttpc",
  "base64 0.22.1",
  "derive_more",
  "displaydoc",
  "error-stack",
+ "expect-test",
  "eyre",
  "futures-util",
+ "hex",
  "http 1.1.0",
  "iroha_config",
  "iroha_config_base",
@@ -3123,6 +3128,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.21.0",
  "toml",
+ "trybuild",
  "tungstenite 0.21.0",
  "url",
 ]
@@ -3219,6 +3225,7 @@ dependencies = [
 name = "iroha_core"
 version = "2.0.0-rc.1.0"
 dependencies = [
+ "arc-swap",
  "async-trait",
  "criterion",
  "crossbeam-queue",
@@ -3770,21 +3777,21 @@ dependencies = [
  "iroha_executor_data_model",
  "iroha_futures",
  "iroha_genesis",
- "iroha_logger",
  "iroha_primitives",
  "iroha_telemetry",
  "iroha_test_samples",
  "nix 0.29.0",
  "parity-scale-codec",
+ "petname",
  "rand",
  "serde",
  "serde_json",
  "tempfile",
- "thiserror",
  "tokio",
  "toml",
+ "tracing",
+ "tracing-subscriber",
  "unique_port",
- "which",
 ]
 
 [[package]]
@@ -4768,6 +4775,20 @@ checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
 dependencies = [
  "fixedbitset",
  "indexmap 2.6.0",
+]
+
+[[package]]
+name = "petname"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cd31dcfdbbd7431a807ef4df6edd6473228e94d5c805e8cf671227a21bad068"
+dependencies = [
+ "anyhow",
+ "clap",
+ "itertools 0.12.1",
+ "proc-macro2",
+ "quote",
+ "rand",
 ]
 
 [[package]]
@@ -7273,18 +7294,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "which"
-version = "6.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ee928febd44d98f2f459a4a79bd4d928591333a494a10a868418ac1b39cf1f"
-dependencies = [
- "either",
- "home",
- "rustix",
- "winsafe",
-]
-
-[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7527,12 +7536,6 @@ checksum = "36c1fec1a2bb5866f07c25f68c26e565c4c200aebb96d7e55710c19d3e8ac49b"
 dependencies = [
  "memchr",
 ]
-
-[[package]]
-name = "winsafe"
-version = "0.0.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wit-parser"

@@ -51,7 +51,7 @@ impl TimeSource {
         match &self.0 {
             TimeSourceInner::SystemTime => SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap(),
+                .expect("assuming that now is later than 1970/01/01"),
             TimeSourceInner::MockTime(time) => *time.lock(),
         }
     }

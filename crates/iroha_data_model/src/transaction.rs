@@ -12,6 +12,8 @@ use derive_more::{DebugCustom, Display};
 use iroha_crypto::{Signature, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
+#[cfg(feature = "std")]
+use iroha_primitives::time::TimeSource;
 use iroha_schema::IntoSchema;
 use iroha_version::{declare_versioned, version};
 use parity_scale_codec::{Decode, Encode};
@@ -315,11 +317,11 @@ impl TransactionBuilder {
     /// Construct [`Self`], using the time from [`TimeSource`]
     // we don't want to expose this to non-tests
     #[inline]
-    #[cfg(all(feature = "std", feature = "transparent_api"))]
+    #[cfg(feature = "std")]
     pub fn new_with_time_source(
         chain_id: ChainId,
         authority: AccountId,
-        time_source: &iroha_primitives::time::TimeSource,
+        time_source: &TimeSource,
     ) -> Self {
         let creation_time_ms = time_source
             .get_unix_time()
@@ -334,16 +336,7 @@ impl TransactionBuilder {
     #[inline]
     #[cfg(feature = "std")]
     pub fn new(chain_id: ChainId, authority: AccountId) -> Self {
-        use std::time::SystemTime;
-
-        // can't delegate to `new_with_time_source`, because it's gated behind "transparent_api"
-        let creation_time_ms = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-            .try_into()
-            .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX");
-        Self::new_with_time(chain_id, authority, creation_time_ms)
+        Self::new_with_time_source(chain_id, authority, &TimeSource::new_system())
     }
 }
 

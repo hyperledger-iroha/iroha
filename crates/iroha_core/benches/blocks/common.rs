@@ -202,6 +202,8 @@ pub fn build_state(rt: &tokio::runtime::Handle, account_id: &AccountId) -> State
         ),
         kura,
         query_handle,
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
     );
 
     {

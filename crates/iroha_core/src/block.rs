@@ -113,8 +113,7 @@ pub enum InvalidGenesisError {
 pub struct BlockBuilder<B>(B);
 
 mod pending {
-    use std::time::SystemTime;
-
+    use iroha_primitives::time::TimeSource;
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -127,6 +126,7 @@ mod pending {
     pub struct Pending {
         /// Collection of transactions which have been accepted.
         transactions: Vec<AcceptedTransaction>,
+        time_source: TimeSource,
     }
 
     impl BlockBuilder<Pending> {
@@ -135,20 +135,33 @@ mod pending {
         /// Create [`Self`]
         #[inline]
         pub fn new(transactions: Vec<AcceptedTransaction>) -> Self {
+            Self::new_with_time_source(transactions, TimeSource::new_system())
+        }
+
+        /// Create with provided [`TimeSource`] to use for block creation time.
+        pub fn new_with_time_source(
+            transactions: Vec<AcceptedTransaction>,
+            time_source: TimeSource,
+        ) -> Self {
             // Note that empty block is allowed
 
-            Self(Pending { transactions })
+            Self(Pending {
+                transactions,
+                time_source,
+            })
         }
 
         fn make_header(
+            &self,
             prev_block: Option<&SignedBlock>,
             view_change_index: usize,
-            transactions: &[AcceptedTransaction],
         ) -> BlockHeader {
             let prev_block_time =
                 prev_block.map_or(Duration::ZERO, |block| block.header().creation_time());
 
-            let latest_txn_time = transactions
+            let latest_txn_time = self
+                .0
+                .transactions
                 .iter()
                 .map(AsRef::as_ref)
                 .map(SignedTransaction::creation_time)
@@ -156,9 +169,7 @@ mod pending {
                 // Empty block is allowed
                 .unwrap_or(Duration::ZERO);
 
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap();
+            let now = self.0.time_source.get_unix_time();
 
             // NOTE: Lower time bound must always be upheld for a valid block
             // If the clock has drifted too far this block will be rejected
@@ -181,7 +192,9 @@ mod pending {
                     },
                 ),
                 prev_block_hash: prev_block.map(SignedBlock::hash),
-                transactions_hash: transactions
+                transactions_hash: self
+                    .0
+                    .transactions
                     .iter()
                     .map(AsRef::as_ref)
                     .map(SignedTransaction::hash)
@@ -206,7 +219,7 @@ mod pending {
             latest_block: Option<&SignedBlock>,
         ) -> BlockBuilder<Chained> {
             BlockBuilder(Chained {
-                header: Self::make_header(latest_block, view_change_index, &self.0.transactions),
+                header: self.make_header(latest_block, view_change_index),
                 transactions: self.0.transactions,
             })
         }
@@ -329,11 +342,14 @@ mod valid {
 
     use commit::CommittedBlock;
     use iroha_data_model::{account::AccountId, events::pipeline::PipelineEventBox, ChainId};
-    use mv::storage::StorageReadOnly;
 
     use super::*;
     use crate::{
-        smartcontracts::wasm::cache::WasmCache, state::StateBlock, sumeragi::network_topology::Role,
+        smartcontracts::wasm::cache::WasmCache,
+        state::{
+            storage_transactions::TransactionsReadOnly, StateBlock, StateReadOnlyWithTransactions,
+        },
+        sumeragi::network_topology::Role,
     };
 
     /// Block that was validated and accepted
@@ -508,7 +524,7 @@ mod valid {
             block: &SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
-            state: &impl StateReadOnly,
+            state: &impl StateReadOnlyWithTransactions,
             soft_fork: bool,
         ) -> Result<(), BlockValidationError> {
             let expected_block_height = if soft_fork {

@@ -14,6 +14,8 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use serde::{de::DeserializeSeed, Serialize};
 
+#[cfg(feature = "telemetry")]
+use crate::telemetry::StateTelemetry;
 use crate::{
     kura::{BlockCount, Kura},
     query::store::LiveQueryStoreHandle,
@@ -130,6 +132,7 @@ pub fn try_read_snapshot(
     kura: &Arc<Kura>,
     live_query_store_lazy: impl FnOnce() -> LiveQueryStoreHandle,
     BlockCount(block_count): BlockCount,
+    #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
 ) -> Result<State, TryReadError> {
     let mut bytes = Vec::new();
     let path = store_dir.as_ref().join(SNAPSHOT_FILE_NAME);
@@ -149,6 +152,8 @@ pub fn try_read_snapshot(
     let seed = KuraSeed {
         kura: Arc::clone(kura),
         query_handle: live_query_store_lazy(),
+        #[cfg(feature = "telemetry")]
+        telemetry,
     };
     let state = seed.deserialize(&mut deserializer)?;
     let state_view = state.view();
@@ -249,6 +254,7 @@ mod tests {
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::peer::PeerId;
+    use nonzero_ext::nonzero;
     use tempfile::tempdir;
     use tokio::test;
 
@@ -290,6 +296,8 @@ mod tests {
             &Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test,
             BlockCount(state.view().height()),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default()),
         )
         .unwrap();
     }
@@ -304,6 +312,8 @@ mod tests {
             &Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test,
             BlockCount(15),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
         ) else {
             panic!("should not be ok")
         };
@@ -326,6 +336,8 @@ mod tests {
             &Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test,
             BlockCount(15),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
         ) else {
             panic!("should not be ok")
         };
@@ -343,7 +355,10 @@ mod tests {
         let peer_key_pair = KeyPair::random();
         let peer_id = PeerId::new(peer_key_pair.public_key().clone());
         let topology = Topology::new(vec![peer_id]);
-        let valid_block = ValidBlock::new_dummy(peer_key_pair.private_key());
+        let valid_block =
+            ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
+                header.height = nonzero!(1u64);
+            });
         let committed_block = valid_block
             .clone()
             .commit(&topology)
@@ -360,7 +375,7 @@ mod tests {
 
         let valid_block =
             ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.height = header.height.checked_add(1).unwrap();
+                header.height = nonzero!(2u64);
             });
         let committed_block = valid_block
             .clone()
@@ -383,6 +398,8 @@ mod tests {
             &kura,
             LiveQueryStore::start_test,
             BlockCount(state.view().height()),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
         )
         .unwrap();
 
@@ -399,7 +416,10 @@ mod tests {
         let peer_key_pair = KeyPair::random();
         let peer_id = PeerId::new(peer_key_pair.public_key().clone());
         let topology = Topology::new(vec![peer_id]);
-        let valid_block = ValidBlock::new_dummy(peer_key_pair.private_key());
+        let valid_block =
+            ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
+                header.height = nonzero!(1u64);
+            });
         let committed_block = valid_block
             .clone()
             .commit(&topology)
@@ -416,7 +436,7 @@ mod tests {
 
         let valid_block =
             ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.height = header.height.checked_add(1).unwrap();
+                header.height = nonzero!(2u64);
             });
         let committed_block = valid_block
             .clone()
@@ -435,7 +455,7 @@ mod tests {
         // This case imitate situation when snapshot was created for block which later is discarded as soft-fork
         let valid_block =
             ValidBlock::new_dummy_and_modify_header(peer_key_pair.private_key(), |header| {
-                header.height = header.height.checked_add(1).unwrap();
+                header.height = nonzero!(2u64);
                 header.view_change_index += 1;
             });
         let committed_block = valid_block
@@ -452,6 +472,8 @@ mod tests {
             &kura,
             LiveQueryStore::start_test,
             BlockCount(state.view().height()),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
         )
         .unwrap();
 
