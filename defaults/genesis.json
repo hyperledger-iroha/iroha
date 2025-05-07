@@ -158,10 +158,8 @@
       "Grant": {
         "Permission": {
           "object": {
-            "name": "CanMintAssetWithDefinition",
-            "payload": {
-              "asset_definition": "rose#wonderland"
-            }
+            "name": "CanUpgradeExecutor",
+            "payload": null
           },
           "destination": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
         }
@@ -206,10 +204,26 @@
       "Grant": {
         "Permission": {
           "object": {
-            "name": "CanUpgradeExecutor",
-            "payload": null
+            "name": "CanMintAssetWithDefinition",
+            "payload": {
+              "asset_definition": "rose#wonderland"
+            }
           },
           "destination": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+        }
+      }
+    },
+    {
+      "Register": {
+        "Role": {
+          "id": "volunteers",
+          "permissions": [
+            {
+              "name": "CanRegisterDomain",
+              "payload": null
+            }
+          ],
+          "grant_to": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
         }
       }
     }
@@ -220,6 +234,24 @@
       "id": "airdrop",
       "action": {
         "executable": "trigger_airdrop.wasm",
+        "repeats": "Indefinitely",
+        "authority": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
+        "filter": {
+          "Data": {
+            "Account": {
+              "id_matcher": null,
+              "event_set": [
+                "Created"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "default_roles",
+      "action": {
+        "executable": "trigger_default_roles.wasm",
         "repeats": "Indefinitely",
         "authority": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
         "filter": {
