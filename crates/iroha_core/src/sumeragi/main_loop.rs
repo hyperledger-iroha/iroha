@@ -12,7 +12,7 @@ use super::{view_change::ProofBuilder, *};
 use crate::telemetry::Telemetry;
 use crate::{
     block::*, peers_gossiper::PeersGossiperHandle, queue::TransactionGuard,
-    sumeragi::tracing::instrument,
+    state::StateReadOnlyWithTransactions, sumeragi::tracing::instrument,
 };
 
 /// `Sumeragi` is the implementation of the consensus.

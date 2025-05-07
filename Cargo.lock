@@ -1346,6 +1346,7 @@ dependencies = [
  "lock_api",
  "once_cell",
  "parking_lot_core",
+ "serde",
 ]
 
 [[package]]
@@ -3224,6 +3225,7 @@ dependencies = [
 name = "iroha_core"
 version = "2.0.0-rc.1.0"
 dependencies = [
+ "arc-swap",
  "async-trait",
  "criterion",
  "crossbeam-queue",
