@@ -62,10 +62,10 @@ pub mod isi {
 
             #[allow(clippy::float_arithmetic)]
             {
+                #[cfg(feature = "telemetry")]
                 state_transaction
-                    .new_tx_amounts
-                    .lock()
-                    .push(self.object.to_f64());
+                    .telemetry
+                    .observe_tx_amount(self.object.to_f64());
                 state_transaction
                     .world
                     .increase_asset_total_amount(&asset_id.definition, self.object)?;
@@ -115,10 +115,10 @@ pub mod isi {
 
             #[allow(clippy::float_arithmetic)]
             {
+                #[cfg(feature = "telemetry")]
                 state_transaction
-                    .new_tx_amounts
-                    .lock()
-                    .push(self.object.to_f64());
+                    .telemetry
+                    .observe_tx_amount(self.object.to_f64());
                 state_transaction
                     .world
                     .decrease_asset_total_amount(&asset_id.definition, self.object)?;
@@ -180,12 +180,10 @@ pub mod isi {
             }
 
             #[allow(clippy::float_arithmetic)]
-            {
-                state_transaction
-                    .new_tx_amounts
-                    .lock()
-                    .push(self.object.to_f64());
-            }
+            #[cfg(feature = "telemetry")]
+            state_transaction
+                .telemetry
+                .observe_tx_amount(self.object.to_f64());
 
             state_transaction.world.emit_events([
                 AssetEvent::Removed(AssetChanged {
