@@ -20,7 +20,6 @@ fn program() -> PathBuf {
             .join(&path)
             .canonicalize()
             .wrap_err_with(|| eyre!("Used path from {PROGRAM_ENV}: {path}"))
-            .wrap_err("Failed to resolve iroha binary")
     } else {
         repo_root()
             .join(PROGRAM_DEFAULT)
