@@ -607,7 +607,7 @@ pub mod tests {
         let mut state_block = state.block(block_header);
         state_block
             .transactions
-            .insert(tx.as_ref().hash(), nonzero!(1_usize));
+            .insert_block_with_single_tx(tx.as_ref().hash(), nonzero!(1_usize));
         state_block.commit();
         let queue = Queue::test(config_factory(), &time_source);
         time_handle.advance(Duration::from_secs(100));
