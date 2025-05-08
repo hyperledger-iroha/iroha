@@ -119,8 +119,9 @@ impl Config {
         };
 
         let config = toml_source
-            .map(|x| ConfigReader::new().with_toml_source(x))
-            .unwrap_or_else(ConfigReader::new)
+            .map_or_else(ConfigReader::new, |x| {
+                ConfigReader::new().with_toml_source(x)
+            })
             .with_env(env)
             .read_and_complete::<user::Root>()
             .change_context(LoadError)?
