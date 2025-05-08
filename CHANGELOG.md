@@ -29,6 +29,7 @@ All notable changes to this project will be documented in this file.
 - *(core)* Reconnect disconnected peer (#5325)
 - Fix pytests related to store assets and NFT (#5341)
 - *(CI)* Fix python static analysis workflow for poetry v2 (#5374)
+- Expired transaction event appears after commit (#5396)
 
 ### 💼 Other
 
