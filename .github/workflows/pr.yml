@@ -122,7 +122,10 @@ jobs:
     needs: pre_build
     env:
       LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
+      # for iroha_test_network
       TEST_NETWORK_IROHAD: bins/irohad
+      # for client_cli tests
+      BIN_IROHA: bins/iroha
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
