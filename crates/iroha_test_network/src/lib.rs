@@ -17,6 +17,7 @@ use std::{
 
 use backoff::ExponentialBackoffBuilder;
 use color_eyre::eyre::{eyre, Context, Result};
+pub use config::chain_id;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
 use iroha::{client::Client, data_model::prelude::*};
