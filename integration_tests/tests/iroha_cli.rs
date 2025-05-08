@@ -15,19 +15,23 @@ const PROGRAM_ENV: &str = "BIN_IROHA";
 const PROGRAM_DEFAULT: &str = "target/release/iroha";
 
 fn program() -> PathBuf {
-    if let Ok(path) = std::env::var(PROGRAM_ENV) {
-        repo_root()
-            .join(&path)
-            .canonicalize()
-            .wrap_err_with(|| eyre!("Used path from {PROGRAM_ENV}: {path}"))
-    } else {
-        repo_root()
-            .join(PROGRAM_DEFAULT)
-            .canonicalize()
-            .wrap_err_with(|| eyre!("Used default path: {PROGRAM_DEFAULT}"))
-    }
-    .wrap_err("Cannot resolve iroha binary")
-    .unwrap()
+    std::env::var(PROGRAM_ENV)
+        .map_or_else(
+            |err| {
+                repo_root()
+                    .join(PROGRAM_DEFAULT)
+                    .canonicalize()
+                    .wrap_err_with(|| eyre!("Used default path: {PROGRAM_DEFAULT} (env: {err})"))
+            },
+            |path| {
+                repo_root()
+                    .join(&path)
+                    .canonicalize()
+                    .wrap_err_with(|| eyre!("Used path from {PROGRAM_ENV}: {path}"))
+            },
+        )
+        .wrap_err("Cannot resolve iroha binary")
+        .unwrap()
 }
 
 fn repo_root() -> PathBuf {
@@ -74,7 +78,7 @@ impl ProgramConfig {
         toml::Table::new()
             .write("chain", iroha_test_network::chain_id())
             .write("torii_url", &self.torii_url)
-            .write(["account", "domain"], &self.account.domain())
+            .write(["account", "domain"], self.account.domain())
             .write(
                 ["account", "private_key"],
                 ExposedPrivateKey(self.key.private_key().clone()),
@@ -86,7 +90,10 @@ impl ProgramConfig {
 #[tokio::test]
 async fn can_upgrade_executor() -> eyre::Result<()> {
     // Assuming Alice already has the CanUpgradeExecutor permission
-    let network = NetworkBuilder::new().start().await?;
+    let network = NetworkBuilder::new()
+        .with_wasm_fuel(iroha_test_network::WasmFuelConfig::Auto)
+        .start()
+        .await?;
 
     let config = ProgramConfig::from(&network.client());
     let mut child = tokio::process::Command::new(program())

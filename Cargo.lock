@@ -3779,6 +3779,7 @@ dependencies = [
  "iroha_telemetry",
  "iroha_test_samples",
  "nix 0.29.0",
+ "nonzero_ext",
  "parity-scale-codec",
  "petname",
  "rand",

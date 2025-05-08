@@ -274,11 +274,10 @@ fn main() -> error_stack::Result<(), MainError> {
 
     error_stack::Report::set_color_mode(color_mode());
 
-    let config = Config::load(
-        args.config
-            .map(LoadPath::Explicit)
-            .unwrap_or_else(|| LoadPath::Default(PathBuf::from("client.toml"))),
-    )
+    let config = Config::load(args.config.map_or_else(
+        || LoadPath::Default(PathBuf::from("client.toml")),
+        LoadPath::Explicit,
+    ))
     // FIXME: would be nice to NOT change the context, it's unnecessary
     .change_context(MainError::Config)
     .attach_printable("config path was set by `--config` argument")?;
