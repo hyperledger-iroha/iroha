@@ -397,9 +397,7 @@ pub mod message {
 
         impl Decode for GetBlocksAfter {
             fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
-                GetBlocksAfterCandidate::decode(input)?
-                    .validate()
-                    .map_err(Into::into)
+                GetBlocksAfterCandidate::decode(input)?.validate()
             }
         }
 

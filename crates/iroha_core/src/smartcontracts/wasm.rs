@@ -763,6 +763,7 @@ impl<W, S> Runtime<state::CommonState<W, S>> {
 }
 
 impl<W, S> Runtime<Option<CommonState<W, S>>> {
+    #[allow(clippy::ref_option)]
     #[codec::wrap]
     fn log(
         (log_level, msg): (u8, String),

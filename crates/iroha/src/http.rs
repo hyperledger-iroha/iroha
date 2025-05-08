@@ -74,7 +74,7 @@ pub mod ws {
     ///
     /// 1. **Init stage**: establish `WebSocket` connection with Iroha
     /// 2. **Events stage**: wait for messages from Iroha. For each message, decode *some event* from it
-    ///     and send back *some "received"* message
+    ///    and send back *some "received"* message
     ///
     ///
     ///

@@ -612,7 +612,7 @@ pub trait WorldReadOnly {
     ) -> bool {
         self.account_permissions()
             .get(account)
-            .map_or(false, |permissions| permissions.contains(token))
+            .is_some_and(|permissions| permissions.contains(token))
     }
 
     // Asset-related methods
@@ -891,7 +891,7 @@ impl WorldTransaction<'_, '_> {
     pub fn remove_account_permission(&mut self, account: &AccountId, token: &Permission) -> bool {
         self.account_permissions
             .get_mut(account)
-            .map_or(false, |permissions| permissions.remove(token))
+            .is_some_and(|permissions| permissions.remove(token))
     }
 
     /// Remove all [`Role`]s from the [`Account`]
@@ -1092,11 +1092,8 @@ impl WorldTransaction<'_, '_> {
         events_buffer: &mut TransactionEventBuffer<'_>,
         world_events: I,
     ) {
-        let data_events: SmallVec<[DataEvent; 3]> = world_events
-            .into_iter()
-            .map(Into::into)
-            .map(Into::into)
-            .collect();
+        let data_events: SmallVec<[DataEvent; 3]> =
+            world_events.into_iter().map(Into::into).collect();
 
         for event in data_events.iter() {
             triggers.handle_data_event(event.clone());

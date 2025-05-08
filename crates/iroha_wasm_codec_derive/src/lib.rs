@@ -2,6 +2,8 @@
 //! function into another function which signature will be compatible with `wasmtime` crate to be
 //! successfully exported.
 
+#![allow(clippy::large_enum_variant)]
+
 use std::ops::Deref;
 
 use iroha_macro_utils::Emitter;
@@ -82,6 +84,7 @@ pub fn wrap(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
+#[allow(clippy::ref_option)]
 fn impl_wrap_fn(
     emitter: &mut Emitter,
     state_attr_opt: &Option<StateAttr>,
@@ -156,6 +159,7 @@ pub fn wrap_trait_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
+#[allow(clippy::ref_option)]
 fn impl_wrap_trait_fn(
     emitter: &mut Emitter,
     state_attr_opt: &Option<StateAttr>,

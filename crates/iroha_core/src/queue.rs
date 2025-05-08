@@ -397,6 +397,7 @@ impl Queue {
 
 #[cfg(test)]
 // this is `pub` to re-use internal utils
+#[allow(missing_docs)]
 pub mod tests {
     use std::{sync::Arc, thread, time::Duration};
 

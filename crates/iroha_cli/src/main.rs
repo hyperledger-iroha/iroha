@@ -125,7 +125,7 @@ trait RunContext {
                         "Incompatible `--input` `--output` flags with `iroha transaction wasm`"
                     )
                 }
-                return self._submit(wasm);
+                return self.submit(wasm);
             }
             Executable::Instructions(instructions) => instructions.into_vec(),
         };
@@ -137,7 +137,7 @@ trait RunContext {
         if self.output_instructions() {
             dump_json5_stdout(&instructions)
         } else {
-            self._submit(instructions)
+            self.submit(instructions)
         }
     }
 
@@ -146,7 +146,7 @@ trait RunContext {
     /// # Errors
     ///
     /// Fails if submitting over network fails
-    fn _submit(&mut self, instructions: impl Into<Executable>) -> Result<()> {
+    fn submit(&mut self, instructions: impl Into<Executable>) -> Result<()> {
         let client = self.client_from_config();
         let transaction = client.build_transaction(
             instructions,
@@ -1421,7 +1421,7 @@ mod multisig {
                     )
                 })
             })
-            .filter(|(k, _v)| context.key_span.map_or(true, |(_, top)| *k == top))
+            .filter(|(k, _v)| context.key_span.is_none_or(|(_, top)| *k == top))
         {
             let mut is_root_proposal = true;
             for instruction in &proposal_value.instructions {

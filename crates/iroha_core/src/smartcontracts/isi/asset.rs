@@ -13,7 +13,6 @@ use super::prelude::*;
 impl Registrable for NewAssetDefinition {
     type Target = AssetDefinition;
 
-    #[must_use]
     #[inline]
     fn build(self, authority: &AccountId) -> Self::Target {
         Self::Target {

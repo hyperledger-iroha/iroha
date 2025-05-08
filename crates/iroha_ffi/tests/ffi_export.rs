@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 #![allow(unsafe_code, clippy::pedantic)]
 
 use std::{alloc, collections::BTreeMap, mem::MaybeUninit};

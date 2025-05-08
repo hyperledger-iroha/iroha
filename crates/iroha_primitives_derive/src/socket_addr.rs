@@ -15,9 +15,9 @@ fn stringify_tokens(tokens: TokenStream) -> String {
                 let inner = stringify_tokens(g.stream());
 
                 let bracketed = match g.delimiter() {
-                    Delimiter::Parenthesis => format!("({})", inner),
-                    Delimiter::Brace => format!("{{{}}}", inner),
-                    Delimiter::Bracket => format!("[{}]", inner),
+                    Delimiter::Parenthesis => format!("({inner})"),
+                    Delimiter::Brace => format!("{{{inner}}}"),
+                    Delimiter::Bracket => format!("[{inner}]"),
                     Delimiter::None => inner,
                 };
 
@@ -85,7 +85,7 @@ impl IpAddress {
                     .map_err(|e| {
                         syn::Error::new_spanned(
                             ip_tokens,
-                            format!("Failed to parse `{}` as an IPv4 address: {}", ip_string, e),
+                            format!("Failed to parse `{ip_string}` as an IPv4 address: {e}"),
                         )
                     })
             }
@@ -97,7 +97,7 @@ impl IpAddress {
                     .map_err(|e| {
                         syn::Error::new_spanned(
                             ip_tokens,
-                            format!("Failed to parse `{}` as an IPv6 address: {}", ip_string, e),
+                            format!("Failed to parse `{ip_string}` as an IPv6 address: {e}"),
                         )
                     })
             }

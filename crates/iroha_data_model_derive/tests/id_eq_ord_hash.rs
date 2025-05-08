@@ -1,5 +1,7 @@
 //! Basic tests for traits derived by [`IdEqOrdHash`] macro
 
+#![allow(missing_docs)]
+
 use std::collections::BTreeSet;
 
 use iroha_data_model_derive::IdEqOrdHash;

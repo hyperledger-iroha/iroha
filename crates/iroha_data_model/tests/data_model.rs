@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
 

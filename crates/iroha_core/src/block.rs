@@ -1,6 +1,6 @@
 //! This module contains [`Block`] structures for each state. Transitions are modeled as follows:
 //! 1. If a new block is constructed by the node:
-//!     `BlockBuilder<Pending>` -> `BlockBuilder<Chained>` -> `ValidBlock` -> `CommittedBlock`
+//!    `BlockBuilder<Pending>` -> `BlockBuilder<Chained>` -> `ValidBlock` -> `CommittedBlock`
 //! 2. If a block is received, i.e. deserialized:
 //!    `SignedBlock` -> `ValidBlock` -> `CommittedBlock`
 //!    [`Block`]s are organised into a linear sequence over time (also known as the block chain).

@@ -105,7 +105,7 @@ fn into_tracing_level(level: Level) -> tracing::Level {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use iroha_data_model::Level;
 
     use crate::logger::{Directives, Format};

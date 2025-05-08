@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 extern crate alloc;
 
 use core::any::TypeId;

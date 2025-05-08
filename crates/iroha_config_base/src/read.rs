@@ -167,7 +167,7 @@ impl ConfigReader {
                         attach::ExtendsChain::new(path.as_ref().to_path_buf(), full_path, depth + 1)
                     })?;
                 }
-            };
+            }
 
             reader.sources.push(source);
 

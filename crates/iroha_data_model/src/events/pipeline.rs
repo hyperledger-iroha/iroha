@@ -277,14 +277,14 @@ impl TransactionEventFilter {
 #[cfg(feature = "transparent_api")]
 impl TransactionEventFilter {
     fn field_matches<T: Eq>(filter: Option<&T>, event: &T) -> bool {
-        filter.map_or(true, |field| field == event)
+        filter.is_none_or(|field| field == event)
     }
 }
 
 #[cfg(feature = "transparent_api")]
 impl BlockEventFilter {
     fn field_matches<T: Eq>(filter: Option<&T>, event: &T) -> bool {
-        filter.map_or(true, |field| field == event)
+        filter.is_none_or(|field| field == event)
     }
 }
 

@@ -179,9 +179,10 @@ impl Actor {
                         block.hash()
                     );
                     #[allow(clippy::cast_precision_loss)]
-                    self.metrics
-                        .last_commit_time_ms
-                        .set(last_reported_block.commit_time.as_millis() as u64);
+                    self.metrics.last_commit_time_ms.set(
+                        u64::try_from(last_reported_block.commit_time.as_millis())
+                            .expect("time should fit into u64"),
+                    );
                 }
             }
             self.last_sync_block = block_index;
@@ -215,7 +216,7 @@ impl Actor {
                     .try_into()
                     .expect("Timestamp should fit into u64"),
             )
-        };
+        }
 
         // Below metrics could be out of sync with the "latest block" metric,
         // since state_view might be potentially ahead of the last reported block.
@@ -271,8 +272,8 @@ impl BlockCommitReport {
         Self {
             #[cfg(debug_assertions)]
             hash: block_header.hash(),
-            #[allow(clippy::cast_precision_loss)]
-            height: block_header.height().get() as usize,
+            height: usize::try_from(block_header.height().get())
+                .expect("block height should fit into usize"),
             commit_time,
         }
     }
@@ -317,6 +318,7 @@ pub fn start(
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_types)]
 mod tests {
     use std::{collections::HashSet, time::Duration};
 

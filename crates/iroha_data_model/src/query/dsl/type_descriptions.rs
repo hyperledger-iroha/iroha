@@ -631,7 +631,7 @@ impl EvaluatePredicate<Metadata> for MetadataProjection<PredicateMarker> {
             MetadataProjection::Atom(atom) => atom.applies(input),
             MetadataProjection::Key(proj) => input
                 .get(&proj.key)
-                .map_or(false, |value| proj.projection.applies(value)),
+                .is_some_and(|value| proj.projection.applies(value)),
         }
     }
 }

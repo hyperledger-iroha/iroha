@@ -892,7 +892,7 @@ impl Sumeragi {
         let prev_block_is_empty = state
             .view()
             .latest_block()
-            .map_or(true, |block| block.is_empty());
+            .is_none_or(|block| block.is_empty());
         let block_expected = tx_cache_non_empty || !prev_block_is_empty;
 
         if tx_cache_full || block_expected && (view_change_in_progress || deadline_reached) {
@@ -1165,7 +1165,7 @@ pub(crate) fn run(
         let tx_cache_non_empty = !sumeragi.transaction_cache.is_empty();
         let prev_block_is_empty = state_view
             .latest_block()
-            .map_or(true, |block| block.is_empty());
+            .is_none_or(|block| block.is_empty());
         let block_expected = tx_cache_non_empty || !prev_block_is_empty;
 
         let view_change_in_progress = view_change_index > 0;
@@ -1327,6 +1327,7 @@ enum BlockSyncError {
     },
 }
 
+#[allow(clippy::result_large_err)]
 #[cfg(test)]
 fn handle_block_sync<'state, F: Fn(PipelineEventBox)>(
     chain_id: &ChainId,
@@ -1550,13 +1551,11 @@ mod tests {
                 .with_instructions([create_asset_definition1])
                 .sign(alice_keypair.private_key());
             let tx1 = AcceptedTransaction::accept(tx1, chain_id, max_clock_drift, tx_limits)
-                .map(Into::into)
                 .expect("Valid");
             let tx2 = TransactionBuilder::new(chain_id.clone(), alice_id)
                 .with_instructions([create_asset_definition2])
                 .sign(alice_keypair.private_key());
             let tx2 = AcceptedTransaction::accept(tx2, chain_id, max_clock_drift, tx_limits)
-                .map(Into::into)
                 .expect("Valid");
 
             // Creating a block of two identical transactions and validating it

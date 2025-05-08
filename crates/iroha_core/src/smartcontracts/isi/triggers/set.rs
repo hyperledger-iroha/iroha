@@ -754,7 +754,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                             count: NonZeroU64::MIN,
                         },
                     );
-                };
+                }
                 ExecutableRef::Wasm(hash)
             }
             Executable::Instructions(instructions) => ExecutableRef::Instructions(instructions),
@@ -978,7 +978,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         if let Some(action) = self.by_call_triggers.get(&event.trigger_id) {
             let id = event.trigger_id.clone();
             Self::match_and_insert_trigger(&mut self.matched_ids, event, (&id, action));
-        };
+        }
     }
 
     /// Match and insert a [`TriggerId`] into the set of matched ids.

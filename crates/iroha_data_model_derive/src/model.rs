@@ -23,7 +23,7 @@ pub fn impl_model(emitter: &mut Emitter, input: &syn::ItemMod) -> TokenStream {
         );
 
         return quote!();
-    };
+    }
 
     if ident != "model" {
         emit!(
