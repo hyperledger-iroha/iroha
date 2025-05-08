@@ -14,7 +14,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
     strategy:
       matrix:
         suite: [iroha_cli_tests, iroha_torii_tests]

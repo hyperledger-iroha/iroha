@@ -15,7 +15,7 @@ use path_absolutize::Absolutize;
 use serde::{Deserialize, Serialize};
 
 /// Current toolchain used to build smartcontracts
-const TOOLCHAIN: &str = "+nightly-2024-09-09";
+const TOOLCHAIN: &str = "+nightly-2025-05-08";
 
 /// Build profile for smartcontracts
 #[derive(
