@@ -65,7 +65,7 @@ macro_rules! dbg {
         match $val {
             tmp => {
                 let location = concat!("[{}:{}:{}]", core::file!(), core::line!(), core::column!());
-                let location = format!("{location} {} = {tmp:#?}", stringify!($val));
+                let location = alloc::format!("{location} {} = {tmp:#?}", stringify!($val));
                 $crate::__dbg(&location);
             }
         }

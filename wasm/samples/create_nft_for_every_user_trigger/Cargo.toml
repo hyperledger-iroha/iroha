@@ -7,6 +7,9 @@ authors.workspace = true
 
 license.workspace = true
 
+[features]
+debug = []
+
 [lib]
 crate-type = ['cdylib']
 

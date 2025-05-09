@@ -5,6 +5,8 @@
 #[cfg(not(test))]
 extern crate panic_halt;
 
+extern crate alloc;
+
 use dlmalloc::GlobalDlmalloc;
 use iroha_trigger::prelude::*;
 use mint_rose_trigger_data_model::MintRoseArgs;
