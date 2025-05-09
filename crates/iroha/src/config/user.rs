@@ -18,6 +18,7 @@ use crate::{
 #[derive(Clone, Debug, ReadConfig)]
 #[allow(missing_docs)]
 pub struct Root {
+    #[config(env = "CHAIN")]
     pub chain: ChainId,
     #[config(env = "TORII_URL")]
     pub torii_url: WithOrigin<Url>,
@@ -125,8 +126,11 @@ impl Root {
 #[derive(Debug, Clone, ReadConfig)]
 #[allow(missing_docs)]
 pub struct Account {
+    #[config(env = "ACCOUNT_DOMAIN")]
     pub domain: DomainId,
+    #[config(env = "ACCOUNT_PUBLIC_KEY")]
     pub public_key: WithOrigin<PublicKey>,
+    #[config(env = "ACCOUNT_PRIVATE_KEY")]
     pub private_key: WithOrigin<PrivateKey>,
 }
 
@@ -139,26 +143,4 @@ pub struct Transaction {
     pub status_timeout_ms: WithOrigin<DurationMs>,
     #[config(default = "super::DEFAULT_TRANSACTION_NONCE")]
     pub nonce: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-
-    use iroha_config_base::{env::MockEnv, read::ConfigReader};
-
-    use super::*;
-
-    #[test]
-    fn parses_all_envs() {
-        let env = MockEnv::from([("TORII_URL", "http://localhost:8080")]);
-
-        let _ = ConfigReader::new()
-            .with_env(env.clone())
-            .read_and_complete::<Root>()
-            .expect_err("there are missing fields, but that of no concern");
-
-        assert_eq!(env.unvisited(), HashSet::new());
-        assert_eq!(env.unknown(), HashSet::new());
-    }
 }

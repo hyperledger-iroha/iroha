@@ -96,6 +96,13 @@ impl MockEnv {
         Self { map, ..Self::new() }
     }
 
+    /// Set a variable
+    #[must_use]
+    pub fn set(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.map.insert(key.into(), value.into());
+        self
+    }
+
     /// Get a set of keys not visited yet by [`ReadEnv::read_env`]
     ///
     /// Since [`Rc`] is used under the hood, should work on clones as well.

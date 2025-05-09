@@ -19,6 +19,7 @@ eyre = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+toml = { workspace = true }
 derive_more = { workspace = true }
 parity-scale-codec = { workspace = true, default-features = false, features = ["derive"] }
 futures-util = "0.3.30"
@@ -34,4 +35,5 @@ reqwest = { version = "0.12.7", features = ["json"] }
 hex = { workspace = true }
 assert_matches = "1.5.0"
 expect-test = { workspace = true }
+tempfile = { workspace = true }
 
