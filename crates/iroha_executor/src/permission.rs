@@ -464,7 +464,7 @@ pub mod asset_definition {
                 SingleQueryError::ExpectedOneGotNone => {
                     // assuming this can only happen due to such a domain not existing
                     ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-                        FindError::AssetDefinition(asset_definition_id.clone()),
+                        FindError::AssetDefinition(asset_definition_id.clone().into()),
                     ))
                 }
                 _ => unreachable!(),
@@ -603,7 +603,7 @@ pub mod nft {
                 SingleQueryError::ExpectedOneGotNone => {
                     // assuming this can only happen due to such a NFT not existing
                     ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-                        FindError::Nft(nft_id.clone()),
+                        FindError::Nft(nft_id.clone().into()),
                     ))
                 }
                 _ => unreachable!(),
@@ -855,7 +855,7 @@ pub mod trigger {
             .map_err(|e| match e {
                 SingleQueryError::QueryError(e) => e,
                 SingleQueryError::ExpectedOneGotNone => ValidationFail::InstructionFailed(
-                    InstructionExecutionError::Find(FindError::Trigger(trigger_id.clone())),
+                    InstructionExecutionError::Find(FindError::Trigger(trigger_id.clone().into())),
                 ),
                 _ => unreachable!(),
             })
@@ -1007,7 +1007,7 @@ pub mod domain {
                 SingleQueryError::ExpectedOneGotNone => {
                     // assuming this can only happen due to such a domain not existing
                     ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-                        FindError::Domain(domain_id.clone()),
+                        FindError::Domain(domain_id.clone().into()),
                     ))
                 }
                 _ => unreachable!(),

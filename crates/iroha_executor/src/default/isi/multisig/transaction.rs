@@ -154,7 +154,7 @@ fn multisig_spec<V: Execute + Visit + ?Sized>(
         .map_err(|e| match e {
             SingleQueryError::QueryError(e) => e,
             SingleQueryError::ExpectedOneGotNone => ValidationFail::QueryFailed(
-                QueryExecutionFail::Find(FindError::Account(multisig_account)),
+                QueryExecutionFail::Find(FindError::Account(multisig_account.into())),
             ),
             SingleQueryError::ExpectedOneGotMany | SingleQueryError::ExpectedOneOrZeroGotMany => {
                 unreachable!()
@@ -178,7 +178,7 @@ fn proposal_value<V: Execute + Visit + ?Sized>(
         .map_err(|e| match e {
             SingleQueryError::QueryError(e) => e,
             SingleQueryError::ExpectedOneGotNone => ValidationFail::QueryFailed(
-                QueryExecutionFail::Find(FindError::Account(multisig_account)),
+                QueryExecutionFail::Find(FindError::Account(multisig_account.into())),
             ),
             SingleQueryError::ExpectedOneGotMany | SingleQueryError::ExpectedOneOrZeroGotMany => {
                 unreachable!()

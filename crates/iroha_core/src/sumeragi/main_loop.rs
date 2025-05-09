@@ -250,13 +250,16 @@ impl Sumeragi {
                         block
                             .commit(&self.topology)
                             .unpack(|e| self.send_event(e))
-                            .map_err(|(block, error)| (block.into(), error))
+                            .map_err(|(block, error)| {
+                                (block.as_ref().as_ref().clone().into(), error)
+                            })
                     }) {
                         Ok(block) => block,
-                        Err(error) => {
+                        Err((block, error)) => {
                             error!(
                                 peer_id=%self.peer,
                                 ?error,
+                                ?block,
                                 "Received invalid genesis block"
                             );
 
@@ -772,7 +775,7 @@ impl Sumeragi {
                                             .replace_signatures(prev_signatures, &self.topology)
                                             .unpack(|e| self.send_event(e))
                                             .expect("INTERNAL BUG: Failed to replace signatures");
-                                        voted_block.block = block;
+                                        voted_block.block = *block;
                                         *voting_block = Some(voted_block);
                                     }
                                 }
@@ -1335,7 +1338,7 @@ fn handle_block_sync<'state, F: Fn(PipelineEventBox)>(
     state: &'state State,
     genesis_account: &AccountId,
     handle_events: &F,
-) -> Result<BlockSyncOk<'state>, (SignedBlock, BlockSyncError)> {
+) -> Result<BlockSyncOk<'state>, (Box<SignedBlock>, BlockSyncError)> {
     let block_sync_type = categorize_block_sync(&block, &state.view());
     handle_categorized_block_sync(
         chain_id,
@@ -1356,11 +1359,11 @@ fn handle_categorized_block_sync<'state, F: Fn(PipelineEventBox)>(
     handle_events: &F,
     block_sync_type: Result<BlockSyncType, BlockSyncError>,
     voting_block: &mut Option<VotingBlock>,
-) -> Result<BlockSyncOk<'state>, (SignedBlock, BlockSyncError)> {
+) -> Result<BlockSyncOk<'state>, (Box<SignedBlock>, BlockSyncError)> {
     let soft_fork = match block_sync_type {
         Ok(BlockSyncType::CommitBlock) => false,
         Ok(BlockSyncType::ReplaceTopBlock) => true,
-        Err(e) => return Err((block, e)),
+        Err(e) => return Err((block.into(), e)),
     };
 
     let topology = {

@@ -357,6 +357,8 @@ mod valid {
     #[repr(transparent)]
     pub struct ValidBlock(pub(super) SignedBlock);
 
+    type Error = (Box<SignedBlock>, BlockValidationError);
+
     impl ValidBlock {
         fn verify_leader_signature(
             block: &SignedBlock,
@@ -464,17 +466,17 @@ mod valid {
             expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             state_block: &mut StateBlock<'_>,
-        ) -> WithEvents<Result<ValidBlock, (SignedBlock, BlockValidationError)>> {
+        ) -> WithEvents<Result<ValidBlock, Error>> {
             if let Err(error) =
                 Self::validate_header(&block, topology, genesis_account, state_block, false)
             {
-                return WithEvents::new(Err((block, error)));
+                return WithEvents::new(Err((block.into(), error)));
             }
 
             if let Err(error) =
                 Self::categorize(&mut block, expected_chain_id, genesis_account, state_block)
             {
-                return WithEvents::new(Err((block, error.into())));
+                return WithEvents::new(Err((block.into(), error.into())));
             }
 
             WithEvents::new(Ok(ValidBlock(block)))
@@ -492,12 +494,11 @@ mod valid {
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), (SignedBlock, BlockValidationError)>>
-        {
+        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             if let Err(error) =
                 Self::validate_header(&block, topology, genesis_account, &state.view(), soft_fork)
             {
-                return WithEvents::new(Err((block, error)));
+                return WithEvents::new(Err((block.into(), error)));
             }
 
             // Release block writer before creating new one
@@ -514,7 +515,7 @@ mod valid {
                 genesis_account,
                 &mut state_block,
             ) {
-                return WithEvents::new(Err((block, error.into())));
+                return WithEvents::new(Err((block.into(), error.into())));
             }
 
             WithEvents::new(Ok((ValidBlock(block), state_block)))
@@ -732,9 +733,9 @@ mod valid {
         pub fn commit(
             self,
             topology: &Topology,
-        ) -> WithEvents<Result<CommittedBlock, (ValidBlock, BlockValidationError)>> {
+        ) -> WithEvents<Result<CommittedBlock, (Box<ValidBlock>, BlockValidationError)>> {
             WithEvents::new(match Self::is_commit(self.as_ref(), topology) {
-                Err(err) => Err((self, err)),
+                Err(err) => Err((self.into(), err)),
                 Ok(()) => Ok(CommittedBlock(self)),
             })
         }
@@ -756,11 +757,9 @@ mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             send_events: F,
-        ) -> WithEvents<
-            Result<(CommittedBlock, StateBlock<'state>), (SignedBlock, BlockValidationError)>,
-        > {
+        ) -> WithEvents<Result<(CommittedBlock, StateBlock<'state>), Error>> {
             if let Err(err) = Self::is_commit(&block, topology) {
-                return WithEvents::new(Err((block, err)));
+                return WithEvents::new(Err((block.into(), err)));
             }
 
             WithEvents::new(

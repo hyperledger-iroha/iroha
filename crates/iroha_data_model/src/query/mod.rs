@@ -1122,31 +1122,31 @@ pub mod error {
         #[ffi_type(opaque)]
         pub enum FindError {
             /// Failed to find asset: `{0}`
-            Asset(AssetId),
+            Asset(Box<AssetId>),
             /// Failed to find asset definition: `{0}`
-            AssetDefinition(AssetDefinitionId),
+            AssetDefinition(Box<AssetDefinitionId>),
             /// Failed to find NFT: `{0}`
-            Nft(NftId),
+            Nft(Box<NftId>),
             /// Failed to find account: `{0}`
-            Account(AccountId),
+            Account(Box<AccountId>),
             /// Failed to find domain: `{0}`
-            Domain(DomainId),
+            Domain(Box<DomainId>),
             /// Failed to find metadata key: `{0}`
-            MetadataKey(Name),
+            MetadataKey(Box<Name>),
             /// Block with hash `{0}` not found
             Block(HashOf<BlockHeader>),
             /// Transaction with hash `{0}` not found
             Transaction(HashOf<SignedTransaction>),
             /// Peer with id `{0}` not found
-            Peer(PeerId),
+            Peer(Box<PeerId>),
             /// Trigger with id `{0}` not found
-            Trigger(TriggerId),
+            Trigger(Box<TriggerId>),
             /// Role with id `{0}` not found
-            Role(RoleId),
+            Role(Box<RoleId>),
             /// Failed to find [`Permission`] by id.
-            Permission(Permission),
+            Permission(Box<Permission>),
             /// Failed to find public key: `{0}`
-            PublicKey(PublicKey),
+            PublicKey(Box<PublicKey>),
         }
     }
 }

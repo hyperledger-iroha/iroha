@@ -642,7 +642,9 @@ pub mod error {
             ///
             /// In practice should be fully replaced by [`ValidationFail::Execution`]
             /// and will be removed soon.
-            InstructionExecution(#[cfg_attr(feature = "std", source)] InstructionExecutionFail),
+            InstructionExecution(
+                #[cfg_attr(feature = "std", source)] Box<InstructionExecutionFail>,
+            ),
             /// Failure in WebAssembly execution
             WasmExecution(#[cfg_attr(feature = "std", source)] WasmExecutionFail),
         }

@@ -150,7 +150,7 @@ pub mod isi {
                         Err(MathError::Overflow.into())
                     }
                 })
-                .ok_or_else(|| Error::Find(FindError::Trigger(id.clone())))??;
+                .ok_or_else(|| Error::Find(FindError::Trigger(id.clone().into())))??;
 
             triggers.mod_repeats(&id, |n| {
                 n.checked_add(self.object)
@@ -215,7 +215,7 @@ pub mod isi {
                         .metadata_mut()
                         .insert(self.key.clone(), self.value.clone())
                 })
-                .ok_or(FindError::Trigger(trigger_id.clone()))?;
+                .ok_or(FindError::Trigger(trigger_id.clone().into()))?;
 
             state_transaction
                 .world
@@ -245,9 +245,9 @@ pub mod isi {
                     action
                         .metadata_mut()
                         .remove(&self.key)
-                        .ok_or_else(|| FindError::MetadataKey(self.key.clone()))
+                        .ok_or_else(|| FindError::MetadataKey(self.key.clone().into()))
                 })
-                .ok_or(FindError::Trigger(trigger_id.clone()))??;
+                .ok_or(FindError::Trigger(trigger_id.clone().into()))??;
 
             state_transaction
                 .world
@@ -297,7 +297,7 @@ pub mod isi {
                         )))
                     }
                 })
-                .ok_or_else(|| Error::Find(FindError::Trigger(id.clone())))
+                .ok_or_else(|| Error::Find(FindError::Trigger(id.clone().into())))
                 .and_then(core::convert::identity)?;
 
             state_transaction.world.execute_trigger(event);

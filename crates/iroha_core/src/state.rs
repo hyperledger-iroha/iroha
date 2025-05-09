@@ -448,7 +448,7 @@ pub trait WorldReadOnly {
         let domain = self
             .domains()
             .get(id)
-            .ok_or_else(|| FindError::Domain(id.clone()))?;
+            .ok_or_else(|| FindError::Domain(id.clone().into()))?;
         Ok(domain)
     }
 
@@ -541,7 +541,7 @@ pub trait WorldReadOnly {
     fn account(&self, id: &AccountId) -> Result<&Account, FindError> {
         self.accounts()
             .get(id)
-            .ok_or_else(|| FindError::Account(id.clone()))
+            .ok_or_else(|| FindError::Account(id.clone().into()))
     }
 
     /// Get `Account` and pass it to closure.
@@ -556,7 +556,7 @@ pub trait WorldReadOnly {
         let account = self
             .accounts()
             .get(id)
-            .ok_or(FindError::Account(id.clone()))?;
+            .ok_or(FindError::Account(id.clone().into()))?;
         Ok(f(account))
     }
 
@@ -628,7 +628,7 @@ pub trait WorldReadOnly {
 
         self.assets()
             .get(id)
-            .ok_or_else(|| QueryExecutionFail::from(FindError::Asset(id.clone())))
+            .ok_or_else(|| QueryExecutionFail::from(FindError::Asset(id.clone().into())))
             .cloned()
     }
 
@@ -641,7 +641,7 @@ pub trait WorldReadOnly {
     fn asset_definition(&self, asset_id: &AssetDefinitionId) -> Result<AssetDefinition, FindError> {
         self.asset_definitions()
             .get(asset_id)
-            .ok_or_else(|| FindError::AssetDefinition(asset_id.clone()))
+            .ok_or_else(|| FindError::AssetDefinition(asset_id.clone().into()))
             .cloned()
     }
 
@@ -662,7 +662,7 @@ pub trait WorldReadOnly {
     fn nft(&self, nft_id: &NftId) -> Result<Nft, FindError> {
         self.nfts()
             .get(nft_id)
-            .ok_or_else(|| FindError::Nft(nft_id.clone()))
+            .ok_or_else(|| FindError::Nft(nft_id.clone().into()))
             .cloned()
     }
 
@@ -693,7 +693,7 @@ pub trait WorldReadOnly {
     fn role(&self, id: &RoleId) -> Result<&Role, FindError> {
         self.roles()
             .get(id)
-            .ok_or_else(|| FindError::Role(id.clone()))
+            .ok_or_else(|| FindError::Role(id.clone().into()))
     }
 }
 
@@ -851,7 +851,7 @@ impl WorldTransaction<'_, '_> {
         let domain = self
             .domains
             .get_mut(id)
-            .ok_or_else(|| FindError::Domain(id.clone()))?;
+            .ok_or_else(|| FindError::Domain(id.clone().into()))?;
         Ok(domain)
     }
 
@@ -862,7 +862,7 @@ impl WorldTransaction<'_, '_> {
     pub fn account_mut(&mut self, id: &AccountId) -> Result<&mut Account, FindError> {
         self.accounts
             .get_mut(id)
-            .ok_or_else(|| FindError::Account(id.clone()))
+            .ok_or_else(|| FindError::Account(id.clone().into()))
     }
 
     /// Add [`permission`](Permission) to the [`Account`] if the account does not have this permission yet.
@@ -915,7 +915,7 @@ impl WorldTransaction<'_, '_> {
         let _ = self.account(&id.account)?;
         self.assets
             .get_mut(id)
-            .ok_or_else(|| FindError::Asset(id.clone()))
+            .ok_or_else(|| FindError::Asset(id.clone().into()))
     }
 
     /// Get asset or inserts new with `default_asset_value`.
@@ -958,7 +958,7 @@ impl WorldTransaction<'_, '_> {
     ) -> Result<&mut AssetDefinition, FindError> {
         self.asset_definitions
             .get_mut(id)
-            .ok_or_else(|| FindError::AssetDefinition(id.clone()))
+            .ok_or_else(|| FindError::AssetDefinition(id.clone().into()))
     }
 
     /// Increase [`Asset`] total amount by given value
@@ -1028,7 +1028,7 @@ impl WorldTransaction<'_, '_> {
     pub fn nft_mut(&mut self, id: &NftId) -> Result<&mut Nft, FindError> {
         self.nfts
             .get_mut(id)
-            .ok_or_else(|| FindError::Nft(id.clone()))
+            .ok_or_else(|| FindError::Nft(id.clone().into()))
     }
 
     /// Set executor data model.

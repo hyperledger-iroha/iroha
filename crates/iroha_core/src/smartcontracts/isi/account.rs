@@ -48,7 +48,7 @@ pub mod isi {
             let asset_definition = state_transaction.world.asset_definition_mut(&object)?;
 
             if asset_definition.owned_by != source {
-                return Err(Error::Find(FindError::Account(source)));
+                return Err(Error::Find(FindError::Account(source.into())));
             }
 
             asset_definition.owned_by = destination.clone();
@@ -112,7 +112,7 @@ pub mod isi {
                     account
                         .metadata
                         .remove(&self.key)
-                        .ok_or_else(|| FindError::MetadataKey(self.key.clone()))
+                        .ok_or_else(|| FindError::MetadataKey(self.key.clone().into()))
                 })?;
 
             state_transaction
@@ -185,7 +185,7 @@ pub mod isi {
                 .world
                 .remove_account_permission(&account_id, &permission)
             {
-                return Err(FindError::Permission(permission).into());
+                return Err(FindError::Permission(permission.into()).into());
             }
 
             state_transaction
@@ -260,7 +260,7 @@ pub mod isi {
                 })
                 .is_none()
             {
-                return Err(FindError::Role(role_id).into());
+                return Err(FindError::Role(role_id.into()).into());
             }
 
             state_transaction
