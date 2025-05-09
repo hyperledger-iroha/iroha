@@ -1,5 +1,5 @@
 #!/bin/sh
-# rustup default nightly-2024-09-09
+# rustup default nightly-2025-05-08
 set -e
 # format checks
 cargo fmt --all -- --check

@@ -7,9 +7,9 @@ WORKDIR /app
 RUN apt-get update -y && \
     apt-get install -y build-essential mold
 
-RUN rustup toolchain install nightly-2024-09-09
+RUN rustup toolchain install nightly-2025-05-08
 RUN rustup target add wasm32-unknown-unknown
-RUN rustup default nightly-2024-09-09
+RUN rustup default nightly-2025-05-08
 
 COPY . .
 ARG PROFILE="deploy"

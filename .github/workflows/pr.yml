@@ -20,7 +20,7 @@ jobs:
   pre_build:
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +54,7 @@ jobs:
   consistency:
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
     needs: pre_build
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +81,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: "false"
-          toolchain: "nightly-2024-09-09"
+          toolchain: "nightly-2025-05-08"
           target: "wasm32-unknown-unknown"
           components: "rustfmt"
       - name: Format
@@ -93,7 +93,7 @@ jobs:
   clippy:
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -106,7 +106,7 @@ jobs:
   doc:
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -118,7 +118,7 @@ jobs:
   test:
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
     needs: pre_build
     env:
       LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
@@ -310,7 +310,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
     steps:
       - uses: actions/checkout@v4
       - name: Download clippy and lcov artifact reports
@@ -333,7 +333,7 @@ jobs:
   test_wasm:
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2024-09-09
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
     needs: pre_build
     steps:
       - uses: actions/checkout@v4
