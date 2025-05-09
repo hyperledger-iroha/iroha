@@ -13,7 +13,6 @@ pub use self::model::*;
 use crate::prelude::Name;
 
 /// A path slice, composed of [`Name`]s.
-
 pub type Path = [Name];
 
 #[model]

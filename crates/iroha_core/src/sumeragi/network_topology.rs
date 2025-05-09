@@ -148,7 +148,7 @@ impl Topology {
                     filtered.extend(topology.proxy_tail_index() + 1..topology.0.len());
                 }
                 _ => {}
-            };
+            }
         }
 
         signatures.into_iter().filter(move |signature| {
@@ -266,12 +266,14 @@ fn test_peers(n_peers: usize) -> Vec<PeerId> {
         .collect()
 }
 
+#[allow(missing_docs)]
 #[cfg(test)]
 pub fn test_topology(n_peers: usize) -> Topology {
     let keys = (0..n_peers).map(|_| KeyPair::random()).collect::<Vec<_>>();
     test_topology_with_keys(&keys)
 }
 
+#[allow(missing_docs)]
 #[cfg(test)]
 #[allow(single_use_lifetimes)] // false-positive
 pub fn test_topology_with_keys<'a>(keys: impl IntoIterator<Item = &'a KeyPair>) -> Topology {

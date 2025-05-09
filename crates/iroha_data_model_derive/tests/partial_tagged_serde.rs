@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use std::fmt::Formatter;
 
 use iroha_data_model_derive::{PartiallyTaggedDeserialize, PartiallyTaggedSerialize};

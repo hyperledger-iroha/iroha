@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU64},
@@ -224,7 +226,7 @@ fn multisig_base(suite: TestSuite) -> Result<()> {
     // Allow time to elapse to test the expiration
     if let Some(ms) = transaction_ttl_ms_opt {
         std::thread::sleep(Duration::from_millis(ms))
-    };
+    }
     test_client.submit_blocking(Log::new(Level::DEBUG, "Just ticking time".to_string()))?;
 
     let approve = MultisigApprove::new(multisig_account_id.clone(), instructions_hash);
@@ -402,7 +404,7 @@ fn multisig_recursion_base(suite: TestSuite) -> Result<()> {
     // Allow time to elapse to test the expiration
     if let Some(ms) = transaction_ttl_ms_opt {
         std::thread::sleep(Duration::from_millis(ms))
-    };
+    }
     test_client.submit_blocking(Log::new(Level::DEBUG, "Just ticking time".to_string()))?;
 
     // Check that the entire authentication policy has been deployed down to one of the leaf signatories

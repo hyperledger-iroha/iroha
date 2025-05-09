@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
 use iroha::data_model::{prelude::*, transaction::error::TransactionRejectionReason};
@@ -240,8 +242,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
     assert!(test_client
         .query(FindRolesByAccountId::new(alice_id.clone()))
         .execute_all()?
-        .iter()
-        .any(|account_role_id| *account_role_id == role_id));
+        .contains(&role_id));
     test_client.submit_blocking(set_key_value.clone())?;
 
     // Alice can't modify Mouse's metadata after permission is removed from role

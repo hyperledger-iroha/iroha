@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use iroha::data_model::prelude::*;
 use iroha_primitives::numeric::numeric;
 use iroha_test_network::*;

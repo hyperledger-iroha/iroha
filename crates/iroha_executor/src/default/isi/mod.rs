@@ -9,7 +9,7 @@ pub fn visit_custom_instruction<V: Execute + Visit + ?Sized>(
 ) {
     if let Ok(instruction) = MultisigInstructionBox::try_from(instruction.payload()) {
         return instruction.visit_execute(executor);
-    };
+    }
 
     deny!(executor, "unexpected custom instruction");
 }

@@ -315,7 +315,7 @@ impl Kura {
         let block_index = block_height.get() - 1;
         if let Some(block_arc) = data_array_guard[block_index].1.as_ref() {
             return Some(Arc::clone(block_arc));
-        };
+        }
 
         let block_store = self.block_store.lock();
         let BlockIndex { start, length } = block_store

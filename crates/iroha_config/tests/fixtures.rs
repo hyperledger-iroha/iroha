@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 #![allow(clippy::needless_raw_string_hashes)] // triggered by `expect!` snapshots
 
 use std::{

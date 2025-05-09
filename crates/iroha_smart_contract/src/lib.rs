@@ -5,8 +5,6 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-#[cfg(feature = "debug")]
-use alloc::format;
 use core::fmt::Debug;
 
 use data_model::{

@@ -5,6 +5,8 @@
 #[cfg(not(test))]
 extern crate panic_halt;
 
+extern crate alloc;
+
 use dlmalloc::GlobalDlmalloc;
 use iroha_executor::{data_model::block::BlockHeader, prelude::*};
 

@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use iroha_config::client_api::{ConfigUpdateDTO, Logger};
 use iroha_data_model::Level;
 use iroha_test_network::NetworkBuilder;

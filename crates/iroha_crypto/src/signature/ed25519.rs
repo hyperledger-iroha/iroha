@@ -90,7 +90,6 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn create_new_keys() {
         let (p, s) = Ed25519Sha512::keypair(KeyGenOption::Random);
 

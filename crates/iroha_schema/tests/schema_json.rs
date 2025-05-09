@@ -1,4 +1,6 @@
 //! This test checks how the json-serialized schema looks like.
+
+#![allow(missing_docs)]
 #![allow(dead_code)]
 
 use iroha_schema::IntoSchema;

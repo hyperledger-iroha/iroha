@@ -72,7 +72,7 @@ mod model {
     )]
     #[display(fmt = "({header})")]
     #[allow(missing_docs)]
-    pub(crate) struct BlockPayload {
+    pub struct BlockPayload {
         /// Block header
         pub header: BlockHeader,
         /// array of transactions, which successfully passed validation and consensus step.

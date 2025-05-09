@@ -99,7 +99,7 @@ impl Parse for MetricSpec {
                         proc_macro2::Span::call_site(),
                         "Spaces are not allowed. Use underscores '_'",
                     ));
-                };
+                }
                 lit_str
             }
             _ => {
@@ -126,7 +126,7 @@ impl ToTokens for MetricSpec {
 /// Macro for instrumenting an `isi`'s `impl execute` to track a given
 /// metric.  To specify a metric, put it as an attribute parameter
 /// inside quotes.
-
+///
 /// This will increment the `prometheus::IntVec` metric
 /// corresponding to the literal provided in quotes, with the second
 /// argument being `TOTAL_STR == "total"`. If the execution of the

@@ -8,7 +8,6 @@ use crate::prelude::*;
 impl Registrable for NewRole {
     type Target = Role;
 
-    #[must_use]
     #[inline]
     fn build(self, _authority: &AccountId) -> Self::Target {
         self.inner
@@ -63,7 +62,7 @@ pub mod isi {
             let peer_id = self.object;
             let world = &mut state_transaction.world;
             let Some(index) = world.peers.iter().position(|id| id == &peer_id) else {
-                return Err(FindError::Peer(peer_id).into());
+                return Err(FindError::Peer(peer_id.into()).into());
             };
 
             world.peers.remove(index);
@@ -185,7 +184,7 @@ pub mod isi {
                 .remove(domain_id.clone())
                 .is_none()
             {
-                return Err(FindError::Domain(domain_id).into());
+                return Err(FindError::Domain(domain_id.into()).into());
             }
 
             state_transaction
@@ -252,7 +251,7 @@ pub mod isi {
 
             let world = &mut state_transaction.world;
             if world.roles.remove(role_id.clone()).is_none() {
-                return Err(FindError::Role(role_id).into());
+                return Err(FindError::Role(role_id.into()).into());
             }
 
             world.emit_events(Some(RoleEvent::Deleted(role_id)));
@@ -272,7 +271,7 @@ pub mod isi {
             let permission = self.object;
 
             let Some(role) = state_transaction.world.roles.get_mut(&role_id) else {
-                return Err(FindError::Role(role_id).into());
+                return Err(FindError::Role(role_id.into()).into());
             };
 
             if !role.permissions.insert(permission.clone()) {
@@ -305,11 +304,11 @@ pub mod isi {
             let permission = self.object;
 
             let Some(role) = state_transaction.world.roles.get_mut(&role_id) else {
-                return Err(FindError::Role(role_id).into());
+                return Err(FindError::Role(role_id.into()).into());
             };
 
             if !role.permissions.remove(&permission) {
-                return Err(FindError::Permission(permission).into());
+                return Err(FindError::Permission(permission.into()).into());
             }
 
             state_transaction

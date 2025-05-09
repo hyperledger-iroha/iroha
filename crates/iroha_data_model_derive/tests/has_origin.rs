@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use iroha_data_model::prelude::{HasOrigin, Identifiable};
 use iroha_data_model_derive::{HasOrigin, IdEqOrdHash};
 

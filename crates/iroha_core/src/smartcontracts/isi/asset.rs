@@ -13,7 +13,6 @@ use super::prelude::*;
 impl Registrable for NewAssetDefinition {
     type Target = AssetDefinition;
 
-    #[must_use]
     #[inline]
     fn build(self, authority: &AccountId) -> Self::Target {
         Self::Target {
@@ -99,7 +98,7 @@ pub mod isi {
                 .world
                 .assets
                 .get_mut(&asset_id)
-                .ok_or_else(|| FindError::Asset(asset_id.clone()))?;
+                .ok_or_else(|| FindError::Asset(asset_id.clone().into()))?;
             let quantity = &mut asset.value;
             *quantity = quantity
                 .checked_sub(self.object)
@@ -155,7 +154,7 @@ pub mod isi {
                     .world
                     .assets
                     .get_mut(&source_id)
-                    .ok_or_else(|| FindError::Asset(source_id.clone()))?;
+                    .ok_or_else(|| FindError::Asset(source_id.clone().into()))?;
                 let quantity = &mut asset.value;
                 *quantity = quantity
                     .checked_sub(self.object)

@@ -210,7 +210,7 @@ impl Client {
         if self.add_transaction_nonce {
             let nonce = rand::thread_rng().gen::<NonZeroU32>();
             tx_builder.set_nonce(nonce);
-        };
+        }
 
         tx_builder
             .with_metadata(metadata)
@@ -367,7 +367,6 @@ impl Client {
                     self.transaction_status_timeout
                 )
             })
-            .map_err(Into::into)
             .and_then(std::convert::identity);
             event_iterator.close().await;
             result
@@ -606,7 +605,7 @@ impl Client {
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or(""),
             ));
-        };
+        }
 
         Ok(())
     }
@@ -708,7 +707,7 @@ pub mod stream_api {
                     Ok(WebSocketMessage::Binary(message)) => {
                         return Some(self.handler.message(message))
                     }
-                    Ok(_) => continue,
+                    Ok(_) => (),
                     Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
                         return None
                     }

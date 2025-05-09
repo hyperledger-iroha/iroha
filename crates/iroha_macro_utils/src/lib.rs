@@ -60,7 +60,7 @@ pub fn find_single_attr_opt<'a>(
         [attr, ref tail @ ..] => {
             // allow parsing to proceed further to collect more errors
             accumulator.push(
-                darling::Error::custom(format!("Only one #[{}] attribute is allowed!", attr_name))
+                darling::Error::custom(format!("Only one #[{attr_name}] attribute is allowed!"))
                     .with_spans(tail.iter().map(syn::spanned::Spanned::span)),
             );
             attr
@@ -92,7 +92,7 @@ pub fn parse_single_list_attr_opt<Body: syn::parse::Parse>(
 
     match &attr.meta {
         syn::Meta::Path(_) | syn::Meta::NameValue(_) => accumulator.push(darling::Error::custom(
-            format!("Expected #[{}(...)] attribute to be a list", attr_name),
+            format!("Expected #[{attr_name}(...)] attribute to be a list"),
         )),
         syn::Meta::List(list) => {
             kind = accumulator.handle(syn::parse2(list.tokens.clone()).map_err(Into::into));
@@ -116,7 +116,7 @@ pub fn parse_single_list_attr<Body: syn::parse::Parse>(
     attrs: &[syn::Attribute],
 ) -> darling::Result<Body> {
     parse_single_list_attr_opt(attr_name, attrs)?
-        .ok_or_else(|| darling::Error::custom(format!("Missing `#[{}(...)]` attribute", attr_name)))
+        .ok_or_else(|| darling::Error::custom(format!("Missing `#[{attr_name}(...)]` attribute")))
 }
 
 /// Macro for automatic [`syn::parse::Parse`] impl generation for keyword

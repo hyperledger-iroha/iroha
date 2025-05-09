@@ -95,7 +95,7 @@ impl darling::FromField for FromVariantField {
                 SKIP_TRY_FROM_ATTR => skip_try_from = true,
                 SKIP_CONTAINER => skip_container = true,
                 // ignore unknown attributes, rustc handles them
-                _ => continue,
+                _ => (),
             }
         }
         Ok(Self {

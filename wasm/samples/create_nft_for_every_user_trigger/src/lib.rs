@@ -67,7 +67,7 @@ fn generate_new_nft_id(host: &Iroha, account_id: &AccountId) -> NftId {
         .count()
         .checked_add(1)
         .dbg_unwrap();
-    iroha_trigger::log::debug!(&format!("New number: {}", new_number));
+    iroha_trigger::log::debug!(&format!("New number: {new_number}"));
 
     format!(
         "nft_number_{}_for_{}${}",

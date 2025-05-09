@@ -40,7 +40,7 @@ pub async fn handle_transaction(
         .push(accepted_tx, state.view())
         .map_err(|queue::Failure { tx, err }| {
             iroha_logger::warn!(
-                tx_hash=%tx.as_ref().hash(), ?err,
+                tx_hash=%tx.as_ref().as_ref().hash(), ?err,
                 "Failed to push into queue"
             );
 

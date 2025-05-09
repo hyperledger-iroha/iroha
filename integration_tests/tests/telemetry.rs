@@ -1,8 +1,10 @@
+#![allow(missing_docs)]
+
 use std::collections::{HashMap, HashSet};
 
 use expect_test::expect;
 use iroha_data_model::{isi::Log, peer::Peer, Identifiable, Level};
-use iroha_test_network::NetworkBuilder;
+use iroha_test_network::{NetworkBuilder, NetworkPeer};
 
 struct MetricsReader {
     map: HashMap<String, f64>,
@@ -50,7 +52,7 @@ fn commit_time() -> eyre::Result<()> {
         .client()
         .submit_blocking(Log::new(Level::INFO, "mewo".to_owned()))?;
 
-    for client in network.peers().iter().map(|x| x.client()) {
+    for client in network.peers().iter().map(NetworkPeer::client) {
         let status = client.get_status()?;
         assert!(
             status.commit_time_ms > 0,
@@ -61,6 +63,7 @@ fn commit_time() -> eyre::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::float_cmp)]
 #[tokio::test]
 async fn misc_measurements() -> eyre::Result<()> {
     let network = NetworkBuilder::new().start().await?;
@@ -144,7 +147,7 @@ async fn fetch_online_peers() -> eyre::Result<()> {
         let others: HashSet<_> = network
             .peers()
             .iter()
-            .map(|x| x.peer())
+            .map(NetworkPeer::peer)
             .filter(|x| x.id() != &peer.peer_id())
             .collect();
 

@@ -300,7 +300,7 @@ impl NumericSpec {
     /// # Errors
     /// If given number has precision or scale higher than specified by spec.
     pub fn check(self, numeric: &Numeric) -> Result<(), NumericSpecError> {
-        if !self.scale.map_or(true, |scale| scale >= numeric.scale()) {
+        if self.scale.is_some_and(|scale| scale < numeric.scale()) {
             return Err(NumericSpecError::ScaleTooHigh);
         }
 

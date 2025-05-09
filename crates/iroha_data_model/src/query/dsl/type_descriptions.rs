@@ -631,7 +631,7 @@ impl EvaluatePredicate<Metadata> for MetadataProjection<PredicateMarker> {
             MetadataProjection::Atom(atom) => atom.applies(input),
             MetadataProjection::Key(proj) => input
                 .get(&proj.key)
-                .map_or(false, |value| proj.projection.applies(value)),
+                .is_some_and(|value| proj.projection.applies(value)),
         }
     }
 }
@@ -647,7 +647,7 @@ impl EvaluateSelector<Metadata> for MetadataProjection<SelectorMarker> {
                 batch,
                 |item| {
                     item.get(&proj.key).ok_or_else(|| {
-                        QueryExecutionFail::Find(FindError::MetadataKey(proj.key.clone()))
+                        QueryExecutionFail::Find(FindError::MetadataKey(proj.key.clone().into()))
                     })
                 },
                 &proj.projection,
@@ -665,7 +665,7 @@ impl EvaluateSelector<Metadata> for MetadataProjection<SelectorMarker> {
                 |item| {
                     // using remove here to get a value, not a reference
                     item.get(&proj.key).cloned().ok_or_else(|| {
-                        QueryExecutionFail::Find(FindError::MetadataKey(proj.key.clone()))
+                        QueryExecutionFail::Find(FindError::MetadataKey(proj.key.clone().into()))
                     })
                 },
                 &proj.projection,

@@ -620,7 +620,7 @@ where
 
     fn into_repr_c(self, store: &'itm mut Self::RustStore) -> *mut [C; N] {
         store.0 = self.into_repr_c(&mut store.1);
-        &mut store.0
+        &raw mut store.0
     }
     unsafe fn try_from_repr_c(
         source: *mut [C; N],
@@ -741,7 +741,7 @@ impl<R: ReprC> CTypeConvert<'_, Box<Robust>, *mut R> for Box<R> {
     type FfiStore = ();
 
     fn into_repr_c(self, store: &mut Self::RustStore) -> *mut R {
-        &mut **store.insert(self)
+        &raw mut **store.insert(self)
     }
 
     unsafe fn try_from_repr_c(source: *mut R, (): &mut ()) -> Result<Self> {

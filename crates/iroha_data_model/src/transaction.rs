@@ -99,7 +99,7 @@ mod model {
         Serialize,
         IntoSchema,
     )]
-    pub(crate) struct TransactionPayload {
+    pub struct TransactionPayload {
         /// Unique id of the blockchain. Used for simple replay attack protection.
         pub chain: ChainId,
         /// Account ID of transaction creator.
@@ -642,7 +642,9 @@ pub mod error {
             ///
             /// In practice should be fully replaced by [`ValidationFail::Execution`]
             /// and will be removed soon.
-            InstructionExecution(#[cfg_attr(feature = "std", source)] InstructionExecutionFail),
+            InstructionExecution(
+                #[cfg_attr(feature = "std", source)] Box<InstructionExecutionFail>,
+            ),
             /// Failure in WebAssembly execution
             WasmExecution(#[cfg_attr(feature = "std", source)] WasmExecutionFail),
         }

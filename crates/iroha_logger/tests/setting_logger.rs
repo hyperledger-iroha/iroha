@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use iroha_logger::{init_global, Config, InitConfig};
 
 #[tokio::test]

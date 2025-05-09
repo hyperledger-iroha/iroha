@@ -164,7 +164,7 @@ pub trait FfiOutPtrRead: FfiOutPtr + Sized {
 ///
 ///     let output = output.assume_init();
 ///     let out_store = Default::default();
-
+///
 ///     // &(u32, u32) references out_store which is defined locally
 ///     let output = FfiConvert::try_from_ffi(output, &mut out_store);
 ///     LocalRef(out_store.0, core::marker::PhantomData)

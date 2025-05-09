@@ -7,7 +7,6 @@ use super::prelude::*;
 impl Registrable for NewNft {
     type Target = Nft;
 
-    #[must_use]
     #[inline]
     fn build(self, authority: &AccountId) -> Self::Target {
         Self::Target {
@@ -73,7 +72,7 @@ pub mod isi {
                 .world
                 .nfts
                 .remove(nft_id.clone())
-                .ok_or_else(|| FindError::Nft(nft_id.clone()))?;
+                .ok_or_else(|| FindError::Nft(nft_id.clone().into()))?;
             state_transaction
                 .world
                 .domain(&nft_id.domain)
@@ -126,7 +125,7 @@ pub mod isi {
             let value = state_transaction.world.nft_mut(&nft_id).and_then(|nft| {
                 nft.content
                     .remove(&self.key)
-                    .ok_or_else(|| FindError::MetadataKey(self.key.clone()))
+                    .ok_or_else(|| FindError::MetadataKey(self.key.clone().into()))
             })?;
 
             state_transaction

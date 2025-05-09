@@ -357,7 +357,7 @@ impl Iroha {
                     // TODO: produce non-zero exit code or something
                 } else {
                     iroha_logger::debug!("Torii exited normally");
-                };
+                }
             }),
             OnShutdown::Wait(Duration::from_secs(5)),
         ));

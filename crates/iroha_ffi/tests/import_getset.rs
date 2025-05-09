@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 #![allow(unsafe_code)]
 
 use iroha_ffi::{ffi, ffi_import};
@@ -113,7 +114,7 @@ mod ffi {
         output: *mut <&u8 as FfiType>::ReprC,
     ) -> FfiReturn {
         let input = &*input;
-        output.write(&input.id);
+        output.write(&raw const input.id);
         FfiReturn::Ok
     }
 
@@ -123,7 +124,7 @@ mod ffi {
         output: *mut <&mut u8 as FfiType>::ReprC,
     ) -> FfiReturn {
         let input = &mut *input;
-        output.write(&mut input.id);
+        output.write(&raw mut input.id);
         FfiReturn::Ok
     }
 

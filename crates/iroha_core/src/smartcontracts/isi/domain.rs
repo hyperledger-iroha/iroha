@@ -9,7 +9,6 @@ use super::super::isi::prelude::*;
 impl Registrable for iroha_data_model::domain::NewDomain {
     type Target = Domain;
 
-    #[must_use]
     #[inline]
     fn build(self, authority: &AccountId) -> Self::Target {
         Self::Target {
@@ -118,7 +117,7 @@ pub mod isi {
                 .remove(account_id.clone())
                 .is_none()
             {
-                return Err(FindError::Account(account_id).into());
+                return Err(FindError::Account(account_id.into()).into());
             }
 
             state_transaction
@@ -209,7 +208,7 @@ pub mod isi {
                 .remove(asset_definition_id.clone())
                 .is_none()
             {
-                return Err(FindError::AssetDefinition(asset_definition_id).into());
+                return Err(FindError::AssetDefinition(asset_definition_id.into()).into());
             }
             let _ = state_transaction
                 .world
@@ -274,7 +273,7 @@ pub mod isi {
                     asset_definition
                         .metadata
                         .remove(&self.key)
-                        .ok_or_else(|| FindError::MetadataKey(self.key.clone()))
+                        .ok_or_else(|| FindError::MetadataKey(self.key.clone().into()))
                 })?;
 
             state_transaction
@@ -328,7 +327,7 @@ pub mod isi {
             let value = domain
                 .metadata
                 .remove(&self.key)
-                .ok_or_else(|| FindError::MetadataKey(self.key.clone()))?;
+                .ok_or_else(|| FindError::MetadataKey(self.key.clone().into()))?;
 
             state_transaction
                 .world

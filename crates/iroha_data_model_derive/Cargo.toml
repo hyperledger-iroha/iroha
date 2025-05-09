@@ -10,6 +10,9 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+std = []
+
 [lib]
 proc-macro = true
 

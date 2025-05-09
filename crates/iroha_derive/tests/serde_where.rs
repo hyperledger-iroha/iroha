@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use iroha_derive::serde_where;
 use serde::{Deserialize, Serialize};
 
