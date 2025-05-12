@@ -27,6 +27,7 @@ nonzero_ext = { workspace = true }
 iroha = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_test_network = { workspace = true }
+tracing = { workspace = true }
 
 mint_rose_trigger_data_model = { path = "../data_model/samples/mint_rose_trigger_data_model" }
 executor_custom_data_model = { path = "../data_model/samples/executor_custom_data_model" }

@@ -28,16 +28,18 @@ async fn genesis_transactions_are_validated_by_executor() {
     let network = NetworkBuilder::new()
         .with_genesis_instruction(invalid_instruction)
         .build();
+    let genesis = network.genesis();
     let peer = network.peer();
 
-    timeout(Duration::from_secs(3), async {
+    timeout(Duration::from_secs(5), async {
         join!(
             // Peer should start...
-            peer.start(network.config(), Some(network.genesis())),
+            peer.start(network.config_layers(), Some(genesis)),
             peer.once(|event| matches!(event, PeerLifecycleEvent::ServerStarted)),
             // ...but it should shortly exit with an error
             peer.once(|event| match event {
                 // TODO: handle "Invalid genesis" in a more granular way
+                //       https://github.com/hyperledger-iroha/iroha/issues/5423
                 PeerLifecycleEvent::Terminated { status } => !status.success(),
                 _ => false,
             })

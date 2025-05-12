@@ -34,6 +34,7 @@ pub fn base_iroha_config() -> Table {
         .write(["kura", "store_dir"], "./storage")
         .write(["network", "block_gossip_size"], 1)
         .write(["logger", "level"], "DEBUG")
+        .write(["logger", "format"], "pretty")
 }
 
 pub fn genesis<T: Instruction>(

@@ -78,6 +78,7 @@ impl LockContent {
 pub struct AllocatedPort(u16);
 
 impl AllocatedPort {
+    #[allow(clippy::new_without_default)] // has side effects
     pub fn new() -> Self {
         let mut lock = fslock::LockFile::open(LOCK_FILE).expect("path is valid");
         lock.lock().expect("this handle doesn't own the file yet");
