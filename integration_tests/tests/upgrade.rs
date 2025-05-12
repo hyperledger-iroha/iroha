@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use executor_custom_data_model::{complex_isi::NumericQuery, permissions::CanControlDomainLives};
 use eyre::Result;
 use futures_util::TryStreamExt as _;
@@ -347,6 +349,65 @@ fn migration_fail_should_not_cause_any_effects() {
 
     // The fact that query in previous assertion does not fail means that executor haven't
     // been changed, because `executor_with_migration_fail` does not allow any queries
+}
+
+#[test]
+fn executor_with_fuel() -> Result<()> {
+    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let client = network.client();
+
+    upgrade_executor(&client, "executor_with_fuel")?;
+    let mut fuel_config = Metadata::default();
+
+    // upgrade_executor changes default fuel limits, but we need to reset it for this test.
+    // Set 60_000_000 fuel as default, which is definitely not enough to execute
+    // 3 instructions consuming 30_000_000 fuel each.
+    fuel_config.insert("fuel".parse().unwrap(), 30_000_000_u64);
+    client.submit_blocking_with_metadata::<InstructionBox>(
+        InstructionBox::SetParameter(SetParameter::new(Parameter::Executor(
+            SmartContractParameter::Fuel(
+                std::num::NonZeroU64::new(60_000_000_u64).expect("Fuel must be positive."),
+            ),
+        ))),
+        fuel_config.clone(),
+    )?;
+
+    let asset_definition_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+    let sample_isi = Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone());
+
+    // Each instruction will use 30_000_000 additional fuel, so this should cover it
+    fuel_config.insert("fuel".parse().unwrap(), 90_000_000_u64);
+
+    client.submit_all_blocking_with_metadata(
+        [sample_isi.clone(), sample_isi.clone(), sample_isi.clone()],
+        fuel_config.clone(),
+    )?;
+
+    assert_eq!(
+        client
+            .query(FindAssets)
+            .filter_with(|asset| asset.id.eq(bob_rose.clone()))
+            .select_with(|asset| asset.value)
+            .execute_single()?,
+        Numeric::from(3u32)
+    );
+
+    // This will be enough for only one instruction, thus fail
+    fuel_config.insert("fuel".parse().unwrap(), 30_000_000_u64);
+    let res = client.submit_all_blocking_with_metadata(
+        [sample_isi.clone(), sample_isi.clone(), sample_isi.clone()],
+        fuel_config.clone(),
+    );
+
+    assert!(matches!(
+        res.unwrap_err()
+            .downcast_ref::<TransactionRejectionReason>()
+            .expect("transaction must fail"),
+        &TransactionRejectionReason::Validation(ValidationFail::TooComplex)
+    ));
+
+    Ok(())
 }
 
 #[test]

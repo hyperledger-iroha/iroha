@@ -52,6 +52,9 @@ mod export {
     pub const EXECUTE_QUERY: &str = "execute_query";
     pub const SET_DATA_MODEL: &str = "set_data_model";
 
+    pub const CONSUME_FUEL: &str = "consume_fuel";
+    pub const ADD_FUEL: &str = "add_fuel";
+
     pub const DBG: &str = "dbg";
     pub const LOG: &str = "log";
 }
@@ -1216,6 +1219,34 @@ where
     }
 }
 
+impl<S> Runtime<S> {
+    fn consume_fuel(
+        mut caller: ::wasmtime::Caller<S>,
+        offset: ::iroha_wasm_codec::WasmUsize,
+        len: ::iroha_wasm_codec::WasmUsize,
+    ) -> ::wasmtime::Result<()> {
+        let memory = Runtime::<S>::get_memory(&mut caller).expect("Checked at instantiation step");
+        let fuel: u64 = ::iroha_wasm_codec::decode_from_memory(&memory, &caller, offset, len)
+            .map_err(|e| Error::ExportFnCall(ExportFnCallError::ExecutionLimitsExceeded(e)))?;
+
+        let current = caller.get_fuel()?;
+        caller.set_fuel(current.saturating_sub(fuel))
+    }
+
+    fn add_fuel(
+        mut caller: ::wasmtime::Caller<S>,
+        offset: ::iroha_wasm_codec::WasmUsize,
+        len: ::iroha_wasm_codec::WasmUsize,
+    ) -> ::wasmtime::Result<()> {
+        let memory = Runtime::<S>::get_memory(&mut caller).expect("Checked at instantiation step");
+        let fuel: u64 = ::iroha_wasm_codec::decode_from_memory(&memory, &caller, offset, len)
+            .map_err(|e| Error::ExportFnCall(ExportFnCallError::ExecutionLimitsExceeded(e)))?;
+
+        let current = caller.get_fuel()?;
+        caller.set_fuel(current.saturating_add(fuel))
+    }
+}
+
 /// Marker trait to auto-implement [`import_traits::SetExecutorDataModel`] for a concrete [`Runtime`].
 ///
 /// Useful because *Executor* exposes more entrypoints than just `migrate()` which is the
@@ -1524,6 +1555,22 @@ macro_rules! create_imports {
                     WASM_MODULE,
                     export::DBG,
                     |caller: ::wasmtime::Caller<$ty>, offset, len| Runtime::dbg(caller, offset, len),
+                )
+            })
+            // CONSUME_FUEL and ADD_FUEL are temporaly made avalibile for all wasm calls.
+            // For security reasons, might be restricted to only executor-related operations.
+            .and_then(|l| {
+                l.func_wrap(
+                    WASM_MODULE,
+                    export::CONSUME_FUEL,
+                    |caller: ::wasmtime::Caller<$ty>, offset, len| Runtime::consume_fuel(caller, offset, len),
+                )
+            })
+            .and_then(|l| {
+                l.func_wrap(
+                    WASM_MODULE,
+                    export::ADD_FUEL,
+                    |caller: ::wasmtime::Caller<$ty>, offset, len| Runtime::add_fuel(caller, offset, len),
                 )
             })
             $(.and_then(|l| {
