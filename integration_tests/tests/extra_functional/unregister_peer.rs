@@ -45,11 +45,11 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     mint(&client, &asset_def, &account, numeric!(100)).await?;
     network.ensure_blocks(3).await?;
     // and a new peer is registered
-    let new_peer = NetworkPeer::generate();
-    let new_peer_id = new_peer.peer_id();
+    let new_peer = NetworkPeer::builder().build(network.env());
+    let new_peer_id = new_peer.id();
     let new_peer_client = new_peer.client();
     network.add_peer(&new_peer);
-    new_peer.start(network.config(), None).await;
+    new_peer.start(network.config_layers(), None).await;
     {
         let client = client.clone();
         let id = new_peer_id.clone();
