@@ -95,10 +95,7 @@ impl From<&'_ base::Root> for Network {
             transaction_gossip_period_ms: u32::try_from(
                 value.transaction_gossiper.gossip_period.as_millis(),
             )
-            .expect(
-                "
-                transaction gossip period should fit into a u32",
-            ),
+            .expect("transaction gossip period should fit into a u32"),
         }
     }
 }
