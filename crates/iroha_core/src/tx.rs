@@ -226,7 +226,7 @@ impl StateBlock<'_> {
 
         if state_transaction.world.accounts.get(authority).is_none() {
             return Err(TransactionRejectionReason::AccountDoesNotExist(
-                FindError::Account(authority.clone().into()),
+                FindError::Account(authority.clone()),
             ));
         }
 

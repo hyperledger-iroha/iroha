@@ -647,7 +647,7 @@ impl EvaluateSelector<Metadata> for MetadataProjection<SelectorMarker> {
                 batch,
                 |item| {
                     item.get(&proj.key).ok_or_else(|| {
-                        QueryExecutionFail::Find(FindError::MetadataKey(proj.key.clone().into()))
+                        QueryExecutionFail::Find(FindError::MetadataKey(proj.key.clone()))
                     })
                 },
                 &proj.projection,
@@ -665,7 +665,7 @@ impl EvaluateSelector<Metadata> for MetadataProjection<SelectorMarker> {
                 |item| {
                     // using remove here to get a value, not a reference
                     item.get(&proj.key).cloned().ok_or_else(|| {
-                        QueryExecutionFail::Find(FindError::MetadataKey(proj.key.clone().into()))
+                        QueryExecutionFail::Find(FindError::MetadataKey(proj.key.clone()))
                     })
                 },
                 &proj.projection,

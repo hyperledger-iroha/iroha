@@ -117,7 +117,7 @@ pub mod isi {
                 .remove(account_id.clone())
                 .is_none()
             {
-                return Err(FindError::Account(account_id.into()).into());
+                return Err(FindError::Account(account_id).into());
             }
 
             state_transaction
@@ -208,7 +208,7 @@ pub mod isi {
                 .remove(asset_definition_id.clone())
                 .is_none()
             {
-                return Err(FindError::AssetDefinition(asset_definition_id.into()).into());
+                return Err(FindError::AssetDefinition(asset_definition_id).into());
             }
             let _ = state_transaction
                 .world
@@ -273,7 +273,7 @@ pub mod isi {
                     asset_definition
                         .metadata
                         .remove(&self.key)
-                        .ok_or_else(|| FindError::MetadataKey(self.key.clone().into()))
+                        .ok_or_else(|| FindError::MetadataKey(self.key.clone()))
                 })?;
 
             state_transaction
@@ -327,7 +327,7 @@ pub mod isi {
             let value = domain
                 .metadata
                 .remove(&self.key)
-                .ok_or_else(|| FindError::MetadataKey(self.key.clone().into()))?;
+                .ok_or_else(|| FindError::MetadataKey(self.key.clone()))?;
 
             state_transaction
                 .world

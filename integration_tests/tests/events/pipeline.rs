@@ -28,7 +28,7 @@ async fn transaction_with_fail_instruction_should_be_rejected() -> Result<()> {
         [fail_isi],
         &TransactionStatus::Rejected(Box::new(TransactionRejectionReason::Validation(
             ValidationFail::InstructionFailed(InstructionExecutionError::Find(FindError::Domain(
-                unknown_domain_id.into(),
+                unknown_domain_id,
             ))),
         ))),
     )

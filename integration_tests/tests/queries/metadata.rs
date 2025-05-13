@@ -65,7 +65,7 @@ fn find_accounts_with_asset() {
     else {
         panic!("Got unexpected query error on missing metadata key {alice_no_key_err:?}",);
     };
-    assert_eq!(*returned_key, another_key);
+    assert_eq!(returned_key, another_key);
 
     // check single key retrieval
     let another_key_value = test_client

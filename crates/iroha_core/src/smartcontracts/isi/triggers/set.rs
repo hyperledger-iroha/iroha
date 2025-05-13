@@ -1044,9 +1044,7 @@ pub struct RepeatsOverflowError;
 impl From<ModRepeatsError> for InstructionExecutionError {
     fn from(err: ModRepeatsError) -> Self {
         match err {
-            ModRepeatsError::NotFound(not_found_id) => {
-                FindError::Trigger(not_found_id.into()).into()
-            }
+            ModRepeatsError::NotFound(not_found_id) => FindError::Trigger(not_found_id).into(),
             ModRepeatsError::RepeatsOverflow(_) => MathError::Overflow.into(),
         }
     }

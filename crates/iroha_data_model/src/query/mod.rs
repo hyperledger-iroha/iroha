@@ -1124,29 +1124,29 @@ pub mod error {
             /// Failed to find asset: `{0}`
             Asset(Box<AssetId>),
             /// Failed to find asset definition: `{0}`
-            AssetDefinition(Box<AssetDefinitionId>),
+            AssetDefinition(AssetDefinitionId),
             /// Failed to find NFT: `{0}`
-            Nft(Box<NftId>),
+            Nft(NftId),
             /// Failed to find account: `{0}`
-            Account(Box<AccountId>),
+            Account(AccountId),
             /// Failed to find domain: `{0}`
-            Domain(Box<DomainId>),
+            Domain(DomainId),
             /// Failed to find metadata key: `{0}`
-            MetadataKey(Box<Name>),
+            MetadataKey(Name),
             /// Block with hash `{0}` not found
             Block(HashOf<BlockHeader>),
             /// Transaction with hash `{0}` not found
             Transaction(HashOf<SignedTransaction>),
             /// Peer with id `{0}` not found
-            Peer(Box<PeerId>),
+            Peer(PeerId),
             /// Trigger with id `{0}` not found
-            Trigger(Box<TriggerId>),
+            Trigger(TriggerId),
             /// Role with id `{0}` not found
-            Role(Box<RoleId>),
+            Role(RoleId),
             /// Failed to find [`Permission`] by id.
             Permission(Box<Permission>),
             /// Failed to find public key: `{0}`
-            PublicKey(Box<PublicKey>),
+            PublicKey(PublicKey),
         }
     }
 }
