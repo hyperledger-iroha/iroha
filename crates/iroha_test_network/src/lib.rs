@@ -286,7 +286,6 @@ impl Network {
 #[derive(Default)]
 pub enum WasmFuelConfig {
     /// Do not set anything, i.e. let Iroha use its default value
-    #[default]
     Unset,
     /// Set to a specific value
     Value(NonZero<u64>),
@@ -295,6 +294,7 @@ pub enum WasmFuelConfig {
     ///
     /// If the profile is not optimized, the fuel will be increased, otherwise the same as
     /// [`WasmFuelConfig::Unset`].
+    #[default]
     Auto,
 }
 
@@ -380,7 +380,7 @@ impl NetworkBuilder {
 
     /// Set [`WasmFuelConfig`].
     ///
-    /// [`WasmFuelConfig::Unset`] by default.
+    /// [`WasmFuelConfig::Auto`] by default.
     pub fn with_wasm_fuel(mut self, config: WasmFuelConfig) -> Self {
         self.wasm_fuel = config;
         self
