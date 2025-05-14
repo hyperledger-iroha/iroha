@@ -99,7 +99,8 @@ mod model {
         Serialize,
         IntoSchema,
     )]
-    pub struct TransactionPayload {
+    #[allow(clippy::redundant_pub_crate)]
+    pub(crate) struct TransactionPayload {
         /// Unique id of the blockchain. Used for simple replay attack protection.
         pub chain: ChainId,
         /// Account ID of transaction creator.

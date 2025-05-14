@@ -72,7 +72,8 @@ mod model {
     )]
     #[display(fmt = "({header})")]
     #[allow(missing_docs)]
-    pub struct BlockPayload {
+    #[allow(clippy::redundant_pub_crate)]
+    pub(crate) struct BlockPayload {
         /// Block header
         pub header: BlockHeader,
         /// array of transactions, which successfully passed validation and consensus step.
