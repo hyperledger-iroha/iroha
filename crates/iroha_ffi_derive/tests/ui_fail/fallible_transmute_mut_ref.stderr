@@ -2,7 +2,7 @@ error[E0277]: the trait bound `Wrapper: InfallibleTransmute` is not satisfied
   --> tests/ui_fail/fallible_transmute_mut_ref.rs:21:1
    |
 21 | #[ffi_export]
-   | ^^^^^^^^^^^^^ the trait `InfallibleTransmute` is not implemented for `Wrapper`, which is required by `&mut Wrapper: FfiType`
+   | ^^^^^^^^^^^^^ the trait `InfallibleTransmute` is not implemented for `Wrapper`
    |
    = help: the following other types implement trait `InfallibleTransmute`:
              ManuallyDrop<T>
@@ -24,7 +24,7 @@ error[E0277]: the trait bound `&mut Wrapper: FfiConvert<'_, *mut u32>` is not sa
 21 | #[ffi_export]
    | ------------- required by a bound introduced by this call
 22 | pub fn take_non_robust_ref_mut(_ffi_struct: &mut Wrapper) {}
-   |                                ^^^^^^^^^^^ the trait `InfallibleTransmute` is not implemented for `Wrapper`, which is required by `&mut Wrapper: FfiConvert<'_, *mut u32>`
+   |                                ^^^^^^^^^^^ the trait `InfallibleTransmute` is not implemented for `Wrapper`
    |
    = help: the following other types implement trait `InfallibleTransmute`:
              ManuallyDrop<T>
