@@ -1,4 +1,4 @@
-//! This crate provides [`wrap`] and [`wrap_signature`] attribute macros to wrap a host-defined
+//! This crate provides `wrap` and `wrap_signature` attribute macros to wrap a host-defined
 //! function into another function which signature will be compatible with `wasmtime` crate to be
 //! successfully exported.
 
@@ -132,7 +132,7 @@ fn impl_wrap_fn(
 /// Macro to wrap trait function signature with normal parameters and return value
 /// to another one which will meet `wasmtime` specifications.
 ///
-/// See [`wrap`] for more details.
+/// See [`macro@wrap`] for more details.
 #[manyhow]
 #[proc_macro_attribute]
 pub fn wrap_trait_fn(attr: TokenStream, item: TokenStream) -> TokenStream {

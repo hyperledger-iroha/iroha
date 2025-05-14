@@ -12,7 +12,7 @@ use iroha_data_model::prelude::{AccountId, WasmSmartContract};
 use iroha_wasm_builder::Profile;
 use serde::Deserialize;
 
-/// Generate [`AccountId`](iroha_data_model::account::AccountId) in the given `domain`.
+/// Generate [`AccountId`] in the given `domain`.
 ///
 /// # Panics
 ///
@@ -28,7 +28,7 @@ pub fn gen_account_in(domain: impl core::fmt::Display) -> (AccountId, KeyPair) {
 
 macro_rules! declare_keypair {
     ( $key_pair:ident, $public_key:expr, $private_key:expr ) => {
-        /// A standardized [`KeyPair`](iroha_crypto::KeyPair).
+        /// A standardized [`KeyPair`].
         pub static $key_pair: LazyLock<KeyPair> = LazyLock::new(|| {
             KeyPair::new(
                 $public_key
@@ -45,7 +45,7 @@ macro_rules! declare_keypair {
 
 macro_rules! declare_account_with_keypair {
     ( $account_id:ident, $domain:literal, $key_pair:ident, $public_key:literal, $private_key:literal ) => {
-        /// A standardized [`AccountId`](iroha_data_model::account::AccountId).
+        /// A standardized [`AccountId`].
         pub static $account_id: LazyLock<AccountId> = LazyLock::new(|| {
             format!("{}@{}", $key_pair.public_key(), $domain)
                 .parse()

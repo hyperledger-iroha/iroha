@@ -133,7 +133,7 @@ impl SumeragiHandle {
 }
 
 impl SumeragiStartArgs {
-    /// Start [`Sumeragi`] actor and return handle to it.
+    /// Start [`main_loop::Sumeragi`] actor and return handle to it.
     ///
     /// # Panics
     /// May panic if something is of during initialization which is bug.
@@ -264,7 +264,7 @@ pub struct VotingBlock<'state> {
     block: ValidBlock,
     /// At what time has this peer voted for this block
     pub voted_at: Instant,
-    /// [`WorldState`] after applying transactions to it but before it was committed
+    /// State after applying transactions to it but before it was committed
     pub state_block: StateBlock<'state>,
 }
 
@@ -285,7 +285,7 @@ impl VotingBlock<'_> {
     }
 }
 
-/// Arguments for [`SumeragiHandle::start`] function
+/// Arguments for [`Self::start`] function
 #[allow(missing_docs)]
 pub struct SumeragiStartArgs {
     pub config: SumeragiConfig,

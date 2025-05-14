@@ -48,7 +48,7 @@ ffi::ffi_item! {
 }
 
 impl Signature {
-    /// Creates new signature by signing payload via [`KeyPair::private_key`].
+    /// Creates new signature by signing payload via [`crate::KeyPair::private_key`].
     pub fn new(private_key: &PrivateKey, payload: &[u8]) -> Self {
         use crate::secrecy::ExposeSecret;
 
@@ -92,7 +92,7 @@ impl Signature {
         Ok(Self::from_bytes(&payload))
     }
 
-    /// Verify `payload` using signed data and [`KeyPair::public_key`].
+    /// Verify `payload` using signed data and [`crate::KeyPair::public_key`].
     ///
     /// # Errors
     /// Fails if the message doesn't pass verification
@@ -204,12 +204,12 @@ impl<T: IntoSchema> IntoSchema for SignatureOf<T> {
 }
 
 impl<T> SignatureOf<T> {
-    /// Create [`SignatureOf`] from the given hash with [`KeyPair::private_key`].
+    /// Create [`SignatureOf`] from the given hash with [`crate::KeyPair::private_key`].
     ///
     /// # Errors
     /// Fails if signing fails
     #[inline]
-    fn from_hash(private_key: &PrivateKey, hash: HashOf<T>) -> Self {
+    pub fn from_hash(private_key: &PrivateKey, hash: HashOf<T>) -> Self {
         Self(Signature::new(private_key, hash.as_ref()), PhantomData)
     }
 
@@ -224,7 +224,7 @@ impl<T> SignatureOf<T> {
 }
 
 impl<T: parity_scale_codec::Encode> SignatureOf<T> {
-    /// Create [`SignatureOf`] by signing the given value with [`KeyPair::private_key`].
+    /// Create [`SignatureOf`] by signing the given value with [`crate::KeyPair::private_key`].
     /// The value provided will be hashed before being signed. If you already have the
     /// hash of the value you can sign it with [`SignatureOf::from_hash`] instead.
     ///

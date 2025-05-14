@@ -140,7 +140,7 @@ impl BlockSynchronizer {
         .await;
     }
 
-    /// Create [`Self`] from [`Configuration`]
+    /// Create [`Self`] from [`Config`]
     pub fn from_config(
         config: &Config,
         sumeragi: SumeragiHandle,
@@ -164,7 +164,7 @@ impl BlockSynchronizer {
 }
 
 pub mod message {
-    //! Module containing messages for [`BlockSynchronizer`](super::BlockSynchronizer).
+    //! Module containing messages for [`BlockSynchronizer`].
 
     use super::*;
 

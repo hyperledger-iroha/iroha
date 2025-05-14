@@ -140,7 +140,7 @@ impl Registered for Domain {
 }
 
 impl Domain {
-    /// Construct builder for [`Domain`] identifiable by [`Id`].
+    /// Construct builder for [`Domain`] identifiable by [`DomainId`].
     #[inline]
     pub fn new(id: DomainId) -> <Self as Registered>::With {
         <Self as Registered>::With::new(id)

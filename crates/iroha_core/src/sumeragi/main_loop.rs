@@ -29,7 +29,7 @@ pub struct Sumeragi {
     pub events_sender: EventsSender,
     /// Kura instance used for IO
     pub kura: Arc<Kura>,
-    /// [`iroha_p2p::Network`] actor address
+    /// [`iroha_p2p::NetworkHandle`] actor address
     pub network: IrohaNetwork,
     /// Peers gossiper
     pub peers_gossiper: PeersGossiperHandle,

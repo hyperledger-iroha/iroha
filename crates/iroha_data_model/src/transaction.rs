@@ -1,4 +1,4 @@
-//! [`Transaction`] structures and related implementations.
+//! Transaction structures and related implementations.
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::{
@@ -85,7 +85,7 @@ mod model {
         pub(super) Vec<u8>,
     );
 
-    /// Iroha [`Transaction`] payload.
+    /// Iroha transaction payload.
     #[derive(
         Debug,
         Clone,
@@ -367,19 +367,19 @@ impl TransactionBuilder {
         self
     }
 
-    /// Adds metadata to the `Transaction`
+    /// Adds metadata to this transaction
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
         self.payload.metadata = metadata;
         self
     }
 
-    /// Set nonce for [`Transaction`]
+    /// Set nonce for this transaction
     pub fn set_nonce(&mut self, nonce: NonZeroU32) -> &mut Self {
         self.payload.nonce = Some(nonce);
         self
     }
 
-    /// Set time-to-live for [`Transaction`]
+    /// Set time-to-live for this transaction
     pub fn set_ttl(&mut self, time_to_live: Duration) -> &mut Self {
         let ttl: u64 = time_to_live
             .as_millis()
@@ -641,7 +641,7 @@ pub mod error {
             Validation(#[cfg_attr(feature = "std", source)] crate::ValidationFail),
             /// Failure in instruction execution
             ///
-            /// In practice should be fully replaced by [`ValidationFail::Execution`]
+            /// In practice should be fully replaced by [`crate::ValidationFail::InstructionFailed`]
             /// and will be removed soon.
             InstructionExecution(
                 #[cfg_attr(feature = "std", source)] Box<InstructionExecutionFail>,

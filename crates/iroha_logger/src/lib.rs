@@ -57,7 +57,7 @@ impl InitConfig {
     }
 }
 
-/// Initializes the logger globally with given [`Configuration`].
+/// Initializes the logger globally with given [`InitConfig`].
 ///
 /// Returns [`LoggerHandle`] to interact with the logger instance
 ///

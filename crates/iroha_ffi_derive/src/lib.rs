@@ -177,7 +177,7 @@ pub fn ffi(input: TokenStream) -> TokenStream {
 /// whether it carries ownership of the data pointed to. Place this attribute on the field to
 /// indicate pointer doesn't own the data and is robust in the type. Alternatively, if the type
 /// is carrying ownership mark entire type as opaque with `#[ffi_type(opaque)]`. If the type
-/// is not carrying ownership, but is not robust convert it into an equivalent [`iroha_ffi::ReprC`]
+/// is not carrying ownership, but is not robust convert it into an equivalent `iroha_ffi::ReprC`
 /// type that is validated when crossing the FFI boundary. It is also ok to mark non-owning,
 /// non-robust type as opaque
 ///
@@ -220,8 +220,8 @@ pub fn ffi_type_derive(input: TokenStream) -> TokenStream {
 
 /// Generate FFI functions
 ///
-/// When placed on a structure, it integrates with [`getset`] to export derived getter/setter methods.
-/// To be visible this attribute must be placed before/on top of any [`getset`] derive macro attributes
+/// When placed on a structure, it integrates with `getset` to export derived getter/setter methods.
+/// To be visible this attribute must be placed before/on top of any `getset` derive macro attributes
 ///
 /// It also works on impl blocks (by visiting all methods in the impl block) and on enums and unions (as a no-op)
 ///
@@ -386,9 +386,9 @@ pub fn ffi_export(attr: TokenStream, item: TokenStream) -> TokenStream {
     emitter.finish_token_stream_with(result)
 }
 
-/// Replace the function's body with a call to FFI function. Counterpart of [`ffi_export`]
+/// Replace the function's body with a call to FFI function. Counterpart of [`macro@ffi_export`]
 ///
-/// When placed on a structure, it integrates with [`getset`] to import derived getter/setter methods.
+/// When placed on a structure, it integrates with `getset` to import derived getter/setter methods.
 ///
 /// # Example:
 /// ```rust

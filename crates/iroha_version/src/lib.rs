@@ -181,7 +181,7 @@ pub mod scale {
 
     use super::{error::Result, Version};
 
-    /// [`Decode`] versioned analog.
+    /// [`parity_scale_codec::Decode`] versioned analog.
     pub trait DecodeVersioned: DecodeAll + Version {
         /// Use this function for versioned objects instead of `decode_all`.
         ///
@@ -192,7 +192,7 @@ pub mod scale {
         fn decode_all_versioned(input: &[u8]) -> Result<Self>;
     }
 
-    /// [`Encode`] versioned analog.
+    /// [`parity_scale_codec::Encode`] versioned analog.
     pub trait EncodeVersioned: Encode + Version {
         /// Use this function for versioned objects instead of `encode`.
         fn encode_versioned(&self) -> Vec<u8>;

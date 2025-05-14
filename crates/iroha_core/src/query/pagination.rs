@@ -1,4 +1,4 @@
-//! Module with [`Paginate`] iterator adaptor which provides [`paginate`] function.
+//! Module with [`Paginate`] iterator adaptor which provides [`paginate`](Paginate::paginate) method.
 
 use iroha_data_model::query::parameters::Pagination;
 

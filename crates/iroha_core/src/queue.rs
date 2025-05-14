@@ -79,7 +79,7 @@ pub struct Failure {
 }
 
 /// Will remove transaction from the queue on drop.
-/// See [`Queue::remove_transaction`] for details.
+/// See `Queue::remove_transaction` for details.
 pub struct TransactionGuard {
     tx: AcceptedTransaction,
     queue: Arc<Queue>,

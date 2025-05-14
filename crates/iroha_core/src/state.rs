@@ -221,7 +221,7 @@ pub struct State {
     /// Reference to Kura subsystem.
     #[serde(skip)]
     kura: Arc<Kura>,
-    /// Handle to the [`LiveQueryStore`].
+    /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     #[serde(skip)]
     pub query_handle: LiveQueryStoreHandle,
     /// State telemetry
@@ -251,7 +251,7 @@ pub struct StateBlock<'state> {
 
     /// Reference to Kura subsystem.
     kura: &'state Kura,
-    /// Handle to the [`LiveQueryStore`].
+    /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
     /// State telemetry
     #[cfg(feature = "telemetry")]
@@ -277,7 +277,7 @@ pub struct StateTransaction<'block, 'state> {
 
     /// Reference to Kura subsystem.
     kura: &'state Kura,
-    /// Handle to the [`LiveQueryStore`].
+    /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
     /// State telemetry
     #[cfg(feature = "telemetry")]
@@ -303,7 +303,7 @@ pub struct StateView<'state> {
 
     /// Reference to Kura subsystem.
     kura: &'state Kura,
-    /// Handle to the [`LiveQueryStore`].
+    /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
     /// State telemetry
     #[cfg(feature = "telemetry")]
@@ -1232,7 +1232,7 @@ impl State {
         }
     }
 
-    /// Create point in time view of [`WorldState`]
+    /// Create point in time view of [`State`]
     pub fn view(&self) -> StateView<'_> {
         let _view_lock = self.view_lock.read();
         StateView {

@@ -68,7 +68,7 @@ impl Metadata {
         self.0.get(key)
     }
 
-    /// Insert [`Value`] under the given key.  Returns `Some(value)`
+    /// Insert [`Json`] under the given key.  Returns `Some(value)`
     /// if the value was already present, `None` otherwise.
     pub fn insert(&mut self, key: Name, value: impl Into<Json>) -> Option<Json> {
         self.0.insert(key, value.into())

@@ -14,7 +14,7 @@ use crate::{
     WorldReadOnly,
 };
 
-/// [`Gossiper`] actor handle.
+/// [`TransactionGossiper`] actor handle.
 #[derive(Clone)]
 pub struct TransactionGossiperHandle {
     message_sender: mpsc::Sender<TransactionGossip>,

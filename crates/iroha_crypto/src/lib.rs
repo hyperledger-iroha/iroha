@@ -214,8 +214,6 @@ impl KeyPair {
     }
 
     /// Get [`PublicKey`] and [`PrivateKey`] contained in the [`KeyPair`].
-    ///
-    /// See [`Self::from_raw_parts`] for an opposite conversion.
     pub fn into_parts(self) -> (PublicKey, PrivateKey) {
         (self.public_key, self.private_key)
     }

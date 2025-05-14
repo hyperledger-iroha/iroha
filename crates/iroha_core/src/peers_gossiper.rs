@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use crate::{IrohaNetwork, NetworkMessage};
 
-/// [`Gossiper`] actor handle.
+/// [`PeersGossiper`] actor handle.
 #[derive(Clone)]
 pub struct PeersGossiperHandle {
     message_sender: mpsc::Sender<(PeersGossip, Peer)>,

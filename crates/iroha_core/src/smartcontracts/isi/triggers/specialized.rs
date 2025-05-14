@@ -68,7 +68,7 @@ where
 /// Same as [`iroha_data_model::trigger::Trigger`] but generic over the filter type
 #[derive(Constructor)]
 pub struct SpecializedTrigger<F> {
-    /// [`Id`] of the [`Trigger`].
+    /// Unique identifier of the [`Trigger`].
     pub id: TriggerId,
     /// Action to be performed when the trigger matches.
     pub action: SpecializedAction<F>,
