@@ -3,11 +3,7 @@
 //! Intended usage:
 //!
 //! - Create [`ConfigGetDTO`] from [`base::Root`] and serialize it for the client
-//! - Deserialize [`ConfigGetDTO`] from the client and use [`ConfigGetDTO::apply_update()`] to update the configuration
-// TODO: Currently logic here is not generalised and handles only `logger.level` parameter. In future, when
-//       other parts of configuration are refactored and there is a solid foundation e.g. as a general
-//       configuration-related crate, this part should be re-written in a clean way.
-//       Track configuration refactoring here: https://github.com/hyperledger-iroha/iroha/issues/2585
+//! - Deserialize [`ConfigUpdateDTO`] from the client and apply the changes
 
 use std::num::NonZero;
 
