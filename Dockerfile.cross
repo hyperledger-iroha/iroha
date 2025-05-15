@@ -1,0 +1,79 @@
+# Multi-platform image via cross-compilation.
+#
+# Useful links:
+#
+# - https://docs.docker.com/build/building/multi-platform/#cross-compilation
+# - https://doc.rust-lang.org/nightly/rustc/platform-support.html
+# - https://github.com/tonistiigi/xx
+# - https://users.rust-lang.org/t/cross-compilation-linux-x86-64-host-aarch64-target/105680
+#
+# FIX: Unresolved issues:
+# - libunwind cryptic message after irohad start
+
+FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
+
+# NOTE: building on the **host** platform to avoid emulation
+FROM --platform=$BUILDPLATFORM rust:alpine as xx-build
+
+WORKDIR /app
+COPY --from=xx / /
+
+# NOTE: `git` for `VERGEN_GIT_SHA`; `clang` for `xx-cargo`
+RUN apk add mold git clang
+
+COPY . .
+# NOTE: Cache mounts as in https://github.com/tonistiigi/xx#rust
+#       It is said to be put _before_ `ARG TARGETPLATFORM`
+RUN --mount=type=cache,target=/root/.cargo/git/db \
+    --mount=type=cache,target=/root/.cargo/registry/cache \
+    --mount=type=cache,target=/root/.cargo/registry/index \
+    cargo fetch
+
+ARG TARGETPLATFORM
+ARG PROFILE="deploy"
+ARG RUSTFLAGS=""
+ARG FEATURES=""
+ARG CARGOFLAGS=""
+
+RUN xx-apk add build-base
+ENV CXX=xx-c++
+ENV CC=xx-clang
+
+RUN --mount=type=cache,target=/root/.cargo/git/db \
+    --mount=type=cache,target=/root/.cargo/registry/cache \
+    --mount=type=cache,target=/root/.cargo/registry/index \
+    RUSTFLAGS="${RUSTFLAGS}" mold --run \
+    xx-cargo ${CARGOFLAGS} build \
+    --target $(xx-cargo --print-target-triple) \
+    --profile "${PROFILE}" \
+    --features "${FEATURES}" \
+    --bins
+
+RUN <<EOF
+  set -ex
+  mkdir ./bins
+  target_triple="$(xx-cargo --print-target-triple)"
+  for bin in iroha irohad kagami iroha_wasm_test_runner; do
+    bin_path="./target/${target_triple}/${PROFILE}/${bin}"
+    xx-verify "${bin_path}"
+    mv "${bin_path}" ./bins/
+  done
+EOF
+
+FROM alpine
+
+COPY --from=xx-build /app/bins/* /usr/local/bin/
+
+# NOTE: jq & curl for `kagami swarm` output
+RUN apk add jq curl \
+  && adduser --disabled-password --gecos '' iroha \
+  && mkdir -p /data/iroha /config/iroha \
+  && chown -R iroha /data/iroha /config/iroha
+
+USER iroha
+
+# TODO: Define these paths with VOLUME directive?
+ENV KURA_STORE_DIR=/data/iroha/storage
+ENV SNAPSHOT_STORE_DIR=/data/iroha/snapshot
+
+CMD ["irohad"]
