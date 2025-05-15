@@ -1,20 +1,14 @@
-name: Pull Request Labels
+name: Pull Request Labeler
 
 on:
-  pull_request:
-    branches: [main]
+  pull_request_target:
 
 jobs:
-  config_changes:
+  labeler:
     permissions:
       contents: read
       pull-requests: write
     runs-on: ubuntu-latest
     steps:
-      - id: label-the-PR
-        uses: actions/labeler@v5
-      - uses: mshick/add-pr-comment@v2
-        if: contains(steps.label-the-PR.outputs.all-labels, 'config-changes')
-        with:
-          message: |
-            @BAStos525
+      # NOTE: uses `.github/labeler.yml` config
+      - uses: actions/labeler@v5
