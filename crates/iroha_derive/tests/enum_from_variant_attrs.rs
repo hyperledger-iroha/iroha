@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use impls::impls;
 
 struct Variant1;

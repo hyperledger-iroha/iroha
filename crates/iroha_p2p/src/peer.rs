@@ -260,7 +260,7 @@ mod run {
                                     break;
                                 }
                             }
-                        };
+                        }
                         // Reset idle and ping timeout as peer received message from another peer
                         idle_interval.reset();
                         ping_interval.reset();

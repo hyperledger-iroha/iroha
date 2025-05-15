@@ -262,7 +262,7 @@ macro_rules! def_ffi_fns {
 #[macro_export]
 macro_rules! decl_ffi_fns {
     ( dealloc ) => {
-        extern {
+        extern "C" {
             /// FFI function equivalent of [`alloc::alloc::dealloc`]
             ///
             /// # Safety

@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use std::collections::HashSet;
 
 use eyre::{Result, WrapErr as _};
@@ -12,7 +14,7 @@ use nonzero_ext::nonzero;
 use rand::{seq::SliceRandom, thread_rng};
 
 #[test]
-#[ignore]
+#[ignore = "#4786"]
 #[allow(clippy::cast_possible_truncation)]
 fn correct_pagination_assets_after_creating_new_one() {
     // FIXME transaction is rejected for more than a certain number of instructions

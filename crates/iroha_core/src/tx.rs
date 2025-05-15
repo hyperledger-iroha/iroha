@@ -205,12 +205,12 @@ impl StateBlock<'_> {
         &mut self,
         tx: AcceptedTransaction,
         wasm_cache: &mut WasmCache<'_, '_, '_>,
-    ) -> Result<SignedTransaction, (SignedTransaction, TransactionRejectionReason)> {
+    ) -> Result<SignedTransaction, (Box<SignedTransaction>, TransactionRejectionReason)> {
         let mut state_transaction = self.transaction();
         if let Err(rejection_reason) =
             Self::validate_internal(tx.clone(), &mut state_transaction, wasm_cache)
         {
-            return Err((tx.0, rejection_reason));
+            return Err((tx.0.into(), rejection_reason));
         }
         state_transaction.apply();
 

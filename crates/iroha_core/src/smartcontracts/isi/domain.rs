@@ -9,7 +9,6 @@ use super::super::isi::prelude::*;
 impl Registrable for iroha_data_model::domain::NewDomain {
     type Target = Domain;
 
-    #[must_use]
     #[inline]
     fn build(self, authority: &AccountId) -> Self::Target {
         Self::Target {

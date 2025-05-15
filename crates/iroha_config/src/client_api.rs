@@ -89,10 +89,13 @@ impl From<&'_ base::Root> for Network {
     fn from(value: &'_ base::Root) -> Self {
         Self {
             block_gossip_size: value.block_sync.gossip_size,
-            block_gossip_period_ms: value.block_sync.gossip_period.as_millis() as u32,
+            block_gossip_period_ms: u32::try_from(value.block_sync.gossip_period.as_millis())
+                .expect("block gossip period should fit into a u32"),
             transaction_gossip_size: value.transaction_gossiper.gossip_size,
-            transaction_gossip_period_ms: value.transaction_gossiper.gossip_period.as_millis()
-                as u32,
+            transaction_gossip_period_ms: u32::try_from(
+                value.transaction_gossiper.gossip_period.as_millis(),
+            )
+            .expect("transaction gossip period should fit into a u32"),
         }
     }
 }
@@ -112,7 +115,7 @@ mod test {
                 .public_key()
                 .clone(),
             logger: Logger {
-                level: Level::TRACE.into(),
+                level: Level::TRACE,
                 filter: None,
             },
             network: Network {
@@ -122,7 +125,7 @@ mod test {
                 transaction_gossip_period_ms: 1000,
             },
             queue: Queue {
-                capacity: nonzero!(656565usize),
+                capacity: nonzero!(656_565_usize),
             },
         };
 

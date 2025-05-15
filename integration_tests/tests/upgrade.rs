@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use executor_custom_data_model::{complex_isi::NumericQuery, permissions::CanControlDomainLives};
 use eyre::Result;
 use futures_util::TryStreamExt as _;

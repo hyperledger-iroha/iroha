@@ -26,9 +26,9 @@ pub trait KeyExchangeScheme {
     /// Create new keypairs. If
     /// - `options` is [`Random`](KeyGenOption::Random), the keys are generated ephemerally from the [`OsRng`](rand::rngs::OsRng)
     /// - `options` is [`UseSeed`](KeyGenOption::UseSeed), the keys are generated ephemerally from the sha256 hash of the seed which is
-    ///     then used to seed the [`ChaChaRng`](rand_chacha::ChaChaRng)
+    ///   then used to seed the [`ChaChaRng`](rand_chacha::ChaChaRng)
     /// - `options` is [`FromPrivateKey`](KeyGenOption::FromPrivateKey), the corresponding public key is returned. This should be used for
-    ///     static Diffie-Hellman and loading a long-term key.
+    ///   static Diffie-Hellman and loading a long-term key.
     fn keypair(
         &self,
         options: KeyGenOption<Self::PrivateKey>,

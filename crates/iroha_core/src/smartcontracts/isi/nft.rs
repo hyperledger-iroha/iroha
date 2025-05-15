@@ -7,7 +7,6 @@ use super::prelude::*;
 impl Registrable for NewNft {
     type Target = Nft;
 
-    #[must_use]
     #[inline]
     fn build(self, authority: &AccountId) -> Self::Target {
         Self::Target {

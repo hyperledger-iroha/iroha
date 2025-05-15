@@ -9,7 +9,6 @@ use super::prelude::*;
 impl Registrable for iroha_data_model::account::NewAccount {
     type Target = Account;
 
-    #[must_use]
     #[inline]
     fn build(self, _authority: &AccountId) -> Self::Target {
         self.into_account()
@@ -186,7 +185,7 @@ pub mod isi {
                 .world
                 .remove_account_permission(&account_id, &permission)
             {
-                return Err(FindError::Permission(permission).into());
+                return Err(FindError::Permission(permission.into()).into());
             }
 
             state_transaction

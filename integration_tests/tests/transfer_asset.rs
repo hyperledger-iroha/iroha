@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use iroha::data_model::{
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition},

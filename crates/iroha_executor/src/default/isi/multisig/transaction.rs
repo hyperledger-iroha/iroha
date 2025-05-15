@@ -30,17 +30,17 @@ impl VisitExecute for MultisigPropose {
             .filter_with(|role_id| role_id.eq(multisig_role_for(&multisig_account)))
             .execute_single()
             .is_ok();
-        let has_not_longer_ttl = self.transaction_ttl_ms.map_or(true, |override_ttl_ms| {
-            override_ttl_ms <= multisig_spec.transaction_ttl_ms
-        });
+        let has_not_longer_ttl = self
+            .transaction_ttl_ms
+            .is_none_or(|override_ttl_ms| override_ttl_ms <= multisig_spec.transaction_ttl_ms);
 
         if !(is_downward_proposal || has_not_longer_ttl) {
             deny!(executor, "ttl violates the restriction");
-        };
+        }
 
         if !(is_downward_proposal || has_multisig_role) {
             deny!(executor, "not qualified to propose multisig");
-        };
+        }
 
         if host
             .query(FindAccounts)
@@ -50,7 +50,7 @@ impl VisitExecute for MultisigPropose {
             .is_ok()
         {
             deny!(executor, "multisig proposal duplicates")
-        };
+        }
     }
 
     fn execute<V: Execute + Visit + ?Sized>(self, executor: &mut V) -> Result<(), ValidationFail> {
@@ -212,11 +212,11 @@ impl VisitExecute for MultisigApprove {
             .is_err()
         {
             deny!(executor, "not qualified to approve multisig");
-        };
+        }
 
         if let Err(err) = proposal_value(multisig_account, instructions_hash, executor) {
             deny!(executor, err)
-        };
+        }
     }
 
     fn execute<V: Execute + Visit + ?Sized>(self, executor: &mut V) -> Result<(), ValidationFail> {

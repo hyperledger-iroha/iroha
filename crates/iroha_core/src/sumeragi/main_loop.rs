@@ -250,13 +250,16 @@ impl Sumeragi {
                         block
                             .commit(&self.topology)
                             .unpack(|e| self.send_event(e))
-                            .map_err(|(block, error)| (block.into(), error))
+                            .map_err(|(block, error)| {
+                                (block.as_ref().as_ref().clone().into(), error)
+                            })
                     }) {
                         Ok(block) => block,
-                        Err(error) => {
+                        Err((block, error)) => {
                             error!(
                                 peer_id=%self.peer,
                                 ?error,
+                                ?block,
                                 "Received invalid genesis block"
                             );
 
@@ -772,7 +775,7 @@ impl Sumeragi {
                                             .replace_signatures(prev_signatures, &self.topology)
                                             .unpack(|e| self.send_event(e))
                                             .expect("INTERNAL BUG: Failed to replace signatures");
-                                        voted_block.block = block;
+                                        voted_block.block = *block;
                                         *voting_block = Some(voted_block);
                                     }
                                 }
@@ -892,7 +895,7 @@ impl Sumeragi {
         let prev_block_is_empty = state
             .view()
             .latest_block()
-            .map_or(true, |block| block.is_empty());
+            .is_none_or(|block| block.is_empty());
         let block_expected = tx_cache_non_empty || !prev_block_is_empty;
 
         if tx_cache_full || block_expected && (view_change_in_progress || deadline_reached) {
@@ -1165,7 +1168,7 @@ pub(crate) fn run(
         let tx_cache_non_empty = !sumeragi.transaction_cache.is_empty();
         let prev_block_is_empty = state_view
             .latest_block()
-            .map_or(true, |block| block.is_empty());
+            .is_none_or(|block| block.is_empty());
         let block_expected = tx_cache_non_empty || !prev_block_is_empty;
 
         let view_change_in_progress = view_change_index > 0;
@@ -1327,6 +1330,7 @@ enum BlockSyncError {
     },
 }
 
+#[allow(clippy::result_large_err)]
 #[cfg(test)]
 fn handle_block_sync<'state, F: Fn(PipelineEventBox)>(
     chain_id: &ChainId,
@@ -1334,7 +1338,7 @@ fn handle_block_sync<'state, F: Fn(PipelineEventBox)>(
     state: &'state State,
     genesis_account: &AccountId,
     handle_events: &F,
-) -> Result<BlockSyncOk<'state>, (SignedBlock, BlockSyncError)> {
+) -> Result<BlockSyncOk<'state>, (Box<SignedBlock>, BlockSyncError)> {
     let block_sync_type = categorize_block_sync(&block, &state.view());
     handle_categorized_block_sync(
         chain_id,
@@ -1355,11 +1359,11 @@ fn handle_categorized_block_sync<'state, F: Fn(PipelineEventBox)>(
     handle_events: &F,
     block_sync_type: Result<BlockSyncType, BlockSyncError>,
     voting_block: &mut Option<VotingBlock>,
-) -> Result<BlockSyncOk<'state>, (SignedBlock, BlockSyncError)> {
+) -> Result<BlockSyncOk<'state>, (Box<SignedBlock>, BlockSyncError)> {
     let soft_fork = match block_sync_type {
         Ok(BlockSyncType::CommitBlock) => false,
         Ok(BlockSyncType::ReplaceTopBlock) => true,
-        Err(e) => return Err((block, e)),
+        Err(e) => return Err((block.into(), e)),
     };
 
     let topology = {
@@ -1550,13 +1554,11 @@ mod tests {
                 .with_instructions([create_asset_definition1])
                 .sign(alice_keypair.private_key());
             let tx1 = AcceptedTransaction::accept(tx1, chain_id, max_clock_drift, tx_limits)
-                .map(Into::into)
                 .expect("Valid");
             let tx2 = TransactionBuilder::new(chain_id.clone(), alice_id)
                 .with_instructions([create_asset_definition2])
                 .sign(alice_keypair.private_key());
             let tx2 = AcceptedTransaction::accept(tx2, chain_id, max_clock_drift, tx_limits)
-                .map(Into::into)
                 .expect("Valid");
 
             // Creating a block of two identical transactions and validating it

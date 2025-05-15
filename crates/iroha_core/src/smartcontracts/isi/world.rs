@@ -8,7 +8,6 @@ use crate::prelude::*;
 impl Registrable for NewRole {
     type Target = Role;
 
-    #[must_use]
     #[inline]
     fn build(self, _authority: &AccountId) -> Self::Target {
         self.inner
@@ -309,7 +308,7 @@ pub mod isi {
             };
 
             if !role.permissions.remove(&permission) {
-                return Err(FindError::Permission(permission).into());
+                return Err(FindError::Permission(permission.into()).into());
             }
 
             state_transaction

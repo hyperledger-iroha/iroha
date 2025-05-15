@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 #![allow(unsafe_code)]
 
 use std::mem::MaybeUninit;

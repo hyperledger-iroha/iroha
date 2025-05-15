@@ -1,5 +1,7 @@
 //! A test for `PartiallyTaggedSerialize` and `PartiallyTaggedDeserialize` which uses `Self` as a type
 
+#![allow(missing_docs)]
+
 use iroha_data_model_derive::{PartiallyTaggedDeserialize, PartiallyTaggedSerialize};
 
 #[derive(Debug, PartialEq, Eq, PartiallyTaggedSerialize, PartiallyTaggedDeserialize)]

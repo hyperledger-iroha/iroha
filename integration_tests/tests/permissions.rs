@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use std::time::Duration;
 
 use eyre::Result;
@@ -310,7 +312,7 @@ fn stored_vs_granted_permission_payload() {
     let value_json = Json::from_string_unchecked(format!(
         // NOTE: Permissions is created explicitly as a json string to introduce additional whitespace
         // This way, if the executor compares permissions just as JSON strings, the test will fail
-        r##"{{ "asset"   :   "xor#wonderland#{mouse_id}" }}"##
+        r#"{{ "asset"   :   "xor#wonderland#{mouse_id}" }}"#
     ));
 
     let mouse_asset = AssetId::new(asset_definition_id, mouse_id.clone());

@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 mod events {
     use iroha_data_model_derive::EventSet;
     #[derive(EventSet)]

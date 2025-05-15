@@ -72,6 +72,7 @@ mod model {
     )]
     #[display(fmt = "({header})")]
     #[allow(missing_docs)]
+    #[allow(clippy::redundant_pub_crate)]
     pub(crate) struct BlockPayload {
         /// Block header
         pub header: BlockHeader,

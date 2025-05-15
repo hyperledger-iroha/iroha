@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 #![allow(clippy::needless_raw_string_hashes)]
 
 use std::{backtrace::Backtrace, panic::Location, path::PathBuf};
@@ -456,7 +457,7 @@ fn env_overwrites_toml() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "TODO"]
 fn full_from_env() {
     todo!()
 }

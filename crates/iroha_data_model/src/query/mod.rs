@@ -1122,7 +1122,7 @@ pub mod error {
         #[ffi_type(opaque)]
         pub enum FindError {
             /// Failed to find asset: `{0}`
-            Asset(AssetId),
+            Asset(Box<AssetId>),
             /// Failed to find asset definition: `{0}`
             AssetDefinition(AssetDefinitionId),
             /// Failed to find NFT: `{0}`
@@ -1144,7 +1144,7 @@ pub mod error {
             /// Role with id `{0}` not found
             Role(RoleId),
             /// Failed to find [`Permission`] by id.
-            Permission(Permission),
+            Permission(Box<Permission>),
             /// Failed to find public key: `{0}`
             PublicKey(PublicKey),
         }
