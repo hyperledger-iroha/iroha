@@ -5171,6 +5171,10 @@
       {
         "name": "memory",
         "type": "NonZero<u64>"
+      },
+      {
+        "name": "execution_depth",
+        "type": "u8"
       }
     ]
   },

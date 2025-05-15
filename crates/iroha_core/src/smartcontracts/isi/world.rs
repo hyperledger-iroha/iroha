@@ -390,9 +390,11 @@ pub mod isi {
 
                 SmartContract(smart_contract.fuel) => SmartContractParameter::Fuel,
                 SmartContract(smart_contract.memory) => SmartContractParameter::Memory,
+                SmartContract(smart_contract.execution_depth) => SmartContractParameter::ExecutionDepth,
 
                 Executor(executor.fuel) => SmartContractParameter::Fuel,
                 Executor(executor.memory) => SmartContractParameter::Memory,
+                Executor(executor.execution_depth) => SmartContractParameter::ExecutionDepth,
             );
 
             Ok(())
