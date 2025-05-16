@@ -278,20 +278,6 @@ jobs:
           header: pr-title-lint-error
           delete: true
 
-  check_config_label:
-    permissions:
-      contents: read
-      pull-requests: write
-    runs-on: ubuntu-latest
-    steps:
-      - id: label-the-PR
-        uses: actions/labeler@v5
-      - uses: mshick/add-pr-comment@v2
-        if: contains(steps.label-the-PR.outputs.all-labels, 'config-changes')
-        with:
-          message: |
-            @BAStos525
-
   check_links:
     runs-on: [ubuntu-latest]
     steps:
