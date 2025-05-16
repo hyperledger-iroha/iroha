@@ -51,7 +51,41 @@ jobs:
           path: ${{ env.WASM_TARGET_DIR }}
           retention-days: 1
 
+  # FIXME: temporary job, testing workflows
+  dev_image:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    needs: pre_build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download wasm libs
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm
+          path: ${{ env.DEFAULTS_DIR }}/libs
+      - name: Move the default executor
+        run: mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
+      - name: Set up Docker Buildx
+        id: buildx
+        if: always()
+        uses: docker/setup-buildx-action@v3
+        with:
+          version: latest
+          install: true
+      - name: Test build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          labels: commit=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   consistency:
+    # FIXME: tmp
+    if: false
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -75,6 +109,8 @@ jobs:
           ./scripts/tests/consistency.sh docker-compose
 
   fmt:
+    # FIXME: tmp
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +127,8 @@ jobs:
         run: cargo fmt --all -- --check
 
   clippy:
+    # FIXME: tmp
+    if: false
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -104,6 +142,8 @@ jobs:
       # TODO: upload clippy artifact?
 
   doc:
+    # FIXME: tmp
+    if: false
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -116,6 +156,8 @@ jobs:
         run: cargo doc --no-deps --quiet --all-features
 
   test:
+    # FIXME: tmp
+    if: false
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -179,6 +221,8 @@ jobs:
           retention-days: 3
 
   pytests:
+    # FIXME: tmp
+    if: false
     needs: pre_build
     runs-on: ubuntu-latest
     env:
@@ -241,6 +285,8 @@ jobs:
         run: ./scripts/test_env.py cleanup
 
   check_title:
+    # FIXME: tmp
+    if: false
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -279,6 +325,8 @@ jobs:
           delete: true
 
   check_links:
+    # FIXME: tmp
+    if: false
     runs-on: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
@@ -317,6 +365,8 @@ jobs:
           # -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
 
   test_wasm:
+    # FIXME: tmp
+    if: false
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
