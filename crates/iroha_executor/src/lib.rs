@@ -18,6 +18,7 @@ pub use smart_contract::{data_model, Iroha};
 
 pub mod default;
 pub mod permission;
+pub mod runtime;
 
 pub mod log {
     //! WASM logging utilities
@@ -317,7 +318,7 @@ pub mod prelude {
             executor::Result, prelude::*, smart_contract::payloads::ExecutorContext as Context,
             visit::Visit,
         },
-        dbg, dbg_panic, deny, execute, DataModelBuilder, DebugExpectExt, DebugUnwrapExt, Execute,
-        Iroha,
+        dbg, dbg_panic, deny, execute, runtime, DataModelBuilder, DebugExpectExt, DebugUnwrapExt,
+        Execute, Iroha,
     };
 }
