@@ -17,6 +17,7 @@ use std::{
 
 use backoff::ExponentialBackoffBuilder;
 use color_eyre::eyre::{eyre, Context, Result};
+pub use config::chain_id;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
 use iroha::{client::Client, data_model::prelude::*};
@@ -27,13 +28,14 @@ use iroha_config::base::{
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 use iroha_data_model::{
     isi::InstructionBox,
-    parameter::{SumeragiParameter, SumeragiParameters},
+    parameter::{SmartContractParameter, SumeragiParameter, SumeragiParameters},
     ChainId,
 };
 use iroha_genesis::GenesisBlock;
 use iroha_primitives::{addr::socket_addr, unique_vec::UniqueVec};
 use iroha_telemetry::metrics::Status;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, PEER_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use nonzero_ext::nonzero;
 use parity_scale_codec::Encode;
 use rand::{prelude::IteratorRandom, thread_rng};
 use tempfile::TempDir;
@@ -54,6 +56,7 @@ const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
 const PEER_START_TIMEOUT: Duration = Duration::from_secs(30);
 const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const SYNC_TIMEOUT: Duration = Duration::from_secs(30);
+const NON_OPTIMIZED_WASM_FUEL: NonZero<u64> = nonzero!(90_000_000u64);
 
 const IROHAD_BIN_ENV: &str = "TEST_NETWORK_IROHAD";
 const IROHAD_DEFAULT: &str = "target/release/irohad";
@@ -279,12 +282,29 @@ impl Network {
     }
 }
 
+/// Determines how [`NetworkBuilder`] configures [`SmartContractParameter::Fuel`] in the genesis.
+#[derive(Default)]
+pub enum WasmFuelConfig {
+    /// Do not set anything, i.e. let Iroha use its default value
+    Unset,
+    /// Set to a specific value
+    Value(NonZero<u64>),
+    /// Determine automatically based on the WASM samples build profile
+    /// (received from [`iroha_test_samples::load_wasm_build_profile`]).
+    ///
+    /// If the profile is not optimized, the fuel will be increased, otherwise the same as
+    /// [`WasmFuelConfig::Unset`].
+    #[default]
+    Auto,
+}
+
 /// Builder of [`Network`]
 pub struct NetworkBuilder {
     n_peers: usize,
     config: Table,
     pipeline_time: Option<Duration>,
     extra_isi: Vec<InstructionBox>,
+    wasm_fuel: WasmFuelConfig,
 }
 
 impl Default for NetworkBuilder {
@@ -302,6 +322,7 @@ impl NetworkBuilder {
             config: config::base_iroha_config(),
             pipeline_time: Some(INSTANT_PIPELINE_TIME),
             extra_isi: vec![],
+            wasm_fuel: WasmFuelConfig::default(),
         }
     }
 
@@ -357,6 +378,14 @@ impl NetworkBuilder {
         self
     }
 
+    /// Set [`WasmFuelConfig`].
+    ///
+    /// [`WasmFuelConfig::Auto`] by default.
+    pub fn with_wasm_fuel(mut self, config: WasmFuelConfig) -> Self {
+        self.wasm_fuel = config;
+        self
+    }
+
     /// Build the [`Network`]. Doesn't start it.
     pub fn build(self) -> Network {
         let peers: Vec<_> = (0..self.n_peers).map(|_| NetworkPeer::generate()).collect();
@@ -384,20 +413,25 @@ impl NetworkBuilder {
             commit_time = SumeragiParameters::default().commit_time();
         }
 
-        let genesis = config::genesis(
-            [
-                InstructionBox::SetParameter(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::BlockTimeMs(block_time.as_millis() as u64),
-                ))),
-                InstructionBox::SetParameter(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::CommitTimeMs(commit_time.as_millis() as u64),
-                ))),
-            ]
-            .into_iter()
-            .chain(self.extra_isi)
-            .chain(extra_isi),
-            topology,
-        );
+        let set_wasm_fuel = match self.wasm_fuel {
+            WasmFuelConfig::Unset => None,
+            WasmFuelConfig::Value(value) => Some(value),
+            WasmFuelConfig::Auto => {
+                let profile = iroha_test_samples::load_wasm_build_profile();
+                if profile.is_optimized() {
+                    None
+                } else {
+                    Some(NON_OPTIMIZED_WASM_FUEL)
+                }
+            }
+        };
+        if let Some(value) = set_wasm_fuel {
+            extra_isi.push(InstructionBox::SetParameter(SetParameter::new(
+                Parameter::Executor(SmartContractParameter::Fuel(value)),
+            )));
+        }
+
+        let genesis = config::genesis(self.extra_isi.into_iter().chain(extra_isi), topology);
 
         Network {
             peers,

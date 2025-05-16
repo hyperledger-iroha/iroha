@@ -224,6 +224,14 @@ mod model {
         }
     }
 
+    impl core::str::FromStr for ChainId {
+        type Err = core::convert::Infallible;
+
+        fn from_str(value: &str) -> Result<Self, Self::Err> {
+            Ok(value.into())
+        }
+    }
+
     /// Sized container for all possible identifications.
     #[derive(
         Debug,
