@@ -296,7 +296,7 @@ impl<'de> DeserializeSeed<'de> for WasmSeed<'_, WasmSmartContractEntry> {
         deserializer.deserialize_map(WasmSmartContractEntryVisitor { loader: self })
     }
 }
-/// Trait to perform read-only operations on [`WorldBlock`], [`WorldTransaction`] and [`WorldView`]
+/// Trait to perform read-only operations on [`SetBlock`], [`SetTransaction`] and [`SetView`]
 #[allow(missing_docs)]
 pub trait SetReadOnly {
     fn data_triggers(&self) -> &impl StorageReadOnly<TriggerId, LoadedAction<DataEventFilter>>;
@@ -372,7 +372,7 @@ pub trait SetReadOnly {
         self.ids().iter().map(|(trigger_id, _)| trigger_id)
     }
 
-    /// Get [`LoadedExecutable`] for given [`TriggerId`].
+    /// Get [`ExecutableRef`] for given [`TriggerId`].
     /// Returns `None` if `id` is not in the set.
     fn get_executable(&self, id: &TriggerId) -> Option<&ExecutableRef> {
         let event_type = self.ids().get(id)?;
@@ -543,7 +543,7 @@ impl Set {
         }
     }
 
-    /// Create point in time view of the [`World`]
+    /// Create point in time view of the [`Set`]
     pub fn view(&self) -> SetView<'_> {
         SetView {
             data_triggers: self.data_triggers.view(),
@@ -586,7 +586,6 @@ impl<'set> SetBlock<'set> {
     /// Handle [`TimeEvent`].
     ///
     /// Find all actions that are triggered by `event` and store them.
-    /// These actions are inspected in the next [`Set::inspect_matched()`] call.
     pub fn handle_time_event(&mut self, event: TimeEvent) {
         for (id, action) in self.time_triggers.iter() {
             let mut count = action.filter.count_matches(&event);
@@ -842,7 +841,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         true
     }
 
-    /// Modify repetitions of the hook identified by [`Id`].
+    /// Modify repetitions of the hook identified by [`TriggerId`].
     ///
     /// # Errors
     ///
@@ -961,8 +960,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     /// Handle [`DataEvent`].
     ///
     /// Finds all actions, that are triggered by `event` and stores them.
-    /// This actions will be inspected in the next [`Set::handle_data_event()`] call
-    // Passing by value to follow other `handle_` methods interface
     #[allow(clippy::needless_pass_by_value)]
     pub fn handle_data_event(&mut self, event: DataEvent) {
         self.data_triggers.iter().for_each(|entry| {
@@ -973,7 +970,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     /// Handle [`ExecuteTriggerEvent`].
     ///
     /// Find all actions that are triggered by `event` and store them.
-    /// These actions are inspected in the next [`Set::inspect_matched()`] call.
     pub fn handle_execute_trigger_event(&mut self, event: ExecuteTriggerEvent) {
         if let Some(action) = self.by_call_triggers.get(&event.trigger_id) {
             let id = event.trigger_id.clone();
@@ -1006,7 +1002,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
 }
 
 #[expect(clippy::too_long_first_doc_paragraph)]
-/// Same as [`Executable`](iroha_data_model::transaction::Executable), but instead of
+/// Same as [`Executable`], but instead of
 /// [`Wasm`](iroha_data_model::transaction::Executable::Wasm) contains hash of the WASM blob
 /// Which can be used to obtain compiled by `wasmtime` module
 #[derive(Clone, Serialize, Deserialize)]
@@ -1028,7 +1024,7 @@ impl core::fmt::Debug for ExecutableRef {
     }
 }
 
-/// [`Set::mod_repeats()`] error
+/// [`SetTransaction::mod_repeats()`] error
 #[derive(Debug, Clone, thiserror::Error, displaydoc::Display)]
 pub enum ModRepeatsError {
     /// Trigger with id = `{0}` not found

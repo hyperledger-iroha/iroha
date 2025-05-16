@@ -32,7 +32,7 @@ use crate::{
     UpdateTopology,
 };
 
-/// [`NetworkBase`] actor handle.
+/// `NetworkBase` actor handle.
 // NOTE: channels are unbounded in order to break communication cycle deadlock.
 // Unbounded channels are ok here because messages frequency is either configurable (and relatively low)
 // or depends on frequency of incoming messages from other peers which are bounded and backpressure is applied to them.
@@ -575,11 +575,11 @@ pub mod message {
     /// Current online network peers
     pub type OnlinePeers = HashSet<Peer>;
 
-    /// The message that is sent to [`NetworkBase`] to update p2p topology of the network.
+    /// The message that is sent to `NetworkBase` to update p2p topology of the network.
     #[derive(Clone, Debug)]
     pub struct UpdateTopology(pub HashSet<PeerId>);
 
-    /// The message that is sent to [`NetworkBase`] to update peers addresses of the network.
+    /// The message that is sent to `NetworkBase` to update peers addresses of the network.
     #[derive(Clone, Debug)]
     pub struct UpdatePeers(pub Vec<(PeerId, SocketAddr)>);
 

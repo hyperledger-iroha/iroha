@@ -1,4 +1,4 @@
-//! This module contains [`QueryService`](service::QueryService) and helpers.
+//! This module contains [`store::LiveQueryStore`] and helpers.
 
 pub mod cursor;
 pub mod pagination;

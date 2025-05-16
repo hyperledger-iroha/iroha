@@ -55,7 +55,7 @@ impl Supervisor {
 
     /// Spawns a task that will initiate supervisor shutdown on SIGINT/SIGTERM signals.
     /// # Errors
-    /// See [`signal::unix::signal`] errors.
+    /// See [`tokio::signal::unix::signal`] errors.
     pub fn setup_shutdown_on_os_signals(&mut self) -> Result<(), Error> {
         use tokio::signal;
 

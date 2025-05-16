@@ -121,7 +121,7 @@ impl RawGenesisTransaction {
     ///
     /// # Errors
     ///
-    /// Fails if [`RawGenesisTransaction::parse`] fails.
+    /// Fails if `RawGenesisTransaction::parse` fails.
     pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
         let chain = self.chain.clone();
         let genesis_account = AccountId::new(

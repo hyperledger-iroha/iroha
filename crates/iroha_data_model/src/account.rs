@@ -103,7 +103,7 @@ impl AccountId {
 }
 
 impl Account {
-    /// Construct builder for [`Account`] identifiable by [`Id`] containing the given signatory.
+    /// Construct builder for [`Account`] identifiable by [`AccountId`] containing the given signatory.
     #[inline]
     #[must_use]
     pub fn new(id: AccountId) -> <Self as Registered>::With {

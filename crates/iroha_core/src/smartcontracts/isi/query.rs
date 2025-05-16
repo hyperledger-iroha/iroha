@@ -205,7 +205,7 @@ impl ValidQueryRequest {
 
     /// Validate a query for a wasm program.
     ///
-    /// The validation logic is defined by the implementation of the [`ValidateQueryOperation`] trait.
+    /// The validation logic is defined by the implementation of the [`ValidateQueryOperation`](wasm::state::ValidateQueryOperation) trait.
     ///
     /// # Errors
     ///

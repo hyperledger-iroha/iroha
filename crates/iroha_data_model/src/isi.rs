@@ -737,7 +737,7 @@ mod transparent {
     }
 
     impl Transfer<Asset, Numeric, Account> {
-        /// Constructs a new [`Transfer`] for an [`Asset`] of [`Quantity`] type.
+        /// Constructs a new [`Transfer`] for an [`Asset`] of [`Numeric`] type.
         pub fn asset_numeric(
             asset_id: AssetId,
             quantity: impl Into<Numeric>,

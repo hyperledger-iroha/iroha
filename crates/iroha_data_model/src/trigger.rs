@@ -60,7 +60,7 @@ mod model {
     #[display(fmt = "{id}")]
     #[ffi_type]
     pub struct Trigger {
-        /// [`Id`] of the [`Trigger`].
+        /// Unique identifier of the [`Trigger`].
         pub id: TriggerId,
         /// Action to be performed when the trigger matches.
         pub action: action::Action,
@@ -75,7 +75,7 @@ impl Trigger {
         Trigger { id, action }
     }
 
-    /// [`Id`] of the [`Trigger`].
+    /// Unique identifier of the [`Trigger`].
     pub fn id(&self) -> &TriggerId {
         &self.id
     }

@@ -684,7 +684,7 @@ impl From<NftEvent> for DataEvent {
 }
 
 impl DataEvent {
-    /// Return the domain id of [`Event`]
+    /// Return the domain id of [`DataEvent`]
     pub fn domain(&self) -> Option<&DomainId> {
         match self {
             Self::Domain(event) => Some(event.origin()),

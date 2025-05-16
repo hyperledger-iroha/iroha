@@ -1,9 +1,9 @@
-//! This module contains [`Block`] structures for each state. Transitions are modeled as follows:
+//! This module contains block structures for each state. Transitions are modeled as follows:
 //! 1. If a new block is constructed by the node:
 //!    `BlockBuilder<Pending>` -> `BlockBuilder<Chained>` -> `ValidBlock` -> `CommittedBlock`
 //! 2. If a block is received, i.e. deserialized:
 //!    `SignedBlock` -> `ValidBlock` -> `CommittedBlock`
-//!    [`Block`]s are organised into a linear sequence over time (also known as the block chain).
+//!    blocks are organized into a linear sequence over time (also known as the block chain).
 use std::time::Duration;
 
 use iroha_crypto::{HashOf, KeyPair, MerkleTree};
@@ -232,7 +232,7 @@ mod chained {
 
     use super::*;
 
-    /// When a [`Pending`] block is chained with the blockchain it becomes [`Chained`] block.
+    /// When a `Pending` block is chained with the blockchain it becomes [`Chained`] block.
     #[derive(Debug, Clone)]
     pub struct Chained {
         pub(super) header: BlockHeader,
@@ -259,7 +259,7 @@ mod new {
     use super::*;
     use crate::{smartcontracts::wasm::cache::WasmCache, state::StateBlock};
 
-    /// First stage in the life-cycle of a [`Block`].
+    /// First stage in the life-cycle of a block.
     ///
     /// Transactions in this block are not categorized.
     #[derive(Debug, Clone)]
@@ -742,11 +742,11 @@ mod valid {
 
         /// Validate and commit block if possible.
         ///
-        /// This method is different from calling [`ValidBlock::validate_keep_voting_block`] and [`ValidateBlock::commit`] in the following ways:
+        /// This method is different from calling [`ValidBlock::validate_keep_voting_block`] and [`ValidBlock::commit`] in the following ways:
         /// - signatures are checked eagerly so voting block is kept if block doesn't have valid signatures
         ///
         /// # Errors
-        /// Combinations of errors from [`ValidBlock::validate_keep_voting_block`] and [`ValidateBlock::commit`].
+        /// Combinations of errors from [`ValidBlock::validate_keep_voting_block`] and [`ValidBlock::commit`].
         #[allow(clippy::too_many_arguments)]
         pub fn commit_keep_voting_block<'state, F: Fn(PipelineEventBox)>(
             block: SignedBlock,

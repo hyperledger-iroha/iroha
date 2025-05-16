@@ -84,7 +84,7 @@ mod model {
         Constructor,
     )]
     pub struct Sorting {
-        /// Sort query result using [`Name`] of the key in [`Asset`]'s metadata.
+        /// Sort query result using [`Name`] of the key in metadata.
         pub sort_by_metadata_key: Option<Name>,
     }
 

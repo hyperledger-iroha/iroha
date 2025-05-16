@@ -23,9 +23,6 @@ mod model {
     use crate::parameter::CustomParameters;
 
     /// executor that checks if an operation satisfies some conditions.
-    ///
-    /// Can be used with things like [`Transaction`]s,
-    /// [`InstructionExpr`]s, etc.
     #[derive(
         Debug,
         Clone,
@@ -80,11 +77,11 @@ mod model {
     #[ffi_type]
     #[display(fmt = "{self:?}")]
     pub struct ExecutorDataModel {
-        /// Corresponds to the [`Parameter::Custom`].
+        /// Corresponds to the [`crate::parameter::Parameter::Custom`].
         /// Holds the initial value of the parameter
         pub parameters: CustomParameters,
-        /// Corresponds to the [`InstructionBox::Custom`].
-        /// Any type that implements [`Instruction`] should be listed here.
+        /// Corresponds to the [`crate::isi::InstructionBox::Custom`].
+        /// Any type that implements [`crate::isi::Instruction`] should be listed here.
         pub instructions: BTreeSet<Ident>,
         /// Ids of permission tokens supported by the executor.
         pub permissions: BTreeSet<Ident>,

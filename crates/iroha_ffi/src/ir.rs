@@ -1,6 +1,6 @@
 //! Internal representation, a.k.a IR of `Rust` types during conversion into FFI types.
 //!
-//! While you can implement [`FfiType`] on your `Rust` type directly, it is encouraged
+//! While you can implement [`crate::FfiType`] on your `Rust` type directly, it is encouraged
 //! that you map your type into IR by providing the implementation of [`Ir`] and benefit
 //! from automatic, correct and performant conversions from IR to C type equivalent.
 use alloc::{boxed::Box, vec::Vec};
@@ -62,15 +62,15 @@ pub unsafe trait Transmute {
 pub unsafe trait InfallibleTransmute {}
 
 /// Designates a type that can be converted to/from internal representation. Predefined IR
-/// types are given automatic implementation of [`FfiType`] and other conversion traits.
+/// types are given automatic implementation of [`crate::FfiType`] and other conversion traits.
 pub trait Ir {
     /// Internal representation of the type.
     ///
-    /// If the `Self` is [`ReprC`], [`Ir::Type`] should be set to [`Robust`] in which
+    /// If the `Self` is [`crate::ReprC`], [`Ir::Type`] should be set to [`Robust`] in which
     /// case the type will be used in the FFI function as given without any conversion.
     ///
     /// If the [`Ir::Type`] is set to [`Transparent`], `Self` will get an automatic
-    /// implementation of [`FfiType`] that delegates to the inner type. If the conversion
+    /// implementation of [`crate::FfiType`] that delegates to the inner type. If the conversion
     /// of the inner type is zero-copy conversion of [`Transparent`] will also be.
     ///
     /// If the [`Ir::Type`] is set to [`Opaque`], `T` will be serialized as an
@@ -78,8 +78,8 @@ pub trait Ir {
     /// [`Opaque`] is currently the only family of types that transfer ownership over FFI.
     ///
     /// Otherwise, in the common case, [`Ir::Type`] should be set to `Self` and implement
-    /// [`Cloned`] to benefit from the default implementation of [`FfiType`]. Be warned
-    /// that in this case [`FfiType`] implementation will clone the given type.
+    /// [`Cloned`] to benefit from the default implementation of [`crate::FfiType`]. Be warned
+    /// that in this case [`crate::FfiType`] implementation will clone the given type.
     type Type;
 }
 
@@ -91,7 +91,7 @@ pub enum Opaque {}
 #[derive(Debug, Clone, Copy)]
 pub enum Transparent {}
 
-/// Marker for a type that is a robust [`ReprC`] type and doesn't require conversion
+/// Marker for a type that is a robust [`crate::ReprC`] type and doesn't require conversion
 #[derive(Debug, Clone, Copy)]
 pub enum Robust {}
 

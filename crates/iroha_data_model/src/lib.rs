@@ -3,7 +3,7 @@
 //!
 //! ## Note about WASM and deserialization
 //! Some structs performs validation during deserialization.
-//! (e.g. [`transaction::candidate::SignedTransactionCandidate`]).
+//! (e.g. `transaction::candidate::SignedTransactionCandidate`).
 //! However such validation was disabled when compiled to WASM,
 //! Validation at WASM side is not necessary,
 //! because validation was already performed on host side,
@@ -315,7 +315,7 @@ mod model {
         ///
         /// For example it's a very big WASM binary.
         ///
-        /// It's different from [`TransactionRejectionReason::LimitCheck`] because it depends on
+        /// It's different from [`crate::transaction::error::TransactionRejectionReason::LimitCheck`] because it depends on
         /// executor.
         TooComplex,
         /// Internal error occurred, please contact the support or check the logs if you are the node owner
@@ -411,8 +411,8 @@ mod test {
     }
 }
 
-/// Uniquely identifiable entity ([`Domain`], [`Account`], etc.).
-/// This trait should always be derived with [`IdEqOrdHash`]
+/// Uniquely identifiable entity ([`domain::Domain`], [`account::Account`], etc.).
+/// This trait should always be derived with `IdEqOrdHash`.
 pub trait Identifiable: Ord + Eq {
     /// Type of the entity identifier
     type Id: Into<IdBox> + Ord + Eq + core::hash::Hash;

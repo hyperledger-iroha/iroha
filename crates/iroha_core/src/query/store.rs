@@ -203,7 +203,7 @@ impl LiveQueryStoreHandle {
     ///
     /// # Errors
     ///
-    /// - Returns [`Error::CapacityLimit`] if [`LiveQueryStore`] capacity is reached,
+    /// - Returns [`QueryExecutionFail::CapacityLimit`] if [`LiveQueryStore`] capacity is reached,
     /// - Otherwise throws up query output handling errors.
     pub fn handle_iter_start(
         &self,
@@ -235,7 +235,7 @@ impl LiveQueryStoreHandle {
     ///
     /// # Errors
     ///
-    /// - Returns an [`Error`] if the query id is not found,
+    /// - Returns an [`QueryExecutionFail`] if the query id is not found,
     ///   or if cursor position doesn't match or cannot continue.
     pub fn handle_iter_continue(
         &self,

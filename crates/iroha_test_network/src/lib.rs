@@ -812,7 +812,7 @@ impl NetworkPeer {
 
     /// Wait _once_ an event matches a predicate.
     ///
-    /// ```
+    /// ```ignore
     /// use iroha_test_network::{Network, NetworkBuilder, PeerLifecycleEvent};
     ///
     /// #[tokio::main]

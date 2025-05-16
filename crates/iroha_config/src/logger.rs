@@ -9,7 +9,7 @@ pub use iroha_data_model::Level;
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use tracing_subscriber::filter::Directive;
 
-/// Reflects formatters in [`tracing_subscriber::fmt::format`]
+/// Reflects formatters in [`mod@tracing_subscriber::fmt::format`]
 #[derive(
     Debug,
     Copy,

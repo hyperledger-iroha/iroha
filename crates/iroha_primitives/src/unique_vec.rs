@@ -12,7 +12,7 @@ use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-/// Creates a [`UniqueVec`](unique_vec::UniqueVec) from a list of values.
+/// Creates a [`UniqueVec`](crate::unique_vec::UniqueVec) from a list of values.
 ///
 /// Works like [`vec!`] macro, but does not accept syntax for repeated values
 /// and might return [`Result`].

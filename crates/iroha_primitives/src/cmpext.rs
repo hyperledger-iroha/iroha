@@ -1,4 +1,4 @@
-//! Utilities to work with [`BTreeMap`]/[`BTreeSet`] `get`/`range` functions.
+//! Utilities to work with `BTreeMap`/`BTreeSet` `get`/`range` functions.
 
 use core::cmp::Ordering;
 
@@ -66,7 +66,7 @@ impl<T> From<T> for MinMaxExt<T> {
 }
 
 /// Helper macro to enable cast of key to dyn object and derive required traits for it.
-/// Used to bypass limitation of [`Borrow`] which wouldn't allow to create object and return reference to it.
+/// Used to bypass limitation of `Borrow` which wouldn't allow to create object and return reference to it.
 #[macro_export]
 macro_rules! impl_as_dyn_key {
     (target: $ty:ident, key: $key:ty, trait: $trait:ident) => {

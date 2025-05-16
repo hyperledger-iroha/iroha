@@ -220,10 +220,6 @@ where
                 f,
                 "parameter `{id}` with value `{value}` set from environment variable `{var}`"
             ),
-            ParameterOrigin::EnvUnknown { id } => write!(
-                f,
-                "parameter `{id}` with value `{value}` set from environment variables"
-            ),
             ParameterOrigin::Default { id } => {
                 write!(f, "parameter `{id}` with default value `{value}`")
             }

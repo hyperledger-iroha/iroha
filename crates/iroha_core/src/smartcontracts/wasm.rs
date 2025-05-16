@@ -306,7 +306,7 @@ impl LimitsExecutor {
 }
 
 pub mod state {
-    //! All supported states for [`Runtime`](super::Runtime)
+    //! All supported states for [`Runtime`]
 
     use derive_more::Constructor;
     use indexmap::IndexSet;
@@ -314,7 +314,7 @@ pub mod state {
     use self::chain_state::ConstState;
     use super::*;
 
-    /// Construct [`StoreLimits`] from [`Configuration`]
+    /// Construct [`StoreLimits`] from [`Config`]
     ///
     /// # Panics
     ///
@@ -350,7 +350,7 @@ pub mod state {
     }
 
     impl<W, S> CommonState<W, S> {
-        /// Create new [`OrdinaryState`]
+        /// Create new [`CommonState`]
         pub fn new(
             authority: AccountId,
             config: Config,
@@ -406,7 +406,7 @@ pub mod state {
             pub(in super::super) &'wrld mut StateTransaction<'block, 'state>,
         );
 
-        /// Trait to get immutable [`StateSnapshot`]
+        /// Trait to get immutable [`StateReadOnly`]
         ///
         /// Exists to write generic code for [`WithMut`] and [`WithConst`].
         pub trait ConstState {
@@ -1484,7 +1484,7 @@ impl<S> RuntimeBuilder<S> {
         self
     }
 
-    /// Sets the [`Configuration`] to be used by the [`Runtime`]
+    /// Sets the [`Config`] to be used by the [`Runtime`]
     #[must_use]
     #[inline]
     pub fn with_config(mut self, config: Config) -> Self {

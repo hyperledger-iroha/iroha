@@ -1,5 +1,5 @@
 //! This module contains implementations of smart-contract traits and instructions for [`Account`] structure
-//! and implementations of [`Query`]'s about [`Account`].
+//! and implementations for account queries.
 
 use iroha_data_model::{prelude::*, query::error::FindError};
 use iroha_telemetry::metrics;
@@ -305,7 +305,7 @@ pub mod isi {
     }
 }
 
-/// Account-related [`Query`] instructions.
+/// Implementations for account queries.
 pub mod query {
 
     use eyre::Result;

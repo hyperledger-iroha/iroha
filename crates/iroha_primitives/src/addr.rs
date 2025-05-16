@@ -144,11 +144,11 @@ ffi::ffi_item! {
 }
 
 impl Ipv6Addr {
-    /// The analogue of [`Ipv4Addr::LOCALHOST`], an address associated
+    /// The analogue of [`std::net::Ipv4Addr::LOCALHOST`], an address associated
     /// with the local machine.
     pub const LOOPBACK: Self = Self([0, 0, 0, 0_u16, 0, 0, 0, 1]);
 
-    /// The analogue of [`Ipv4Addr::Unspecified`], an address that
+    /// The analogue of [`std::net::Ipv4Addr::UNSPECIFIED`], an address that
     /// usually resolves to the `LOCALHOST`, but might be configured
     /// to resolve to something else.
     pub const UNSPECIFIED: Self = Self([0, 0, 0, 0_u16, 0, 0, 0, 0]);

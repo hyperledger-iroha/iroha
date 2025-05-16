@@ -20,7 +20,7 @@ use crate::{
     Identifiable, Name, ParseError, Registered,
 };
 
-/// [`AssetTotalQuantityMap`] provides an API to work with collection of key([`AssetDefinitionId`])-value([`AssetValue`])
+/// [`AssetTotalQuantityMap`] provides an API to work with collection of key([`AssetDefinitionId`])-value([`Numeric`])
 /// pairs.
 pub type AssetTotalQuantityMap = btree_map::BTreeMap<AssetDefinitionId, Numeric>;
 
@@ -111,7 +111,7 @@ mod model {
     pub struct AssetDefinition {
         /// An Identification of the [`AssetDefinition`].
         pub id: AssetDefinitionId,
-        /// Numeric spec of [`AssetValue`]
+        /// Numeric spec of this asset.
         #[getset(get_copy = "pub")]
         pub spec: NumericSpec,
         /// Is the asset mintable
@@ -209,14 +209,14 @@ mod model {
 }
 
 impl AssetDefinition {
-    /// Construct builder for [`AssetDefinition`] identifiable by [`Id`].
+    /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
     #[must_use]
     #[inline]
     pub fn new(id: AssetDefinitionId, spec: NumericSpec) -> <Self as Registered>::With {
         <Self as Registered>::With::new(id, spec)
     }
 
-    /// Construct builder for [`AssetDefinition`] identifiable by [`Id`].
+    /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
     #[must_use]
     #[inline]
     pub fn numeric(id: AssetDefinitionId) -> <Self as Registered>::With {

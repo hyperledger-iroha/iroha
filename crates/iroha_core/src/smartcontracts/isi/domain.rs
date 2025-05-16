@@ -377,7 +377,7 @@ pub mod isi {
     }
 }
 
-/// Query module provides [`Query`] Domain related implementations.
+/// Implementations for domain queries.
 pub mod query {
     use iroha_data_model::{
         domain::Domain,
