@@ -59,13 +59,15 @@ jobs:
     needs: pre_build
     steps:
       - uses: actions/checkout@v4
-      - name: Download wasm libs
+      - name: Download WASMs
         uses: actions/download-artifact@v4
         with:
           name: wasm
-          path: ${{ env.DEFAULTS_DIR }}/libs
-      - name: Move the default executor
-        run: mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
+          path: ${{ env.WASM_TARGET_DIR }}
+      - name: Move WASM libs
+        run: |
+          mv ${{ env.WASM_TARGET_DIR }}/libs ${{ env.DEFAULTS_DIR }}/libs
+          mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
       - name: Set up Docker Buildx
         id: buildx
         if: always()
