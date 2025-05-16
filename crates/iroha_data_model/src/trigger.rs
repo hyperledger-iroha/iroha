@@ -53,16 +53,16 @@ mod model {
         pub name: Name,
     }
 
-    /// Type which is used for registering a `Trigger`.
+    /// Represents a trigger, binding an identifier to its action.
     #[derive(
         Debug, Display, Clone, IdEqOrdHash, Decode, Encode, Deserialize, Serialize, IntoSchema,
     )]
     #[display(fmt = "{id}")]
     #[ffi_type]
     pub struct Trigger {
-        /// Unique identifier of the [`Trigger`].
+        /// Unique identifier of this trigger.
         pub id: TriggerId,
-        /// Action to be performed when the trigger matches.
+        /// Defines when, who initiates what execution and includes persistent storage.
         pub action: action::Action,
     }
 }
@@ -103,45 +103,32 @@ pub mod action {
     mod model {
         use super::*;
 
-        /// Designed to differentiate between oneshot and unlimited
-        /// triggers. If the trigger must be run a limited number of times,
-        /// it's the end-user's responsibility to either unregister the
-        /// `Unlimited` variant.
-        ///
-        /// # Considerations
-        ///
-        /// The granularity might not be sufficient to run an action exactly
-        /// `n` times. In order to ensure that it is even possible to run the
-        /// triggers without gaps, the `Executable` wrapped in the action must
-        /// be run before any of the ISIs are pushed into the queue of the
-        /// next block.
+        /// Core definition of a trigger action, including the executable, firing policy, and persistent storage.
         #[derive(Debug, Clone, PartialEq, Eq, Encode, Serialize, IntoSchema)]
         #[ffi_type]
         pub struct Action {
-            /// The executable linked to this action
+            /// The executable linked to this trigger.
             pub executable: Executable,
-            /// The repeating scheme of the action. It's kept as part of the
-            /// action and not inside the [`Trigger`] type, so that further
-            /// sanity checking can be done.
+            /// How many times this trigger may fire.
             pub repeats: Repeats,
-            /// Account executing this action
+            /// Account invoking the executable.
             pub authority: AccountId,
-            /// Defines events which trigger the `Action`
+            /// Condition defining which events invoke the executable.
             pub filter: EventFilterBox,
-            /// Metadata used as persistent storage for trigger data.
+            /// Arbitrary metadata stored for this trigger.
             pub metadata: Metadata,
         }
 
-        /// Enumeration of possible repetitions schemes.
+        /// Repetition policy for a trigger action.
         #[derive(
             Debug, Copy, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema,
         )]
         #[ffi_type]
         pub enum Repeats {
-            /// Repeat indefinitely, until the trigger is unregistered.
+            /// Repeat the trigger indefinitely until it is unregistered.
             Indefinitely,
-            /// Repeat a set number of times
-            Exactly(u32), // If you need more, use `Indefinitely`.
+            /// Repeat the trigger a fixed number of times.
+            Exactly(u32),
         }
     }
 
@@ -246,6 +233,13 @@ pub mod action {
     impl From<u32> for Repeats {
         fn from(num: u32) -> Self {
             Repeats::Exactly(num)
+        }
+    }
+
+    impl Repeats {
+        /// Returns `true` if this repeat policy has no remaining executions.
+        pub fn is_depleted(&self) -> bool {
+            matches!(self, Repeats::Exactly(0))
         }
     }
 

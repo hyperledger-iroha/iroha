@@ -206,6 +206,8 @@ mod model {
         pub fuel: NonZeroU64,
         /// Maximum amount of memory that a smart contract can use
         pub memory: NonZeroU64,
+        /// Maximum length of chained data trigger executions
+        pub execution_depth: u8,
     }
 
     /// Single smart contract parameter
@@ -217,6 +219,7 @@ mod model {
     pub enum SmartContractParameter {
         Fuel(NonZeroU64),
         Memory(NonZeroU64),
+        ExecutionDepth(u8),
     }
 
     /// Blockchain specific parameter defined in the executor
@@ -407,6 +410,9 @@ mod defaults {
         pub const fn memory() -> NonZeroU64 {
             nonzero!(55_000_000_u64)
         }
+        pub const fn execution_depth() -> u8 {
+            3
+        }
     }
 }
 
@@ -439,6 +445,7 @@ impl Default for SmartContractParameters {
         Self {
             fuel: fuel(),
             memory: memory(),
+            execution_depth: execution_depth(),
         }
     }
 }
@@ -498,9 +505,11 @@ impl Parameters {
 
             SmartContract(smart_contract.fuel) => SmartContractParameter::Fuel,
             SmartContract(smart_contract.memory) => SmartContractParameter::Memory,
+            SmartContract(smart_contract.execution_depth) => SmartContractParameter::ExecutionDepth,
 
             Executor(executor.fuel) => SmartContractParameter::Fuel,
             Executor(executor.memory) => SmartContractParameter::Memory,
+            Executor(executor.execution_depth) => SmartContractParameter::ExecutionDepth,
         );
     }
 }
@@ -645,6 +654,8 @@ mod candidate {
         fuel: NonZeroU64,
         #[serde(default = "super::defaults::smart_contract::memory")]
         memory: NonZeroU64,
+        #[serde(default = "super::defaults::smart_contract::execution_depth")]
+        execution_depth: u8,
     }
 
     impl BlockParameterCandidate {
@@ -725,6 +736,7 @@ mod candidate {
             Ok(SmartContractParameters {
                 fuel: self.fuel,
                 memory: self.memory,
+                execution_depth: self.execution_depth,
             })
         }
     }

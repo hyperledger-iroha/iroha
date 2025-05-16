@@ -109,20 +109,18 @@ impl_try_from_box! {
 }
 
 /// Same as [`iroha_data_model::trigger::action::Action`] but with
-/// executable in pre-loaded form
+/// a reference to a pre-loaded executable.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadedAction<F> {
-    /// The executable linked to this action in loaded form
+    /// Reference to the pre-loaded executable.
     pub(super) executable: ExecutableRef,
-    /// The repeating scheme of the action. It's kept as part of the
-    /// action and not inside the [`Trigger`] type, so that further
-    /// sanity checking can be done.
+    /// How many times this trigger may fire.
     pub repeats: Repeats,
-    /// Account executing this action
+    /// Account invoking the executable.
     pub authority: AccountId,
-    /// Defines events which trigger the `Action`
+    /// Condition defining which events invoke the executable.
     pub filter: F,
-    /// Metadata used as persistent storage for trigger data.
+    /// Arbitrary metadata stored for this trigger.
     pub metadata: Metadata,
 }
 

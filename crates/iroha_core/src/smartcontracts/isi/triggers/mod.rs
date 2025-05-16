@@ -300,7 +300,10 @@ pub mod isi {
                 .ok_or_else(|| Error::Find(FindError::Trigger(id.clone())))
                 .and_then(core::convert::identity)?;
 
-            state_transaction.world.execute_trigger(event);
+            state_transaction
+                .execute_called_trigger(id, event)
+                // Workaround until #5147: avoid circular error dependencies.
+                .map_err(|err| Error::InvariantViolation(err.to_string()))?;
 
             Ok(())
         }

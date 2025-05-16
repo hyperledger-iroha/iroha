@@ -16,7 +16,7 @@ fn apply_blocks(c: &mut Criterion) {
         b.iter_batched_ref(
             || StateApplyBlocks::setup(rt.handle()),
             |bench| {
-                StateApplyBlocks::measure(bench).expect("Failed to execute benchmark");
+                StateApplyBlocks::measure(bench);
             },
             criterion::BatchSize::SmallInput,
         );

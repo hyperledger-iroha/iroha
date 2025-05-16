@@ -23,7 +23,7 @@ use iroha_data_model::{
     role::RoleId,
 };
 use iroha_logger::prelude::*;
-use iroha_primitives::{must_use::MustUse, numeric::Numeric, small::SmallVec};
+use iroha_primitives::numeric::Numeric;
 use mv::{
     cell::{Block as CellBlock, Cell, Transaction as CellTransaction, View as CellView},
     storage::{
@@ -48,12 +48,12 @@ use crate::{
     role::RoleIdWithOwner,
     smartcontracts::{
         triggers::{
-            self,
             set::{
-                Set as TriggerSet, SetBlock as TriggerSetBlock, SetReadOnly as TriggerSetReadOnly,
-                SetTransaction as TriggerSetTransaction, SetView as TriggerSetView,
+                ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
+                SetReadOnly as TriggerSetReadOnly, SetTransaction as TriggerSetTransaction,
+                SetView as TriggerSetView,
             },
-            specialized::LoadedActionTrait,
+            specialized::{LoadedAction, LoadedActionTrait},
         },
         wasm, Execute,
     },
@@ -95,6 +95,8 @@ pub struct World {
     pub(crate) executor: Cell<Executor>,
     /// Executor-defined data model
     pub(crate) executor_data_model: Cell<ExecutorDataModel>,
+    /// Required here for formal correctness, even though it is only used below block level.
+    external_event_buf: Cell<Vec<EventBox>>,
 }
 
 /// Struct for block's aggregated changes
@@ -125,8 +127,8 @@ pub struct WorldBlock<'world> {
     pub(crate) executor: CellBlock<'world, Executor>,
     /// Executor-defined data model
     pub(crate) executor_data_model: CellBlock<'world, ExecutorDataModel>,
-    /// Events produced during execution of block
-    events_buffer: Vec<EventBox>,
+    /// Buffer of events pending publication to external subscribers.
+    external_event_buf: CellBlock<'world, Vec<EventBox>>,
 }
 
 /// Struct for single transaction's aggregated changes
@@ -158,16 +160,11 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) executor: CellTransaction<'block, 'world, Executor>,
     /// Executor-defined data model
     pub(crate) executor_data_model: CellTransaction<'block, 'world, ExecutorDataModel>,
-    /// Events produced during execution of a transaction
-    events_buffer: TransactionEventBuffer<'block>,
-}
-
-/// Wrapper for event's buffer to apply transaction rollback
-struct TransactionEventBuffer<'block> {
-    /// Events produced during execution of block
-    events_buffer: &'block mut Vec<EventBox>,
-    /// Number of events produced during execution current transaction
-    events_created_in_transaction: usize,
+    /// Buffer of events pending publication to external subscribers.
+    external_event_buf: CellTransaction<'block, 'world, Vec<EventBox>>,
+    /// Data events buffered during a single execution step
+    /// -- either the initial step (transaction or time trigger) or a subsequent step (data trigger).
+    internal_event_buf: Vec<DataEvent>,
 }
 
 /// Consistent point in time view of the [`World`]
@@ -377,7 +374,7 @@ impl World {
             triggers: self.triggers.block(),
             executor: self.executor.block(),
             executor_data_model: self.executor_data_model.block(),
-            events_buffer: Vec::new(),
+            external_event_buf: self.external_event_buf.block(),
         }
     }
 
@@ -397,7 +394,7 @@ impl World {
             triggers: self.triggers.block_and_revert(),
             executor: self.executor.block_and_revert(),
             executor_data_model: self.executor_data_model.block_and_revert(),
-            events_buffer: Vec::new(),
+            external_event_buf: self.external_event_buf.block_and_revert(),
         }
     }
 
@@ -764,10 +761,8 @@ impl<'world> WorldBlock<'world> {
             triggers: self.triggers.transaction(),
             executor: self.executor.transaction(),
             executor_data_model: self.executor_data_model.transaction(),
-            events_buffer: TransactionEventBuffer {
-                events_buffer: &mut self.events_buffer,
-                events_created_in_transaction: 0,
-            },
+            external_event_buf: self.external_event_buf.transaction(),
+            internal_event_buf: Vec::new(),
         }
     }
 
@@ -788,7 +783,8 @@ impl<'world> WorldBlock<'world> {
             triggers,
             executor,
             executor_data_model,
-            events_buffer: _,
+            // Always drop at the block level.
+            external_event_buf: _,
         } = self;
         // IMPORTANT!!! Commit fields in reverse order, this way consistent results are insured
         executor_data_model.commit();
@@ -825,8 +821,10 @@ impl WorldTransaction<'_, '_> {
             triggers,
             executor,
             executor_data_model,
-            mut events_buffer,
+            external_event_buf,
+            internal_event_buf: _,
         } = self;
+        external_event_buf.apply();
         executor_data_model.apply();
         executor.apply();
         triggers.apply();
@@ -840,7 +838,6 @@ impl WorldTransaction<'_, '_> {
         domains.apply();
         peers.apply();
         parameters.apply();
-        events_buffer.events_created_in_transaction = 0;
     }
 
     /// Get `Domain` with an ability to modify it.
@@ -936,8 +933,8 @@ impl WorldTransaction<'_, '_> {
             let asset = Asset::new(asset_id.clone(), default_asset_value.into());
 
             Self::emit_events_impl(
-                &mut self.triggers,
-                &mut self.events_buffer,
+                &mut self.external_event_buf,
+                &mut self.internal_event_buf,
                 Some(AssetEvent::Created(asset.clone())),
             );
             self.assets.insert(asset_id.clone(), asset);
@@ -1063,66 +1060,28 @@ impl WorldTransaction<'_, '_> {
         }
     }
 
-    /// Execute trigger with `trigger_id` as id and `authority` as owner
-    ///
-    /// Produces [`ExecuteTriggerEvent`].
-    ///
-    /// Trigger execution time:
-    /// - If this method is called by ISI inside *transaction*,
-    ///   then *trigger* will be executed on the **current** block
-    /// - If this method is called by ISI inside *trigger*,
-    ///   then *trigger* will be executed on the **next** block
-    pub fn execute_trigger(&mut self, event: ExecuteTriggerEvent) {
-        self.triggers.handle_execute_trigger_event(event.clone());
-        self.events_buffer.push(event.into());
-    }
-
-    /// The function puts events produced by iterator into `events_buffer`.
+    /// The function puts events produced by iterator into event buffers.
     /// Events should be produced in the order of expanding scope: from specific to general.
     /// Example: account events before domain events.
     pub fn emit_events<I: IntoIterator<Item = T>, T: Into<DataEvent>>(&mut self, world_events: I) {
-        Self::emit_events_impl(&mut self.triggers, &mut self.events_buffer, world_events)
+        Self::emit_events_impl(
+            &mut self.external_event_buf,
+            &mut self.internal_event_buf,
+            world_events,
+        )
     }
 
     /// Implementation of [`Self::emit_events()`].
     ///
     /// Usable when you can't call [`Self::emit_events()`] due to mutable reference to self.
     fn emit_events_impl<I: IntoIterator<Item = T>, T: Into<DataEvent>>(
-        triggers: &mut TriggerSetTransaction,
-        events_buffer: &mut TransactionEventBuffer<'_>,
+        external_event_buf: &mut CellTransaction<Vec<EventBox>>,
+        internal_event_buf: &mut Vec<DataEvent>,
         world_events: I,
     ) {
-        let data_events: SmallVec<[DataEvent; 3]> =
-            world_events.into_iter().map(Into::into).collect();
-
-        for event in data_events.iter() {
-            triggers.handle_data_event(event.clone());
-        }
-        events_buffer.extend(data_events.into_iter().map(Into::into));
-    }
-}
-
-impl TransactionEventBuffer<'_> {
-    fn push(&mut self, event: EventBox) {
-        self.events_created_in_transaction += 1;
-        self.events_buffer.push(event);
-    }
-}
-
-impl Extend<EventBox> for TransactionEventBuffer<'_> {
-    fn extend<T: IntoIterator<Item = EventBox>>(&mut self, iter: T) {
-        let len_before = self.events_buffer.len();
-        self.events_buffer.extend(iter);
-        let len_after = self.events_buffer.len();
-        self.events_created_in_transaction += len_after - len_before;
-    }
-}
-
-impl Drop for TransactionEventBuffer<'_> {
-    fn drop(&mut self) {
-        // remove events produced by current transaction
-        self.events_buffer
-            .truncate(self.events_buffer.len() - self.events_created_in_transaction);
+        let data_events: Vec<DataEvent> = world_events.into_iter().map(Into::into).collect();
+        external_event_buf.extend(data_events.iter().cloned().map(EventBox::from));
+        internal_event_buf.extend(data_events);
     }
 }
 
@@ -1434,56 +1393,8 @@ impl<'state> StateBlock<'state> {
         world.commit();
     }
 
-    /// Commit `CommittedBlock` with changes in form of **Iroha Special
-    /// Instructions** to `self`.
-    ///
-    /// Order of execution:
-    /// 1) Transactions
-    /// 2) Triggers
-    ///
-    /// # Errors
-    ///
-    /// - (RARE) if applying transaction after validation fails.
-    /// - If trigger execution fails
-    /// - If timestamp conversion to `u64` fails
-    #[cfg_attr(
-        not(debug_assertions),
-        deprecated(note = "This function is to be used in testing only. ")
-    )]
-    #[iroha_logger::log(skip_all, fields(block_height))]
-    pub fn apply(
-        &mut self,
-        block: &CommittedBlock,
-        topology: Vec<PeerId>,
-    ) -> Result<MustUse<Vec<EventBox>>> {
-        self.execute_transactions(block)?;
-        debug!("All block transactions successfully executed");
-        Ok(self.apply_without_execution(block, topology).into())
-    }
-
-    /// Execute `block` transactions and store their hashes as well as
-    /// `rejected_transactions` hashes
-    ///
-    /// # Errors
-    /// Fails if transaction instruction execution fails
-    fn execute_transactions(&mut self, block: &CommittedBlock) -> Result<()> {
-        let block = block.as_ref();
-
-        // TODO: Should this block panic instead?
-        for (idx, tx) in block.transactions().enumerate() {
-            if block.error(idx).is_none() {
-                // Execute every tx in it's own transaction
-                let mut transaction = self.transaction();
-                transaction.process_executable(tx.instructions(), tx.authority().clone())?;
-                transaction.apply();
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Apply transactions without actually executing them.
-    /// It's assumed that block's transaction was already executed (as part of validation for example).
+    /// Assuming all transactions in the block have been processed,
+    /// apply the remaining block effects outside the world state.
     #[iroha_logger::log(skip_all, fields(block_height = block.as_ref().header().height))]
     #[must_use]
     pub fn apply_without_execution(
@@ -1493,9 +1404,6 @@ impl<'state> StateBlock<'state> {
     ) -> Vec<EventBox> {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
-
-        let time_event = self.create_time_event(block);
-        self.world.events_buffer.push(time_event.into());
 
         let block_height = block
             .as_ref()
@@ -1510,35 +1418,68 @@ impl<'state> StateBlock<'state> {
             .collect();
         self.transactions.insert_block(transactions, block_height);
 
-        self.world.triggers.handle_time_event(time_event);
-
-        let res = self.process_triggers();
-
-        if let Err(errors) = res {
-            warn!(
-                ?errors,
-                "The following errors have occurred during trigger execution"
-            );
-        }
-
         self.block_hashes.push(block_hash);
 
         *self.prev_commit_topology = core::mem::take(&mut self.commit_topology);
         *self.commit_topology = topology;
 
-        self.world.events_buffer.push(
+        self.world.external_event_buf.push(
             BlockEvent {
                 header: block.as_ref().header(),
                 status: BlockStatus::Applied,
             }
             .into(),
         );
-        core::mem::take(&mut self.world.events_buffer)
+        core::mem::take(&mut self.world.external_event_buf)
     }
 
-    /// Create time event using previous and current blocks
-    fn create_time_event(&self, block: &CommittedBlock) -> TimeEvent {
-        let to = block.as_ref().header().creation_time();
+    /// Execute all time triggers matching the given block.
+    pub(crate) fn execute_time_triggers(&mut self, block: &SignedBlock) {
+        let time_event = self.create_time_event(block);
+        self.world.external_event_buf.push(time_event.into());
+        let matched: Vec<_> = self.world.triggers.match_time_event(time_event).collect();
+
+        for (trg_id, action) in &matched {
+            if let Err(error) = self.execute_time_trigger(trg_id, action, &time_event) {
+                // TODO(#4968): Record errors in the block alongside transaction errors.
+                iroha_logger::warn!(
+                    trigger=%trg_id,
+                    block=%block.hash(),
+                    reason=?error,
+                    "Time trigger and its chained data triggers failed to execute"
+                );
+            }
+        }
+    }
+
+    fn execute_time_trigger(
+        &mut self,
+        trg_id: &TriggerId,
+        action: &LoadedAction<TimeEventFilter>,
+        time_event: &TimeEvent,
+    ) -> Result<(), TransactionRejectionReason> {
+        let mut transaction = self.transaction();
+
+        transaction
+            .execute_trigger(
+                trg_id,
+                action.authority(),
+                action.executable(),
+                (*time_event).into(),
+            )
+            .and_then(|()| transaction.execute_data_triggers_dfs())?;
+        transaction
+            .world
+            .triggers
+            .decrease_repeats([trg_id].into_iter());
+        transaction.apply();
+
+        Ok(())
+    }
+
+    /// Create time event using previous and current blocks.
+    fn create_time_event(&self, block: &SignedBlock) -> TimeEvent {
+        let to = block.header().creation_time();
 
         let since = self.latest_block().map_or(to, |latest_block| {
             let header = latest_block.header();
@@ -1551,53 +1492,41 @@ impl<'state> StateBlock<'state> {
         TimeEvent { interval }
     }
 
-    /// Process every trigger in `matched_ids`
-    fn process_triggers(&mut self) -> Result<(), Vec<eyre::Report>> {
-        // Cloning and clearing `self.matched_ids` so that `handle_` call won't deadlock
-        let matched_ids = self.world.triggers.extract_matched_ids();
-        let mut succeed = Vec::<TriggerId>::with_capacity(matched_ids.len());
-        let mut errors = Vec::new();
-        for (event, id) in matched_ids {
-            // Eliding the closure triggers a lifetime mismatch
-            #[allow(clippy::redundant_closure_for_method_calls)]
-            let action = self
-                .world
-                .triggers
-                .inspect_by_id(&id, |action| action.clone_and_box());
-            if let Some(action) = action {
-                if let Repeats::Exactly(repeats) = action.repeats() {
-                    if *repeats == 0 {
-                        continue;
-                    }
-                }
-                // Execute every trigger in it's own transaction
-                let event = {
-                    let mut transaction = self.transaction();
-                    match transaction.process_trigger(&id, &action, event) {
-                        Ok(()) => {
-                            transaction.apply();
-                            succeed.push(id.clone());
-                            TriggerCompletedEvent::new(id, TriggerCompletedOutcome::Success)
-                        }
-                        Err(error) => {
-                            let event = TriggerCompletedEvent::new(
-                                id,
-                                TriggerCompletedOutcome::Failure(error.to_string()),
-                            );
-                            errors.push(error);
-                            event
-                        }
-                    }
-                };
-                self.world.events_buffer.push(event.into());
+    /// Apply a committed block to the world state.
+    ///
+    /// Execution order:
+    /// 1. Transactions (including invoked data triggers)
+    /// 2. Time triggers (including invoked data triggers)
+    ///
+    /// # Panics
+    ///
+    /// Panics if processing approved transactions or time triggers fails.
+    #[cfg(any(test, feature = "bench"))]
+    #[iroha_logger::log(skip_all, fields(block_height))]
+    pub fn apply(&mut self, block: &CommittedBlock, topology: Vec<PeerId>) -> Vec<EventBox> {
+        self.apply_transactions(block);
+        debug!(height = %self.height(), "Transactions applied");
+        self.execute_time_triggers(block.as_ref());
+        debug!(height = %self.height(), "Time triggers executed");
+        self.apply_without_execution(block, topology)
+    }
+
+    /// Apply all non-erroneous transactions in the given committed block.
+    #[cfg(any(test, feature = "bench"))]
+    fn apply_transactions(&mut self, block: &CommittedBlock) {
+        let block = block.as_ref();
+
+        for (idx, tx) in block.transactions().enumerate() {
+            if block.error(idx).is_none() {
+                // Execute each transaction in its own transactional state
+                let mut transaction = self.transaction();
+                transaction.apply_executable(tx.instructions(), tx.authority().clone());
+                transaction
+                    .execute_data_triggers_dfs()
+                    .expect("should be no errors");
+                transaction.apply();
             }
         }
-
-        let mut transaction = self.transaction();
-        transaction.world.triggers.decrease_repeats(&succeed);
-        transaction.apply();
-
-        errors.is_empty().then_some(()).ok_or(errors)
     }
 }
 
@@ -1618,61 +1547,172 @@ impl StateTransaction<'_, '_> {
         world.apply();
     }
 
-    fn process_executable(&mut self, executable: &Executable, authority: AccountId) -> Result<()> {
-        match executable {
-            Executable::Instructions(instructions) => {
-                self.process_instructions(instructions.iter().cloned(), &authority)
-            }
-            Executable::Wasm(bytes) => {
-                let mut wasm_runtime = wasm::RuntimeBuilder::<wasm::state::SmartContract>::new()
-                    .with_config(self.world().parameters().smart_contract)
-                    .with_engine(self.engine.clone()) // Cloning engine is cheap
-                    .build()?;
-                wasm_runtime
-                    .execute(self, authority, bytes)
-                    .map_err(Into::into)
-            }
-        }
-    }
-
-    fn process_instructions(
-        &mut self,
-        instructions: impl IntoIterator<Item = InstructionBox>,
-        authority: &AccountId,
-    ) -> Result<()> {
-        instructions.into_iter().try_for_each(|instruction| {
-            instruction.execute(authority, self)?;
-            Ok::<_, eyre::Report>(())
-        })
-    }
-
-    fn process_trigger(
+    /// Execute a call-trigger. This function will be deprecated in #5147.
+    pub(crate) fn execute_called_trigger(
         &mut self,
         id: &TriggerId,
-        action: &dyn LoadedActionTrait,
-        event: EventBox,
-    ) -> Result<()> {
-        use triggers::set::ExecutableRef::*;
-        let authority = action.authority();
+        event: ExecuteTriggerEvent,
+    ) -> Result<(), TransactionRejectionReason> {
+        let (authority, executable) = {
+            let action = self
+                .world
+                .triggers
+                .by_call_triggers()
+                .get(event.trigger_id())
+                .ok_or_else(|| FindError::Trigger(id.clone()))
+                .map_err(Error::from)
+                .map_err(ValidationFail::from)?;
+            assert!(
+                !action.repeats.is_depleted(),
+                "orphaned trigger was not removed"
+            );
 
-        match action.executable() {
-            Instructions(instructions) => {
-                self.process_instructions(instructions.iter().cloned(), authority)
+            (action.authority().clone(), action.executable().clone())
+        };
+        self.world.external_event_buf.push(event.clone().into());
+        self.execute_trigger(id, &authority, &executable, event.into())?;
+        self.world.triggers.decrease_repeats([id].into_iter());
+
+        Ok(())
+    }
+
+    /// Perform a depth-first traversal of the trigger execution path.
+    pub(crate) fn execute_data_triggers_dfs(&mut self) -> Result<(), TransactionRejectionReason> {
+        let mut stack: Vec<(DataEvent, TriggerId, u8)> = self
+            .capture_data_events()
+            .into_iter()
+            // Preserve the order of the matched triggers
+            .rev()
+            .map(|(e, t)| (e, t, 1))
+            .collect();
+
+        while let Some((event, trg_id, depth)) = stack.pop() {
+            let max_depth = self.world.parameters.smart_contract.execution_depth;
+            if max_depth < depth {
+                return Err(TriggerExecutionFail::MaxDepthExceeded.into());
             }
-            Wasm(blob_hash) => {
+            let (authority, executable) = {
+                let action = self
+                    .world
+                    .triggers
+                    .data_triggers()
+                    .get(&trg_id)
+                    .expect("stack should reference existing data trigger IDs");
+                assert!(
+                    !action.repeats.is_depleted(),
+                    "orphaned trigger was not removed"
+                );
+
+                (action.authority().clone(), action.executable().clone())
+            };
+
+            self.execute_trigger(&trg_id, &authority, &executable, event.clone().into())?;
+            let depleted = self.world.triggers.decrease_repeats([&trg_id].into_iter());
+            stack.retain(|(_, trg_id, _)| !depleted.contains(trg_id));
+
+            let next_items = self
+                .capture_data_events()
+                .into_iter()
+                .rev()
+                .map(|(e, t)| (e, t, depth + 1));
+            stack.extend(next_items);
+        }
+
+        Ok(())
+    }
+
+    /// Flush the internal event buffer and return pairs of __representative__ matched events and trigger IDs.
+    // FIXME: Return the triggering event unions instead of the representatives (#5355 as a prerequisite)
+    fn capture_data_events(&mut self) -> Vec<(DataEvent, TriggerId)> {
+        let drained: Vec<DataEvent> = self.world.internal_event_buf.drain(..).collect();
+        self.world
+            .triggers
+            .data_triggers()
+            .iter()
+            .filter_map(|(trg_id, action)| {
+                drained.iter().find_map(|event| {
+                    action
+                        .filter
+                        .matches(event)
+                        .then(|| (event.clone(), trg_id.clone()))
+                })
+            })
+            .collect()
+    }
+
+    fn execute_trigger(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        executable: &ExecutableRef,
+        event: EventBox,
+    ) -> Result<(), TransactionRejectionReason> {
+        let res = match executable {
+            ExecutableRef::Instructions(instructions) => self
+                .execute_instructions(instructions.iter().cloned(), authority)
+                .map_err(ValidationFail::from),
+            ExecutableRef::Wasm(blob_hash) => {
                 let module = self
                     .world
                     .triggers
                     .get_compiled_contract(blob_hash)
                     .expect("INTERNAL BUG: contract is not present")
                     .clone();
-                let mut wasm_runtime = wasm::RuntimeBuilder::<wasm::state::Trigger>::new()
+                wasm::RuntimeBuilder::<wasm::state::Trigger>::new()
                     .with_config(self.world().parameters().smart_contract)
                     .with_engine(self.engine.clone()) // Cloning engine is cheap
-                    .build()?;
+                    .build()
+                    .and_then(|mut wasm_runtime| {
+                        wasm_runtime.execute_trigger_module(
+                            self,
+                            id,
+                            authority.clone(),
+                            &module,
+                            event,
+                        )
+                    })
+                    .map_err(ValidationFail::from)
+            }
+        };
+
+        let outcome = match &res {
+            Ok(()) => TriggerCompletedOutcome::Success,
+            Err(error) => TriggerCompletedOutcome::Failure(error.to_string()),
+        };
+        let event = TriggerCompletedEvent::new(id.clone(), outcome);
+        self.world.external_event_buf.push(event.into());
+
+        res.map_err(Into::into)
+    }
+
+    fn execute_instructions(
+        &mut self,
+        instructions: impl IntoIterator<Item = InstructionBox>,
+        authority: &AccountId,
+    ) -> Result<(), Error> {
+        instructions.into_iter().try_for_each(|instruction| {
+            instruction.execute(authority, self)?;
+            Ok(())
+        })
+    }
+
+    /// Apply a non-erroneous executable in the given committed block.
+    #[cfg(any(test, feature = "bench"))]
+    fn apply_executable(&mut self, executable: &Executable, authority: AccountId) {
+        match executable {
+            Executable::Instructions(instructions) => {
+                self.execute_instructions(instructions.iter().cloned(), &authority)
+                    .expect("should be no errors");
+            }
+            Executable::Wasm(bytes) => {
+                let mut wasm_runtime = wasm::RuntimeBuilder::<wasm::state::SmartContract>::new()
+                    .with_config(self.world().parameters().smart_contract)
+                    .with_engine(self.engine.clone()) // Cloning engine is cheap
+                    .build()
+                    .expect("failed to create wasm runtime");
                 wasm_runtime
-                    .execute_trigger_module(self, id, authority.clone(), &module, event)
-                    .map_err(Into::into)
+                    .execute(self, authority, bytes)
+                    .expect("should be no errors");
             }
         }
     }
@@ -2065,6 +2105,7 @@ pub(crate) mod deserialize {
                     let mut triggers = None;
                     let mut executor = None;
                     let mut executor_data_model = None;
+                    let mut external_event_buf = None;
 
                     while let Some(key) = map.next_key::<String>()? {
                         match key.as_str() {
@@ -2110,6 +2151,9 @@ pub(crate) mod deserialize {
                             "executor_data_model" => {
                                 executor_data_model = Some(map.next_value()?);
                             }
+                            "external_event_buf" => {
+                                external_event_buf = Some(map.next_value()?);
+                            }
 
                             _ => { /* Skip unknown fields */ }
                         }
@@ -2140,6 +2184,8 @@ pub(crate) mod deserialize {
                         executor_data_model: executor_data_model.ok_or_else(|| {
                             serde::de::Error::missing_field("executor_data_model")
                         })?,
+                        external_event_buf: external_event_buf
+                            .ok_or_else(|| serde::de::Error::missing_field("external_event_buf"))?,
                     })
                 }
             }
@@ -2306,7 +2352,7 @@ mod tests {
 
             let mut state_block = state.block(block.as_ref().header());
             block_hashes.push(block.as_ref().hash());
-            let _events = state_block.apply(&block, Vec::new()).unwrap();
+            let _events = state_block.apply(&block, Vec::new());
             state_block.commit();
         }
 
@@ -2336,7 +2382,7 @@ mod tests {
             });
 
             let mut state_block = state.block(block.as_ref().header());
-            let _events = state_block.apply(&block, Vec::new()).unwrap();
+            let _events = state_block.apply(&block, Vec::new());
             state_block.commit();
             kura.store_block(block);
         }
