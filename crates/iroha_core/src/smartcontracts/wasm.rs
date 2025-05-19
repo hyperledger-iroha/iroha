@@ -1247,9 +1247,7 @@ impl<S> Runtime<S> {
         caller.set_fuel(current.saturating_add(fuel))
     }
 
-    fn get_fuel(
-        caller: ::wasmtime::Caller<S>,
-    ) -> ::wasmtime::Result<u64> {
+    fn get_fuel(caller: ::wasmtime::Caller<S>) -> ::wasmtime::Result<u64> {
         caller.get_fuel()
     }
 }
