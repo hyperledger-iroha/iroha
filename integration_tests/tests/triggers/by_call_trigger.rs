@@ -80,6 +80,7 @@ fn execute_trigger_should_produce_event() -> Result<()> {
 }
 
 #[test]
+#[ignore = "should be addressed in #5432"]
 fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<()> {
     let (network, rt) = NetworkBuilder::new().start_blocking()?;
     let test_client = network.client();

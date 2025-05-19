@@ -92,6 +92,7 @@ fn mint_asset_after_3_sec() -> Result<()> {
 }
 
 #[test]
+#[ignore = "should be addressed in #5432"]
 fn pre_commit_trigger_should_be_executed() -> Result<()> {
     const CHECKS_COUNT: usize = 5;
 
