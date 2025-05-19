@@ -407,6 +407,34 @@ fn executor_with_fuel() -> Result<()> {
         &TransactionRejectionReason::Validation(ValidationFail::TooComplex)
     ));
 
+    // Test with trigger
+    // Should be enabled with trigger support
+    // let trigger_id = "mint_three_roses".parse::<TriggerId>()?;
+    // let trigger_instructions: Vec<InstructionBox> = vec![
+    //     sample_isi.clone().into(),
+    //     sample_isi.clone().into(),
+    //     sample_isi.clone().into(),
+    // ];
+    // let register_trigger = Register::trigger(Trigger::new(
+    //     trigger_id.clone(),
+    //     Action::new(
+    //         trigger_instructions,
+    //         2_u32,
+    //         client.account.clone(),
+    //         ExecuteTriggerEventFilter::new()
+    //             .for_trigger(trigger_id.clone())
+    //             .under_authority(client.account.clone()),
+    //     ),
+    // ));
+    // client.submit_blocking_with_metadata(register_trigger, fuel_config.clone())?;
+
+    // let execute_trigger = ExecuteTrigger::new(trigger_id);
+    // fuel_config.insert("fuel".parse().unwrap(), 90_000_000_u64);
+    // client.submit_blocking_with_metadata(execute_trigger.clone(), fuel_config.clone())?;
+
+    // fuel_config.insert("fuel".parse().unwrap(), 30_000_000_u64);
+    // client.submit_blocking_with_metadata(execute_trigger.clone(), fuel_config.clone())?;
+
     Ok(())
 }
 

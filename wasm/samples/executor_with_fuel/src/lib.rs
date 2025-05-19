@@ -2,12 +2,15 @@
 
 #![no_std]
 
+extern crate alloc;
 #[cfg(not(test))]
 extern crate panic_halt;
 
 use dlmalloc::GlobalDlmalloc;
 use iroha_executor::prelude::*;
 use serde::{Deserialize, Serialize};
+use iroha_trigger::log;
+use alloc::{format, string::ToString};
 
 #[global_allocator]
 static ALLOC: GlobalDlmalloc = GlobalDlmalloc;
@@ -29,7 +32,14 @@ fn visit_transaction(executor: &mut Executor, tx: &SignedTransaction) {
         .try_into_any()
         .expect("invalid `fuel` configuraion");
 
+    let fuel = runtime::get_fuel();
+    log::info!(&format!("initial fuel: {}", fuel));
+    
     runtime::add_fuel(fuel_config);
+
+    let fuel = runtime::get_fuel();
+    log::error!(&format!("updated fuel amounts: {}", fuel));
+
     iroha_executor::default::visit_transaction(executor, tx)
 }
 

@@ -54,6 +54,7 @@ mod export {
 
     pub const CONSUME_FUEL: &str = "consume_fuel";
     pub const ADD_FUEL: &str = "add_fuel";
+    pub const GET_FUEL: &str = "get_fuel";
 
     pub const DBG: &str = "dbg";
     pub const LOG: &str = "log";
@@ -1245,6 +1246,12 @@ impl<S> Runtime<S> {
         let current = caller.get_fuel()?;
         caller.set_fuel(current.saturating_add(fuel))
     }
+
+    fn get_fuel(
+        caller: ::wasmtime::Caller<S>,
+    ) -> ::wasmtime::Result<u64> {
+        caller.get_fuel()
+    }
 }
 
 /// Marker trait to auto-implement [`import_traits::SetExecutorDataModel`] for a concrete [`Runtime`].
@@ -1557,20 +1564,11 @@ macro_rules! create_imports {
                     |caller: ::wasmtime::Caller<$ty>, offset, len| Runtime::dbg(caller, offset, len),
                 )
             })
-            // CONSUME_FUEL and ADD_FUEL are temporaly made avalibile for all wasm calls.
-            // For security reasons, might be restricted to only executor-related operations.
             .and_then(|l| {
                 l.func_wrap(
                     WASM_MODULE,
-                    export::CONSUME_FUEL,
-                    |caller: ::wasmtime::Caller<$ty>, offset, len| Runtime::consume_fuel(caller, offset, len),
-                )
-            })
-            .and_then(|l| {
-                l.func_wrap(
-                    WASM_MODULE,
-                    export::ADD_FUEL,
-                    |caller: ::wasmtime::Caller<$ty>, offset, len| Runtime::add_fuel(caller, offset, len),
+                    export::GET_FUEL,
+                    |caller: ::wasmtime::Caller<$ty>| Runtime::get_fuel(caller),
                 )
             })
             $(.and_then(|l| {
@@ -1640,6 +1638,8 @@ impl<'wrld, 'block, 'state>
                 export::EXECUTE_ISI => |caller: ::wasmtime::Caller<state::executor::ExecuteTransaction<'wrld, 'block, 'state>>, offset, len| Runtime::execute_instruction(caller, offset, len),
                 export::EXECUTE_QUERY => |caller: ::wasmtime::Caller<state::executor::ExecuteTransaction<'wrld, 'block, 'state>>, offset, len| Runtime::execute_query(caller, offset, len),
                 export::SET_DATA_MODEL => |caller: ::wasmtime::Caller<state::executor::ExecuteTransaction<'wrld, 'block, 'state>>, offset, len| Runtime::set_data_model(caller, offset, len),
+                export::ADD_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::add_fuel(caller, offset, len),
+                export::CONSUME_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::consume_fuel(caller, offset, len),
             )?;
             Ok(linker)
         })
@@ -1664,6 +1664,8 @@ impl<'wrld, 'block, 'state>
                 export::EXECUTE_ISI => |caller: ::wasmtime::Caller<state::executor::ExecuteInstruction<'wrld, 'block, 'state>>, offset, len| Runtime::execute_instruction(caller, offset, len),
                 export::EXECUTE_QUERY => |caller: ::wasmtime::Caller<state::executor::ExecuteInstruction<'wrld, 'block, 'state>>, offset, len| Runtime::execute_query(caller, offset, len),
                 export::SET_DATA_MODEL => |caller: ::wasmtime::Caller<state::executor::ExecuteInstruction<'wrld, 'block, 'state>>, offset, len| Runtime::set_data_model(caller, offset, len),
+                export::ADD_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::add_fuel(caller, offset, len),
+                export::CONSUME_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::consume_fuel(caller, offset, len),
             )?;
             Ok(linker)
         })
@@ -1685,6 +1687,8 @@ impl<'wrld, S: StateReadOnly> RuntimeBuilder<state::executor::ValidateQuery<'wrl
                 export::EXECUTE_ISI => |caller: ::wasmtime::Caller<state::executor::ValidateQuery<'_, S>>, offset, len| Runtime::execute_instruction(caller, offset, len),
                 export::EXECUTE_QUERY => |caller: ::wasmtime::Caller<state::executor::ValidateQuery<'_, S>>, offset, len| Runtime::execute_query(caller, offset, len),
                 export::SET_DATA_MODEL => |caller: ::wasmtime::Caller<state::executor::ValidateQuery<'_, S>>, offset, len| Runtime::set_data_model(caller, offset, len),
+                export::ADD_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::add_fuel(caller, offset, len),
+                export::CONSUME_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::consume_fuel(caller, offset, len),
             )?;
             Ok(linker)
         })
@@ -1706,6 +1710,8 @@ impl<'wrld, 'block, 'state> RuntimeBuilder<state::executor::Migrate<'wrld, 'bloc
                 export::EXECUTE_ISI => |caller: ::wasmtime::Caller<state::executor::Migrate<'wrld, 'block, 'state>>, offset, len| Runtime::execute_instruction(caller, offset, len),
                 export::EXECUTE_QUERY => |caller: ::wasmtime::Caller<state::executor::Migrate<'wrld, 'block, 'state>>, offset, len| Runtime::execute_query(caller, offset, len),
                 export::SET_DATA_MODEL => |caller: ::wasmtime::Caller<state::executor::Migrate<'wrld, 'block, 'state>>, offset, len| Runtime::set_data_model(caller, offset, len),
+                export::ADD_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::add_fuel(caller, offset, len),
+                export::CONSUME_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::consume_fuel(caller, offset, len),
             )?;
             Ok(linker)
         })

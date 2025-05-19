@@ -20,6 +20,16 @@ pub fn consume_fuel(fuel: u64) {
     unsafe { iroha_smart_contract_utils::encode_and_execute(&fuel, host::consume_fuel) }
 }
 
+/// Returns availiable fuel in the runtime.
+///
+/// # Errors
+///
+/// - If execution on Iroha side failed
+#[cfg(not(test))]
+pub fn get_fuel() -> u64 {
+    unsafe { host::get_fuel() }
+}
+
 #[cfg(not(test))]
 mod host {
     #[link(wasm_import_module = "iroha")]
@@ -30,5 +40,10 @@ mod host {
     #[link(wasm_import_module = "iroha")]
     extern "C" {
         pub(super) fn consume_fuel(ptr: *const u8, len: usize);
+    }
+
+    #[link(wasm_import_module = "iroha")]
+    extern "C" {
+        pub(super) fn get_fuel() -> u64;
     }
 }
