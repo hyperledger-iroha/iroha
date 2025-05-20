@@ -72,7 +72,8 @@ const TEMPDIR_IN_ENV: &str = "TEST_NETWORK_TMP_DIR";
 const PROGRAM_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
 const PROGRAM_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
 
-fn repo_root() -> PathBuf {
+/// Utility to get the root of the repository
+pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../")
         .canonicalize()
@@ -135,7 +136,12 @@ pub enum Program {
 }
 
 impl Program {
-    fn resolve(&self) -> color_eyre::Result<PathBuf> {
+    /// Resolve program path.
+    ///
+    /// # Errors
+    ///
+    /// If the path is not found.
+    pub fn resolve(&self) -> color_eyre::Result<PathBuf> {
         let (name, env, default) = match self {
             Self::Irohad => ("irohad", PROGRAM_IROHAD_ENV, "target/release/irohad"),
             Self::Iroha => ("iroha", PROGRAM_IROHA_ENV, "target/release/iroha"),
