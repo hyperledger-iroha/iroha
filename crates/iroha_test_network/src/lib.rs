@@ -411,7 +411,15 @@ impl NetworkBuilder {
         self
     }
 
-    /// Add a layer of TOML configuration via [`TomlWriter`].
+    /// Add a new TOML configuration _layer_, using [`TomlWriter`] helper.
+    ///
+    /// Layers are composed using `extends` field in the final config file:
+    ///
+    /// ```toml
+    /// extends = ["layer-1.toml", "layer-2.toml", "layer-3.toml"]
+    /// ```
+    ///
+    /// Thus, layers are merged sequentially, with later ones overriding _conflicting_ parameters from earlier ones.
     ///
     /// # Example
     ///
