@@ -17,31 +17,7 @@ env:
   NEXTEST_PROFILE: ci
 
 jobs:
-  cross_image:
-    runs-on: [self-hosted, Linux, iroha2]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        id: buildx
-        if: always()
-        uses: docker/setup-buildx-action@v3
-        with:
-          version: latest
-          install: true
-      - name: Build a multi-architecture image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: false
-          file: Dockerfile.cross
-          platforms: linux/amd64,linux/arm64
-          tags: hyperledger/iroha:experimental-alpine-multi-arch
-          labels: commit=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
   pre_build:
-    if: false
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -76,7 +52,6 @@ jobs:
           retention-days: 1
 
   consistency:
-    if: false
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -97,7 +72,6 @@ jobs:
           ./scripts/tests/consistency.sh all
 
   fmt:
-    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,7 +88,6 @@ jobs:
         run: cargo fmt --all -- --check
 
   clippy:
-    if: false
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -128,7 +101,6 @@ jobs:
       # TODO: upload clippy artifact?
 
   doc:
-    if: false
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -141,7 +113,6 @@ jobs:
         run: cargo doc --no-deps --quiet --all-features
 
   test:
-    if: false
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -206,7 +177,6 @@ jobs:
           retention-days: 3
 
   pytests:
-    if: false
     needs: pre_build
     runs-on: ubuntu-latest
     env:
@@ -269,7 +239,6 @@ jobs:
         run: ./scripts/test_env.py cleanup
 
   check_title:
-    if: false
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -308,7 +277,6 @@ jobs:
           delete: true
 
   check_links:
-    if: false
     runs-on: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
@@ -347,7 +315,6 @@ jobs:
           # -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
 
   test_wasm:
-    if: false
     runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
