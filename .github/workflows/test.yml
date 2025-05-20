@@ -1,0 +1,27 @@
+name: Test
+
+on:
+  pull_request:
+
+jobs:
+  cross_image:
+    runs-on: [self-hosted, Linux, iroha2]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        id: buildx
+        if: always()
+        uses: docker/setup-buildx-action@v3
+        with:
+          version: latest
+          install: true
+      - name: Build a multi-architecture image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64,linux/arm64
+          tags: hyperledger/iroha:experimental-alpine-multi-arch
+          labels: commit=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
