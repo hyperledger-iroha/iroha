@@ -148,9 +148,9 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
 
 ###### **Options:**
 
-* `-c`, `--config <PATH>` — Path to the configuration file
+* `-c`, `--config <PATH>` — Path to the configuration file.
 
-  Default value: `client.toml`
+   By default, `iroha` will try to read `client.toml` file, but would proceed if it is not found.
 * `-v`, `--verbose` — Print configuration details to stderr
 * `-m`, `--metadata <PATH>` — Path to a JSON5 file for attaching transaction metadata (optional)
 * `-i`, `--input` — Reads instructions from stdin and appends new ones.

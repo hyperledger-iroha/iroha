@@ -3082,7 +3082,9 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "toml",
 ]
 
 [[package]]
@@ -3095,17 +3097,14 @@ checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 name = "iroha"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "assert_matches",
  "assertables",
  "attohttpc",
  "base64 0.22.1",
  "derive_more",
  "displaydoc",
  "error-stack",
- "expect-test",
  "eyre",
  "futures-util",
- "hex",
  "http 1.1.0",
  "iroha_config",
  "iroha_config_base",
@@ -3128,7 +3127,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.21.0",
  "toml",
- "trybuild",
  "tungstenite 0.21.0",
  "url",
 ]
@@ -3781,6 +3779,7 @@ dependencies = [
  "iroha_telemetry",
  "iroha_test_samples",
  "nix 0.29.0",
+ "nonzero_ext",
  "parity-scale-codec",
  "petname",
  "rand",

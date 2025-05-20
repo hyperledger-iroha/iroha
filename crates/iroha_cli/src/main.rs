@@ -14,7 +14,11 @@ use erased_serde::Serialize;
 use error_stack::{fmt::ColorMode, IntoReportCompat, ResultExt};
 use eyre::{eyre, Result, WrapErr};
 use futures::TryStreamExt;
-use iroha::{client::Client, config::Config, data_model::prelude::*};
+use iroha::{
+    client::Client,
+    config::{Config, LoadPath},
+    data_model::prelude::*,
+};
 use thiserror::Error;
 use tokio::runtime::Runtime;
 
@@ -22,9 +26,11 @@ use tokio::runtime::Runtime;
 #[derive(clap::Parser, Debug)]
 #[command(name = "iroha", version = concat!("version=", env!("CARGO_PKG_VERSION"), " git_commit_sha=", env!("VERGEN_GIT_SHA")), author)]
 struct Args {
-    /// Path to the configuration file
-    #[arg(short, long, value_name("PATH"), default_value = "client.toml")]
-    config: PathBuf,
+    /// Path to the configuration file.
+    ///
+    /// By default, `iroha` will try to read `client.toml` file, but would proceed if it is not found.
+    #[arg(short, long, value_name("PATH"))]
+    config: Option<PathBuf>,
     /// Print configuration details to stderr
     #[arg(short, long)]
     verbose: bool,
@@ -268,10 +274,13 @@ fn main() -> error_stack::Result<(), MainError> {
 
     error_stack::Report::set_color_mode(color_mode());
 
-    let config = Config::load(args.config)
-        // FIXME: would be nice to NOT change the context, it's unnecessary
-        .change_context(MainError::Config)
-        .attach_printable("config path was set by `--config` argument")?;
+    let config = Config::load(args.config.map_or_else(
+        || LoadPath::Default(PathBuf::from("client.toml")),
+        LoadPath::Explicit,
+    ))
+    // FIXME: would be nice to NOT change the context, it's unnecessary
+    .change_context(MainError::Config)
+    .attach_printable("config path was set by `--config` argument")?;
 
     if args.verbose {
         eprintln!(
