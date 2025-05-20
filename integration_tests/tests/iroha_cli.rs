@@ -1,4 +1,4 @@
-#![allow(missing_docs)]
+//! Integration tests of the Iroha Client CLI
 
 use std::path::PathBuf;
 
