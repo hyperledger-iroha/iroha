@@ -69,10 +69,7 @@ jobs:
           BIN_IROHA: bins/iroha
         run: |
           chmod +x -R bins
-          ./scripts/tests/consistency.sh genesis
-          ./scripts/tests/consistency.sh schema
-          ./scripts/tests/consistency.sh cli-help
-          ./scripts/tests/consistency.sh docker-compose
+          ./scripts/tests/consistency.sh all
 
   fmt:
     runs-on: ubuntu-latest
