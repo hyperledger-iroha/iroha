@@ -365,7 +365,7 @@ fn executor_with_fuel() -> Result<()> {
     fuel_config.insert("fuel".parse().unwrap(), 30_000_000_u64);
     client.submit_blocking_with_metadata::<InstructionBox>(
         InstructionBox::SetParameter(SetParameter::new(Parameter::Executor(
-            SmartContractParameter::Fuel(
+            iroha_data_model::parameter::SmartContractParameter::Fuel(
                 std::num::NonZeroU64::new(60_000_000_u64).expect("Fuel must be positive."),
             ),
         ))),
