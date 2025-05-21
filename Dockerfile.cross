@@ -35,6 +35,10 @@ RUN --mount=type=cache,target=/root/.cargo/git/db \
     --mount=type=cache,target=/root/.cargo/registry/index \
     cargo fetch
 
+# NOTE: this is needed for profiling image, when `-Z build-std` is set
+# TODO: set up cache mount?
+RUN rustup component add rust-src
+
 ARG TARGETPLATFORM
 ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
