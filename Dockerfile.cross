@@ -1,0 +1,96 @@
+# Multi-platform image via cross-compilation.
+#
+# Useful links:
+#
+# - https://docs.docker.com/build/building/multi-platform/#cross-compilation
+# - https://doc.rust-lang.org/nightly/rustc/platform-support.html
+# - https://github.com/tonistiigi/xx
+# - https://users.rust-lang.org/t/cross-compilation-linux-x86-64-host-aarch64-target/105680
+#
+# FIX: Unresolved issues:
+# - libunwind cryptic message after irohad start
+
+FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
+
+# NOTE: building on the **host** platform to avoid emulation, which is extremely slow
+FROM --platform=$BUILDPLATFORM rust:alpine as xx-build
+
+WORKDIR /app
+COPY --from=xx / /
+
+# NOTE: `git` for `VERGEN_GIT_SHA`; `clang` for `xx-cargo`
+RUN apk add mold git clang
+
+COPY Cargo.toml Cargo.lock rust-toolchain.toml .
+COPY crates crates
+COPY data_model data_model
+COPY integration_tests integration_tests
+# FIX: needed for `VERGEN_GIT_SHA`; prefer to pass `GIT_SHA` explicitly
+COPY .git .git
+# PERF: Cache mounts as in https://github.com/tonistiigi/xx#rust
+#       Using _before_ `ARG TARGETPLATFORM` to re-use between platform jobs
+#       (not sure it works exactly this way, but it is said to be done this way)
+RUN --mount=type=cache,target=/root/.cargo/git/db \
+    --mount=type=cache,target=/root/.cargo/registry/cache \
+    --mount=type=cache,target=/root/.cargo/registry/index \
+    cargo fetch
+
+# NOTE: this is needed for profiling image, when `-Z build-std` is set
+# TODO: set up cache mount?
+RUN rustup component add rust-src
+
+ARG TARGETPLATFORM
+ARG PROFILE="deploy"
+ARG RUSTFLAGS=""
+ARG FEATURES=""
+ARG CARGOFLAGS=""
+
+# HACK: install target platform-specific headers necessary for cross-compilation
+RUN xx-apk add build-base
+# HACK: this is not set by `xx-cargo`, but is used by `cxx` package (dependency of `wasm-opt-sys`)
+ENV CXX=xx-c++
+# HACK: this resolves clang issues on link stage
+ENV CC=xx-clang
+# HACK: `xx-cargo` is necessary.
+#       If using just `cargo` with `--target $(xx-cargo --print-target-triple)`, build fails on link stage
+#       (mold finds a mismatch between architectures).
+#       Also, despite `xx-cargo` setting the target triple, build still fails if not set `--target` here.
+RUN --mount=type=cache,target=/root/.cargo/git/db \
+    --mount=type=cache,target=/root/.cargo/registry/cache \
+    --mount=type=cache,target=/root/.cargo/registry/index \
+    RUSTFLAGS="${RUSTFLAGS}" mold --run \
+    xx-cargo ${CARGOFLAGS} build \
+    --target $(xx-cargo --print-target-triple) \
+    --profile "${PROFILE}" \
+    --features "${FEATURES}" \
+    --bins
+
+RUN <<EOF
+  set -ex
+  mkdir ./bins
+  target_triple="$(xx-cargo --print-target-triple)"
+  # TODO: extract bins using `cargo metadata` & `jq`
+  for bin in iroha irohad kagami iroha_wasm_test_runner; do
+    bin_path="./target/${target_triple}/${PROFILE}/${bin}"
+    xx-verify "${bin_path}"
+    mv "${bin_path}" ./bins/
+  done
+EOF
+
+FROM alpine
+
+COPY --from=xx-build /app/bins/* /usr/local/bin/
+
+# NOTE: jq & curl to support output `kagami swarm`
+RUN apk add jq curl \
+  && adduser --disabled-password --gecos '' iroha \
+  && mkdir -p /data/iroha /config/iroha \
+  && chown -R iroha /data/iroha /config/iroha
+
+USER iroha
+
+# TODO: Define these paths with VOLUME directive?
+ENV KURA_STORE_DIR=/data/iroha/storage
+ENV SNAPSHOT_STORE_DIR=/data/iroha/snapshot
+
+CMD ["irohad"]

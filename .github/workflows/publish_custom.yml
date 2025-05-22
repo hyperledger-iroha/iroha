@@ -109,8 +109,8 @@ jobs:
 
       # Alpine (difference from glibc is the use of Dockerfile.musl)
       - name: Build and push iroha:alpine-sha image
-        uses: docker/build-push-action@v6
         if: ${{ inputs.image_type == 'alpine' }}
+        uses: docker/build-push-action@v6
         with:
           push: true
           tags: docker.soramitsu.co.jp/iroha2/iroha:alpine-${{ github.sha }}
