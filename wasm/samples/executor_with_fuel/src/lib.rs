@@ -34,12 +34,12 @@ fn visit_transaction(executor: &mut Executor, tx: &SignedTransaction) {
         .expect("invalid `fuel` configuraion");
 
     let fuel = runtime::get_fuel();
-    log::info!(&format!("initial fuel: {}", fuel));
+    log::info!(&format!("initial fuel: {fuel}"));
 
     runtime::add_fuel(fuel_config);
 
     let fuel = runtime::get_fuel();
-    log::info!(&format!("updated fuel amounts: {}", fuel));
+    log::info!(&format!("updated fuel amounts: {fuel}"));
 
     iroha_executor::default::visit_transaction(executor, tx)
 }
