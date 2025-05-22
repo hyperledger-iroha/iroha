@@ -1,6 +1,7 @@
 [package]
 name = "integration_tests"
 edition = "2021"
+version = "2.0.0-rc.2.0"
 
 [lints]
 workspace = true

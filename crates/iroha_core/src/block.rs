@@ -270,8 +270,12 @@ mod new {
     }
 
     impl NewBlock {
-        /// Categorize transactions of this block to produce a [`ValidBlock`]
-        pub fn categorize(self, state_block: &mut StateBlock<'_>) -> WithEvents<ValidBlock> {
+        /// Validate each transaction in the block, apply resulting state changes,
+        /// and record any errors back into the block.
+        pub fn validate_and_record_transactions(
+            self,
+            state_block: &mut StateBlock<'_>,
+        ) -> WithEvents<ValidBlock> {
             let mut wasm_cache = WasmCache::new();
             let errors = self
                 .transactions
@@ -280,7 +284,9 @@ mod new {
                 .cloned()
                 .enumerate()
                 .fold(BTreeMap::new(), |mut acc, (idx, tx)| {
-                    if let Err((rejected_tx, error)) = state_block.validate(tx, &mut wasm_cache) {
+                    if let Err((rejected_tx, error)) =
+                        state_block.validate_transaction(tx, &mut wasm_cache)
+                    {
                         iroha_logger::debug!(
                             block=%self.header.hash(),
                             tx=%rejected_tx.hash(),
@@ -296,6 +302,9 @@ mod new {
 
             let mut block: SignedBlock = self.into();
             block.set_transaction_errors(errors);
+            state_block.execute_time_triggers(&block);
+
+            // FIXME: Don't create a ValidBlock that deviates from the result of ValidBlock::validate.
             WithEvents::new(ValidBlock(block))
         }
 
@@ -446,8 +455,8 @@ mod valid {
             Ok(())
         }
 
-        /// Validate a block against the current state of the world.
-        /// Individual transaction errors will be updated.
+        /// Validate the given block, apply resulting state changes,
+        /// and record any transaction errors back into the block.
         ///
         /// # Errors
         ///
@@ -473,9 +482,12 @@ mod valid {
                 return WithEvents::new(Err((block.into(), error)));
             }
 
-            if let Err(error) =
-                Self::categorize(&mut block, expected_chain_id, genesis_account, state_block)
-            {
+            if let Err(error) = Self::validate_and_record_transactions(
+                &mut block,
+                expected_chain_id,
+                genesis_account,
+                state_block,
+            ) {
                 return WithEvents::new(Err((block.into(), error.into())));
             }
 
@@ -509,7 +521,7 @@ mod valid {
                 state.block(block.header())
             };
 
-            if let Err(error) = Self::categorize(
+            if let Err(error) = Self::validate_and_record_transactions(
                 &mut block,
                 expected_chain_id,
                 genesis_account,
@@ -606,7 +618,9 @@ mod valid {
             Ok(())
         }
 
-        fn categorize(
+        /// Validate each transaction in the block, apply resulting state changes,
+        /// and record any errors back into the block.
+        fn validate_and_record_transactions(
             block: &mut SignedBlock,
             expected_chain_id: &ChainId,
             genesis_account: &AccountId,
@@ -641,7 +655,7 @@ mod valid {
                     }?;
 
                     if let Err((rejected_tx, error)) =
-                        state_block.validate(accepted_tx, &mut wasm_cache)
+                        state_block.validate_transaction(accepted_tx, &mut wasm_cache)
                     {
                         iroha_logger::debug!(
                             tx=%rejected_tx.hash(),
@@ -657,6 +671,8 @@ mod valid {
                 })?;
 
             block.set_transaction_errors(errors);
+
+            state_block.execute_time_triggers(block);
 
             Ok(())
         }
@@ -1216,7 +1232,9 @@ mod tests {
             .unpack(|_| {});
 
         let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block.categorize(&mut state_block).unpack(|_| {});
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
         state_block.commit();
 
         // The 1st transaction should be confirmed and the 2nd rejected
@@ -1282,7 +1300,9 @@ mod tests {
             .sign(alice_keypair.private_key())
             .unpack(|_| {});
         let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block.categorize(&mut state_block).unpack(|_| {});
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
         state_block.commit();
 
         // The 1st transaction should fail and 2nd succeed
@@ -1335,7 +1355,9 @@ mod tests {
             .unpack(|_| {});
 
         let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block.categorize(&mut state_block).unpack(|_| {});
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
         state_block.commit();
 
         let mut errors = valid_block.as_ref().errors();
@@ -1400,7 +1422,9 @@ mod tests {
             .unpack(|_| {});
 
         let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block.categorize(&mut state_block).unpack(|_| {});
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
         state_block.commit();
 
         // Validate genesis block

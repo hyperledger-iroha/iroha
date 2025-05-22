@@ -171,7 +171,7 @@ fn validate_transaction(criterion: &mut Criterion) {
     let mut state_block = state.block(unverified_block.header());
     let _ = criterion.bench_function("validate", |b| {
         b.iter(
-            || match state_block.validate(transaction.clone(), &mut wasm_cache) {
+            || match state_block.validate_transaction(transaction.clone(), &mut wasm_cache) {
                 Ok(_) => success_count += 1,
                 Err(_) => failure_count += 1,
             },
