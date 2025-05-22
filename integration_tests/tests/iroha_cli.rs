@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 
-use eyre::{eyre, Context};
 use iroha::{
     client::Client,
     crypto::{ExposedPrivateKey, KeyPair},
@@ -13,34 +12,8 @@ use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::sample_wasm_path;
 use reqwest::Url;
 
-const PROGRAM_ENV: &str = "BIN_IROHA";
-const PROGRAM_DEFAULT: &str = "target/release/iroha";
-
 fn program() -> PathBuf {
-    std::env::var(PROGRAM_ENV)
-        .map_or_else(
-            |err| {
-                repo_root()
-                    .join(PROGRAM_DEFAULT)
-                    .canonicalize()
-                    .wrap_err_with(|| eyre!("Used default path: {PROGRAM_DEFAULT} (env: {err})"))
-            },
-            |path| {
-                repo_root()
-                    .join(&path)
-                    .canonicalize()
-                    .wrap_err_with(|| eyre!("Used path from {PROGRAM_ENV}: {path}"))
-            },
-        )
-        .wrap_err("Cannot resolve iroha binary")
-        .unwrap()
-}
-
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../")
-        .canonicalize()
-        .unwrap()
+    iroha_test_network::Program::Iroha.resolve().unwrap()
 }
 
 struct ProgramConfig {
@@ -99,7 +72,7 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
 
     let config = ProgramConfig::from(&network.client());
     let mut child = tokio::process::Command::new(program())
-        .current_dir(repo_root())
+        .current_dir(iroha_test_network::repo_root())
         .envs(config.envs())
         .arg("executor")
         .arg("upgrade")

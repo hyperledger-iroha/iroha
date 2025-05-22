@@ -363,7 +363,7 @@ impl Client {
             .await
             .wrap_err_with(|| {
                 eyre!(
-                    "haven't got tx confirmation within {:?} (configured with `transaction_status_timeout`)",
+                    "haven't got tx confirmation within {:?} (configured with `transaction.status_timeout_ms`)",
                     self.transaction_status_timeout
                 )
             })

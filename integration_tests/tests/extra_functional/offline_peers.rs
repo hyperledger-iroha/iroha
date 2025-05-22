@@ -17,7 +17,7 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
 
     // When
     let network = NetworkBuilder::new().with_peers(4).build();
-    let cfg = network.config();
+    let cfg = network.config_layers().collect::<Vec<_>>();
     let genesis = network.genesis();
     network
         .peers()
@@ -25,7 +25,7 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
         // only 2 out of 4
         .take(2)
         .enumerate()
-        .map(|(i, peer)| peer.start(cfg.clone(), (i == 0).then_some(genesis)))
+        .map(|(i, peer)| peer.start(cfg.iter(), (i == 0).then_some(genesis)))
         .collect::<FuturesUnordered<_>>()
         .collect::<Vec<_>>()
         .await;

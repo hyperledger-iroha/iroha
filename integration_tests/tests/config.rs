@@ -8,7 +8,7 @@ use nonzero_ext::nonzero;
 #[test]
 fn retrieve_update_config() -> eyre::Result<()> {
     let (network, _rt) = NetworkBuilder::new()
-        .with_config(|c| {
+        .with_config_layer(|c| {
             c.write(["network", "block_gossip_size"], 100)
                 .write(["queue", "capacity"], 100_000);
         })
