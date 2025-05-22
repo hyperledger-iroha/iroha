@@ -12,7 +12,7 @@ pub(crate) mod secp256k1;
 
 #[cfg(not(feature = "std"))]
 use alloc::{format, string::String, vec, vec::Vec};
-use core::{borrow::Borrow as _, marker::PhantomData};
+use core::marker::PhantomData;
 
 use arrayref::array_ref;
 use derive_more::{Deref, DerefMut};
@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use zeroize::Zeroize as _;
 
-use crate::{error::ParseError, ffi, hex_decode, Error, HashOf, PrivateKey, PublicKey};
+use crate::{
+    error::ParseError, ffi, hex_decode, Error, HashOf, PrivateKey, PublicKey, PublicKeyFull,
+};
 
 /// Construct cryptographic RNG from seed.
 fn rng_from_seed(mut seed: Vec<u8>) -> impl CryptoRngCore {
@@ -97,19 +99,16 @@ impl Signature {
     /// # Errors
     /// Fails if the message doesn't pass verification
     pub fn verify(&self, public_key: &PublicKey, payload: &[u8]) -> Result<(), Error> {
-        match public_key.0.borrow() {
-            crate::PublicKeyInner::Ed25519(pk) => {
+        let public_key_full: PublicKeyFull = (&public_key.0).into();
+        match &public_key_full {
+            PublicKeyFull::Ed25519(pk) => {
                 ed25519::Ed25519Sha512::verify(payload, &self.payload, pk)
             }
-            crate::PublicKeyInner::Secp256k1(pk) => {
+            PublicKeyFull::Secp256k1(pk) => {
                 secp256k1::EcdsaSecp256k1Sha256::verify(payload, &self.payload, pk)
             }
-            crate::PublicKeyInner::BlsSmall(pk) => {
-                bls::BlsSmall::verify(payload, &self.payload, pk)
-            }
-            crate::PublicKeyInner::BlsNormal(pk) => {
-                bls::BlsNormal::verify(payload, &self.payload, pk)
-            }
+            PublicKeyFull::BlsSmall(pk) => bls::BlsSmall::verify(payload, &self.payload, pk),
+            PublicKeyFull::BlsNormal(pk) => bls::BlsNormal::verify(payload, &self.payload, pk),
         }?;
 
         Ok(())
