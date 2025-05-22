@@ -1,0 +1,24 @@
+[
+  {
+    "Time": {
+      "interval": {
+        "since_ms": 1747950697947,
+        "length_ms": 0
+      }
+    }
+  },
+  {
+    "Pipeline": {
+      "Block": {
+        "header": {
+          "height": 1,
+          "prev_block_hash": null,
+          "transactions_hash": "51F7FB25C3CF1D20BC451958B281C65978AE7FB9295FB17965F3CDEF8CF8ED85",
+          "creation_time_ms": 1747950697947,
+          "view_change_index": 0
+        },
+        "status": "Applied"
+      }
+    }
+  }
+]

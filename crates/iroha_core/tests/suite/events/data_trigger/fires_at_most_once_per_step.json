@@ -1,0 +1,114 @@
+[
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##ed012064A9FD27508B8BD38080ADB56F0EF72259B9F8677C6579E331BB946DD9626723@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##ed0120874F82265255BF774A8FAE7E0F9B900A03FAA1A548B0CC14A0B9669093D07491@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##ed012064A9FD27508B8BD38080ADB56F0EF72259B9F8677C6579E331BB946DD9626723@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##ed0120874F82265255BF774A8FAE7E0F9B900A03FAA1A548B0CC14A0B9669093D07491@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##ed0120874F82265255BF774A8FAE7E0F9B900A03FAA1A548B0CC14A0B9669093D07491@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##ed0120384F5AF98BEDAF1C400B98D4E91913B5EE8C76F451D87EB03A9759296E791BAD@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "TriggerCompleted": {
+      "trigger_id": "data-bob-carol",
+      "outcome": "Success"
+    }
+  },
+  {
+    "Time": {
+      "interval": {
+        "since_ms": 1747950697922,
+        "length_ms": 0
+      }
+    }
+  },
+  {
+    "Pipeline": {
+      "Block": {
+        "header": {
+          "height": 1,
+          "prev_block_hash": null,
+          "transactions_hash": "8EF4B2CA888A0AEB224C8E22715AA206DE7AA130152CE69E4F3D32B148336D0F",
+          "creation_time_ms": 1747950697922,
+          "view_change_index": 0
+        },
+        "status": "Applied"
+      }
+    }
+  }
+]

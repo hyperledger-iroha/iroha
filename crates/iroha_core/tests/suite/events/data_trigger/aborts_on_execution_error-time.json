@@ -1,0 +1,24 @@
+[
+  {
+    "Time": {
+      "interval": {
+        "since_ms": 1747950697915,
+        "length_ms": 0
+      }
+    }
+  },
+  {
+    "Pipeline": {
+      "Block": {
+        "header": {
+          "height": 1,
+          "prev_block_hash": null,
+          "transactions_hash": null,
+          "creation_time_ms": 1747950697915,
+          "view_change_index": 0
+        },
+        "status": "Applied"
+      }
+    }
+  }
+]

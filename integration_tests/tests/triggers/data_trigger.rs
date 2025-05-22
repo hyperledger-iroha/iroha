@@ -4,7 +4,7 @@ use iroha_test_network::*;
 use iroha_test_samples::{gen_account_in, ALICE_ID};
 
 #[test]
-fn subscribes_events() -> Result<()> {
+fn two_non_intersecting_execution_paths() -> Result<()> {
     let (network, _rt) = NetworkBuilder::new().start_blocking()?;
     let test_client = network.client();
 

@@ -239,7 +239,7 @@ pub mod action {
     impl Repeats {
         /// Returns `true` if this repeat policy has no remaining executions.
         pub fn is_depleted(&self) -> bool {
-            matches!(self, Repeats::Exactly(0))
+            *self == Repeats::Exactly(0)
         }
     }
 
@@ -304,4 +304,16 @@ pub mod prelude {
     //! Re-exports of commonly used types.
 
     pub use super::{action::prelude::*, Trigger, TriggerId};
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::Repeats;
+
+    #[test]
+    fn repeats_is_depleted() {
+        assert!(!Repeats::Indefinitely.is_depleted());
+        assert!(!Repeats::Exactly(1).is_depleted());
+        assert!(Repeats::Exactly(0).is_depleted());
+    }
 }

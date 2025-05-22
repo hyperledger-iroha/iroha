@@ -1624,7 +1624,7 @@ impl StateTransaction<'_, '_> {
     /// Flush the internal event buffer and return pairs of __representative__ matched events and trigger IDs.
     // FIXME: Return the triggering event unions instead of the representatives (#5355 as a prerequisite)
     fn capture_data_events(&mut self) -> Vec<(DataEvent, TriggerId)> {
-        let drained: Vec<DataEvent> = self.world.internal_event_buf.drain(..).collect();
+        let drained = core::mem::take(&mut self.world.internal_event_buf);
         self.world
             .triggers
             .data_triggers()

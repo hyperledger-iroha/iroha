@@ -306,56 +306,53 @@ impl StateBlock<'_> {
 
 #[cfg(test)]
 mod tests {
+    use core::panic;
     use std::sync::LazyLock;
 
     use iroha_data_model::{block::SignedBlock, isi::Instruction, prelude::EventBox};
     use iroha_genesis::GENESIS_DOMAIN_ID;
-    use iroha_test_samples::{gen_account_in, PEER_KEYPAIR};
+    use iroha_test_samples::gen_account_in;
 
     use super::*;
     use crate::{
         block::{BlockBuilder, ValidBlock},
-        smartcontracts::{
-            isi::Registrable,
-            triggers::{set::SetTransaction, specialized::SpecializedTrigger},
-        },
+        smartcontracts::isi::Registrable,
         state::{State, StateBlock, StateReadOnly, World},
         sumeragi::network_topology::Topology,
     };
-
-    /// The origin that initiates a chain of data triggers.
-    enum TriggerOrigin {
-        /// A user-submitted transaction.
-        ExternalTransaction,
-        /// A scheduled time-based trigger.
-        TimeTrigger,
-    }
 
     mod time_trigger {
         use super::*;
 
         /// # Scenario
         ///
-        /// 1. Transaction transfers an asset from Alice to Bob.
-        /// 2. Data trigger fires and transfers a LARGE asset from Bob to Carol.
-        /// 3. Time trigger fires and __should succeed__ to transfer the LARGE asset from Carol to Dave.
-        /// 4. Data trigger fires and transfers the LARGE asset from Dave to Eve.
+        /// 1. Transaction: Alice sends a large donation to Bob.
+        /// 2. Data trigger: Bob forwards the donation to Carol.
+        /// 3. Time trigger: Carol attempts to send the donation to Dave; this should fail if step 2 did not occur.
+        /// 4. Data trigger: Dave forwards the donation to Eve.
         #[tokio::test]
-        #[expect(clippy::cast_possible_wrap)]
         async fn fires_after_external_transactions() {
             let mut sandbox = Sandbox::new()
-                .with_data_trigger_oneshot("bob", "carol", INIT_BALANCE["bob"])
-                .with_time_trigger_oneshot("carol", "dave", INIT_BALANCE["bob"])
-                .with_data_trigger_oneshot("dave", "eve", INIT_BALANCE["bob"]);
-            sandbox.transfer_one("alice", "bob");
+                .with_data_trigger_transfer("bob", 50, "carol")
+                .with_time_trigger_transfer("carol", 50, "dave")
+                .with_data_trigger_transfer("dave", 50, "eve");
+            sandbox.request_transfer("alice", 50, "bob");
             let mut block = sandbox.block();
-            let _events = block.apply();
             block.assert_balances([
-                ("alice", -1),
-                ("bob", 1 - INIT_BALANCE["bob"] as i32),
-                ("carol", 0),
-                ("dave", 0),
-                ("eve", INIT_BALANCE["bob"] as i32),
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
+            ]);
+            let events = block.apply();
+            assert_events(&events, "time_trigger/fires_after_external_transactions");
+            block.assert_balances([
+                ("alice", 10),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 60),
             ]);
         }
     }
@@ -365,164 +362,196 @@ mod tests {
 
         /// # Scenario
         ///
-        /// 1. Transaction transfers an asset from Alice to Bob.
-        /// 2. Trigger fires and transfers a LARGE asset from Bob to Carol.
-        /// 3. Transaction __should succeed__ to transfer the LARGE asset from Carol to Dave.
+        /// 1. Transaction: Alice sends a large donation to Bob.
+        /// 2. Data trigger: Bob forwards the donation to Carol.
+        /// 3. Transaction: Carol attempts to send the donation to Dave; this should fail if step 2 did not occur.
         #[tokio::test]
-        #[expect(clippy::cast_possible_wrap)]
         async fn fires_for_each_transaction() {
-            let mut sandbox =
-                Sandbox::new().with_data_trigger_oneshot("bob", "carol", INIT_BALANCE["bob"]);
-            sandbox.transfer_one("alice", "bob");
-            sandbox.transfers_batched(1, "carol", "dave", INIT_BALANCE["bob"]);
+            let mut sandbox = Sandbox::new().with_data_trigger_transfer("bob", 50, "carol");
+            sandbox.request_transfer("alice", 50, "bob");
+            sandbox.request_transfer("carol", 50, "dave");
             let mut block = sandbox.block();
-            let _events = block.apply();
-            block.assert_balances([
-                ("alice", -1),
-                ("bob", 1 - INIT_BALANCE["bob"] as i32),
-                ("carol", 0),
-                ("dave", INIT_BALANCE["bob"] as i32),
-            ]);
+            block.assert_balances([("alice", 60), ("bob", 10), ("carol", 10), ("dave", 10)]);
+            let events = block.apply();
+            assert_events(&events, "data_trigger/fires_for_each_transaction");
+            block.assert_balances([("alice", 10), ("bob", 10), ("carol", 10), ("dave", 60)]);
         }
 
         /// # Scenario
         ///
-        /// 1. Transaction transfers an asset from Alice to Bob twice.
-        /// 2. Trigger __should fire once__ and transfer one from Bob to Carol.
+        /// 1. Transaction: Alice sends the asset to Bob in two separate packages, emitting two events.
+        /// 2. Data trigger: Bob forwards exactly one package to Carol; this trigger fires only once.
         #[tokio::test]
-        async fn fires_at_most_once_per_transaction() {
-            let mut sandbox = Sandbox::new().with_data_trigger("bob", "carol");
-            sandbox.transfers_batched(2, "alice", "bob", 1);
+        async fn fires_at_most_once_per_step() {
+            let mut sandbox = Sandbox::new().with_data_trigger_transfer("bob", 10, "carol");
+            sandbox.request_transfers_batched::<2>("alice", 10, "bob");
             let mut block = sandbox.block();
-            let _events = block.apply();
-            block.assert_balances([("alice", -2), ("bob", 1), ("carol", 1)]);
+            block.assert_balances([("alice", 60), ("bob", 10), ("carol", 10)]);
+            let events = block.apply();
+            assert_events(&events, "data_trigger/fires_at_most_once_per_step");
+            block.assert_balances([("alice", 40), ("bob", 20), ("carol", 20)]);
         }
 
         /// # Scenario
         ///
-        /// 1. Transaction transfers an asset from Alice to Bob.
-        /// 2. Depth-first trigger chain: Bob -> Carol -> Dave -> Bob.
-        /// 3. Sibling trigger (Bob -> Eve) executes only after the depth-first chain completes.
+        /// 1. Transaction: Alice sends a large donation to Bob.
+        /// 2. Data triggers: Bob forwards the donation to Carol, Carol forwards it to Dave, and Dave forwards it back to Bob.
+        /// 3. Data trigger: Bob forwards the donation to Eve; this should fail if step 2 has not completed.
         #[tokio::test]
-        #[expect(clippy::cast_possible_wrap)]
         async fn chains_in_depth_first_order() {
             let mut sandbox = Sandbox::new()
-                .with_data_trigger_oneshot("bob", "carol", INIT_BALANCE["bob"])
+                .with_data_trigger_transfer_once("bob", 50, "carol")
                 // Sibling trigger waits for depth-first resolution.
-                .with_data_trigger_oneshot("bob", "eve", INIT_BALANCE["bob"])
-                .with_data_trigger_oneshot("carol", "dave", INIT_BALANCE["bob"])
-                .with_data_trigger_oneshot("dave", "bob", INIT_BALANCE["bob"]);
-            sandbox.transfer_one("alice", "bob");
+                .with_data_trigger_transfer_once("bob", 50, "eve")
+                .with_data_trigger_transfer("carol", 50, "dave")
+                .with_data_trigger_transfer("dave", 50, "bob");
+            sandbox.request_transfer("alice", 50, "bob");
             let mut block = sandbox.block();
-            let _events = block.apply();
             block.assert_balances([
-                ("alice", -1),
-                ("bob", 1 - INIT_BALANCE["bob"] as i32),
-                ("carol", 0),
-                ("dave", 0),
-                ("eve", INIT_BALANCE["bob"] as i32),
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
+            ]);
+            let events = block.apply();
+            assert_events(&events, "data_trigger/chains_in_depth_first_order");
+            block.assert_balances([
+                ("alice", 10),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 60),
             ]);
         }
 
         /// All or none of the initial transaction and subsequent data triggers should take effect.
         #[tokio::test]
         async fn atomically_chains_from_transaction() {
-            aborts_on_execution_error(&TriggerOrigin::ExternalTransaction);
-            aborts_on_exceeding_depth(&TriggerOrigin::ExternalTransaction);
-            commits_on_depleting_lives(&TriggerOrigin::ExternalTransaction);
-            commits_on_regular_success(&TriggerOrigin::ExternalTransaction);
+            let sandbox = || {
+                let mut res = Sandbox::new();
+                res.request_transfer("alice", 50, "bob");
+                res
+            };
+
+            aborts_on_execution_error(sandbox(), "txn");
+            aborts_on_exceeding_depth(sandbox(), "txn");
+            commits_on_depleting_lives(sandbox(), "txn");
+            commits_on_regular_success(sandbox(), "txn");
         }
 
         /// All or none of the initial time trigger and subsequent data triggers should take effect.
         #[tokio::test]
         async fn atomically_chains_from_time_trigger() {
-            aborts_on_execution_error(&TriggerOrigin::TimeTrigger);
-            aborts_on_exceeding_depth(&TriggerOrigin::TimeTrigger);
-            commits_on_depleting_lives(&TriggerOrigin::TimeTrigger);
-            commits_on_regular_success(&TriggerOrigin::TimeTrigger);
+            let sandbox = || Sandbox::new().with_time_trigger_transfer("alice", 50, "bob");
+
+            aborts_on_execution_error(sandbox(), "time");
+            aborts_on_exceeding_depth(sandbox(), "time");
+            commits_on_depleting_lives(sandbox(), "time");
+            commits_on_regular_success(sandbox(), "time");
         }
 
-        fn aborts_on_execution_error(origin: &TriggerOrigin) {
-            let mut sandbox = Sandbox::new()
-                .with_data_trigger("bob", "carol")
+        fn aborts_on_execution_error(sandbox: Sandbox, suite_suffix: &str) {
+            let mut sandbox = sandbox
+                .with_data_trigger_transfer("bob", 10, "carol")
+                .with_data_trigger_transfer("bob", 10, "dave")
                 // This trigger execution fails.
-                .with_data_trigger_fail("carol", "dave");
-            if let TriggerOrigin::TimeTrigger = origin {
-                sandbox = sandbox.with_time_trigger("alice", "bob");
-            }
-            if let TriggerOrigin::ExternalTransaction = origin {
-                sandbox.transfer_one("alice", "bob");
-            }
+                .with_data_trigger_transfer("dave", 500, "eve");
             let mut block = sandbox.block();
-            let _events = block.apply();
-            // Everything should be rolled back.
-            block.assert_balances([("alice", 0), ("bob", 0), ("carol", 0), ("dave", 0)]);
-        }
-
-        fn aborts_on_exceeding_depth(origin: &TriggerOrigin) {
-            let mut sandbox = Sandbox::new()
-                .with_max_execution_depth(2)
-                .with_data_trigger("bob", "carol")
-                .with_data_trigger("carol", "dave")
-                // The execution sequence exceeds the depth limit.
-                .with_data_trigger("dave", "eve");
-
-            if let TriggerOrigin::TimeTrigger = origin {
-                sandbox = sandbox.with_time_trigger("alice", "bob");
-            }
-            if let TriggerOrigin::ExternalTransaction = origin {
-                sandbox.transfer_one("alice", "bob");
-            }
-            let mut block = sandbox.block();
-            let _events = block.apply();
+            block.assert_balances([
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
+            ]);
+            let events = block.apply();
+            assert_events(
+                &events,
+                format!("data_trigger/aborts_on_execution_error-{suite_suffix}"),
+            );
             // Everything should be rolled back.
             block.assert_balances([
-                ("alice", 0),
-                ("bob", 0),
-                ("carol", 0),
-                ("dave", 0),
-                ("eve", 0),
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
             ]);
         }
 
-        fn commits_on_depleting_lives(origin: &TriggerOrigin) {
-            let mut sandbox = Sandbox::new()
-                .with_data_trigger("bob", "carol")
-                // This trigger depletes after an execution.
-                .with_data_trigger_oneshot("carol", "bob", 1);
-            if let TriggerOrigin::TimeTrigger = origin {
-                sandbox = sandbox.with_time_trigger("alice", "bob");
-            }
-            if let TriggerOrigin::ExternalTransaction = origin {
-                sandbox.transfer_one("alice", "bob");
-            }
+        fn aborts_on_exceeding_depth(sandbox: Sandbox, suite_suffix: &str) {
+            let mut sandbox = sandbox
+                .with_max_execution_depth(2)
+                .with_data_trigger_transfer("bob", 50, "carol")
+                .with_data_trigger_transfer("carol", 50, "dave")
+                // The execution sequence exceeds the depth limit.
+                .with_data_trigger_transfer("dave", 50, "eve");
             let mut block = sandbox.block();
-            let _events = block.apply();
+            block.assert_balances([
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
+            ]);
+            let events = block.apply();
+            assert_events(
+                &events,
+                format!("data_trigger/aborts_on_exceeding_depth-{suite_suffix}"),
+            );
             // Everything should be rolled back.
-            block.assert_balances([("alice", -1), ("bob", 0), ("carol", 1)]);
+            block.assert_balances([
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
+            ]);
         }
 
-        fn commits_on_regular_success(origin: &TriggerOrigin) {
-            let mut sandbox = Sandbox::new()
-                .with_max_execution_depth(3)
-                .with_data_trigger("bob", "carol")
-                .with_data_trigger("carol", "dave")
-                .with_data_trigger("dave", "eve");
-            if let TriggerOrigin::TimeTrigger = origin {
-                sandbox = sandbox.with_time_trigger("alice", "bob");
-            }
-            if let TriggerOrigin::ExternalTransaction = origin {
-                sandbox.transfer_one("alice", "bob");
-            }
+        fn commits_on_depleting_lives(sandbox: Sandbox, suite_suffix: &str) {
+            let mut sandbox = sandbox
+                .with_data_trigger_transfer("bob", 50, "carol")
+                // This trigger depletes after an execution.
+                .with_data_trigger_transfer_once("carol", 50, "bob");
             let mut block = sandbox.block();
-            let _events = block.apply();
+            block.assert_balances([("alice", 60), ("bob", 10), ("carol", 10)]);
+            let events = block.apply();
+            assert_events(
+                &events,
+                format!("data_trigger/commits_on_depleting_lives-{suite_suffix}"),
+            );
+            // The execution sequence should take effect.
+            block.assert_balances([("alice", 10), ("bob", 10), ("carol", 60)]);
+        }
+
+        fn commits_on_regular_success(sandbox: Sandbox, suite_suffix: &str) {
+            let mut sandbox = sandbox
+                .with_max_execution_depth(3)
+                .with_data_trigger_transfer("bob", 50, "carol")
+                .with_data_trigger_transfer("carol", 50, "dave")
+                .with_data_trigger_transfer("dave", 50, "eve");
+            let mut block = sandbox.block();
+            block.assert_balances([
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
+            ]);
+            let events = block.apply();
+            assert_events(
+                &events,
+                format!("data_trigger/commits_on_regular_success-{suite_suffix}"),
+            );
             // The execution sequence should take effect.
             block.assert_balances([
-                ("alice", -1),
-                ("bob", 0),
-                ("carol", 0),
-                ("dave", 0),
-                ("eve", 1),
+                ("alice", 10),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 60),
             ]);
         }
     }
@@ -539,11 +568,16 @@ mod tests {
         block: Option<SignedBlock>,
     }
 
+    const ACCOUNTS_STR: [&str; 5] = ["alice", "bob", "carol", "dave", "eve"];
+    static INIT_BALANCE: LazyLock<AccountBalance> =
+        LazyLock::new(|| ACCOUNTS_STR.into_iter().zip([60, 10, 10, 10, 10]).collect());
+    const INIT_EXECUTION_DEPTH: u8 = u8::MAX;
+
+    type AccountBalance = std::collections::BTreeMap<&'static str, u32>;
+    type AccountMap = std::collections::BTreeMap<&'static str, Credential>;
+
     const DOMAIN_STR: &str = "wonderland";
     const ASSET_STR: &str = "rose";
-    const ACCOUNTS_STR: [&str; 5] = ["alice", "bob", "carol", "dave", "eve"];
-    const INIT_EXECUTION_DEPTH: u8 = 5;
-
     static DOMAIN: LazyLock<DomainId> = LazyLock::new(|| DOMAIN_STR.parse().unwrap());
     static ASSET: LazyLock<AssetDefinitionId> =
         LazyLock::new(|| format!("{ASSET_STR}#{DOMAIN_STR}").parse().unwrap());
@@ -551,7 +585,11 @@ mod tests {
         ACCOUNTS_STR
             .iter()
             .map(|name| {
-                let key_pair = iroha_crypto::KeyPair::random().into_parts();
+                let key_pair = iroha_crypto::KeyPair::from_seed(
+                    name.as_bytes().into(),
+                    iroha_crypto::Algorithm::Ed25519,
+                )
+                .into_parts();
                 let credential = Credential {
                     id: format!("{}@{DOMAIN_STR}", key_pair.0).parse().unwrap(),
                     key: key_pair.1,
@@ -560,12 +598,6 @@ mod tests {
             })
             .collect()
     });
-    static INIT_BALANCE: LazyLock<AccountBalance> =
-        LazyLock::new(|| ACCOUNTS_STR.into_iter().zip([10, 10, 1, 1, 1]).collect());
-
-    type AccountMap = std::collections::BTreeMap<&'static str, Credential>;
-    type AccountBalance = std::collections::BTreeMap<&'static str, u32>;
-    type AccountBalanceDiff = std::collections::BTreeMap<&'static str, i32>;
 
     #[derive(Debug, Clone)]
     struct Credential {
@@ -574,7 +606,7 @@ mod tests {
     }
 
     static TOPOLOGY: LazyLock<Topology> = LazyLock::new(|| {
-        let leader: PeerId = PEER_KEYPAIR.public_key().clone().into();
+        let leader: PeerId = iroha_crypto::KeyPair::random().into_parts().0.into();
         Topology::new([leader])
     });
     static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
@@ -591,22 +623,47 @@ mod tests {
         AssetId::new(ASSET.clone(), ACCOUNT[account_name].id.clone())
     }
 
-    fn transfer_one<'a>(
+    fn transfer<'a>(
         src: &'a str,
+        quantity: u32,
         dest: &'a str,
     ) -> impl IntoIterator<Item = impl Instruction> + 'a {
-        transfers_batched(1, src, dest, 1u32)
+        transfers_batched::<1>(src, quantity, dest)
     }
 
-    fn transfers_batched<'a>(
-        n_instructions: usize,
+    fn transfers_batched<'a, const N_INSTRUCTIONS: usize>(
         src: &'a str,
+        quantity_per_instruction: u32,
         dest: &'a str,
-        q_per_instruction: u32,
     ) -> impl IntoIterator<Item = impl Instruction> + 'a {
-        (0..n_instructions).map(move |_| {
-            Transfer::asset_numeric(asset(src), q_per_instruction, ACCOUNT[dest].id.clone())
+        (0..N_INSTRUCTIONS).map(move |_| {
+            Transfer::asset_numeric(
+                asset(src),
+                quantity_per_instruction,
+                ACCOUNT[dest].id.clone(),
+            )
         })
+    }
+
+    fn assert_events(actual: &[EventBox], expected: impl AsRef<str>) {
+        let expected: Vec<EventBox> = {
+            let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/suite/events")
+                .join(expected.as_ref());
+            path.set_extension("json");
+            let reader = std::fs::File::open(path).unwrap();
+            serde_json::from_reader(reader).expect("test suite should be deserialized")
+        };
+        actual
+            .iter()
+            .zip(&expected)
+            .for_each(|(l, r)| match (l, r) {
+                (EventBox::Data(l), EventBox::Data(r)) => assert_eq!(l, r),
+                (EventBox::TriggerCompleted(l), EventBox::TriggerCompleted(r)) => assert_eq!(l, r),
+                (EventBox::Time(_), EventBox::Time(_))
+                | (EventBox::Pipeline(_), EventBox::Pipeline(_)) => (),
+                _ => panic!("events mismatch"),
+            });
     }
 
     impl Sandbox {
@@ -637,115 +694,73 @@ mod tests {
             .with_max_execution_depth(INIT_EXECUTION_DEPTH)
         }
 
-        fn with_time_trigger(self, src: &str, dest: &str) -> Self {
-            let engine = self.state.engine.clone();
-            self.with_trigger(
-                "time",
-                src,
-                dest,
-                transfer_one(src, dest),
-                None,
-                TimeEventFilter::new(ExecutionTime::PreCommit),
-                |txn, trg| txn.add_time_trigger(&engine, trg),
-            )
+        fn with_time_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
+            self.with_time_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely)
         }
 
-        fn with_time_trigger_oneshot(self, src: &str, dest: &str, q_per_instruction: u32) -> Self {
-            let engine = self.state.engine.clone();
-            self.with_trigger(
-                "time_oneshot",
-                src,
-                dest,
-                transfers_batched(1, src, dest, q_per_instruction),
-                Some(1),
-                TimeEventFilter::new(ExecutionTime::PreCommit),
-                |txn, trg| txn.add_time_trigger(&engine, trg),
-            )
-        }
-
-        fn with_data_trigger(self, src: &str, dest: &str) -> Self {
-            let engine = self.state.engine.clone();
-            self.with_trigger(
-                "data",
-                src,
-                dest,
-                transfer_one(src, dest),
-                None,
-                AssetEventFilter::new()
-                    .for_events(AssetEventSet::Added)
-                    .for_asset(asset(src))
-                    .into(),
-                |txn, trg| txn.add_data_trigger(&engine, trg),
-            )
-        }
-
-        fn with_data_trigger_oneshot(self, src: &str, dest: &str, q_per_instruction: u32) -> Self {
-            let engine = self.state.engine.clone();
-            self.with_trigger(
-                "data_oneshot",
-                src,
-                dest,
-                transfers_batched(1, src, dest, q_per_instruction),
-                Some(1),
-                AssetEventFilter::new()
-                    .for_events(AssetEventSet::Added)
-                    .for_asset(asset(src))
-                    .into(),
-                |txn, trg| txn.add_data_trigger(&engine, trg),
-            )
-        }
-
-        fn with_data_trigger_fail(self, src: &str, dest: &str) -> Self {
-            let engine = self.state.engine.clone();
-            self.with_trigger(
-                "data_fail",
-                src,
-                dest,
-                [Unregister::domain("nowhere".parse().unwrap())],
-                None,
-                AssetEventFilter::new()
-                    .for_events(AssetEventSet::Added)
-                    .for_asset(asset(src))
-                    .into(),
-                |txn, trg| txn.add_data_trigger(&engine, trg),
-            )
-        }
-
-        #[expect(clippy::too_many_arguments)]
-        fn with_trigger<F, G>(
+        fn with_time_trigger_transfer_internal(
             self,
-            id_prefix: &str,
             src: &str,
+            quantity: u32,
             dest: &str,
-            instructions: impl IntoIterator<Item = impl Instruction>,
-            lives: Option<u32>,
-            filter: F,
-            add_trigger: G,
-        ) -> Self
-        where
-            F: Into<EventFilterBox>,
-            SpecializedTrigger<F>: TryFrom<Trigger>,
-            <SpecializedTrigger<F> as TryFrom<Trigger>>::Error: std::fmt::Debug,
-            G: FnOnce(
-                &mut SetTransaction,
-                SpecializedTrigger<F>,
-            ) -> Result<bool, crate::smartcontracts::triggers::set::Error>,
-        {
+            repeats: Repeats,
+        ) -> Self {
             let mut block = self.state.world.triggers.block();
-            let mut transaction: SetTransaction<'_, '_> = block.transaction();
+            let mut transaction = block.transaction();
             let trigger = Trigger::new(
-                format!("{id_prefix}-{src}-{dest}").parse().unwrap(),
+                format!("time-{src}-{dest}").parse().unwrap(),
                 Action::new(
-                    instructions,
-                    lives.map_or(Repeats::Indefinitely, Repeats::Exactly),
+                    transfer(src, quantity, dest),
+                    repeats,
                     GENESIS_ACCOUNT.id.clone(),
-                    filter,
+                    TimeEventFilter::new(ExecutionTime::PreCommit),
                 ),
             )
             .try_into()
             .unwrap();
 
-            add_trigger(&mut transaction, trigger).unwrap();
+            transaction
+                .add_time_trigger(&self.state.engine, trigger)
+                .unwrap();
+            transaction.apply();
+            block.commit();
+            self
+        }
+
+        fn with_data_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
+            self.with_data_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely)
+        }
+
+        fn with_data_trigger_transfer_once(self, src: &str, quantity: u32, dest: &str) -> Self {
+            self.with_data_trigger_transfer_internal(src, quantity, dest, Repeats::Exactly(1))
+        }
+
+        fn with_data_trigger_transfer_internal(
+            self,
+            src: &str,
+            quantity: u32,
+            dest: &str,
+            repeats: Repeats,
+        ) -> Self {
+            let mut block = self.state.world.triggers.block();
+            let mut transaction = block.transaction();
+            let trigger = Trigger::new(
+                format!("data-{src}-{dest}").parse().unwrap(),
+                Action::new(
+                    transfer(src, quantity, dest),
+                    repeats,
+                    GENESIS_ACCOUNT.id.clone(),
+                    AssetEventFilter::new()
+                        .for_events(AssetEventSet::Added)
+                        .for_asset(asset(src)),
+                ),
+            )
+            .try_into()
+            .unwrap();
+
+            transaction
+                .add_data_trigger(&self.state.engine, trigger)
+                .unwrap();
             transaction.apply();
             block.commit();
             self
@@ -758,19 +773,19 @@ mod tests {
             self
         }
 
-        fn transfer_one(&mut self, src: &str, dest: &str) {
-            self.transfers_batched(1, src, dest, 1u32);
+        fn request_transfer(&mut self, src: &str, quantity: u32, dest: &str) {
+            self.request_transfers_batched::<1>(src, quantity, dest);
         }
 
-        fn transfers_batched(
+        fn request_transfers_batched<const N_INSTRUCTIONS: usize>(
             &mut self,
-            n_instructions: usize,
             src: &str,
+            quantity_per_instruction: u32,
             dest: &str,
-            q_per_instruction: u32,
         ) {
             let transaction = {
-                let instructions = transfers_batched(n_instructions, src, dest, q_per_instruction);
+                let instructions =
+                    transfers_batched::<N_INSTRUCTIONS>(src, quantity_per_instruction, dest);
                 TransactionBuilder::new(CHAIN_ID.clone(), GENESIS_ACCOUNT.id.clone())
                     .with_instructions(instructions)
                     .sign(&GENESIS_ACCOUNT.key)
@@ -816,7 +831,7 @@ mod tests {
                 .apply_without_execution(&committed, TOPOLOGY.iter().cloned().collect())
         }
 
-        fn assert_balances(&self, expected: impl Into<AccountBalanceDiff>) {
+        fn assert_balances(&self, expected: impl Into<AccountBalance>) {
             let actual: AccountBalance = ACCOUNTS_STR
                 .iter()
                 .map(|name| {
@@ -825,16 +840,15 @@ mod tests {
                         .world
                         .assets
                         .get(&asset(name))
-                        .map_or(Numeric::ZERO, |asset| asset.value)
+                        .map_or_else(|| panic!("{name}'s asset not found"), |asset| asset.value)
                         .try_into()
                         .unwrap();
                     (*name, balance)
                 })
                 .collect();
 
-            #[expect(clippy::cast_possible_wrap)]
-            expected.into().iter().for_each(|(name, diff)| {
-                assert_eq!(actual[name] as i32, INIT_BALANCE[name] as i32 + *diff,);
+            expected.into().iter().for_each(|(name, balance)| {
+                assert_eq!(actual[name], *balance);
             });
         }
     }

@@ -131,9 +131,12 @@ fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<()> {
     let err = test_client
         .submit_blocking(ExecuteTrigger::new(bad_trigger_id))
         .expect_err("should immediately result in error");
-    let _err = err
-        .downcast_ref::<InstructionExecutionError>()
-        .expect("unexpected error");
+    let Some(InstructionExecutionError::InvariantViolation(err)) =
+        err.root_cause().downcast_ref::<InstructionExecutionError>()
+    else {
+        panic!("unexpected error")
+    };
+    assert!(err.contains("Validation failed"));
     rt.block_on(async { network.ensure_blocks_with(|x| x.total == 8).await })?;
 
     // Checking results

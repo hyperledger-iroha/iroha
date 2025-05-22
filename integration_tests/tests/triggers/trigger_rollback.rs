@@ -31,12 +31,15 @@ fn failed_trigger_revert() -> Result<()> {
     let _ = client.submit_blocking(register_trigger);
 
     let call_trigger = ExecuteTrigger::new(trigger_id);
-    let _err = client
+    let err = client
         .submit_blocking(call_trigger)
-        .expect_err("should immediately result in error")
-        .root_cause()
-        .downcast_ref::<InstructionExecutionError>()
-        .expect("unexpected error");
+        .expect_err("should immediately result in error");
+    let Some(InstructionExecutionError::InvariantViolation(err)) =
+        err.root_cause().downcast_ref::<InstructionExecutionError>()
+    else {
+        panic!("unexpected error")
+    };
+    assert!(err.contains("Validation failed"));
 
     //Then
     let query_result = client.query(FindAssetsDefinitions::new()).execute_all()?;
