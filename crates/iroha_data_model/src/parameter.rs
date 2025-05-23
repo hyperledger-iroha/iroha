@@ -646,6 +646,7 @@ mod candidate {
     enum SmartContractParameterCandidate {
         Fuel(NonZeroU64),
         Memory(NonZeroU64),
+        ExecutionDepth(u8),
     }
 
     #[derive(Decode, Deserialize)]
@@ -724,6 +725,7 @@ mod candidate {
                         .map_err(|_| "SmartContractParameter::Memory exceeds usize::MAX")?;
                     SmartContractParameter::Memory(memory)
                 }
+                Self::ExecutionDepth(depth) => SmartContractParameter::ExecutionDepth(depth),
             })
         }
     }
