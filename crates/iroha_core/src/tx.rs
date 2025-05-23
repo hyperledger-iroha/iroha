@@ -425,6 +425,45 @@ mod tests {
             ]);
         }
 
+        /// # Scenario
+        ///
+        /// 1. Transaction: Alice sends 50 units to Bob.
+        /// 2. Data triggers: each branch (Bob -> Carol -> Dave -> Eve) runs independently to a max depth of 3, forwarding 1 unit per step.
+        #[tokio::test]
+        async fn each_branch_is_assigned_depth() {
+            let mut sandbox = Sandbox::new()
+                .with_max_execution_depth(3)
+                // Branches: Bob -> Carol
+                .with_data_trigger_transfer_labelled("bob", 1, "carol", 0)
+                .with_data_trigger_transfer_labelled("bob", 1, "carol", 1)
+                .with_data_trigger_transfer_labelled("bob", 1, "carol", 2)
+                .with_data_trigger_transfer_labelled("bob", 1, "carol", 3)
+                .with_data_trigger_transfer_labelled("bob", 1, "carol", 4)
+                .with_data_trigger_transfer_labelled("bob", 1, "carol", 5)
+                .with_data_trigger_transfer_labelled("bob", 1, "carol", 6)
+                // Common path: Carol -> Dave -> Eve
+                .with_data_trigger_transfer("carol", 1, "dave")
+                .with_data_trigger_transfer("dave", 1, "eve");
+            sandbox.request_transfer("alice", 50, "bob");
+            let mut block = sandbox.block();
+            block.assert_balances([
+                ("alice", 60),
+                ("bob", 10),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 10),
+            ]);
+            let events = block.apply();
+            assert_events(&events, "data_trigger/each_branch_is_assigned_depth");
+            block.assert_balances([
+                ("alice", 10),
+                ("bob", 53),
+                ("carol", 10),
+                ("dave", 10),
+                ("eve", 17),
+            ]);
+        }
+
         /// All or none of the initial transaction and subsequent data triggers should take effect.
         #[tokio::test]
         async fn atomically_chains_from_transaction() {
@@ -451,7 +490,7 @@ mod tests {
             commits_on_regular_success(sandbox(), "time");
         }
 
-        fn aborts_on_execution_error(sandbox: Sandbox, suite_suffix: &str) {
+        fn aborts_on_execution_error(sandbox: Sandbox, snapshot_suffix: &str) {
             let mut sandbox = sandbox
                 .with_data_trigger_transfer("bob", 10, "carol")
                 .with_data_trigger_transfer("bob", 10, "dave")
@@ -468,7 +507,7 @@ mod tests {
             let events = block.apply();
             assert_events(
                 &events,
-                format!("data_trigger/aborts_on_execution_error-{suite_suffix}"),
+                format!("data_trigger/aborts_on_execution_error-{snapshot_suffix}"),
             );
             // Everything should be rolled back.
             block.assert_balances([
@@ -480,7 +519,7 @@ mod tests {
             ]);
         }
 
-        fn aborts_on_exceeding_depth(sandbox: Sandbox, suite_suffix: &str) {
+        fn aborts_on_exceeding_depth(sandbox: Sandbox, snapshot_suffix: &str) {
             let mut sandbox = sandbox
                 .with_max_execution_depth(2)
                 .with_data_trigger_transfer("bob", 50, "carol")
@@ -498,7 +537,7 @@ mod tests {
             let events = block.apply();
             assert_events(
                 &events,
-                format!("data_trigger/aborts_on_exceeding_depth-{suite_suffix}"),
+                format!("data_trigger/aborts_on_exceeding_depth-{snapshot_suffix}"),
             );
             // Everything should be rolled back.
             block.assert_balances([
@@ -510,7 +549,7 @@ mod tests {
             ]);
         }
 
-        fn commits_on_depleting_lives(sandbox: Sandbox, suite_suffix: &str) {
+        fn commits_on_depleting_lives(sandbox: Sandbox, snapshot_suffix: &str) {
             let mut sandbox = sandbox
                 .with_data_trigger_transfer("bob", 50, "carol")
                 // This trigger depletes after an execution.
@@ -520,13 +559,13 @@ mod tests {
             let events = block.apply();
             assert_events(
                 &events,
-                format!("data_trigger/commits_on_depleting_lives-{suite_suffix}"),
+                format!("data_trigger/commits_on_depleting_lives-{snapshot_suffix}"),
             );
             // The execution sequence should take effect.
             block.assert_balances([("alice", 10), ("bob", 10), ("carol", 60)]);
         }
 
-        fn commits_on_regular_success(sandbox: Sandbox, suite_suffix: &str) {
+        fn commits_on_regular_success(sandbox: Sandbox, snapshot_suffix: &str) {
             let mut sandbox = sandbox
                 .with_max_execution_depth(3)
                 .with_data_trigger_transfer("bob", 50, "carol")
@@ -543,7 +582,7 @@ mod tests {
             let events = block.apply();
             assert_events(
                 &events,
-                format!("data_trigger/commits_on_regular_success-{suite_suffix}"),
+                format!("data_trigger/commits_on_regular_success-{snapshot_suffix}"),
             );
             // The execution sequence should take effect.
             block.assert_balances([
@@ -645,25 +684,19 @@ mod tests {
         })
     }
 
-    fn assert_events(actual: &[EventBox], expected: impl AsRef<str>) {
-        let expected: Vec<EventBox> = {
+    fn assert_events(actual: &[EventBox], snapshot_path: impl AsRef<std::path::Path>) {
+        let expected = {
             let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/suite/events")
-                .join(expected.as_ref());
+                .join("tests/fixtures")
+                .join(snapshot_path.as_ref());
             path.set_extension("json");
-            let reader = std::fs::File::open(path).unwrap();
-            serde_json::from_reader(reader).expect("test suite should be deserialized")
+            expect_test::expect_file![path]
         };
-        actual
+        let actual = actual
             .iter()
-            .zip(&expected)
-            .for_each(|(l, r)| match (l, r) {
-                (EventBox::Data(l), EventBox::Data(r)) => assert_eq!(l, r),
-                (EventBox::TriggerCompleted(l), EventBox::TriggerCompleted(r)) => assert_eq!(l, r),
-                (EventBox::Time(_), EventBox::Time(_))
-                | (EventBox::Pipeline(_), EventBox::Pipeline(_)) => (),
-                _ => panic!("events mismatch"),
-            });
+            .filter(|e| !matches!(e, EventBox::Time(_) | EventBox::Pipeline(_)))
+            .collect::<Vec<_>>();
+        expected.assert_eq(&serde_json::to_string_pretty(&actual).unwrap());
     }
 
     impl Sandbox {
@@ -728,11 +761,27 @@ mod tests {
         }
 
         fn with_data_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely)
+            self.with_data_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely, 0)
         }
 
         fn with_data_trigger_transfer_once(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_internal(src, quantity, dest, Repeats::Exactly(1))
+            self.with_data_trigger_transfer_internal(src, quantity, dest, Repeats::Exactly(1), 0)
+        }
+
+        fn with_data_trigger_transfer_labelled(
+            self,
+            src: &str,
+            quantity: u32,
+            dest: &str,
+            label: u32,
+        ) -> Self {
+            self.with_data_trigger_transfer_internal(
+                src,
+                quantity,
+                dest,
+                Repeats::Indefinitely,
+                label,
+            )
         }
 
         fn with_data_trigger_transfer_internal(
@@ -741,11 +790,12 @@ mod tests {
             quantity: u32,
             dest: &str,
             repeats: Repeats,
+            label: u32,
         ) -> Self {
             let mut block = self.state.world.triggers.block();
             let mut transaction = block.transaction();
             let trigger = Trigger::new(
-                format!("data-{src}-{dest}").parse().unwrap(),
+                format!("data-{src}-{dest}-{label}").parse().unwrap(),
                 Action::new(
                     transfer(src, quantity, dest),
                     repeats,
@@ -832,8 +882,10 @@ mod tests {
         }
 
         fn assert_balances(&self, expected: impl Into<AccountBalance>) {
+            let expected = expected.into();
             let actual: AccountBalance = ACCOUNTS_STR
                 .iter()
+                .filter(|name| expected.contains_key(*name))
                 .map(|name| {
                     let balance = self
                         .state
@@ -847,9 +899,7 @@ mod tests {
                 })
                 .collect();
 
-            expected.into().iter().for_each(|(name, balance)| {
-                assert_eq!(actual[name], *balance);
-            });
+            assert_eq!(actual, expected);
         }
     }
 }

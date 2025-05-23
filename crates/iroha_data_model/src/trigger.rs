@@ -239,7 +239,7 @@ pub mod action {
     impl Repeats {
         /// Returns `true` if this repeat policy has no remaining executions.
         pub fn is_depleted(&self) -> bool {
-            *self == Repeats::Exactly(0)
+            matches!(self, Repeats::Exactly(0))
         }
     }
 

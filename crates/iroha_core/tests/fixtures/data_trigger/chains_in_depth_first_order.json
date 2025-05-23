@@ -57,7 +57,7 @@
   },
   {
     "TriggerCompleted": {
-      "trigger_id": "data-bob-carol",
+      "trigger_id": "data-bob-carol-0",
       "outcome": "Success"
     }
   },
@@ -91,7 +91,7 @@
   },
   {
     "TriggerCompleted": {
-      "trigger_id": "data-carol-dave",
+      "trigger_id": "data-carol-dave-0",
       "outcome": "Success"
     }
   },
@@ -125,7 +125,7 @@
   },
   {
     "TriggerCompleted": {
-      "trigger_id": "data-dave-bob",
+      "trigger_id": "data-dave-bob-0",
       "outcome": "Success"
     }
   },
@@ -159,30 +159,8 @@
   },
   {
     "TriggerCompleted": {
-      "trigger_id": "data-bob-eve",
+      "trigger_id": "data-bob-eve-0",
       "outcome": "Success"
-    }
-  },
-  {
-    "Time": {
-      "interval": {
-        "since_ms": 1747950697922,
-        "length_ms": 0
-      }
-    }
-  },
-  {
-    "Pipeline": {
-      "Block": {
-        "header": {
-          "height": 1,
-          "prev_block_hash": null,
-          "transactions_hash": "33D3D5D3880D288DD32323F39F588DE91F614328FEB15B96652945D92DD76053",
-          "creation_time_ms": 1747950697922,
-          "view_change_index": 0
-        },
-        "status": "Applied"
-      }
     }
   }
 ]
