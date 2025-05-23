@@ -27,27 +27,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
-          # NOTE: Intentionally do not include `wasm` as it has dependencies to the main workspace and something weird happens
-          #       #5443
-          #       Instead, rely on the default ". -> target"
-          # workspaces: |
-          #   .
-          #   ./wasm -> ../target/wasm32-unknown-unknown
-      - name: Build binaries (irohad, iroha, kagami) (release)
+      - name: Build binaries (release)
         run: |
-          cargo build --release --bin irohad --bin iroha --bin kagami
-          mkdir target/release/pre_build
-          mv target/release/irohad target/release/iroha target/release/kagami target/release/pre_build
+          cargo build --release --bins
+          mkdir target/release/prebuilt
+          # TODO: iroha_wasm_test_runner too?
+          mv target/release/irohad target/release/iroha target/release/kagami target/release/prebuilt
+      - name: Build WASMs
+        env:
+          BIN_KAGAMI: target/release/prebuilt/kagami
+        run: ./scripts/build_wasm.sh
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
           name: bins
-          path: target/release/pre_build
+          path: target/release/prebuilt
           retention-days: 1
-      - name: Build WASMs
-        env:
-          BIN_KAGAMI: target/release/pre_build/kagami
-        run: ./scripts/build_wasm.sh
       - name: Upload WASMs
         uses: actions/upload-artifact@v4
         with:
@@ -102,7 +97,7 @@ jobs:
           cache-on-failure: "true"
       - name: Clippy (all targets, all features)
         run: cargo clippy --all-targets --all-features --quiet
-      # TODO: upload clippy artifact?
+      # TODO: upload clippy artifact for Sonar?
 
   doc:
     runs-on: [self-hosted, Linux, iroha2]
@@ -292,31 +287,32 @@ jobs:
           # We want to have a report, but it is not a hard error
           fail: false
 
-  sonarqube:
-    # FIXME: https://github.com/hyperledger-iroha/iroha/issues/5403
-    if: false
-    needs: test
-    runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download clippy and lcov artifact reports
-        uses: actions/download-artifact@v4
-        with:
-          path: lints
-          pattern: report-*
-          merge-multiple: true
-      - name: SonarQube
-        uses: SonarSource/sonarqube-scan-action@v5.0.0
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        with:
-          args: >
-            -Dcommunity.rust.lcov.reportPaths=lints/lcov.info
-          # TODO: include?
-          # -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
+  #  FIXME: #5403
+  #         commenting fully to disable dependabot updates
+  #
+  # sonarqube:
+  #   needs: test
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: hyperledger/iroha2-ci:nightly-2025-05-08
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Download clippy and lcov artifact reports
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         path: lints
+  #         pattern: report-*
+  #         merge-multiple: true
+  #     - name: SonarQube
+  #       uses: SonarSource/sonarqube-scan-action@v5.0.0
+  #       env:
+  #         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  #         SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+  #       with:
+  #         args: >
+  #           -Dcommunity.rust.lcov.reportPaths=lints/lcov.info
+  #         # TODO: include?
+  #         # -Dcommunity.rust.clippy.reportPaths=lints/clippy.json
 
   test_wasm:
     runs-on: ubuntu-latest

@@ -26,12 +26,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
-          # NOTE: Intentionally do not include `wasm` as it has dependencies to the main workspace and something weird happens
-          #       #5443
-          #       Instead, rely on the default ". -> target"
-          # workspaces: |
-          #   .
-          #   ./wasm -> ../target/wasm32-unknown-unknown
       - name: Build WASMs
         run: ./scripts/build_wasm.sh
       - name: Upload WASMs
