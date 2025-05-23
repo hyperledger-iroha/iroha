@@ -69,10 +69,7 @@ jobs:
           BIN_IROHA: bins/iroha
         run: |
           chmod +x -R bins
-          ./scripts/tests/consistency.sh genesis
-          ./scripts/tests/consistency.sh schema
-          ./scripts/tests/consistency.sh cli-help
-          ./scripts/tests/consistency.sh docker-compose
+          ./scripts/tests/consistency.sh all
 
   fmt:
     runs-on: ubuntu-latest
@@ -122,7 +119,8 @@ jobs:
     needs: pre_build
     env:
       LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
-      TEST_NETWORK_IROHAD: bins/irohad
+      TEST_NETWORK_BIN_IROHAD: bins/irohad
+      TEST_NETWORK_BIN_IROHA: bins/iroha
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
