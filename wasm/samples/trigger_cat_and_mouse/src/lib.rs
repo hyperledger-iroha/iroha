@@ -1,7 +1,4 @@
-//! A trigger that recursively invokes itself, incrementing both its current depth and the maximum allowed depth on each invocation.
-//! The intended use case is unclear; this simply documents its behavior.
-//! Note that the current execution depth cannot be inspected.
-//! It loops indefinitely under `Repeats::Indefinitely`.
+//! A trigger that recursively invokes itself, incrementing both the current and the maximum allowed depth on each invocation.
 
 #![no_std]
 

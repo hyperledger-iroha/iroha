@@ -64,9 +64,19 @@ fn two_non_intersecting_execution_paths() -> Result<()> {
 /// # Scenario
 ///
 /// 1. The max execution depth starts at 1.
-/// 2. A trigger is registered and immediately activated by this event.
-/// 3. The trigger recursively invokes itself 10 times, incrementing both its current depth and the maximum allowed depth on each invocation.
+/// 2. A trigger is registered and immediately activated by the event.
+/// 3. The trigger recursively invokes itself 110 times, incrementing both the current and the maximum allowed depth on each invocation.
 /// 4. After recursion completes, the maximum allowed depth remains elevated.
+///
+/// Note: the current execution depth cannot be inspected.
+///
+/// # Implications
+///
+/// This test illustrates a potential loophole rather than a legitimate use case.
+/// Under `Repeats::Indefinitely`, the trigger would loop indefinitely.
+/// Such behavior must be prevented by enforcing:
+/// - permissions for executable calls (#5441) and event subscriptions (#5439)
+/// - quotas or fee-based consumption (#5440)
 #[test]
 fn cat_depth_and_mouse_depth() -> Result<()> {
     let (network, _rt) = NetworkBuilder::new()
@@ -76,18 +86,21 @@ fn cat_depth_and_mouse_depth() -> Result<()> {
         .start_blocking()?;
     let test_client = network.client();
 
+    let parameters = test_client.query_single(FindParameters)?;
+    assert_eq!(1, parameters.smart_contract().execution_depth());
+
     test_client.submit_blocking(Register::trigger(Trigger::new(
         "cat_and_mouse".parse().unwrap(),
         Action::new(
             load_sample_wasm("trigger_cat_and_mouse"),
-            Repeats::Exactly(10),
+            Repeats::Exactly(110),
             ALICE_ID.clone(),
             DataEventFilter::Any,
         ),
     )))?;
 
     let parameters = test_client.query_single(FindParameters)?;
-    assert_eq!(11, parameters.smart_contract().execution_depth());
+    assert_eq!(111, parameters.smart_contract().execution_depth());
 
     Ok(())
 }
