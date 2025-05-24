@@ -3231,6 +3231,7 @@ dependencies = [
  "dashmap",
  "derive_more",
  "displaydoc",
+ "expect-test",
  "eyre",
  "futures",
  "hex",

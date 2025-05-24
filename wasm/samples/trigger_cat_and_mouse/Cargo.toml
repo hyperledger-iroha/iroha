@@ -1,0 +1,20 @@
+[package]
+name = "trigger_cat_and_mouse"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[features]
+debug = []
+
+[lib]
+crate-type = ['cdylib']
+
+[dependencies]
+iroha_trigger.workspace = true
+
+panic-halt.workspace = true
+dlmalloc.workspace = true

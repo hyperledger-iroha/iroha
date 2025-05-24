@@ -56,7 +56,7 @@ pub fn create_block(
     .chain(0, state)
     .sign(peer_private_key)
     .unpack(|_| {})
-    .categorize(state)
+    .validate_and_record_transactions(state)
     .unpack(|_| {})
     .commit(topology)
     .unpack(|_| {})

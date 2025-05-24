@@ -345,11 +345,11 @@ impl Sumeragi {
     }
 
     fn commit_block(&mut self, block: CommittedBlock, state_block: StateBlock<'_>) {
-        self.update_state::<NewBlockStrategy>(block, state_block);
+        self.update_state::<NewBlockStrategy>(block, state_block)
     }
 
     fn replace_top_block(&mut self, block: CommittedBlock, state_block: StateBlock<'_>) {
-        self.update_state::<ReplaceTopBlockStrategy>(block, state_block);
+        self.update_state::<ReplaceTopBlockStrategy>(block, state_block)
     }
 
     fn update_state<Strategy: ApplyBlockStrategy>(
@@ -761,7 +761,7 @@ impl Sumeragi {
                                     .unpack(|e| self.send_event(e))
                                 {
                                     Ok(committed_block) => {
-                                        self.commit_block(committed_block, voted_block.state_block)
+                                        self.commit_block(committed_block, voted_block.state_block);
                                     }
                                     Err((mut block, error)) => {
                                         error!(
@@ -927,7 +927,7 @@ impl Sumeragi {
 
             let mut state_block = state.block(unverified_block.header());
             let block = unverified_block
-                .categorize(&mut state_block)
+                .validate_and_record_transactions(&mut state_block)
                 .unpack(|e| self.send_event(e));
 
             *voting_block = if self.topology.is_consensus_required().is_some() {
@@ -1531,7 +1531,7 @@ mod tests {
 
         let mut state_block = state.block(unverified_genesis.header());
         let genesis = unverified_genesis
-            .categorize(&mut state_block)
+            .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {})
             .commit(topology)
             .unpack(|_| {})
@@ -1604,7 +1604,7 @@ mod tests {
         let mut state_block = state.block(unverified_block.header());
         let committed_block = unverified_block
             .clone()
-            .categorize(&mut state_block)
+            .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {})
             .commit(&topology)
             .unpack(|_| {})
@@ -1695,7 +1695,7 @@ mod tests {
         let mut state_block = state.block(unverified_block.header());
         let committed_block = unverified_block
             .clone()
-            .categorize(&mut state_block)
+            .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {})
             .commit(&topology)
             .unpack(|_| {})
@@ -1737,7 +1737,7 @@ mod tests {
         let mut state_block = state.block(unverified_block.header());
         let committed_block = unverified_block
             .clone()
-            .categorize(&mut state_block)
+            .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {})
             .commit(&topology)
             .unpack(|_| {})
@@ -1819,7 +1819,9 @@ mod tests {
         let (state, _, unverified_block, genesis_public_key) =
             create_data_for_test(&chain_id, &topology, &leader_private_key);
         let mut state_block = state.block(unverified_block.header());
-        let valid_block = unverified_block.categorize(&mut state_block).unpack(|_| {});
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
         state_block.commit();
 
         // Malform block signatures so that block going to be rejected

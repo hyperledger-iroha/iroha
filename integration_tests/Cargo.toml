@@ -37,4 +37,3 @@ hex = { workspace = true }
 assert_matches = "1.5.0"
 expect-test = { workspace = true }
 tempfile = { workspace = true }
-

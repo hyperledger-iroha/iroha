@@ -1,0 +1,138 @@
+[
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##ed012064A9FD27508B8BD38080ADB56F0EF72259B9F8677C6579E331BB946DD9626723@wonderland",
+              "amount": "50"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##ed0120874F82265255BF774A8FAE7E0F9B900A03FAA1A548B0CC14A0B9669093D07491@wonderland",
+              "amount": "50"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "TriggerCompleted": {
+      "trigger_id": "time-alice-bob",
+      "outcome": "Success"
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##ed0120874F82265255BF774A8FAE7E0F9B900A03FAA1A548B0CC14A0B9669093D07491@wonderland",
+              "amount": "50"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##ed0120384F5AF98BEDAF1C400B98D4E91913B5EE8C76F451D87EB03A9759296E791BAD@wonderland",
+              "amount": "50"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "TriggerCompleted": {
+      "trigger_id": "data-bob-carol-0",
+      "outcome": "Success"
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##ed0120384F5AF98BEDAF1C400B98D4E91913B5EE8C76F451D87EB03A9759296E791BAD@wonderland",
+              "amount": "50"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##ed0120874F82265255BF774A8FAE7E0F9B900A03FAA1A548B0CC14A0B9669093D07491@wonderland",
+              "amount": "50"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "TriggerCompleted": {
+      "trigger_id": "data-carol-bob-0",
+      "outcome": "Success"
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##ed0120874F82265255BF774A8FAE7E0F9B900A03FAA1A548B0CC14A0B9669093D07491@wonderland",
+              "amount": "50"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##ed0120384F5AF98BEDAF1C400B98D4E91913B5EE8C76F451D87EB03A9759296E791BAD@wonderland",
+              "amount": "50"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "TriggerCompleted": {
+      "trigger_id": "data-bob-carol-0",
+      "outcome": "Success"
+    }
+  }
+]
