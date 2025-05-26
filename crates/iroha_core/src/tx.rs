@@ -400,6 +400,7 @@ mod tests {
         #[tokio::test]
         async fn chains_in_depth_first_order() {
             let mut sandbox = Sandbox::new()
+                // Carol receives it before Eve because triggers matching the same event are processed in lexicographical order of their IDs.
                 .with_data_trigger_transfer_once("bob", 50, "carol")
                 // Sibling trigger waits for depth-first resolution.
                 .with_data_trigger_transfer_once("bob", 50, "eve")
