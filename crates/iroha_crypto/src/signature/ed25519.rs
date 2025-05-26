@@ -106,7 +106,7 @@ mod test {
             PrivateKey::from_hex(Algorithm::Ed25519, PRIVATE_KEY).unwrap()
         );
         assert_eq!(
-            PublicKey(Box::new(crate::PublicKeyInner::Ed25519(p1))),
+            PublicKey::new(crate::PublicKeyFull::Ed25519(p1)),
             PublicKey::from_hex(Algorithm::Ed25519, PUBLIC_KEY).unwrap()
         );
     }
