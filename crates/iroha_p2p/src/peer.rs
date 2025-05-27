@@ -33,7 +33,7 @@ pub mod handles {
     use super::{run::RunPeerArgs, *};
     use crate::unbounded_with_len;
 
-    /// Start Peer in [`state::Connecting`] state
+    /// Start Peer in `state::Connecting` state
     pub fn connecting<T: Pload, K: Kex, E: Enc>(
         peer_addr: SocketAddr,
         our_public_address: SocketAddr,
@@ -56,7 +56,7 @@ pub mod handles {
         tokio::task::spawn(run::run::<T, K, E, _>(peer).in_current_span());
     }
 
-    /// Start Peer in [`state::ConnectedFrom`] state
+    /// Start Peer in `state::ConnectedFrom` state
     pub fn connected_from<T: Pload, K: Kex, E: Enc>(
         our_public_address: SocketAddr,
         key_pair: KeyPair,
@@ -260,7 +260,7 @@ mod run {
                                     break;
                                 }
                             }
-                        };
+                        }
                         // Reset idle and ping timeout as peer received message from another peer
                         idle_interval.reset();
                         ping_interval.reset();
@@ -870,7 +870,7 @@ mod cryptographer {
     }
 }
 
-/// An identification for [`Peer`] connections.
+/// An identification for peer connections.
 pub type ConnectionId = u64;
 
 /// P2P connection

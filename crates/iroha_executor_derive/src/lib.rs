@@ -119,7 +119,7 @@ pub fn derive_execute(input: TokenStream) -> TokenStream {
 /// use iroha_executor::prelude::*;
 ///
 /// #[derive(Visit, Execute, Entrypoints)]
-/// #[visit(custom(visit_query)]
+/// #[visit(custom(visit_query))]
 /// struct Executor {
 ///    host: Iroha,
 ///    context: Context,

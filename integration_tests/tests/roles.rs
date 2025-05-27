@@ -1,3 +1,6 @@
+#![allow(missing_docs)]
+use std::time::Duration;
+
 use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
 use iroha::data_model::{prelude::*, transaction::error::TransactionRejectionReason};
@@ -5,6 +8,7 @@ use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
 use iroha_test_network::*;
 use iroha_test_samples::{gen_account_in, ALICE_ID};
 use serde_json::json;
+use tokio::time::timeout;
 
 #[test]
 fn register_empty_role() -> Result<()> {
@@ -240,8 +244,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
     assert!(test_client
         .query(FindRolesByAccountId::new(alice_id.clone()))
         .execute_all()?
-        .iter()
-        .any(|account_role_id| *account_role_id == role_id));
+        .contains(&role_id));
     test_client.submit_blocking(set_key_value.clone())?;
 
     // Alice can't modify Mouse's metadata after permission is removed from role
@@ -264,16 +267,25 @@ fn grant_revoke_role_permissions() -> Result<()> {
     Ok(())
 }
 
-// TODO: refine error handling; check the actual STDERR printed with the expected error
-#[test]
-#[should_panic(expected = "a peer exited unexpectedly")]
-fn grant_unexisting_role_in_genesis_fail() {
+#[tokio::test]
+async fn grant_unexisting_role_in_genesis_fail() {
     // Grant Alice UNEXISTING role
     let alice_id = ALICE_ID.clone();
     let role_id = "UNEXISTING".parse::<RoleId>().unwrap();
     let grant_genesis_role = Grant::account_role(role_id, alice_id);
 
-    let _result = NetworkBuilder::new()
+    let network = NetworkBuilder::new()
+        .with_peers(1)
         .with_genesis_instruction(grant_genesis_role)
-        .start_blocking();
+        .build();
+    let peer = network.peer();
+
+    // TODO: refine error handling; check the actual STDERR printed with the expected error
+    //       https://github.com/hyperledger-iroha/iroha/issues/5423
+    let terminated_fut = peer.once(|e| matches!(e, PeerLifecycleEvent::Terminated { .. }));
+    peer.start(network.config_layers(), Some(network.genesis()))
+        .await;
+    timeout(Duration::from_secs(5), terminated_fut)
+        .await
+        .expect("must terminate immediately");
 }

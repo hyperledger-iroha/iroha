@@ -1,10 +1,11 @@
-use std::iter::once;
+use std::{borrow::Cow, iter::once};
 
 use assert_matches::assert_matches;
 use eyre::Result;
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use iroha::data_model::isi::{Register, Unregister};
 use iroha_config_base::toml::WriteExt;
+use iroha_data_model::peer::Peer;
 use iroha_test_network::*;
 use rand::{prelude::IteratorRandom, seq::SliceRandom, thread_rng};
 use tokio::{task::spawn_blocking, time::timeout};
@@ -23,17 +24,22 @@ async fn connected_peers_with_f_1_0_1() -> Result<()> {
 async fn register_new_peer() -> Result<()> {
     let network = NetworkBuilder::new().with_peers(4).start().await?;
 
-    let peer = NetworkPeer::generate();
+    let random_peer = network.peer();
+    let peer = NetworkPeerBuilder::new().build(network.env());
     peer.start(
-        network
-            .config()
-            // only one random peer
-            .write(["trusted_peers"], [network.peer().peer()]),
+        network.config_layers().chain(Some(Cow::Owned(
+            toml::Table::new()
+                // only one random peer
+                .write(
+                    ["trusted_peers"],
+                    [Peer::new(random_peer.p2p_address(), random_peer.id())],
+                ),
+        ))),
         None,
     )
     .await;
 
-    let register = Register::peer(peer.peer_id());
+    let register = Register::peer(peer.id());
     let client = network.client();
     spawn_blocking(move || client.submit_blocking(register)).await??;
 
@@ -59,7 +65,7 @@ async fn connected_peers_with_f(faults: usize) -> Result<()> {
 
     // Unregister a peer: committed with f = `faults` then `status.peers` decrements
     let client = randomized_peers.choose(&mut thread_rng()).unwrap().client();
-    let unregister_peer = Unregister::peer(removed_peer.peer_id());
+    let unregister_peer = Unregister::peer(removed_peer.id());
     spawn_blocking(move || client.submit_blocking(unregister_peer)).await??;
     timeout(
         network.sync_timeout(),
@@ -90,7 +96,7 @@ async fn connected_peers_with_f(faults: usize) -> Result<()> {
     assert_eq!(status.peers, 0);
 
     // Re-register the peer: committed with f = `faults` - 1 then `status.peers` increments
-    let register_peer = Register::peer(removed_peer.peer_id());
+    let register_peer = Register::peer(removed_peer.id());
     let client = randomized_peers
         .iter()
         .choose(&mut thread_rng())
@@ -121,13 +127,13 @@ async fn assert_peers_status(
                 status.peers,
                 expected_peers,
                 "unexpected peers for {}",
-                peer.peer_id()
+                peer.id()
             );
             assert_eq!(
                 status.blocks_non_empty,
                 expected_blocks,
                 "expected blocks for {}",
-                peer.peer_id()
+                peer.id()
             );
         })
         .collect::<FuturesUnordered<_>>()

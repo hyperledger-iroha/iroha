@@ -16,11 +16,13 @@
     },
     "executor": {
       "fuel": 55000000,
-      "memory": 55000000
+      "memory": 55000000,
+      "execution_depth": 3
     },
     "smart_contract": {
       "fuel": 55000000,
-      "memory": 55000000
+      "memory": 55000000,
+      "execution_depth": 3
     }
   },
   "instructions": [

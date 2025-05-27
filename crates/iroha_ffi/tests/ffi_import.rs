@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 #![allow(unsafe_code)]
 
 use iroha_ffi::{ffi, ffi_import, LocalRef, LocalSlice};

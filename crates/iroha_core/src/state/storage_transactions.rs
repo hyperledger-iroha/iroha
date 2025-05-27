@@ -23,7 +23,7 @@ type Value = NonZeroUsize;
 ///   (`.view()`, `.block()`, `.block_and_revert()`, `.commit()`)
 /// * Q: Why don't we use [`mv::storage::Storage`]?
 ///   A: Because transactions map consumes 80%+ RAM of iroha.
-///      This storage is memory-optimized and consumes ~3x less memory.
+///   This storage is memory-optimized and consumes ~3x less memory.
 pub struct TransactionsStorage {
     /// Latest block. Stored separately because of reverts.
     /// `None` when there are no blocks yet, otherwise must be not `None`.

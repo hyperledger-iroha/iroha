@@ -39,7 +39,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
 
     // restart another one, **without a genesis** even
     let peer_b = &peers[1];
-    let config = network.config();
+    let config = network.config_layers();
     assert_ne!(peer_a, peer_b);
     timeout(network.peer_startup_timeout(), async move {
         peer_b.start(config, None).await;

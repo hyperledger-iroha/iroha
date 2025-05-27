@@ -1,13 +1,16 @@
 //! This file contains examples from the Rust tutorial.
 
 use eyre::{Error, WrapErr};
-use iroha::{config::Config, data_model::prelude::Numeric};
+use iroha::{
+    config::{Config, LoadPath},
+    data_model::prelude::Numeric,
+};
 // #region rust_config_crates
 // #endregion rust_config_crates
 
 fn main() {
     // #region rust_config_load
-    let config = Config::load("../../defaults/client.toml").unwrap();
+    let config = Config::load(LoadPath::Explicit("../../defaults/client.toml")).unwrap();
     // #endregion rust_config_load
 
     // Your code goes here…

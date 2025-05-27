@@ -1,9 +1,9 @@
-//! This module contains [`Block`] structures for each state. Transitions are modeled as follows:
+//! This module contains block structures for each state. Transitions are modeled as follows:
 //! 1. If a new block is constructed by the node:
-//!     `BlockBuilder<Pending>` -> `BlockBuilder<Chained>` -> `ValidBlock` -> `CommittedBlock`
+//!    `BlockBuilder<Pending>` -> `BlockBuilder<Chained>` -> `ValidBlock` -> `CommittedBlock`
 //! 2. If a block is received, i.e. deserialized:
 //!    `SignedBlock` -> `ValidBlock` -> `CommittedBlock`
-//!    [`Block`]s are organised into a linear sequence over time (also known as the block chain).
+//!    blocks are organized into a linear sequence over time (also known as the block chain).
 use std::time::Duration;
 
 use iroha_crypto::{HashOf, KeyPair, MerkleTree};
@@ -232,7 +232,7 @@ mod chained {
 
     use super::*;
 
-    /// When a [`Pending`] block is chained with the blockchain it becomes [`Chained`] block.
+    /// When a `Pending` block is chained with the blockchain it becomes [`Chained`] block.
     #[derive(Debug, Clone)]
     pub struct Chained {
         pub(super) header: BlockHeader,
@@ -259,7 +259,7 @@ mod new {
     use super::*;
     use crate::{smartcontracts::wasm::cache::WasmCache, state::StateBlock};
 
-    /// First stage in the life-cycle of a [`Block`].
+    /// First stage in the life-cycle of a block.
     ///
     /// Transactions in this block are not categorized.
     #[derive(Debug, Clone)]
@@ -270,8 +270,12 @@ mod new {
     }
 
     impl NewBlock {
-        /// Categorize transactions of this block to produce a [`ValidBlock`]
-        pub fn categorize(self, state_block: &mut StateBlock<'_>) -> WithEvents<ValidBlock> {
+        /// Validate each transaction in the block, apply resulting state changes,
+        /// and record any errors back into the block.
+        pub fn validate_and_record_transactions(
+            self,
+            state_block: &mut StateBlock<'_>,
+        ) -> WithEvents<ValidBlock> {
             let mut wasm_cache = WasmCache::new();
             let errors = self
                 .transactions
@@ -280,7 +284,9 @@ mod new {
                 .cloned()
                 .enumerate()
                 .fold(BTreeMap::new(), |mut acc, (idx, tx)| {
-                    if let Err((rejected_tx, error)) = state_block.validate(tx, &mut wasm_cache) {
+                    if let Err((rejected_tx, error)) =
+                        state_block.validate_transaction(tx, &mut wasm_cache)
+                    {
                         iroha_logger::debug!(
                             block=%self.header.hash(),
                             tx=%rejected_tx.hash(),
@@ -296,6 +302,9 @@ mod new {
 
             let mut block: SignedBlock = self.into();
             block.set_transaction_errors(errors);
+            state_block.execute_time_triggers(&block);
+
+            // FIXME: Don't create a ValidBlock that deviates from the result of ValidBlock::validate.
             WithEvents::new(ValidBlock(block))
         }
 
@@ -356,6 +365,8 @@ mod valid {
     #[derive(Debug, Clone)]
     #[repr(transparent)]
     pub struct ValidBlock(pub(super) SignedBlock);
+
+    type Error = (Box<SignedBlock>, BlockValidationError);
 
     impl ValidBlock {
         fn verify_leader_signature(
@@ -444,8 +455,8 @@ mod valid {
             Ok(())
         }
 
-        /// Validate a block against the current state of the world.
-        /// Individual transaction errors will be updated.
+        /// Validate the given block, apply resulting state changes,
+        /// and record any transaction errors back into the block.
         ///
         /// # Errors
         ///
@@ -464,17 +475,20 @@ mod valid {
             expected_chain_id: &ChainId,
             genesis_account: &AccountId,
             state_block: &mut StateBlock<'_>,
-        ) -> WithEvents<Result<ValidBlock, (SignedBlock, BlockValidationError)>> {
+        ) -> WithEvents<Result<ValidBlock, Error>> {
             if let Err(error) =
                 Self::validate_header(&block, topology, genesis_account, state_block, false)
             {
-                return WithEvents::new(Err((block, error)));
+                return WithEvents::new(Err((block.into(), error)));
             }
 
-            if let Err(error) =
-                Self::categorize(&mut block, expected_chain_id, genesis_account, state_block)
-            {
-                return WithEvents::new(Err((block, error.into())));
+            if let Err(error) = Self::validate_and_record_transactions(
+                &mut block,
+                expected_chain_id,
+                genesis_account,
+                state_block,
+            ) {
+                return WithEvents::new(Err((block.into(), error.into())));
             }
 
             WithEvents::new(Ok(ValidBlock(block)))
@@ -492,12 +506,11 @@ mod valid {
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
-        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), (SignedBlock, BlockValidationError)>>
-        {
+        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             if let Err(error) =
                 Self::validate_header(&block, topology, genesis_account, &state.view(), soft_fork)
             {
-                return WithEvents::new(Err((block, error)));
+                return WithEvents::new(Err((block.into(), error)));
             }
 
             // Release block writer before creating new one
@@ -508,13 +521,13 @@ mod valid {
                 state.block(block.header())
             };
 
-            if let Err(error) = Self::categorize(
+            if let Err(error) = Self::validate_and_record_transactions(
                 &mut block,
                 expected_chain_id,
                 genesis_account,
                 &mut state_block,
             ) {
-                return WithEvents::new(Err((block, error.into())));
+                return WithEvents::new(Err((block.into(), error.into())));
             }
 
             WithEvents::new(Ok((ValidBlock(block), state_block)))
@@ -605,7 +618,9 @@ mod valid {
             Ok(())
         }
 
-        fn categorize(
+        /// Validate each transaction in the block, apply resulting state changes,
+        /// and record any errors back into the block.
+        fn validate_and_record_transactions(
             block: &mut SignedBlock,
             expected_chain_id: &ChainId,
             genesis_account: &AccountId,
@@ -640,7 +655,7 @@ mod valid {
                     }?;
 
                     if let Err((rejected_tx, error)) =
-                        state_block.validate(accepted_tx, &mut wasm_cache)
+                        state_block.validate_transaction(accepted_tx, &mut wasm_cache)
                     {
                         iroha_logger::debug!(
                             tx=%rejected_tx.hash(),
@@ -656,6 +671,8 @@ mod valid {
                 })?;
 
             block.set_transaction_errors(errors);
+
+            state_block.execute_time_triggers(block);
 
             Ok(())
         }
@@ -732,20 +749,20 @@ mod valid {
         pub fn commit(
             self,
             topology: &Topology,
-        ) -> WithEvents<Result<CommittedBlock, (ValidBlock, BlockValidationError)>> {
+        ) -> WithEvents<Result<CommittedBlock, (Box<ValidBlock>, BlockValidationError)>> {
             WithEvents::new(match Self::is_commit(self.as_ref(), topology) {
-                Err(err) => Err((self, err)),
+                Err(err) => Err((self.into(), err)),
                 Ok(()) => Ok(CommittedBlock(self)),
             })
         }
 
         /// Validate and commit block if possible.
         ///
-        /// This method is different from calling [`ValidBlock::validate_keep_voting_block`] and [`ValidateBlock::commit`] in the following ways:
+        /// This method is different from calling [`ValidBlock::validate_keep_voting_block`] and [`ValidBlock::commit`] in the following ways:
         /// - signatures are checked eagerly so voting block is kept if block doesn't have valid signatures
         ///
         /// # Errors
-        /// Combinations of errors from [`ValidBlock::validate_keep_voting_block`] and [`ValidateBlock::commit`].
+        /// Combinations of errors from [`ValidBlock::validate_keep_voting_block`] and [`ValidBlock::commit`].
         #[allow(clippy::too_many_arguments)]
         pub fn commit_keep_voting_block<'state, F: Fn(PipelineEventBox)>(
             block: SignedBlock,
@@ -756,11 +773,9 @@ mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             send_events: F,
-        ) -> WithEvents<
-            Result<(CommittedBlock, StateBlock<'state>), (SignedBlock, BlockValidationError)>,
-        > {
+        ) -> WithEvents<Result<(CommittedBlock, StateBlock<'state>), Error>> {
             if let Err(err) = Self::is_commit(&block, topology) {
-                return WithEvents::new(Err((block, err)));
+                return WithEvents::new(Err((block.into(), err)));
             }
 
             WithEvents::new(
@@ -1217,7 +1232,9 @@ mod tests {
             .unpack(|_| {});
 
         let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block.categorize(&mut state_block).unpack(|_| {});
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
         state_block.commit();
 
         // The 1st transaction should be confirmed and the 2nd rejected
@@ -1283,7 +1300,9 @@ mod tests {
             .sign(alice_keypair.private_key())
             .unpack(|_| {});
         let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block.categorize(&mut state_block).unpack(|_| {});
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
         state_block.commit();
 
         // The 1st transaction should fail and 2nd succeed
@@ -1336,7 +1355,9 @@ mod tests {
             .unpack(|_| {});
 
         let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block.categorize(&mut state_block).unpack(|_| {});
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
         state_block.commit();
 
         let mut errors = valid_block.as_ref().errors();
@@ -1401,7 +1422,9 @@ mod tests {
             .unpack(|_| {});
 
         let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block.categorize(&mut state_block).unpack(|_| {});
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
         state_block.commit();
 
         // Validate genesis block

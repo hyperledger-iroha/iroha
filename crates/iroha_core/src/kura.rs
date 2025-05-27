@@ -1,6 +1,6 @@
 //! Translates to warehouse. File-system and persistence-related
 //! logic.  [`Kura`] is the main entity which should be used to store
-//! new [`Block`](`crate::block::SignedBlock`)s on the
+//! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
 use std::{
     fmt::Debug,
@@ -315,7 +315,7 @@ impl Kura {
         let block_index = block_height.get() - 1;
         if let Some(block_arc) = data_array_guard[block_index].1.as_ref() {
             return Some(Arc::clone(block_arc));
-        };
+        }
 
         let block_store = self.block_store.lock();
         let BlockIndex { start, length } = block_store
@@ -1163,7 +1163,7 @@ mod tests {
 
             let mut state_block = state.block(unverified_block.header());
             let block = unverified_block
-                .categorize(&mut state_block)
+                .validate_and_record_transactions(&mut state_block)
                 .unpack(|_| {})
                 .commit(&topology)
                 .unpack(|_| {})
@@ -1183,7 +1183,7 @@ mod tests {
 
             let mut state_block = state.block_and_revert(unverified_block_soft_fork.header());
             let block_soft_fork = unverified_block_soft_fork
-                .categorize(&mut state_block)
+                .validate_and_record_transactions(&mut state_block)
                 .unpack(|_| {})
                 .commit(&topology)
                 .unpack(|_| {})
@@ -1204,7 +1204,7 @@ mod tests {
 
             let mut state_block = state.block(unverified_block_next.header());
             let block_next = unverified_block_next
-                .categorize(&mut state_block)
+                .validate_and_record_transactions(&mut state_block)
                 .unpack(|_| {})
                 .commit(&topology)
                 .unpack(|_| {})

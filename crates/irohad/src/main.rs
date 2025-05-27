@@ -175,7 +175,7 @@ impl Iroha {
     /// # Errors
     /// - Reading telemetry configs
     /// - Telemetry setup
-    /// - Initialization of [`Sumeragi`] and [`Kura`]
+    /// - Initialization of [`Sumeragi`](iroha_core::sumeragi::main_loop::Sumeragi) and [`Kura`]
     #[allow(clippy::too_many_lines)]
     #[iroha_logger::log(name = "start", skip_all)] // This is actually easier to understand as a linear sequence of init statements.
     pub async fn start(
@@ -357,7 +357,7 @@ impl Iroha {
                     // TODO: produce non-zero exit code or something
                 } else {
                     iroha_logger::debug!("Torii exited normally");
-                };
+                }
             }),
             OnShutdown::Wait(Duration::from_secs(5)),
         ));

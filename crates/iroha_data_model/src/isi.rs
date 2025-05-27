@@ -737,7 +737,7 @@ mod transparent {
     }
 
     impl Transfer<Asset, Numeric, Account> {
-        /// Constructs a new [`Transfer`] for an [`Asset`] of [`Quantity`] type.
+        /// Constructs a new [`Transfer`] for an [`Asset`] of [`Numeric`] type.
         pub fn asset_numeric(
             asset_id: AssetId,
             quantity: impl Into<Numeric>,
@@ -1192,7 +1192,7 @@ pub mod error {
     //! Module containing errors that can occur during instruction evaluation
 
     #[cfg(not(feature = "std"))]
-    use alloc::{format, string::String, vec::Vec};
+    use alloc::{boxed::Box, format, string::String, vec::Vec};
     use core::fmt::Debug;
 
     use derive_more::Display;
@@ -1250,7 +1250,7 @@ pub mod error {
             /// Entity missing
             Find(#[cfg_attr(feature = "std", source)] FindError),
             /// Repeated instruction
-            Repetition(#[cfg_attr(feature = "std", source)] RepetitionError),
+            Repetition(#[cfg_attr(feature = "std", source)] Box<RepetitionError>),
             /// Mintability assertion failed
             Mintability(#[cfg_attr(feature = "std", source)] MintabilityError),
             /// Illegal math operation

@@ -146,9 +146,9 @@ pub fn model(attr: TokenStream, input: TokenStream) -> TokenStream {
     emitter.finish_token_stream_with(result)
 }
 
-/// Same as [`model`] macro, but only processes a single item.
+/// Same as [`model()`] macro, but only processes a single item.
 ///
-/// You should prefer using [`model`] macro over this one.
+/// You should prefer using [`model()`] macro over this one.
 #[manyhow]
 #[proc_macro]
 pub fn model_single(input: TokenStream) -> TokenStream {

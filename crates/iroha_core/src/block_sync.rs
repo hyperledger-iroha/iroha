@@ -140,7 +140,7 @@ impl BlockSynchronizer {
         .await;
     }
 
-    /// Create [`Self`] from [`Configuration`]
+    /// Create [`Self`] from [`Config`]
     pub fn from_config(
         config: &Config,
         sumeragi: SumeragiHandle,
@@ -164,7 +164,7 @@ impl BlockSynchronizer {
 }
 
 pub mod message {
-    //! Module containing messages for [`BlockSynchronizer`](super::BlockSynchronizer).
+    //! Module containing messages for [`BlockSynchronizer`].
 
     use super::*;
 
@@ -397,9 +397,7 @@ pub mod message {
 
         impl Decode for GetBlocksAfter {
             fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
-                GetBlocksAfterCandidate::decode(input)?
-                    .validate()
-                    .map_err(Into::into)
+                GetBlocksAfterCandidate::decode(input)?.validate()
             }
         }
 

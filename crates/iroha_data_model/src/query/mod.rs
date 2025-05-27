@@ -228,7 +228,7 @@ mod model {
         Iterable(QueryWithParams),
     }
 
-    /// A response to a [`QuertRequest`] from an Iroha peer
+    /// A response to a [`QueryRequest`] from an Iroha peer
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Deserialize, Serialize, IntoSchema)]
     pub enum QueryResponse {
         Singular(SingularQueryOutputBox),
@@ -724,7 +724,7 @@ macro_rules! queries {
 }
 
 pub mod role {
-    //! Queries related to [`Role`].
+    //! Queries related to [`crate::role`].
 
     #[cfg(not(feature = "std"))]
     use alloc::{format, string::String, vec::Vec};
@@ -734,20 +734,20 @@ pub mod role {
     use crate::prelude::*;
 
     queries! {
-        /// [`FindRoles`] Iroha Query finds all [`Role`]s presented.
+        /// [`FindRoles`] Iroha Query finds all `Role`s presented.
         #[derive(Copy, Display)]
         #[display(fmt = "Find all roles")]
         #[ffi_type]
         pub struct FindRoles;
 
-        /// [`FindRoleIds`] Iroha Query finds [`Id`](crate::RoleId)s of
-        /// all [`Role`]s presented.
+        /// [`FindRoleIds`] Iroha Query finds `RoleId`s of
+        /// all `Role`s presented.
         #[derive(Copy, Display)]
         #[display(fmt = "Find all role ids")]
         #[ffi_type]
         pub struct FindRoleIds;
 
-        /// [`FindRolesByAccountId`] Iroha Query finds all [`Role`]s for a specified account.
+        /// [`FindRolesByAccountId`] Iroha Query finds all `Role`s for a specified account.
         #[derive(Display)]
         #[display(fmt = "Find all roles for `{id}` account")]
         #[repr(transparent)]
@@ -766,7 +766,7 @@ pub mod role {
 }
 
 pub mod permission {
-    //! Queries related to [`Permission`].
+    //! Queries related to [`crate::permission`].
 
     #[cfg(not(feature = "std"))]
     use alloc::{format, string::String, vec::Vec};
@@ -796,7 +796,7 @@ pub mod permission {
 }
 
 pub mod account {
-    //! Queries related to [`Account`].
+    //! Queries related to [`crate::account`].
 
     #[cfg(not(feature = "std"))]
     use alloc::{format, string::String, vec::Vec};
@@ -807,7 +807,7 @@ pub mod account {
 
     queries! {
         // TODO: Better to have find all account ids query instead.
-        /// [`FindAccounts`] Iroha Query finds all [`Account`]s presented.
+        /// [`FindAccounts`] Iroha Query finds all `Account`s presented.
         #[derive(Copy, Display)]
         #[display(fmt = "Find all accounts")]
         #[ffi_type]
@@ -833,7 +833,7 @@ pub mod account {
 }
 
 pub mod asset {
-    //! Queries related to [`Asset`].
+    //! Queries related to [`crate::asset`].
 
     #![allow(clippy::missing_inline_in_public_items)]
 
@@ -843,14 +843,13 @@ pub mod asset {
     use derive_more::Display;
 
     queries! {
-        /// [`FindAssets`] Iroha Query finds all [`Asset`]s presented in Iroha Peer.
+        /// [`FindAssets`] Iroha Query finds all `Asset`s presented.
         #[derive(Copy, Display)]
         #[display(fmt = "Find all assets")]
         #[ffi_type]
         pub struct FindAssets;
 
-        /// [`FindAssetsDefinitions`] Iroha Query finds all [`AssetDefinition`]s presented
-        /// in Iroha Peer.
+        /// [`FindAssetsDefinitions`] Iroha Query finds all `AssetDefinition`s presented.
         #[derive(Copy, Display)]
         #[display(fmt = "Find all asset definitions")]
         #[ffi_type]
@@ -863,7 +862,7 @@ pub mod asset {
 }
 
 pub mod nft {
-    //! Queries related to [`Nft`].
+    //! Queries related to [`crate::nft`].
 
     #[cfg(not(feature = "std"))]
     use alloc::{format, string::String, vec::Vec};
@@ -871,8 +870,7 @@ pub mod nft {
     use derive_more::Display;
 
     queries! {
-        /// [`FindNfts`] Iroha Query finds all [`Nft`]s presented
-        /// in Iroha Peer.
+        /// [`FindNfts`] Iroha Query finds all `Nft`s presented.
         #[derive(Copy, Display)]
         #[display(fmt = "Find all NFTs")]
         #[ffi_type]
@@ -886,7 +884,7 @@ pub mod nft {
 }
 
 pub mod domain {
-    //! Queries related to [`Domain`].
+    //! Queries related to [`crate::domain`].
 
     #![allow(clippy::missing_inline_in_public_items)]
 
@@ -896,7 +894,7 @@ pub mod domain {
     use derive_more::Display;
 
     queries! {
-        /// [`FindDomains`] Iroha Query finds all [`Domain`]s presented in Iroha [`Peer`].
+        /// [`FindDomains`] Iroha Query finds all `Domain`s presented.
         #[derive(Copy, Display)]
         #[display(fmt = "Find all domains")]
         #[ffi_type]
@@ -918,7 +916,7 @@ pub mod peer {
     use derive_more::Display;
 
     queries! {
-        /// [`FindPeers`] Iroha Query finds all trusted [`Peer`]s presented in current Iroha [`Peer`].
+        /// [`FindPeers`] Iroha Query finds all trusted peers presented.
         #[derive(Copy, Display)]
         #[display(fmt = "Find all peers")]
         #[ffi_type]
@@ -1122,7 +1120,7 @@ pub mod error {
         #[ffi_type(opaque)]
         pub enum FindError {
             /// Failed to find asset: `{0}`
-            Asset(AssetId),
+            Asset(Box<AssetId>),
             /// Failed to find asset definition: `{0}`
             AssetDefinition(AssetDefinitionId),
             /// Failed to find NFT: `{0}`
@@ -1144,7 +1142,7 @@ pub mod error {
             /// Role with id `{0}` not found
             Role(RoleId),
             /// Failed to find [`Permission`] by id.
-            Permission(Permission),
+            Permission(Box<Permission>),
             /// Failed to find public key: `{0}`
             PublicKey(PublicKey),
         }

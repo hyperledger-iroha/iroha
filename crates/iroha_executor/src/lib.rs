@@ -184,7 +184,7 @@ impl DataModelBuilder {
         }
     }
 
-    /// Creates a data model with default permissions preset (defined in [`default::permissions`])
+    /// Creates a data model with default permissions preset (defined in [`default::permission`])
     #[must_use]
     pub fn with_default_permissions() -> Self {
         let mut builder = Self::new();

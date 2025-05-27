@@ -1,0 +1,68 @@
+name: Publish (Experimental Multi-Platform)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_type:
+        description: "Type of the image to build"
+        required: true
+        type: choice
+        options:
+          - xx
+          - xx-profiling
+        default: xx
+      checkout_ref:
+        description: "The branch, tag or SHA to checkout"
+        required: true
+        type: string
+        default: main
+
+env:
+  TAG_BASE: experimental-xx
+
+jobs:
+  image:
+    runs-on: [self-hosted, Linux, iroha2]
+    steps:
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Login to Soramitsu Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: docker.soramitsu.co.jp
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_TOKEN }}
+
+      - name: Build and push default image
+        if: ${{ inputs.image_type == 'xx' }}
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: Dockerfile.cross
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            hyperledger/iroha:${{ env.TAG_BASE }}-${{ github.sha }}
+            docker.soramitsu.co.jp/hyperledger/iroha:${{ env.TAG_BASE }}-${{ github.sha }}
+          labels: commit=${{ github.sha }}
+          context: .
+
+      - name: Build and push profiling image
+        if: ${{ inputs.image_type == 'xx-profiling' }}
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: Dockerfile.cross
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            hyperledger/iroha:${{ env.TAG_BASE }}-profiling-${{ github.sha }}
+            docker.soramitsu.co.jp/hyperledger/iroha:${{ env.TAG_BASE }}-profiling-${{ github.sha }}
+          labels: commit=${{ github.sha }}
+          build-args: |
+            "PROFILE=profiling"
+            "RUSTFLAGS=-C force-frame-pointers=on"
+            "FEATURES=profiling"
+            "CARGOFLAGS=-Z build-std"
+          context: .

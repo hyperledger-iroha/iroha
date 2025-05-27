@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use impls::impls;
 use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};

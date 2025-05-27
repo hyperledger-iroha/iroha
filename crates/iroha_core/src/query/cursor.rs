@@ -1,4 +1,4 @@
-//! Module with cursor-based pagination functional like [`Batched`].
+//! Module for cursor-based pagination functionality.
 
 use std::{fmt::Debug, num::NonZeroU64};
 

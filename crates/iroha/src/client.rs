@@ -210,7 +210,7 @@ impl Client {
         if self.add_transaction_nonce {
             let nonce = rand::thread_rng().gen::<NonZeroU32>();
             tx_builder.set_nonce(nonce);
-        };
+        }
 
         tx_builder
             .with_metadata(metadata)
@@ -363,11 +363,10 @@ impl Client {
             .await
             .wrap_err_with(|| {
                 eyre!(
-                    "haven't got tx confirmation within {:?} (configured with `transaction_status_timeout`)",
+                    "haven't got tx confirmation within {:?} (configured with `transaction.status_timeout_ms`)",
                     self.transaction_status_timeout
                 )
             })
-            .map_err(Into::into)
             .and_then(std::convert::identity);
             event_iterator.close().await;
             result
@@ -492,7 +491,7 @@ impl Client {
     ///
     /// # Errors
     /// - Forwards from [`Self::events_handler`]
-    /// - Forwards from [`events_api::EventIterator::new`]
+    /// - Forwards from `events_api::EventIterator::new`
     pub fn listen_for_events(
         &self,
         event_filters: impl IntoIterator<Item = impl Into<EventFilterBox>>,
@@ -504,7 +503,7 @@ impl Client {
     ///
     /// # Errors
     /// - Forwards from [`Self::events_handler`]
-    /// - Forwards from [`events_api::AsyncEventStream::new`]
+    /// - Forwards from `events_api::AsyncEventStream::new`
     pub async fn listen_for_events_async(
         &self,
         event_filters: impl IntoIterator<Item = impl Into<EventFilterBox>> + Send,
@@ -532,7 +531,7 @@ impl Client {
     ///
     /// # Errors
     /// - Forwards from [`Self::events_handler`]
-    /// - Forwards from [`blocks_api::BlockIterator::new`]
+    /// - Forwards from `blocks_api::BlockIterator::new`
     pub fn listen_for_blocks(
         &self,
         height: NonZeroU64,
@@ -544,7 +543,7 @@ impl Client {
     ///
     /// # Errors
     /// - Forwards from [`Self::events_handler`]
-    /// - Forwards from [`blocks_api::BlockIterator::new`]
+    /// - Forwards from `blocks_api::BlockIterator::new`
     pub async fn listen_for_blocks_async(&self, height: NonZeroU64) -> Result<AsyncBlockStream> {
         blocks_api::AsyncBlockStream::new(self.blocks_handler(height)?).await
     }
@@ -606,7 +605,7 @@ impl Client {
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or(""),
             ));
-        };
+        }
 
         Ok(())
     }
@@ -625,8 +624,6 @@ impl Client {
     }
 
     /// Prepares http-request to implement [`Self::get_status`] on your own.
-    ///
-    /// For general usage example see [`Client::prepare_query_request`].
     ///
     /// # Errors
     /// Fails if request build fails
@@ -708,7 +705,7 @@ pub mod stream_api {
                     Ok(WebSocketMessage::Binary(message)) => {
                         return Some(self.handler.message(message))
                     }
-                    Ok(_) => continue,
+                    Ok(_) => (),
                     Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
                         return None
                     }

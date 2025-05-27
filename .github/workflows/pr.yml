@@ -69,10 +69,7 @@ jobs:
           BIN_IROHA: bins/iroha
         run: |
           chmod +x -R bins
-          ./scripts/tests/consistency.sh genesis
-          ./scripts/tests/consistency.sh schema
-          ./scripts/tests/consistency.sh cli-help
-          ./scripts/tests/consistency.sh docker-compose
+          ./scripts/tests/consistency.sh all
 
   fmt:
     runs-on: ubuntu-latest
@@ -122,7 +119,8 @@ jobs:
     needs: pre_build
     env:
       LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
-      TEST_NETWORK_IROHAD: bins/irohad
+      TEST_NETWORK_BIN_IROHAD: bins/irohad
+      TEST_NETWORK_BIN_IROHA: bins/iroha
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -277,20 +275,6 @@ jobs:
         with:
           header: pr-title-lint-error
           delete: true
-
-  check_config_label:
-    permissions:
-      contents: read
-      pull-requests: write
-    runs-on: ubuntu-latest
-    steps:
-      - id: label-the-PR
-        uses: actions/labeler@v5
-      - uses: mshick/add-pr-comment@v2
-        if: contains(steps.label-the-PR.outputs.all-labels, 'config-changes')
-        with:
-          message: |
-            @BAStos525
 
   check_links:
     runs-on: [ubuntu-latest]

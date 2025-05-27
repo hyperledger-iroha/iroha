@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use eyre::Result;
 use iroha::{
     client::Client,

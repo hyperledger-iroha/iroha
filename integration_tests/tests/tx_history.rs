@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use eyre::Result;
 use iroha::data_model::{prelude::*, query::parameters::Pagination};
 use iroha_test_network::*;

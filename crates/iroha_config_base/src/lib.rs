@@ -207,8 +207,6 @@ pub enum ParameterOrigin {
     File { id: ParameterId, path: PathBuf },
     /// Value came from an environment variable
     Env { id: ParameterId, var: String },
-    /// Value came from some environment variables (see [`read::ReadingParameter::env_custom`])
-    EnvUnknown { id: ParameterId },
     /// It is a default value of a parameter
     Default { id: ParameterId },
     /// Custom origin
@@ -224,11 +222,6 @@ impl ParameterOrigin {
     /// Construct [`Self::Env`]
     pub fn env(id: ParameterId, var: String) -> Self {
         Self::Env { var, id }
-    }
-
-    /// Construct [`Self::EnvUnknown`]
-    pub fn env_unknown(id: ParameterId) -> Self {
-        Self::EnvUnknown { id }
     }
 
     /// Construct [`Self::Default`]

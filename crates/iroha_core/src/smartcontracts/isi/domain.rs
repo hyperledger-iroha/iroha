@@ -9,7 +9,6 @@ use super::super::isi::prelude::*;
 impl Registrable for iroha_data_model::domain::NewDomain {
     type Target = Domain;
 
-    #[must_use]
     #[inline]
     fn build(self, authority: &AccountId) -> Self::Target {
         Self::Target {
@@ -378,7 +377,7 @@ pub mod isi {
     }
 }
 
-/// Query module provides [`Query`] Domain related implementations.
+/// Implementations for domain queries.
 pub mod query {
     use iroha_data_model::{
         domain::Domain,

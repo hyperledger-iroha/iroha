@@ -155,7 +155,7 @@ impl Executor {
         }
     }
 
-    /// Execute [`Instruction`].
+    /// Execute [`InstructionBox`].
     ///
     /// # Errors
     ///
@@ -191,7 +191,7 @@ impl Executor {
         }
     }
 
-    /// Validate [`QueryBox`].
+    /// Validate [`QueryRequest`].
     ///
     /// # Errors
     ///

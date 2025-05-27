@@ -1,6 +1,8 @@
-//! This crate provides [`wrap`] and [`wrap_signature`] attribute macros to wrap a host-defined
+//! This crate provides `wrap` and `wrap_signature` attribute macros to wrap a host-defined
 //! function into another function which signature will be compatible with `wasmtime` crate to be
 //! successfully exported.
+
+#![allow(clippy::large_enum_variant)]
 
 use std::ops::Deref;
 
@@ -82,6 +84,7 @@ pub fn wrap(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
+#[allow(clippy::ref_option)]
 fn impl_wrap_fn(
     emitter: &mut Emitter,
     state_attr_opt: &Option<StateAttr>,
@@ -129,7 +132,7 @@ fn impl_wrap_fn(
 /// Macro to wrap trait function signature with normal parameters and return value
 /// to another one which will meet `wasmtime` specifications.
 ///
-/// See [`wrap`] for more details.
+/// See [`macro@wrap`] for more details.
 #[manyhow]
 #[proc_macro_attribute]
 pub fn wrap_trait_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -156,6 +159,7 @@ pub fn wrap_trait_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
+#[allow(clippy::ref_option)]
 fn impl_wrap_trait_fn(
     emitter: &mut Emitter,
     state_attr_opt: &Option<StateAttr>,

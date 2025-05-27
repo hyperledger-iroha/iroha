@@ -6,7 +6,7 @@ use std::{path::Path, time::Duration};
 use derive_more::Display;
 use error_stack::ResultExt;
 use eyre::Result;
-use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+use iroha_config_base::{env::ReadEnv, read::ConfigReader, toml::TomlSource};
 use iroha_primitives::small::SmallStr;
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
@@ -78,16 +78,51 @@ pub struct Config {
 #[error("Failed to load configuration")]
 pub struct LoadError;
 
+/// Where to load configuration from
+pub enum LoadPath<P> {
+    /// Path specified explicitly, therefore, loading will fail if the file is not found
+    Explicit(P),
+    /// Using the default path, therefore, loading will not fail if the file is not found
+    Default(P),
+}
+
 impl Config {
     /// Loads configuration from a file
     ///
     /// # Errors
     /// - unable to load config from a TOML file
     /// - the config is invalid
-    pub fn load(path: impl AsRef<Path>) -> error_stack::Result<Self, LoadError> {
-        let toml = TomlSource::from_file(path).change_context(LoadError)?;
-        let config = ConfigReader::new()
-            .with_toml_source(toml)
+    pub fn load(path: LoadPath<impl AsRef<Path>>) -> error_stack::Result<Self, LoadError> {
+        Self::load_with_env(path, Box::new(iroha_config_base::env::std_env))
+    }
+
+    fn load_with_env(
+        path: LoadPath<impl AsRef<Path>>,
+        env: impl ReadEnv + 'static,
+    ) -> error_stack::Result<Self, LoadError> {
+        let toml_source = match path {
+            LoadPath::Explicit(path) => {
+                Some(TomlSource::from_file(path).change_context(LoadError)?)
+            }
+            LoadPath::Default(path) => match TomlSource::from_file(path) {
+                Ok(x) => Some(x),
+                Err(err)
+                    if matches!(
+                        err.current_context(),
+                        iroha_config_base::toml::FromFileError::Read
+                    ) =>
+                {
+                    None
+                }
+                Err(err) => Err(err).change_context(LoadError)?,
+            },
+        };
+
+        let config = toml_source
+            .map_or_else(ConfigReader::new, |x| {
+                ConfigReader::new().with_toml_source(x)
+            })
+            .with_env(env)
             .read_and_complete::<user::Root>()
             .change_context(LoadError)?
             .parse()
@@ -98,8 +133,11 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashSet, io::Write};
+
     use assertables::{assert_contains, assert_contains_as_result};
     use iroha_config_base::env::MockEnv;
+    use iroha_crypto::ExposedPrivateKey;
 
     use super::*;
 
@@ -183,11 +221,46 @@ mod tests {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(b"not a valid toml").unwrap();
 
-        let err = Config::load(file.path()).expect_err("should fail on toml parsing");
+        let err =
+            Config::load(LoadPath::Explicit(file.path())).expect_err("should fail on toml parsing");
 
         assert_contains!(
             format!("{err:#?}"),
             "Error while deserializing file contents as TOML"
         );
+    }
+
+    #[test]
+    fn reads_default_path() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(toml::to_string(&config_sample()).unwrap().as_bytes())
+            .unwrap();
+
+        let config = Config::load(LoadPath::Default(file.path())).unwrap();
+
+        assert_eq!(
+            config.account.signatory().to_string(),
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+        );
+    }
+
+    #[test]
+    fn full_env_fallback() {
+        let key = KeyPair::random();
+        let env = MockEnv::new()
+            .set("CHAIN", "wonder")
+            .set("TORII_URL", "http://localhost:8080")
+            .set("ACCOUNT_DOMAIN", "land")
+            .set(
+                "ACCOUNT_PRIVATE_KEY",
+                ExposedPrivateKey(key.private_key().clone()).to_string(),
+            )
+            .set("ACCOUNT_PUBLIC_KEY", key.public_key().to_string());
+
+        let _config =
+            Config::load_with_env(LoadPath::Default("non_existing_path"), env.clone()).unwrap();
+
+        assert_eq!(env.unvisited(), HashSet::new());
+        assert_eq!(env.unknown(), HashSet::new());
     }
 }

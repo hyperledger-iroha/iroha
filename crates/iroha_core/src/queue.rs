@@ -73,13 +73,13 @@ pub enum Error {
 #[derive(Debug)]
 pub struct Failure {
     /// Transaction failed to be pushed into the queue
-    pub tx: AcceptedTransaction,
+    pub tx: Box<AcceptedTransaction>,
     /// Push failure reason
     pub err: Error,
 }
 
 /// Will remove transaction from the queue on drop.
-/// See [`Queue::remove_transaction`] for details.
+/// See `Queue::remove_transaction` for details.
 pub struct TransactionGuard {
     tx: AcceptedTransaction,
     queue: Arc<Queue>,
@@ -188,7 +188,7 @@ impl Queue {
     pub fn push(&self, tx: AcceptedTransaction, state_view: StateView) -> Result<(), Failure> {
         trace!(tx=%tx.as_ref().hash(), "Pushing to the queue");
         if let Err(err) = self.check_tx(&tx, &state_view) {
-            return Err(Failure { tx, err });
+            return Err(Failure { tx: tx.into(), err });
         }
         drop(state_view);
 
@@ -198,7 +198,7 @@ impl Queue {
         let entry = match self.txs.entry(hash) {
             Entry::Occupied(_) => {
                 return Err(Failure {
-                    tx,
+                    tx: tx.into(),
                     err: Error::IsInQueue,
                 })
             }
@@ -211,13 +211,13 @@ impl Queue {
                 "Achieved maximum amount of transactions"
             );
             return Err(Failure {
-                tx,
+                tx: tx.into(),
                 err: Error::Full,
             });
         }
 
         if let Err(err) = self.check_and_increase_per_user_tx_count(tx.as_ref().authority()) {
-            return Err(Failure { tx, err });
+            return Err(Failure { tx: tx.into(), err });
         }
 
         // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
@@ -230,7 +230,7 @@ impl Queue {
                 .expect("Inserted just before match");
             self.decrease_per_user_tx_count(err_tx.as_ref().authority());
             Failure {
-                tx: err_tx,
+                tx: err_tx.into(),
                 err: Error::Full,
             }
         })?;
@@ -397,6 +397,7 @@ impl Queue {
 
 #[cfg(test)]
 // this is `pub` to re-use internal utils
+#[allow(missing_docs)]
 pub mod tests {
     use std::{sync::Arc, thread, time::Duration};
 

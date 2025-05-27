@@ -358,6 +358,7 @@ fn impl_declare_versioned(
     };
 
     quote!(
+        #[allow(clippy::unsafe_derive_deserialize)]
         #enum_
 
         impl #impl_generics iroha_version::Version for #enum_name #ty_generics #where_clause {

@@ -38,7 +38,7 @@ mod model {
         pub args: Json,
     }
 
-    /// Filter for trigger execution [`Event`]
+    /// Filter for [`ExecuteTriggerEvent`].
     #[derive(
         Debug,
         Clone,

@@ -57,7 +57,7 @@ impl InitConfig {
     }
 }
 
-/// Initializes the logger globally with given [`Configuration`].
+/// Initializes the logger globally with given [`InitConfig`].
 ///
 /// Returns [`LoggerHandle`] to interact with the logger instance
 ///
@@ -104,12 +104,10 @@ pub fn test_logger() -> LoggerHandle {
                 level: std::env::var("TEST_LOG_LEVEL")
                     .ok()
                     .and_then(|raw| raw.parse().ok())
-                    .unwrap_or(Level::DEBUG)
-                    .into(),
+                    .unwrap_or(Level::DEBUG),
                 filter: std::env::var("TEST_LOG_FILTER")
                     .ok()
-                    .and_then(|raw| raw.parse().ok())
-                    .into(),
+                    .and_then(|raw| raw.parse().ok()),
                 format: Format::Pretty,
             };
 

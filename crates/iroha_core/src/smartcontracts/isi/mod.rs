@@ -1,5 +1,5 @@
 //! This module contains enumeration of all possible Iroha Special
-//! Instructions [`InstructionExpr`], generic instruction types and related
+//! Instructions, generic instruction types and related
 //! implementations.
 pub mod account;
 pub mod asset;

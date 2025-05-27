@@ -1,4 +1,4 @@
-//! Query module provides [`Query`] Transaction related implementations.
+//! Implementations for transaction queries.
 
 use std::sync::Arc;
 

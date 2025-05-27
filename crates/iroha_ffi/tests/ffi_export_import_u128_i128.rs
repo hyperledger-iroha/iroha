@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use iroha_ffi::{ffi_export, ffi_import};
 
 macro_rules! derive_freestanding_export_import {

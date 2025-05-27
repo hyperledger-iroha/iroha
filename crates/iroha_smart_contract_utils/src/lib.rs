@@ -60,7 +60,7 @@ macro_rules! register_getrandom_err_callback {
 ///
 /// It's safe to call this function as long as it's safe to construct, from the given
 /// pointer, `Box<[u8]>` containing the encoded object
-unsafe fn _decode_from_raw_in_range<T: DecodeAll>(
+unsafe fn decode_from_raw_in_range<T: DecodeAll>(
     ptr: *const u8,
     len: usize,
     range: RangeFrom<usize>,
@@ -98,7 +98,7 @@ pub unsafe fn decode_with_length_prefix_from_raw<T: DecodeAll>(ptr: *const u8) -
             .expect("Prefix length size(bytes) incorrect. This is a bug."),
     );
 
-    _decode_from_raw_in_range(ptr, len, len_size_bytes..)
+    decode_from_raw_in_range(ptr, len, len_size_bytes..)
 }
 
 /// Encode the given object and call the given function with the pointer and length of the allocation

@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use std::time::Duration;
 
 use eyre::Result;
@@ -26,16 +28,18 @@ async fn genesis_transactions_are_validated_by_executor() {
     let network = NetworkBuilder::new()
         .with_genesis_instruction(invalid_instruction)
         .build();
+    let genesis = network.genesis();
     let peer = network.peer();
 
-    timeout(Duration::from_secs(3), async {
+    timeout(Duration::from_secs(5), async {
         join!(
             // Peer should start...
-            peer.start(network.config(), Some(network.genesis())),
+            peer.start(network.config_layers(), Some(genesis)),
             peer.once(|event| matches!(event, PeerLifecycleEvent::ServerStarted)),
             // ...but it should shortly exit with an error
             peer.once(|event| match event {
                 // TODO: handle "Invalid genesis" in a more granular way
+                //       https://github.com/hyperledger-iroha/iroha/issues/5423
                 PeerLifecycleEvent::Terminated { status } => !status.success(),
                 _ => false,
             })
@@ -310,7 +314,7 @@ fn stored_vs_granted_permission_payload() {
     let value_json = Json::from_string_unchecked(format!(
         // NOTE: Permissions is created explicitly as a json string to introduce additional whitespace
         // This way, if the executor compares permissions just as JSON strings, the test will fail
-        r##"{{ "asset"   :   "xor#wonderland#{mouse_id}" }}"##
+        r#"{{ "asset"   :   "xor#wonderland#{mouse_id}" }}"#
     ));
 
     let mouse_asset = AssetId::new(asset_definition_id, mouse_id.clone());

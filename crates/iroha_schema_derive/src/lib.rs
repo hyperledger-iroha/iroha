@@ -1,5 +1,6 @@
 //! Crate with derive `IntoSchema` macro
 
+#![allow(clippy::large_enum_variant)]
 // darling-generated code triggers this lint
 #![allow(clippy::option_if_let_else)]
 
@@ -35,9 +36,9 @@ fn override_where_clause(
         .unwrap_or_else(|| where_clause.cloned())
 }
 
-/// Derive [`iroha_schema::TypeId`]
+/// Derive `iroha_schema::TypeId`
 ///
-/// Check out [`iroha_schema`] documentation
+/// Check out `iroha_schema` documentation
 #[manyhow]
 #[proc_macro_derive(TypeId, attributes(type_id))]
 pub fn type_id_derive(input: TokenStream) -> Result<TokenStream> {
@@ -192,9 +193,9 @@ struct CodegenField {
     ty: syn::Type,
 }
 
-/// Derive [`iroha_schema::IntoSchema`] and [`iroha_schema::TypeId`]
+/// Derive `iroha_schema::IntoSchema` and `iroha_schema::TypeId`
 ///
-/// Check out [`iroha_schema`] documentation
+/// Check out `iroha_schema` documentation
 ///
 /// # Panics
 ///

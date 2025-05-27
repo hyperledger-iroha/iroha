@@ -1,18 +1,12 @@
 #![allow(missing_docs)]
 
 use executor_custom_data_model::{complex_isi::NumericQuery, permissions::CanControlDomainLives};
-use eyre::Result;
+use eyre::{Context, Result};
 use futures_util::TryStreamExt as _;
-use iroha::{
-    client::Client,
-    data_model::{
-        parameter::{Parameter, SmartContractParameter},
-        prelude::*,
-    },
-};
+use iroha::{client::Client, data_model::prelude::*};
 use iroha_executor_data_model::permission::{domain::CanUnregisterDomain, Permission as _};
 use iroha_test_network::*;
-use iroha_test_samples::{load_sample_wasm, load_wasm_build_profile, ALICE_ID, BOB_ID};
+use iroha_test_samples::{load_sample_wasm, ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
 
 const ADMIN_PUBLIC_KEY_MULTIHASH: &str =
@@ -30,7 +24,9 @@ fn executor_upgrade_should_work() -> Result<()> {
         .parse::<iroha::crypto::PrivateKey>()
         .unwrap();
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+        .with_wasm_fuel(WasmFuelConfig::Auto)
+        .start_blocking()?;
     let client = network.client();
 
     // Register `admin` domain and account
@@ -70,7 +66,9 @@ fn executor_upgrade_should_work() -> Result<()> {
 
 #[test]
 fn executor_upgrade_should_run_migration() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+        .with_wasm_fuel(WasmFuelConfig::Auto)
+        .start_blocking()?;
     let client = network.client();
 
     // Check that `CanUnregisterDomain` exists
@@ -123,7 +121,9 @@ fn executor_upgrade_should_run_migration() -> Result<()> {
 
 #[test]
 fn executor_upgrade_should_revoke_removed_permissions() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+        .with_wasm_fuel(WasmFuelConfig::Auto)
+        .start_blocking()?;
     let client = network.client();
 
     // Permission which will be removed by executor
@@ -205,7 +205,9 @@ fn executor_upgrade_should_revoke_removed_permissions() -> Result<()> {
 fn executor_custom_instructions_simple() -> Result<()> {
     use executor_custom_data_model::simple_isi::MintAssetForAllAccounts;
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+        .with_wasm_fuel(WasmFuelConfig::Auto)
+        .start_blocking()?;
     let client = network.client();
 
     upgrade_executor(&client, "executor_custom_instructions_simple")?;
@@ -252,13 +254,11 @@ fn executor_custom_instructions_complex() -> Result<()> {
         ConditionalExpr, CoreExpr, EvaluatesTo, Expression, Greater,
     };
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+        .with_wasm_fuel(WasmFuelConfig::Value(nonzero!(1_000_000_000_u64)))
+        .start_blocking()?;
     let client = network.client();
 
-    let executor_fuel_limit = SetParameter::new(Parameter::Executor(SmartContractParameter::Fuel(
-        nonzero!(1_000_000_000_u64),
-    )));
-    client.submit_blocking(executor_fuel_limit)?;
     upgrade_executor(&client, "executor_custom_instructions_complex")?;
 
     // Give 6 roses to bob
@@ -440,7 +440,10 @@ fn executor_with_fuel() -> Result<()> {
 
 #[test]
 fn migration_should_cause_upgrade_event() {
-    let (network, rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let (network, rt) = NetworkBuilder::new()
+        .with_wasm_fuel(WasmFuelConfig::Auto)
+        .start_blocking()
+        .unwrap();
     let client = network.client();
 
     let events_client = client.clone();
@@ -473,7 +476,9 @@ fn migration_should_cause_upgrade_event() {
 fn define_custom_parameter() -> Result<()> {
     use executor_custom_data_model::parameters::DomainLimits;
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let (network, _rt) = NetworkBuilder::new()
+        .with_wasm_fuel(WasmFuelConfig::Auto)
+        .start_blocking()?;
     let client = network.client();
 
     let long_domain_name = "0".repeat(2_usize.pow(5)).parse::<DomainId>()?;
@@ -498,17 +503,8 @@ fn define_custom_parameter() -> Result<()> {
 
 fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
     let upgrade_executor = Upgrade::new(Executor::new(load_sample_wasm(executor)));
-    let profile = load_wasm_build_profile();
-
-    if !profile.is_optimized() {
-        client.submit_all_blocking::<InstructionBox>([InstructionBox::SetParameter(
-            SetParameter::new(Parameter::Executor(SmartContractParameter::Fuel(
-                std::num::NonZeroU64::new(90_000_000_u64).expect("Fuel must be positive."),
-            ))),
-        )])?;
-    }
-
-    client.submit_blocking(upgrade_executor)?;
-
+    client
+        .submit_blocking(upgrade_executor)
+        .wrap_err("Have you set WasmFuelConfig::Auto?")?;
     Ok(())
 }

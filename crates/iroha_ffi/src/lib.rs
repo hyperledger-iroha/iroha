@@ -66,10 +66,10 @@ pub trait FfiConvert<'itm, C: ReprC>: Sized {
     /// does context in a closure
     type FfiStore: Default;
 
-    /// Perform the conversion from [`Self`] into [`Self::ReprC`]
+    /// Perform the conversion from [`Self`] into `C`
     fn into_ffi(self, store: &'itm mut Self::RustStore) -> C;
 
-    /// Perform the conversion from [`Self::ReprC`] into [`Self`]
+    /// Perform the conversion from `C` into [`Self`]
     ///
     /// # Errors
     ///
@@ -99,7 +99,7 @@ pub trait FfiOutPtr: FfiType {
     type OutPtr: ReprC;
 }
 
-/// Facilitates writing [`Self`] into [`Self::OutPtr`].
+/// Facilitates writing [`Self`] into `Self::OutPtr`.
 pub trait FfiOutPtrWrite: FfiOutPtr {
     /// Write the given rust value into the corresponding out-pointer
     ///
@@ -109,7 +109,7 @@ pub trait FfiOutPtrWrite: FfiOutPtr {
     unsafe fn write_out(self, out_ptr: *mut Self::OutPtr);
 }
 
-/// Facilitates reading from [`Self::OutPtr`] out-pointer.
+/// Facilitates reading from `Self::OutPtr` out-pointer.
 pub trait FfiOutPtrRead: FfiOutPtr + Sized {
     /// Read a rust value from the corresponding out-pointer
     ///
@@ -164,7 +164,7 @@ pub trait FfiOutPtrRead: FfiOutPtr + Sized {
 ///
 ///     let output = output.assume_init();
 ///     let out_store = Default::default();
-
+///
 ///     // &(u32, u32) references out_store which is defined locally
 ///     let output = FfiConvert::try_from_ffi(output, &mut out_store);
 ///     LocalRef(out_store.0, core::marker::PhantomData)
@@ -245,15 +245,15 @@ pub enum FfiReturn {
     Ok = 0,
 }
 
-/// Macro for defining FFI types of a known category ([`Robust`] or [`Transmute`]).
+/// Macro for defining FFI types of a known category ([`ir::Robust`] or [`ir::Transmute`]).
 ///
 /// The implementation for an FFI type of one of the categories incurs a lot of bloat that
 /// is reduced by the use of this macro
 ///
 /// # Safety
 ///
-/// * If the type is [`Robust`], it derives [`ReprC`]. Check safety invariants for [`ReprC`]
-/// * If the type is [`Transparent`], it derives [`Transmute`]. Check safety invariants for [`Transmute`]
+/// * If the type is [`ir::Robust`], it derives [`ReprC`]. Check safety invariants for [`ReprC`]
+/// * If the type is [`ir::Transparent`], it derives [`ir::Transmute`. Check safety invariants for [`ir::Transmute`]
 ///
 /// # Example
 ///
@@ -391,7 +391,7 @@ pub struct Extern {
 /// Define the correct [`FfiWrapperType::InputType`]/[`FfiWrapperType::ReturnType`] out of
 /// the given [`CWrapperType::InputType`]/[`CWrapperType::ReturnType`].
 ///
-/// The only situation when this is evident is when [`Ir::Type`] is set to [`Transparent`] or [`Extern`] types
+/// The only situation when this is evident is when [`Ir::Type`] is set to [`ir::Transparent`] or [`Extern`] types
 ///
 /// Example:
 ///
@@ -404,7 +404,7 @@ pub struct Extern {
 /// pub struct Example(u32);
 ///
 /// /*
-/// Due to the fact that implementations of traits for [`Transparent`] structures delegate to the inner
+/// Due to the fact that implementations of traits for [`ir::Transparent`] structures delegate to the inner
 /// type `FfiType`, macro expansion will produce the following impl of [`CWrapperType`] for `Example`:
 ///
 /// impl CWrapperType for Example {

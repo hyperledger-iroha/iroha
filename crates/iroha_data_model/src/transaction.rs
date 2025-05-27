@@ -1,4 +1,4 @@
-//! [`Transaction`] structures and related implementations.
+//! Transaction structures and related implementations.
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::{
@@ -85,7 +85,7 @@ mod model {
         pub(super) Vec<u8>,
     );
 
-    /// Iroha [`Transaction`] payload.
+    /// Iroha transaction payload.
     #[derive(
         Debug,
         Clone,
@@ -99,6 +99,7 @@ mod model {
         Serialize,
         IntoSchema,
     )]
+    #[allow(clippy::redundant_pub_crate)]
     pub(crate) struct TransactionPayload {
         /// Unique id of the blockchain. Used for simple replay attack protection.
         pub chain: ChainId,
@@ -366,19 +367,19 @@ impl TransactionBuilder {
         self
     }
 
-    /// Adds metadata to the `Transaction`
+    /// Adds metadata to this transaction
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
         self.payload.metadata = metadata;
         self
     }
 
-    /// Set nonce for [`Transaction`]
+    /// Set nonce for this transaction
     pub fn set_nonce(&mut self, nonce: NonZeroU32) -> &mut Self {
         self.payload.nonce = Some(nonce);
         self
     }
 
-    /// Set time-to-live for [`Transaction`]
+    /// Set time-to-live for this transaction
     pub fn set_ttl(&mut self, time_to_live: Duration) -> &mut Self {
         let ttl: u64 = time_to_live
             .as_millis()
@@ -604,6 +605,28 @@ pub mod error {
             pub reason: String,
         }
 
+        /// Possible reasons for trigger-specific execution failure.
+        #[derive(
+            Debug,
+            Display,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Decode,
+            Encode,
+            Deserialize,
+            Serialize,
+            IntoSchema,
+        )]
+        #[ffi_type]
+        #[repr(u32)]
+        pub enum TriggerExecutionFail {
+            /// Exceeded maximum depth for chained data triggers.
+            MaxDepthExceeded,
+        }
+
         /// The reason for rejecting transaction which happened because of transaction.
         #[derive(
             Debug,
@@ -640,11 +663,15 @@ pub mod error {
             Validation(#[cfg_attr(feature = "std", source)] crate::ValidationFail),
             /// Failure in instruction execution
             ///
-            /// In practice should be fully replaced by [`ValidationFail::Execution`]
+            /// In practice should be fully replaced by [`crate::ValidationFail::InstructionFailed`]
             /// and will be removed soon.
-            InstructionExecution(#[cfg_attr(feature = "std", source)] InstructionExecutionFail),
+            InstructionExecution(
+                #[cfg_attr(feature = "std", source)] Box<InstructionExecutionFail>,
+            ),
             /// Failure in WebAssembly execution
             WasmExecution(#[cfg_attr(feature = "std", source)] WasmExecutionFail),
+            /// Execution of a time trigger or an invoked data trigger failed.
+            TriggerExecution(#[cfg_attr(feature = "std", source)] TriggerExecutionFail),
         }
     }
 
@@ -684,10 +711,16 @@ pub mod error {
     #[cfg(feature = "std")]
     impl std::error::Error for WasmExecutionFail {}
 
+    #[cfg(feature = "std")]
+    impl std::error::Error for TriggerExecutionFail {}
+
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this module.
 
-        pub use super::{InstructionExecutionFail, TransactionRejectionReason, WasmExecutionFail};
+        pub use super::{
+            InstructionExecutionFail, TransactionRejectionReason, TriggerExecutionFail,
+            WasmExecutionFail,
+        };
     }
 }
 

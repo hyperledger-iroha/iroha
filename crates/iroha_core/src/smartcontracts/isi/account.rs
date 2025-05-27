@@ -1,5 +1,5 @@
 //! This module contains implementations of smart-contract traits and instructions for [`Account`] structure
-//! and implementations of [`Query`]'s about [`Account`].
+//! and implementations for account queries.
 
 use iroha_data_model::{prelude::*, query::error::FindError};
 use iroha_telemetry::metrics;
@@ -9,7 +9,6 @@ use super::prelude::*;
 impl Registrable for iroha_data_model::account::NewAccount {
     type Target = Account;
 
-    #[must_use]
     #[inline]
     fn build(self, _authority: &AccountId) -> Self::Target {
         self.into_account()
@@ -186,7 +185,7 @@ pub mod isi {
                 .world
                 .remove_account_permission(&account_id, &permission)
             {
-                return Err(FindError::Permission(permission).into());
+                return Err(FindError::Permission(permission.into()).into());
             }
 
             state_transaction
@@ -306,7 +305,7 @@ pub mod isi {
     }
 }
 
-/// Account-related [`Query`] instructions.
+/// Implementations for account queries.
 pub mod query {
 
     use eyre::Result;

@@ -1,6 +1,7 @@
 //! TODO
 
 #![allow(unused)]
+#![allow(clippy::large_enum_variant)]
 
 use darling::{FromAttributes, FromDeriveInput};
 use iroha_macro_utils::Emitter;

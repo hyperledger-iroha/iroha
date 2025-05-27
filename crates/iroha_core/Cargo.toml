@@ -24,6 +24,8 @@ telemetry = []
 expensive-telemetry = ["iroha_telemetry/metric-instrumentation"]
 # Profiler integration for wasmtime
 profiling = []
+# Marker feature for functions used in benchmarks
+bench = []
 
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }
@@ -73,6 +75,7 @@ iroha_test_samples = { workspace = true }
 criterion = { workspace = true }
 hex = { workspace = true }
 tempfile = { workspace = true }
+expect-test = { workspace = true }
 
 [[bench]]
 name = "validation"
@@ -86,6 +89,7 @@ harness = false
 name = "apply_blocks"
 harness = false
 path = "benches/blocks/apply_blocks_benchmark.rs"
+required-features = ["bench"]
 
 [[bench]]
 name = "validate_blocks"
@@ -96,6 +100,7 @@ path = "benches/blocks/validate_blocks_benchmark.rs"
 name = "apply_blocks"
 harness = false
 path = "benches/blocks/apply_blocks_oneshot.rs"
+required-features = ["bench"]
 
 [[example]]
 name = "validate_blocks"
