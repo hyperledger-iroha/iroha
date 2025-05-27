@@ -1,5 +1,6 @@
 use eyre::Result;
 use iroha::data_model::{prelude::*, trigger::TriggerId};
+use iroha_data_model::isi::error::InstructionExecutionError;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 
@@ -30,7 +31,15 @@ fn failed_trigger_revert() -> Result<()> {
     let _ = client.submit_blocking(register_trigger);
 
     let call_trigger = ExecuteTrigger::new(trigger_id);
-    client.submit_blocking(call_trigger)?;
+    let err = client
+        .submit_blocking(call_trigger)
+        .expect_err("should immediately result in error");
+    let Some(InstructionExecutionError::InvariantViolation(err)) =
+        err.root_cause().downcast_ref::<InstructionExecutionError>()
+    else {
+        panic!("unexpected error")
+    };
+    assert!(err.contains("Validation failed"));
 
     //Then
     let query_result = client.query(FindAssetsDefinitions::new()).execute_all()?;

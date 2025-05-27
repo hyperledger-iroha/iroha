@@ -34,8 +34,8 @@ fn set_up_trigger(iroha: &Client) -> eyre::Result<(DomainId, AccountId, TriggerI
     iroha.submit_all_blocking::<InstructionBox>([
         create_failand.into(),
         create_the_one_who_fails.into(),
-        register_fail_on_account_events.into(),
     ])?;
+    iroha.submit_blocking::<InstructionBox>(register_fail_on_account_events.into())?;
     Ok((failand, the_one_who_fails, fail_on_account_events))
 }
 

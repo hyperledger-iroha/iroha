@@ -64,7 +64,9 @@ async fn measure_block_size_for_n_executors(n_executors: u32) {
             .unpack(|_| {});
 
         let mut state_block = state.block(unverified_block.header());
-        let block = unverified_block.categorize(&mut state_block).unpack(|_| {});
+        let block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
         state_block.commit();
         block
     };
