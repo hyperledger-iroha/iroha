@@ -323,6 +323,9 @@ Apply `cargo check` to the smartcontract
 
 ###### **Options:**
 
+* `--cargo-args <CARGO_ARGS>` — Extra arguments to pass to `cargo`, e.g. `--locked`
+
+  Default value: ``
 * `--profile <PROFILE>`
 
   Default value: `release`
@@ -341,6 +344,9 @@ Build the smartcontract
 
 ###### **Options:**
 
+* `--cargo-args <CARGO_ARGS>` — Extra arguments to pass to `cargo`, e.g. `--locked`
+
+  Default value: ``
 * `--profile <PROFILE>` — Build profile
 
   Default value: `release`
