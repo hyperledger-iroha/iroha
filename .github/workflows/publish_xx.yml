@@ -45,7 +45,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             hyperledger/iroha:${{ env.TAG_BASE }}-${{ github.sha }}
-            docker.soramitsu.co.jp:hyperledger/iroha:${{ env.TAG_BASE }}-${{ github.sha }}
+            docker.soramitsu.co.jp/hyperledger/iroha:${{ env.TAG_BASE }}-${{ github.sha }}
           labels: commit=${{ github.sha }}
           context: .
 
@@ -58,7 +58,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             hyperledger/iroha:${{ env.TAG_BASE }}-profiling-${{ github.sha }}
-            docker.soramitsu.co.jp:hyperledger/iroha:${{ env.TAG_BASE }}-profiling-${{ github.sha }}
+            docker.soramitsu.co.jp/hyperledger/iroha:${{ env.TAG_BASE }}-profiling-${{ github.sha }}
           labels: commit=${{ github.sha }}
           build-args: |
             "PROFILE=profiling"

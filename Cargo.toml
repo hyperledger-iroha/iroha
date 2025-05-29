@@ -135,7 +135,10 @@ rust.anonymous_parameters = "deny"
 rust.missing_copy_implementations = "deny"
 rust.missing_docs = "deny"
 rust.trivial_casts = "deny"
-rust.trivial_numeric_casts = "deny"
+# FIXME: https://github.com/paritytech/parity-scale-codec/issues/740
+#        There are 900+ errors in the workspace.
+#        Too many to put individual `#[allow]` everywhere.
+rust.trivial_numeric_casts = "allow"
 rust.unsafe_code = "deny"
 rust.variant_size_differences = "deny"
 rust.explicit_outlives_requirements = "deny"
