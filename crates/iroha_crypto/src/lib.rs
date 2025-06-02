@@ -112,6 +112,20 @@ impl FromStr for Algorithm {
     }
 }
 
+impl TryFrom<u8> for Algorithm {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Algorithm::Ed25519),
+            1 => Ok(Algorithm::Secp256k1),
+            2 => Ok(Algorithm::BlsNormal),
+            3 => Ok(Algorithm::BlsSmall),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Key pair generation option. Passed to a specific algorithm.
 #[derive(Debug)]
 pub enum KeyGenOption<K> {
@@ -358,7 +372,7 @@ impl PublicKeyFull {
 
 impl From<&PublicKeyCompact> for PublicKeyFull {
     fn from(public_key: &PublicKeyCompact) -> Self {
-        Self::from_bytes(public_key.algorithm, &public_key.payload)
+        Self::from_bytes(public_key.algorithm(), public_key.payload())
             .expect("`PublicKeyEncoded` must contain valid payload")
     }
 }
@@ -370,16 +384,38 @@ impl From<&PublicKeyCompact> for PublicKeyFull {
 /// Invariant: `payload` is valid, that is conversion to full form must not give error.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PublicKeyCompact {
-    algorithm: Algorithm,
-    payload: ConstVec<u8>,
+    // First byte corresponds to algorithm
+    // Other bytes are payload
+    algorithm_and_payload: ConstVec<u8>,
+    // This is non-optimized version of this struct:
+    // algorithm: Algorithm,
+    // payload: ConstVec<u8>,
+}
+
+impl PublicKeyCompact {
+    fn new(algorithm: Algorithm, payload: &[u8]) -> Self {
+        let algorithm = algorithm as u8;
+        let mut bytes = Vec::with_capacity(1 + payload.len());
+        bytes.push(algorithm);
+        bytes.extend_from_slice(payload);
+        Self {
+            algorithm_and_payload: ConstVec::new(bytes),
+        }
+    }
+
+    fn algorithm(&self) -> Algorithm {
+        let algorithm = self.algorithm_and_payload[0];
+        Algorithm::try_from(algorithm).expect("Invalid PublicKeyCompact::algorithm_and_payload")
+    }
+
+    fn payload(&self) -> &[u8] {
+        &self.algorithm_and_payload[1..]
+    }
 }
 
 impl From<PublicKeyFull> for PublicKeyCompact {
     fn from(public_key: PublicKeyFull) -> Self {
-        Self {
-            algorithm: public_key.algorithm(),
-            payload: public_key.payload(),
-        }
+        Self::new(public_key.algorithm(), &public_key.payload())
     }
 }
 
@@ -434,10 +470,7 @@ impl PublicKey {
         {
             // In WASM we can skip validation of payload for performance reasons.
             // Payload is considered valid because it was received from host.
-            let public_key = PublicKeyCompact {
-                algorithm,
-                payload: payload.to_const_vec(),
-            };
+            let public_key = PublicKeyCompact::new(algorithm, payload);
             Ok(Self(public_key))
         }
     }
@@ -447,7 +480,7 @@ impl PublicKey {
     /// `into_bytes()` without copying is not provided because underlying crypto
     /// libraries do not provide move functionality.
     pub fn to_bytes(&self) -> (Algorithm, &[u8]) {
-        (self.0.algorithm, &self.0.payload)
+        (self.0.algorithm(), self.0.payload())
     }
 
     /// Construct from hex encoded string. A shorthand over [`Self::from_bytes`].
@@ -464,7 +497,7 @@ impl PublicKey {
 
     /// Get the digital signature algorithm of the public key
     pub fn algorithm(&self) -> Algorithm {
-        self.0.algorithm
+        self.0.algorithm()
     }
 }
 
