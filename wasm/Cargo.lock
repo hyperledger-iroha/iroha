@@ -655,6 +655,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "executor_with_fuel"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "dlmalloc",
+ "iroha_data_model",
+ "iroha_executor",
+ "iroha_executor_data_model",
+ "iroha_schema",
+ "iroha_trigger",
+ "panic-halt",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "executor_with_migration_fail"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -1712,6 +1727,15 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "winnow",
+]
+
+[[package]]
+name = "trigger_cat_and_mouse"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "dlmalloc",
+ "iroha_trigger",
+ "panic-halt",
 ]
 
 [[package]]
