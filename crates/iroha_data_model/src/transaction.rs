@@ -8,7 +8,7 @@ use core::{
     time::Duration,
 };
 
-use derive_more::{DebugCustom, Display};
+use derive_more::{DebugCustom, Display, From, TryInto};
 use iroha_crypto::{Signature, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
@@ -24,6 +24,7 @@ use crate::{
     account::AccountId,
     isi::{Instruction, InstructionBox},
     metadata::Metadata,
+    trigger::TriggerId,
     ChainId,
 };
 
@@ -161,6 +162,103 @@ mod model {
         /// [`Transaction`] payload.
         pub(super) payload: TransactionPayload,
     }
+
+    /// Initial execution step of a transaction, which may invoke data triggers.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        From,
+        TryInto,
+        IntoSchema,
+    )]
+    pub enum TransactionEntrypoint {
+        /// User request that initiates a transaction.
+        External(SignedTransaction),
+        /// Scheduled time trigger that initiates a transaction.
+        Time(TimeTriggerEntrypoint),
+    }
+
+    /// A time-triggered entrypoint, forming the second half of the transaction entrypoints.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    #[display(fmt = "TimeTriggerEntrypoint")]
+    pub struct TimeTriggerEntrypoint {
+        /// Identifier for this trigger.
+        pub id: TriggerId,
+        /// Instructions executed in this step.
+        pub instructions: ExecutionStep,
+        /// Account authorized to initiate this time-triggered transaction.
+        pub authority: AccountId,
+    }
+
+    /// Either the sequence of data triggers on success, or the rejection reason on failure.
+    pub type TransactionResult = Result<DataTriggerSequence, error::TransactionRejectionReason>;
+
+    /// Sequence of data trigger execution steps.
+    pub type DataTriggerSequence = Vec<DataTriggerStep>;
+
+    /// Single execution step of the data trigger.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    #[display(fmt = "DataTriggerStep")]
+    pub struct DataTriggerStep {
+        /// Identifier for this trigger.
+        pub id: TriggerId,
+        /// Instructions executed in this step.
+        pub instructions: ExecutionStep,
+    }
+
+    /// Single execution step in a transaction, comprising ordered instructions.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    #[display(fmt = "ExecutionStep")]
+
+    pub struct ExecutionStep(pub ConstVec<InstructionBox>);
 }
 
 impl<A: Instruction> FromIterator<A> for Executable {
@@ -727,7 +825,9 @@ pub mod error {
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{
-        error::prelude::*, Executable, SignedTransaction, TransactionBuilder, WasmSmartContract,
+        error::prelude::*, DataTriggerSequence, DataTriggerStep, Executable, ExecutionStep,
+        SignedTransaction, TimeTriggerEntrypoint, TransactionBuilder, TransactionEntrypoint,
+        TransactionResult, WasmSmartContract,
     };
 }
 

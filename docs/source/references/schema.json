@@ -793,8 +793,8 @@
         "type": "Option<HashOf<BlockHeader>>"
       },
       {
-        "name": "transactions_hash",
-        "type": "Option<HashOf<MerkleTree<SignedTransaction>>>"
+        "name": "merkle_root",
+        "type": "Option<HashOf<MerkleTree<TransactionEntrypoint>>>"
       },
       {
         "name": "creation_time_ms",
@@ -899,6 +899,26 @@
       {
         "tag": "ConsensusBlockRejection",
         "discriminant": 0
+      }
+    ]
+  },
+  "BlockResult": {
+    "Struct": [
+      {
+        "name": "time_triggers",
+        "type": "Vec<TimeTriggerEntrypoint>"
+      },
+      {
+        "name": "merkle",
+        "type": "MerkleTree<TransactionEntrypoint>"
+      },
+      {
+        "name": "result_merkle",
+        "type": "MerkleTree<Result<Vec<DataTriggerStep>, TransactionRejectionReason>>"
+      },
+      {
+        "name": "transaction_results",
+        "type": "Vec<Result<Vec<DataTriggerStep>, TransactionRejectionReason>>"
       }
     ]
   },
@@ -1715,6 +1735,18 @@
       }
     ]
   },
+  "DataTriggerStep": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "TriggerId"
+      },
+      {
+        "name": "instructions",
+        "type": "ExecutionStep"
+      }
+    ]
+  },
   "Domain": {
     "Struct": [
       {
@@ -2042,6 +2074,7 @@
       }
     ]
   },
+  "ExecutionStep": "Vec<InstructionBox>",
   "ExecutionTime": {
     "Enum": [
       {
@@ -2336,8 +2369,10 @@
   },
   "Hash": "Array<u8, 32>",
   "HashOf<BlockHeader>": "Hash",
-  "HashOf<MerkleTree<SignedTransaction>>": "Hash",
+  "HashOf<MerkleTree<TransactionEntrypoint>>": "Hash",
+  "HashOf<Result<Vec<DataTriggerStep>, TransactionRejectionReason>>": "Hash",
   "HashOf<SignedTransaction>": "Hash",
+  "HashOf<TransactionEntrypoint>": "Hash",
   "HashOf<Vec<InstructionBox>>": "Hash",
   "IdBox": {
     "Enum": [
@@ -2720,8 +2755,14 @@
       }
     ]
   },
+  "MerkleTree<Result<Vec<DataTriggerStep>, TransactionRejectionReason>>": {
+    "Vec": "HashOf<Result<Vec<DataTriggerStep>, TransactionRejectionReason>>"
+  },
   "MerkleTree<SignedTransaction>": {
     "Vec": "HashOf<SignedTransaction>"
+  },
+  "MerkleTree<TransactionEntrypoint>": {
+    "Vec": "HashOf<TransactionEntrypoint>"
   },
   "Metadata": "SortedMap<Name, Json>",
   "MetadataChanged<AccountId>": {
@@ -3402,8 +3443,8 @@
   "Option<HashOf<BlockHeader>>": {
     "Option": "HashOf<BlockHeader>"
   },
-  "Option<HashOf<MerkleTree<SignedTransaction>>>": {
-    "Option": "HashOf<MerkleTree<SignedTransaction>>"
+  "Option<HashOf<MerkleTree<TransactionEntrypoint>>>": {
+    "Option": "HashOf<MerkleTree<TransactionEntrypoint>>"
   },
   "Option<HashOf<SignedTransaction>>": {
     "Option": "HashOf<SignedTransaction>"
@@ -4610,6 +4651,12 @@
       }
     ]
   },
+  "Result<Vec<DataTriggerStep>, TransactionRejectionReason>": {
+    "Result": {
+      "ok": "Vec<DataTriggerStep>",
+      "err": "TransactionRejectionReason"
+    }
+  },
   "Revoke<Permission, Account>": {
     "Struct": [
       {
@@ -5027,8 +5074,8 @@
         "type": "BlockPayload"
       },
       {
-        "name": "errors",
-        "type": "SortedMap<u64, TransactionRejectionReason>"
+        "name": "result",
+        "type": "BlockResult"
       }
     ]
   },
@@ -5251,12 +5298,6 @@
       "value": "Json"
     }
   },
-  "SortedMap<u64, TransactionRejectionReason>": {
-    "Map": {
-      "key": "u64",
-      "value": "TransactionRejectionReason"
-    }
-  },
   "SortedVec<AccountId>": {
     "Vec": "AccountId"
   },
@@ -5392,6 +5433,22 @@
       {
         "name": "length_ms",
         "type": "u64"
+      }
+    ]
+  },
+  "TimeTriggerEntrypoint": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "TriggerId"
+      },
+      {
+        "name": "instructions",
+        "type": "ExecutionStep"
+      },
+      {
+        "name": "authority",
+        "type": "AccountId"
       }
     ]
   },
@@ -6166,6 +6223,9 @@
   "Vec<CompoundPredicate<TriggerId>>": {
     "Vec": "CompoundPredicate<TriggerId>"
   },
+  "Vec<DataTriggerStep>": {
+    "Vec": "DataTriggerStep"
+  },
   "Vec<Domain>": {
     "Vec": "Domain"
   },
@@ -6235,6 +6295,9 @@
   "Vec<QueryOutputBatchBox>": {
     "Vec": "QueryOutputBatchBox"
   },
+  "Vec<Result<Vec<DataTriggerStep>, TransactionRejectionReason>>": {
+    "Vec": "Result<Vec<DataTriggerStep>, TransactionRejectionReason>"
+  },
   "Vec<Role>": {
     "Vec": "Role"
   },
@@ -6258,6 +6321,9 @@
   },
   "Vec<String>": {
     "Vec": "String"
+  },
+  "Vec<TimeTriggerEntrypoint>": {
+    "Vec": "TimeTriggerEntrypoint"
   },
   "Vec<Trigger>": {
     "Vec": "Trigger"
