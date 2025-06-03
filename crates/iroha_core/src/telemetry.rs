@@ -156,7 +156,7 @@ impl Actor {
                 block_index += 1;
 
                 let block_txs_rejected = block.errors().count() as u64;
-                let block_txs_all = block.transactions().count() as u64;
+                let block_txs_all = block.external_transactions().count() as u64;
                 let block_txs_approved = block_txs_all - block_txs_rejected;
 
                 inc_blocks += 1;

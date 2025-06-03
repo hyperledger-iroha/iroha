@@ -192,14 +192,16 @@ mod pending {
                     },
                 ),
                 prev_block_hash: prev_block.map(SignedBlock::hash),
-                transactions_hash: self
+                merkle_root: self
                     .0
                     .transactions
                     .iter()
                     .map(AsRef::as_ref)
                     .map(SignedTransaction::hash)
                     .collect::<MerkleTree<_>>()
-                    .root(),
+                    .root()
+                    .map(HashOf::transmute),
+                result_merkle_root: None,
                 creation_time_ms: creation_time
                     .as_millis()
                     .try_into()
@@ -254,8 +256,6 @@ mod chained {
 }
 
 mod new {
-    use std::collections::BTreeMap;
-
     use super::*;
     use crate::{smartcontracts::wasm::cache::WasmCache, state::StateBlock};
 
@@ -271,40 +271,55 @@ mod new {
 
     impl NewBlock {
         /// Validate each transaction in the block, apply resulting state changes,
-        /// and record any errors back into the block.
+        /// and record results back into the block.
+        // TODO: remove logic duplicated from `ValidBlock::validate_and_record_transactions`.
         pub fn validate_and_record_transactions(
             self,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<ValidBlock> {
             let mut wasm_cache = WasmCache::new();
-            let errors = self
+            let (mut hashes, mut results) = self
                 .transactions
                 .iter()
                 // FIXME: Redundant clone
                 .cloned()
-                .enumerate()
-                .fold(BTreeMap::new(), |mut acc, (idx, tx)| {
-                    if let Err((rejected_tx, error)) =
-                        state_block.validate_transaction(tx, &mut wasm_cache)
-                    {
-                        iroha_logger::debug!(
-                            block=%self.header.hash(),
-                            tx=%rejected_tx.hash(),
-                            reason=?error,
-                            "Transaction rejected"
-                        );
+                .fold((Vec::new(), Vec::new()), |mut acc, accepted_tx| {
+                    let (hash, result) =
+                        state_block.validate_transaction(accepted_tx, &mut wasm_cache);
 
-                        acc.insert(idx, error);
+                    match &result {
+                        Err(reason) => {
+                            iroha_logger::debug!(
+                                tx=%hash,
+                                block=%self.header.hash(),
+                                reason=?reason,
+                                "Transaction rejected"
+                            );
+                        }
+                        Ok(trigger_sequence) => {
+                            iroha_logger::debug!(
+                                tx=%hash,
+                                block=%self.header.hash(),
+                                trigger_sequence=?trigger_sequence,
+                                "Transaction approved"
+                            );
+                        }
                     }
 
+                    acc.0.push(hash);
+                    acc.1.push(result);
                     acc
                 });
 
             let mut block: SignedBlock = self.into();
-            block.set_transaction_errors(errors);
-            state_block.execute_time_triggers(&block);
 
-            // FIXME: Don't create a ValidBlock that deviates from the result of ValidBlock::validate.
+            let (time_trgs, mut time_trg_hashes, mut time_trg_results) =
+                state_block.execute_time_triggers(&block);
+            hashes.append(&mut time_trg_hashes);
+            results.append(&mut time_trg_results);
+
+            block.set_transaction_results(time_trgs, hashes, results);
+
             WithEvents::new(ValidBlock(block))
         }
 
@@ -605,7 +620,7 @@ mod valid {
                 Self::verify_no_undefined_signatures(block, topology)?;
             }
 
-            if block.transactions().any(|tx| {
+            if block.external_transactions().any(|tx| {
                 state
                     .transactions()
                     .get(&tx.hash())
@@ -619,7 +634,11 @@ mod valid {
         }
 
         /// Validate each transaction in the block, apply resulting state changes,
-        /// and record any errors back into the block.
+        /// and record results back into the block.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if any pre-validation static analysis fails.
         fn validate_and_record_transactions(
             block: &mut SignedBlock,
             expected_chain_id: &ChainId,
@@ -632,12 +651,11 @@ mod valid {
             };
 
             let mut wasm_cache = WasmCache::new();
-            let errors = block
-                .transactions()
+            let (mut hashes, mut results) = block
+                .external_transactions()
                 // FIXME: Redundant clone
                 .cloned()
-                .enumerate()
-                .try_fold(Vec::new(), |mut acc, (idx, tx)| {
+                .try_fold((Vec::new(), Vec::new()), |mut acc, tx| {
                     let accepted_tx = if block.header().is_genesis() {
                         AcceptedTransaction::accept_genesis(
                             tx,
@@ -654,25 +672,39 @@ mod valid {
                         )
                     }?;
 
-                    if let Err((rejected_tx, error)) =
-                        state_block.validate_transaction(accepted_tx, &mut wasm_cache)
-                    {
-                        iroha_logger::debug!(
-                            tx=%rejected_tx.hash(),
-                            block=%block.hash(),
-                            reason=?error,
-                            "Transaction rejected"
-                        );
+                    let (hash, result) =
+                        state_block.validate_transaction(accepted_tx, &mut wasm_cache);
 
-                        acc.push((idx, error));
+                    match &result {
+                        Err(reason) => {
+                            iroha_logger::debug!(
+                                tx=%hash,
+                                block=%block.hash(),
+                                reason=?reason,
+                                "Transaction rejected"
+                            );
+                        }
+                        Ok(trigger_sequence) => {
+                            iroha_logger::debug!(
+                                tx=%hash,
+                                block=%block.hash(),
+                                trigger_sequence=?trigger_sequence,
+                                "Transaction approved"
+                            );
+                        }
                     }
 
+                    acc.0.push(hash);
+                    acc.1.push(result);
                     Ok::<_, TransactionValidationError>(acc)
                 })?;
 
-            block.set_transaction_errors(errors);
+            let (time_trgs, mut time_trg_hashes, mut time_trg_results) =
+                state_block.execute_time_triggers(block);
+            hashes.append(&mut time_trg_hashes);
+            results.append(&mut time_trg_results);
 
-            state_block.execute_time_triggers(block);
+            block.set_transaction_results(time_trgs, hashes, results);
 
             Ok(())
         }
@@ -835,12 +867,12 @@ mod valid {
             leader_private_key: &PrivateKey,
             f: impl FnOnce(&mut BlockHeader),
         ) -> Self {
-            let transactions_hash =
-                HashOf::from_untyped_unchecked(Hash::prehashed([1; Hash::LENGTH]));
+            let merkle_root = HashOf::from_untyped_unchecked(Hash::prehashed([1; Hash::LENGTH]));
             let mut header = BlockHeader {
                 height: nonzero_ext::nonzero!(2_u64),
                 prev_block_hash: None,
-                transactions_hash: Some(transactions_hash),
+                merkle_root: Some(merkle_root),
+                result_merkle_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
             };
@@ -1117,18 +1149,21 @@ mod event {
             let block_height = self.as_ref().header().height;
 
             let block = self.as_ref();
-            let tx_events = block.transactions().enumerate().map(move |(idx, tx)| {
-                let status = block.error(idx).map_or_else(
-                    || TransactionStatus::Approved,
-                    |error| TransactionStatus::Rejected(Box::new(error.clone())),
-                );
+            let tx_events = block
+                .external_transactions()
+                .enumerate()
+                .map(move |(idx, tx)| {
+                    let status = block.error(idx).map_or_else(
+                        || TransactionStatus::Approved,
+                        |error| TransactionStatus::Rejected(Box::new(error.clone())),
+                    );
 
-                TransactionEvent {
-                    block_height: Some(block_height),
-                    hash: tx.hash(),
-                    status,
-                }
-            });
+                    TransactionEvent {
+                        block_height: Some(block_height),
+                        hash: tx.hash(),
+                        status,
+                    }
+                });
 
             let block_event = core::iter::once(BlockEvent {
                 header: self.as_ref().header(),
@@ -1238,7 +1273,7 @@ mod tests {
         state_block.commit();
 
         // The 1st transaction should be confirmed and the 2nd rejected
-        assert_eq!(*valid_block.as_ref().errors().next().unwrap().0, 1);
+        assert_eq!(valid_block.as_ref().errors().next().unwrap().0, 1);
     }
 
     #[tokio::test]
@@ -1307,7 +1342,7 @@ mod tests {
 
         // The 1st transaction should fail and 2nd succeed
         let mut errors = valid_block.as_ref().errors();
-        assert_eq!(0, *errors.next().unwrap().0);
+        assert_eq!(0, errors.next().unwrap().0);
         assert!(errors.next().is_none());
     }
 
@@ -1364,7 +1399,7 @@ mod tests {
         // The 1st transaction should be rejected
         assert_eq!(
             0,
-            *errors.next().unwrap().0,
+            errors.next().unwrap().0,
             "The first transaction should be rejected, as it contains `Fail`."
         );
 

@@ -1049,16 +1049,16 @@ mod tests {
             assert_eq!(block_count.0, 3);
 
             assert_eq!(
-                kura.get_block(nonzero!(1_usize)),
-                Some(Arc::new(block_genesis.into()))
+                kura.get_block(nonzero!(1_usize)).unwrap().hash(),
+                block_genesis.as_ref().hash()
             );
             assert_eq!(
-                kura.get_block(nonzero!(2_usize)),
-                Some(Arc::new(block_soft_fork.into()))
+                kura.get_block(nonzero!(2_usize)).unwrap().hash(),
+                block_soft_fork.as_ref().hash()
             );
             assert_eq!(
-                kura.get_block(nonzero!(3_usize)),
-                Some(Arc::new(block_next.into()))
+                kura.get_block(nonzero!(3_usize)).unwrap().hash(),
+                block_next.as_ref().hash()
             );
         }
     }

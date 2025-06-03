@@ -194,34 +194,33 @@ impl AsRef<SignedTransaction> for AcceptedTransaction {
 }
 
 impl StateBlock<'_> {
-    /// Move transaction lifecycle forward by checking if the
-    /// instructions can be applied to the [`StateBlock`].
+    /// Validate and apply the transaction to the state if validation succeeds; leave the state unchanged on failure.
     ///
-    /// Validation is skipped for genesis.
-    ///
-    /// # Errors
-    /// Fails if validation of instruction fails (e.g. permissions mismatch).
+    /// Returns the hash and the result of the transaction -- the trigger sequence on success, or the rejection reason on failure.
     pub fn validate_transaction(
         &mut self,
         tx: AcceptedTransaction,
         wasm_cache: &mut WasmCache<'_, '_, '_>,
-    ) -> Result<SignedTransaction, (Box<SignedTransaction>, TransactionRejectionReason)> {
+    ) -> (HashOf<TransactionEntrypoint>, TransactionResult) {
         let mut state_transaction = self.transaction();
-        if let Err(rejection_reason) =
-            Self::validate_transaction_internal(tx.clone(), &mut state_transaction, wasm_cache)
-        {
-            return Err((tx.0.into(), rejection_reason));
+        // Transmute: interpret the external transaction variant as a transaction entrypoint.
+        let hash = tx.0.hash().transmute();
+        let result = Self::validate_transaction_internal(tx, &mut state_transaction, wasm_cache);
+        if result.is_ok() {
+            state_transaction.apply();
         }
-        state_transaction.apply();
 
-        Ok(tx.0)
+        (hash, result)
     }
 
+    /// Validate the transaction, staging its state changes.
+    ///
+    /// Returns the trigger sequence on success, or the rejection reason on failure.
     fn validate_transaction_internal(
         tx: AcceptedTransaction,
         state_transaction: &mut StateTransaction<'_, '_>,
         wasm_cache: &mut WasmCache<'_, '_, '_>,
-    ) -> Result<(), TransactionRejectionReason> {
+    ) -> TransactionResult {
         let authority = tx.as_ref().authority().clone();
 
         if state_transaction.world.accounts.get(&authority).is_none() {
@@ -242,10 +241,10 @@ impl StateBlock<'_> {
         }
 
         debug!("Transaction validated successfully; processing data triggers");
-        state_transaction.execute_data_triggers_dfs(&authority)?;
+        let trigger_sequence = state_transaction.execute_data_triggers_dfs(&authority)?;
         debug!("Data triggers executed successfully");
 
-        Ok(())
+        Ok(trigger_sequence)
     }
 
     fn validate_wasm(

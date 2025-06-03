@@ -22,7 +22,7 @@ pub(crate) struct BlockTransactionRef(Arc<SignedBlock>, usize);
 
 impl BlockTransactionIter {
     fn new(block: Arc<SignedBlock>) -> Self {
-        let n_transactions = block.transactions().len();
+        let n_transactions = block.external_transactions().len();
         Self(block, n_transactions)
     }
 }
@@ -48,7 +48,7 @@ impl BlockTransactionRef {
     fn value(&self) -> (SignedTransaction, Option<TransactionRejectionReason>) {
         (
             self.0
-                .transactions()
+                .external_transactions()
                 .nth(self.1)
                 .expect("INTERNAL BUG: The transaction is not found")
                 .clone(),
