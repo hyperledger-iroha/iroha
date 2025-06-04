@@ -415,33 +415,63 @@ fn executor_with_fuel() -> Result<()> {
         &TransactionRejectionReason::Validation(ValidationFail::TooComplex)
     ));
 
-    // Test with trigger
-    // Should be enabled with trigger support
-    // let trigger_id = "mint_three_roses".parse::<TriggerId>()?;
-    // let trigger_instructions: Vec<InstructionBox> = vec![
-    //     sample_isi.clone().into(),
-    //     sample_isi.clone().into(),
-    //     sample_isi.clone().into(),
-    // ];
-    // let register_trigger = Register::trigger(Trigger::new(
-    //     trigger_id.clone(),
-    //     Action::new(
-    //         trigger_instructions,
-    //         2_u32,
-    //         client.account.clone(),
-    //         ExecuteTriggerEventFilter::new()
-    //             .for_trigger(trigger_id.clone())
-    //             .under_authority(client.account.clone()),
-    //     ),
-    // ));
-    // client.submit_blocking_with_metadata(register_trigger, fuel_config.clone())?;
+    Ok(())
+}
 
-    // let execute_trigger = ExecuteTrigger::new(trigger_id);
-    // fuel_config.insert("fuel".parse().unwrap(), 90_000_000_u64);
-    // client.submit_blocking_with_metadata(execute_trigger.clone(), fuel_config.clone())?;
+/// Test the same executable as above by invoking it via a trigger.
+#[test]
+fn executor_with_fuel_and_trigger() -> Result<()> {
+    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
+    let client = network.client();
 
-    // fuel_config.insert("fuel".parse().unwrap(), 30_000_000_u64);
-    // client.submit_blocking_with_metadata(execute_trigger.clone(), fuel_config.clone())?;
+    upgrade_executor(&client, "executor_with_fuel")?;
+
+    let additional_fuel = |fuel: u64| {
+        let mut metadata = Metadata::default();
+        metadata.insert("additional_fuel".parse().unwrap(), fuel);
+        metadata
+    };
+
+    client.submit_blocking_with_metadata(
+        SetParameter::new(Parameter::Executor(
+            iroha_data_model::parameter::SmartContractParameter::Fuel(
+                std::num::NonZeroU64::new(10_000_000_u64).unwrap(),
+            ),
+        )),
+        additional_fuel(0),
+    )?;
+
+    let bob_rose = AssetId::new("rose#wonderland".parse().unwrap(), BOB_ID.clone());
+    let mint_a_rose = Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone());
+
+    let trigger_id = "mint_three_roses".parse::<TriggerId>()?;
+    let register_trigger = Register::trigger(Trigger::new(
+        trigger_id.clone(),
+        Action::new(
+            vec![mint_a_rose.clone(); 3],
+            Repeats::Indefinitely,
+            client.account.clone(),
+            ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+        ),
+    ));
+    client.submit_blocking_with_metadata(register_trigger, additional_fuel(30_000_000))?;
+
+    let execute_trigger = ExecuteTrigger::new(trigger_id);
+    client.submit_blocking_with_metadata(
+        execute_trigger.clone(),
+        additional_fuel(30_000_000 + 90_000_000),
+    )?;
+
+    let res = client.submit_blocking_with_metadata(
+        execute_trigger.clone(),
+        additional_fuel(30_000_000 + 80_000_000),
+    );
+    assert!(matches!(
+        res.expect_err("transaction should fail")
+            .downcast_ref::<TransactionRejectionReason>()
+            .expect("error should be a TransactionRejectionReason"),
+        &TransactionRejectionReason::Validation(ValidationFail::TooComplex)
+    ));
 
     Ok(())
 }
