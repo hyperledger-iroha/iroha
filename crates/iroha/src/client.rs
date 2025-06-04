@@ -44,6 +44,7 @@ use crate::{
 };
 
 const APPLICATION_JSON: &str = "application/json";
+const PLAIN_TEXT: &str = "text/plain";
 
 /// `Result` with [`QueryError`] as an error
 pub type QueryResult<T> = core::result::Result<T, QueryError>;
@@ -633,6 +634,30 @@ impl Client {
             join_torii_url(&self.torii_url, torii_uri::STATUS),
         )
         .headers(self.headers.clone())
+    }
+
+    /// Get the server version
+    ///
+    /// # Errors
+    /// Fails if sending request or decoding fails
+    pub fn get_server_version(&self) -> Result<String> {
+        let resp = DefaultRequestBuilder::new(
+            HttpMethod::GET,
+            join_torii_url(&self.torii_url, torii_uri::SERVER_VERSION),
+        )
+        .headers(&self.headers)
+        .header(http::header::CONTENT_TYPE, PLAIN_TEXT)
+        .build()?
+        .send()?;
+
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get server version with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or(""),
+            ));
+        }
+        Ok(String::from_utf8(resp.body().to_vec())?)
     }
 }
 
