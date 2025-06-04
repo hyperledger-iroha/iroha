@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     account::{Account, AccountEntry},
     asset::{Asset, AssetEntry},
-    prelude::{AccountProjection, AssetProjection},
+    nft::{Nft, NftEntry},
+    prelude::{AccountProjection, AssetProjection, NftProjection},
     query::dsl::{BaseProjector, EvaluatePredicate, HasProjection, HasPrototype, PredicateMarker},
 };
 
@@ -92,6 +93,10 @@ impl CompoundPredicate<Asset> {
     impl_applies!(applies_to_entry AssetEntry);
 }
 
+impl CompoundPredicate<Nft> {
+    impl_applies!(applies_to_entry NftEntry);
+}
+
 impl AccountProjection<PredicateMarker> {
     fn applies_to_entry(&self, input: AccountEntry) -> bool {
         use AccountProjection::*;
@@ -110,6 +115,18 @@ impl AssetProjection<PredicateMarker> {
             Atom(atom) => match *atom {},
             Id(field) => field.applies(input.id),
             Value(field) => field.applies(input.value),
+        }
+    }
+}
+
+impl NftProjection<PredicateMarker> {
+    fn applies_to_entry(&self, input: NftEntry) -> bool {
+        use NftProjection::*;
+        match self {
+            Atom(atom) => match *atom {},
+            Id(field) => field.applies(input.id),
+            Metadata(field) => field.applies(input.content),
+            AccountId(field) => field.applies(input.owned_by),
         }
     }
 }

@@ -49,7 +49,7 @@ pub mod isi {
                 .domain(&nft_id.domain)
                 .expect("INTERNAL BUG: Can't find domain of NFT to register");
 
-            state_transaction.world.nfts.insert(nft_id, nft.clone());
+            state_transaction.world.nfts.insert(nft_id, (&nft).into());
 
             state_transaction
                 .world
@@ -195,8 +195,8 @@ pub mod query {
             Ok(state_ro
                 .world()
                 .nfts_iter()
-                .filter(move |&nft| filter.applies(nft))
-                .cloned())
+                .filter(move |&nft| filter.applies_to_entry(nft))
+                .map(Into::into))
         }
     }
 }
