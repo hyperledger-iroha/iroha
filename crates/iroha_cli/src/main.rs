@@ -102,6 +102,8 @@ enum Command {
     Executor(executor::Command),
     /// Output CLI documentation in Markdown format
     MarkdownHelp(MarkdownHelp),
+    /// Show client, git SHA, and server version
+    Version(Version),
 }
 
 /// Context inside which commands run
@@ -239,7 +241,7 @@ macro_rules! match_all {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use Command::*;
-        match_all!((self, context), { Domain, Account, Asset, Nft, Peer, Events, Blocks, Multisig, Query, Transaction, Role, Parameter, Trigger, Executor, MarkdownHelp })
+        match_all!((self, context), { Domain, Account, Asset, Nft, Peer, Events, Blocks, Multisig, Query, Transaction, Role, Parameter, Trigger, Executor, MarkdownHelp, Version })
     }
 }
 
@@ -260,6 +262,20 @@ struct MarkdownHelp;
 
 impl Run for MarkdownHelp {
     fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+struct Version;
+
+impl Run for Version {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        println!("Git commit SHA: {}", env!("VERGEN_GIT_SHA"));
+        println!("Client version: {}", env!("CARGO_PKG_VERSION"));
+        let client = context.client_from_config();
+        let server_version = client.get_server_version()?;
+        println!("Server version: {}", server_version);
         Ok(())
     }
 }
