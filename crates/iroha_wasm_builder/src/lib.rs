@@ -77,6 +77,7 @@ pub struct Builder<'path, 'out_dir> {
     show_output: bool,
     /// Build profile
     profile: Profile,
+    cargo_args: Vec<String>,
 }
 
 impl<'path, 'out_dir> Builder<'path, 'out_dir> {
@@ -92,7 +93,14 @@ impl<'path, 'out_dir> Builder<'path, 'out_dir> {
             out_dir: None,
             show_output: false,
             profile,
+            cargo_args: <_>::default(),
         }
+    }
+
+    /// Set extra args for underlying `cargo` command
+    pub fn cargo_args(mut self, args: Vec<String>) -> Self {
+        self.cargo_args = args;
+        self
     }
 
     /// Set smartcontract build output directory.
@@ -159,6 +167,7 @@ impl<'path, 'out_dir> Builder<'path, 'out_dir> {
             )?,
             show_output: self.show_output,
             profile: self.profile,
+            cargo_args: self.cargo_args,
         })
     }
 
@@ -213,6 +222,7 @@ mod internal {
         pub out_dir: Cow<'out_dir, Path>,
         pub show_output: bool,
         pub profile: Profile,
+        pub cargo_args: Vec<String>,
     }
 
     impl Builder<'_> {
@@ -260,7 +270,8 @@ mod internal {
                 .stderr(Stdio::inherit())
                 .arg(cmd)
                 .arg(self.build_profile())
-                .args(Self::build_options());
+                .args(Self::build_options())
+                .args(&self.cargo_args);
 
             command
         }
@@ -420,7 +431,7 @@ fn cargo_command() -> Command {
         if let Ok(value) = env::var(var) {
             if value.contains(INSTRUMENT_COVERAGE_FLAG) {
                 eprintln!("WARNING: found `{INSTRUMENT_COVERAGE_FLAG}` rustc flag in `{var}` environment variable\n  \
-                           This directly interferes with `-Z build-std` flag set by `iroha_wasm_builder`\n  \
+                           This directly interferes with `-Z build-std` flag set by `kagami wasm`\n  \
                            See https://github.com/rust-lang/wg-cargo-std-aware/issues/68 \n  \
                            Further execution of `cargo` will most probably fail with `could not find profiler-builtins` error");
             }
