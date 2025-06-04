@@ -154,6 +154,25 @@ mod model {
         pub value: Numeric,
     }
 
+    /// Read-only reference to [`Asset`].
+    /// Used in query filters to avoid copying.
+    #[derive(Copy, Clone)]
+    pub struct AssetEntry<'world> {
+        /// Component Identification.
+        pub id: &'world AssetId,
+        /// Asset's Quantity.
+        pub value: &'world Numeric,
+    }
+
+    /// [`Asset`] without `id` field.
+    /// Needed only for [`World::assets`] map to reduce memory usage.
+    /// In other places use [`Asset`] directly.
+    #[derive(Clone, Deserialize, Serialize)]
+    pub struct AssetValue {
+        /// Asset's Quantity.
+        pub value: Numeric,
+    }
+
     /// Builder which can be submitted in a transaction to create a new [`AssetDefinition`]
     #[derive(
         Debug, Display, Clone, IdEqOrdHash, Decode, Encode, Deserialize, Serialize, IntoSchema,
@@ -365,6 +384,41 @@ impl Registered for Asset {
 
 impl Registered for AssetDefinition {
     type With = NewAssetDefinition;
+}
+
+impl<'world> AssetEntry<'world> {
+    /// Constructor
+    pub fn new(id: &'world AssetId, value: &'world AssetValue) -> Self {
+        Self {
+            id,
+            value: &value.value,
+        }
+    }
+
+    /// Getter for `id`
+    pub fn id(&self) -> &AssetId {
+        self.id
+    }
+
+    /// Getter for `value`
+    pub fn value(&self) -> &Numeric {
+        self.value
+    }
+}
+
+impl From<AssetEntry<'_>> for Asset {
+    fn from(value: AssetEntry) -> Self {
+        Self {
+            id: value.id.clone(),
+            value: *value.value,
+        }
+    }
+}
+
+impl From<Asset> for AssetValue {
+    fn from(asset: Asset) -> Self {
+        Self { value: asset.value }
+    }
 }
 
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.

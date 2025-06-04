@@ -7,6 +7,7 @@ use eyre::Result;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     account::{AccountEntry, AccountValue},
+    asset::{AssetEntry, AssetValue},
     block::{BlockHeader, SignedBlock},
     events::{
         pipeline::BlockEvent,
@@ -80,7 +81,7 @@ pub struct World {
     /// Registered asset definitions.
     pub(crate) asset_definitions: Storage<AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
-    pub(crate) assets: Storage<AssetId, Asset>,
+    pub(crate) assets: Storage<AssetId, AssetValue>,
     /// Non fungible assets.
     pub(crate) nfts: Storage<NftId, Nft>,
     /// Roles. [`Role`] pairs.
@@ -112,7 +113,7 @@ pub struct WorldBlock<'world> {
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageBlock<'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
-    pub(crate) assets: StorageBlock<'world, AssetId, Asset>,
+    pub(crate) assets: StorageBlock<'world, AssetId, AssetValue>,
     /// Registered NFTs.
     pub(crate) nfts: StorageBlock<'world, NftId, Nft>,
     /// Roles. [`Role`] pairs.
@@ -145,7 +146,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_definitions:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
-    pub(crate) assets: StorageTransaction<'block, 'world, AssetId, Asset>,
+    pub(crate) assets: StorageTransaction<'block, 'world, AssetId, AssetValue>,
     /// Registered NFTs.
     pub(crate) nfts: StorageTransaction<'block, 'world, NftId, Nft>,
     /// Roles. [`Role`] pairs.
@@ -180,7 +181,7 @@ pub struct WorldView<'world> {
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageView<'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
-    pub(crate) assets: StorageView<'world, AssetId, Asset>,
+    pub(crate) assets: StorageView<'world, AssetId, AssetValue>,
     /// Registered NFTs.
     pub(crate) nfts: StorageView<'world, NftId, Nft>,
     /// Roles. [`Role`] pairs.
@@ -348,7 +349,10 @@ impl World {
             .into_iter()
             .map(|ad| (ad.id().clone(), ad))
             .collect();
-        let assets = assets.into_iter().map(|ad| (ad.id().clone(), ad)).collect();
+        let assets = assets
+            .into_iter()
+            .map(|asset| (asset.id().clone(), asset.into()))
+            .collect();
         Self {
             domains,
             accounts,
@@ -426,7 +430,7 @@ pub trait WorldReadOnly {
     fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain>;
     fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue>;
     fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition>;
-    fn assets(&self) -> &impl StorageReadOnly<AssetId, Asset>;
+    fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue>;
     fn nfts(&self) -> &impl StorageReadOnly<NftId, Nft>;
     fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
     fn account_permissions(&self) -> &impl StorageReadOnly<AccountId, Permissions>;
@@ -507,22 +511,18 @@ pub trait WorldReadOnly {
 
     /// Iterate assets in account
     #[allow(clippy::type_complexity)]
-    fn assets_in_account_iter<'slf>(
-        &'slf self,
-        id: &AccountId,
-    ) -> core::iter::Map<
-        RangeIter<'slf, AssetId, Asset>,
-        fn((&'slf AssetId, &'slf Asset)) -> &'slf Asset,
-    > {
+    fn assets_in_account_iter(&self, id: &AccountId) -> impl Iterator<Item = AssetEntry> {
         self.assets()
             .range::<dyn AsAssetIdAccountCompare>(AssetByAccountBounds::new(id))
-            .map(|(_, a)| a)
+            .map(|(id, value)| AssetEntry::new(id, value))
     }
 
     /// Returns reference for asset definitions map
     #[inline]
-    fn assets_iter(&self) -> impl Iterator<Item = &Asset> {
-        self.assets().iter().map(|(_, a)| a)
+    fn assets_iter(&self) -> impl Iterator<Item = AssetEntry> {
+        self.assets()
+            .iter()
+            .map(|(id, value)| AssetEntry::new(id, value))
     }
 
     // Account-related methods
@@ -614,13 +614,13 @@ pub trait WorldReadOnly {
     /// - No such [`Asset`]
     /// - The [`Account`] with which the [`Asset`] is associated doesn't exist.
     /// - The [`Domain`] with which the [`Account`] is associated doesn't exist.
-    fn asset(&self, id: &AssetId) -> Result<Asset, QueryExecutionFail> {
+    fn asset<'a>(&'a self, id: &'a AssetId) -> Result<AssetEntry<'a>, QueryExecutionFail> {
         self.map_account(&id.account, |_| ())?;
 
         self.assets()
             .get(id)
+            .map(|value| AssetEntry::new(id, value))
             .ok_or_else(|| QueryExecutionFail::from(FindError::Asset(id.clone().into())))
-            .cloned()
     }
 
     // AssetDefinition-related methods
@@ -706,7 +706,7 @@ macro_rules! impl_world_ro {
             fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition> {
                 &self.asset_definitions
             }
-            fn assets(&self) -> &impl StorageReadOnly<AssetId, Asset> {
+            fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue> {
                 &self.assets
             }
             fn nfts(&self) -> &impl StorageReadOnly<NftId, Nft> {
@@ -902,7 +902,7 @@ impl WorldTransaction<'_, '_> {
     ///
     /// # Errors
     /// If domain, account or asset not found
-    pub fn asset_mut(&mut self, id: &AssetId) -> Result<&mut Asset, FindError> {
+    pub fn asset_mut(&mut self, id: &AssetId) -> Result<&mut AssetValue, FindError> {
         let _ = self.account(&id.account)?;
         self.assets
             .get_mut(id)
@@ -918,7 +918,7 @@ impl WorldTransaction<'_, '_> {
         &mut self,
         asset_id: &AssetId,
         default_asset_value: impl Into<Numeric>,
-    ) -> Result<&mut Asset, Error> {
+    ) -> Result<&mut AssetValue, Error> {
         self.domain(&asset_id.definition.domain)?;
         self.asset_definition(&asset_id.definition)?;
         self.account(&asset_id.account)?;
@@ -931,7 +931,7 @@ impl WorldTransaction<'_, '_> {
                 &mut self.internal_event_buf,
                 Some(AssetEvent::Created(asset.clone())),
             );
-            self.assets.insert(asset_id.clone(), asset);
+            self.assets.insert(asset_id.clone(), asset.into());
         }
         Ok(self
             .assets

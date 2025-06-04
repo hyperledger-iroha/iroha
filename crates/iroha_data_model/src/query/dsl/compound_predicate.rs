@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     account::{Account, AccountEntry},
-    prelude::AccountProjection,
+    asset::{Asset, AssetEntry},
+    prelude::{AccountProjection, AssetProjection},
     query::dsl::{BaseProjector, EvaluatePredicate, HasProjection, HasPrototype, PredicateMarker},
 };
 
@@ -87,6 +88,10 @@ impl CompoundPredicate<Account> {
     impl_applies!(applies_to_entry AccountEntry);
 }
 
+impl CompoundPredicate<Asset> {
+    impl_applies!(applies_to_entry AssetEntry);
+}
+
 impl AccountProjection<PredicateMarker> {
     fn applies_to_entry(&self, input: AccountEntry) -> bool {
         use AccountProjection::*;
@@ -94,6 +99,17 @@ impl AccountProjection<PredicateMarker> {
             Atom(atom) => match *atom {},
             Id(field) => field.applies(input.id),
             Metadata(field) => field.applies(input.metadata),
+        }
+    }
+}
+
+impl AssetProjection<PredicateMarker> {
+    fn applies_to_entry(&self, input: AssetEntry) -> bool {
+        use AssetProjection::*;
+        match self {
+            Atom(atom) => match *atom {},
+            Id(field) => field.applies(input.id),
+            Value(field) => field.applies(input.value),
         }
     }
 }
