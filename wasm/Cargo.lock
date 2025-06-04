@@ -655,6 +655,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "executor_with_fuel"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "dlmalloc",
+ "iroha_executor",
+ "panic-halt",
+]
+
+[[package]]
 name = "executor_with_migration_fail"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -1712,6 +1721,15 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "winnow",
+]
+
+[[package]]
+name = "trigger_cat_and_mouse"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "dlmalloc",
+ "iroha_trigger",
+ "panic-halt",
 ]
 
 [[package]]
