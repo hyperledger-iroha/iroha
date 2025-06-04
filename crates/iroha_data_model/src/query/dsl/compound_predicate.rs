@@ -7,8 +7,10 @@ use iroha_schema::IntoSchema;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::query::dsl::{
-    BaseProjector, EvaluatePredicate, HasProjection, HasPrototype, PredicateMarker,
+use crate::{
+    account::{Account, AccountEntry},
+    prelude::AccountProjection,
+    query::dsl::{BaseProjector, EvaluatePredicate, HasProjection, HasPrototype, PredicateMarker},
 };
 
 /// A compound predicate that is be used to combine multiple predicates using logical operators.
@@ -53,18 +55,45 @@ impl<T: HasProjection<PredicateMarker>> CompoundPredicate<T> {
     }
 }
 
+macro_rules! impl_applies {
+    ($applies:ident $input_ty:ty) => {
+        /// Evaluate the predicate on the given input.
+        pub fn $applies(&self, input: $input_ty) -> bool {
+            match self {
+                CompoundPredicate::Atom(projection) => projection.$applies(input),
+                CompoundPredicate::Not(expr) => !expr.$applies(input),
+                CompoundPredicate::And(and_list) => {
+                    and_list.iter().all(|expr| expr.$applies(input))
+                }
+                CompoundPredicate::Or(or_list) => or_list.iter().any(|expr| expr.$applies(input)),
+            }
+        }
+    };
+}
+
 impl<T> CompoundPredicate<T>
 where
     T: HasProjection<PredicateMarker>,
     T::Projection: EvaluatePredicate<T>,
 {
-    /// Evaluate the predicate on the given input.
-    pub fn applies(&self, input: &T) -> bool {
+    impl_applies!(applies & T);
+}
+
+// This impl and `impl *Projection<...>` below
+// is a small workaround to support `*Entry` structs in filters without copying.
+// Alternatively we can use `*Entry` classes directly in `type_descriptions!()`,
+// but because of lifetimes it will be very complicated.
+impl CompoundPredicate<Account> {
+    impl_applies!(applies_to_entry AccountEntry);
+}
+
+impl AccountProjection<PredicateMarker> {
+    fn applies_to_entry(&self, input: AccountEntry) -> bool {
+        use AccountProjection::*;
         match self {
-            CompoundPredicate::Atom(projection) => projection.applies(input),
-            CompoundPredicate::Not(expr) => !expr.applies(input),
-            CompoundPredicate::And(and_list) => and_list.iter().all(|expr| expr.applies(input)),
-            CompoundPredicate::Or(or_list) => or_list.iter().any(|expr| expr.applies(input)),
+            Atom(atom) => match *atom {},
+            Id(field) => field.applies(input.id),
+            Metadata(field) => field.applies(input.metadata),
         }
     }
 }

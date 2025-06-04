@@ -361,8 +361,8 @@ pub mod query {
             Ok(state_ro
                 .world()
                 .accounts_iter()
-                .filter(move |&account| filter.applies(account))
-                .cloned())
+                .filter(move |&account| filter.applies_to_entry(account))
+                .map(Into::into))
         }
     }
 
@@ -389,8 +389,8 @@ pub mod query {
                         ))
                         .is_some()
                 })
-                .filter(move |&account| filter.applies(account))
-                .cloned())
+                .filter(move |&account| filter.applies_to_entry(account))
+                .map(Into::into))
         }
     }
 }

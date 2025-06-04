@@ -77,6 +77,25 @@ mod model {
         pub metadata: Metadata,
     }
 
+    /// Read-only reference to [`Account`].
+    /// Used in query filters to avoid copying.
+    #[derive(Copy, Clone)]
+    pub struct AccountEntry<'world> {
+        /// Identification of the [`Account`].
+        pub id: &'world AccountId,
+        /// Metadata of this account as a key-value store.
+        pub metadata: &'world Metadata,
+    }
+
+    /// [`Account`] without `id`.
+    /// Needed only for [`World::accounts`] map to reduce memory usage.
+    /// In other places use [`Account`] directly.
+    #[derive(Clone, Deserialize, Serialize)]
+    pub struct AccountValue {
+        /// Metadata of this account as a key-value store.
+        pub metadata: Metadata,
+    }
+
     /// Builder which should be submitted in a transaction to create a new [`Account`]
     #[derive(
         DebugCustom, Display, Clone, IdEqOrdHash, Decode, Encode, Serialize, Deserialize, IntoSchema,
@@ -184,6 +203,51 @@ impl FromStr for AccountId {
                 })?;
                 Ok(Self::new(domain_id, signatory))
             }
+        }
+    }
+}
+
+impl<'world> AccountEntry<'world> {
+    /// Constructor
+    pub fn new(id: &'world AccountId, value: &'world AccountValue) -> Self {
+        Self {
+            id,
+            metadata: &value.metadata,
+        }
+    }
+
+    /// Getter for `id`
+    pub fn id(&self) -> &AccountId {
+        self.id
+    }
+
+    /// Getter for `metadata`
+    pub fn metadata(&self) -> &Metadata {
+        self.metadata
+    }
+}
+
+impl From<AccountEntry<'_>> for Account {
+    fn from(value: AccountEntry) -> Self {
+        Self {
+            id: value.id.clone(),
+            metadata: value.metadata.clone(),
+        }
+    }
+}
+
+impl From<&Account> for AccountValue {
+    fn from(account: &Account) -> Self {
+        Self {
+            metadata: account.metadata.clone(),
+        }
+    }
+}
+
+impl From<Account> for AccountValue {
+    fn from(account: Account) -> Self {
+        Self {
+            metadata: account.metadata,
         }
     }
 }

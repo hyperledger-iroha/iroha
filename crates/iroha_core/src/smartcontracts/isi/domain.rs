@@ -58,7 +58,7 @@ pub mod isi {
             state_transaction
                 .world
                 .accounts
-                .insert(account_id, account.clone());
+                .insert(account_id, (&account).into());
 
             state_transaction
                 .world

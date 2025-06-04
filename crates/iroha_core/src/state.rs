@@ -6,7 +6,7 @@ use std::{
 use eyre::Result;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    account::AccountId,
+    account::{AccountEntry, AccountValue},
     block::{BlockHeader, SignedBlock},
     events::{
         pipeline::BlockEvent,
@@ -76,7 +76,7 @@ pub struct World {
     /// Registered domains.
     pub(crate) domains: Storage<DomainId, Domain>,
     /// Registered accounts.
-    pub(crate) accounts: Storage<AccountId, Account>,
+    pub(crate) accounts: Storage<AccountId, AccountValue>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: Storage<AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
@@ -108,7 +108,7 @@ pub struct WorldBlock<'world> {
     /// Registered domains.
     pub(crate) domains: StorageBlock<'world, DomainId, Domain>,
     /// Registered accounts.
-    pub(crate) accounts: StorageBlock<'world, AccountId, Account>,
+    pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageBlock<'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
@@ -140,7 +140,7 @@ pub struct WorldTransaction<'block, 'world> {
     /// Registered domains.
     pub(crate) domains: StorageTransaction<'block, 'world, DomainId, Domain>,
     /// Registered accounts.
-    pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, Account>,
+    pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
     /// Registered asset definitions.
     pub(crate) asset_definitions:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinition>,
@@ -176,7 +176,7 @@ pub struct WorldView<'world> {
     /// Registered domains.
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
     /// Registered accounts.
-    pub(crate) accounts: StorageView<'world, AccountId, Account>,
+    pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageView<'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
@@ -342,7 +342,7 @@ impl World {
             .collect();
         let accounts = accounts
             .into_iter()
-            .map(|account| (account.id().clone(), account))
+            .map(|account| (account.id().clone(), account.into()))
             .collect();
         let asset_definitions = asset_definitions
             .into_iter()
@@ -424,7 +424,7 @@ pub trait WorldReadOnly {
     fn parameters(&self) -> &Parameters;
     fn peers(&self) -> &Peers;
     fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain>;
-    fn accounts(&self) -> &impl StorageReadOnly<AccountId, Account>;
+    fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue>;
     fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition>;
     fn assets(&self) -> &impl StorageReadOnly<AssetId, Asset>;
     fn nfts(&self) -> &impl StorageReadOnly<NftId, Nft>;
@@ -471,22 +471,18 @@ pub trait WorldReadOnly {
 
     /// Iterate accounts in domain
     #[allow(clippy::type_complexity)]
-    fn accounts_in_domain_iter<'slf>(
-        &'slf self,
-        id: &DomainId,
-    ) -> core::iter::Map<
-        RangeIter<'slf, AccountId, Account>,
-        fn((&'slf AccountId, &'slf Account)) -> &'slf Account,
-    > {
+    fn accounts_in_domain_iter(&self, id: &DomainId) -> impl Iterator<Item = AccountEntry> {
         self.accounts()
             .range::<dyn AsAccountIdDomainCompare>(AccountByDomainBounds::new(id))
-            .map(|(_, account)| account)
+            .map(|(id, value)| AccountEntry::new(id, value))
     }
 
     /// Returns reference for accounts map
     #[inline]
-    fn accounts_iter(&self) -> impl Iterator<Item = &Account> {
-        self.accounts().iter().map(|(_, account)| account)
+    fn accounts_iter(&self) -> impl Iterator<Item = AccountEntry> {
+        self.accounts()
+            .iter()
+            .map(|(id, value)| AccountEntry::new(id, value))
     }
 
     /// Iterate asset definitions in domain
@@ -535,9 +531,10 @@ pub trait WorldReadOnly {
     ///
     /// # Errors
     /// Fails if there is no domain or account
-    fn account(&self, id: &AccountId) -> Result<&Account, FindError> {
+    fn account<'a>(&'a self, id: &'a AccountId) -> Result<AccountEntry<'a>, FindError> {
         self.accounts()
             .get(id)
+            .map(|value| AccountEntry::new(id, value))
             .ok_or_else(|| FindError::Account(id.clone()))
     }
 
@@ -545,15 +542,12 @@ pub trait WorldReadOnly {
     ///
     /// # Errors
     /// Fails if there is no domain or account
-    fn map_account<'slf, T>(
-        &'slf self,
+    fn map_account<T>(
+        &self,
         id: &AccountId,
-        f: impl FnOnce(&'slf Account) -> T,
+        f: impl FnOnce(AccountEntry) -> T,
     ) -> Result<T, QueryExecutionFail> {
-        let account = self
-            .accounts()
-            .get(id)
-            .ok_or(FindError::Account(id.clone()))?;
+        let account = self.account(id)?;
         Ok(f(account))
     }
 
@@ -706,7 +700,7 @@ macro_rules! impl_world_ro {
             fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain> {
                 &self.domains
             }
-            fn accounts(&self) -> &impl StorageReadOnly<AccountId, Account> {
+            fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue> {
                 &self.accounts
             }
             fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition> {
@@ -856,7 +850,7 @@ impl WorldTransaction<'_, '_> {
     ///
     /// # Errors
     /// Fail if domain or account not found
-    pub fn account_mut(&mut self, id: &AccountId) -> Result<&mut Account, FindError> {
+    pub fn account_mut(&mut self, id: &AccountId) -> Result<&mut AccountValue, FindError> {
         self.accounts
             .get_mut(id)
             .ok_or_else(|| FindError::Account(id.clone()))
