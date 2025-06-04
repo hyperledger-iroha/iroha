@@ -417,3 +417,9 @@ pub mod profiling {
         }
     }
 }
+
+pub fn handle_server_version() -> impl IntoResponse {
+    // Get the version from Cargo.toml
+    let version = env!("CARGO_PKG_VERSION");
+    (StatusCode::OK, version)
+}
