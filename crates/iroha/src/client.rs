@@ -17,7 +17,7 @@ pub use iroha_config::client_api::ConfigGetDTO;
 use iroha_config::client_api::ConfigUpdateDTO;
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, Uptime};
-use iroha_torii_const::uri as torii_uri;
+use iroha_torii_const::{uri as torii_uri, Version};
 use iroha_version::prelude::*;
 use parity_scale_codec::DecodeAll;
 use rand::Rng;
@@ -634,6 +634,30 @@ impl Client {
             join_torii_url(&self.torii_url, torii_uri::STATUS),
         )
         .headers(self.headers.clone())
+    }
+
+    /// Get the server version
+    ///
+    /// # Errors
+    /// Fails if sending request or decoding fails
+    pub fn get_server_version(&self) -> Result<Version> {
+        let resp = DefaultRequestBuilder::new(
+            HttpMethod::GET,
+            join_torii_url(&self.torii_url, torii_uri::SERVER_VERSION),
+        )
+        .headers(&self.headers)
+        .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+        .build()?
+        .send()?;
+
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get server version with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or(""),
+            ));
+        }
+        Ok(serde_json::from_slice(resp.body())?)
     }
 }
 

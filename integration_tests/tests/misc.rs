@@ -55,3 +55,14 @@ async fn json_and_scale_statuses_equality() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn get_server_version() -> eyre::Result<()> {
+    let network = NetworkBuilder::new().start().await?;
+    let client = network.client();
+    let response =
+        tokio::task::spawn_blocking(move || client.get_server_version().unwrap()).await?;
+    assert!(response.version.starts_with("2.0.0"));
+    assert!(!response.git_sha.is_empty());
+    Ok(())
+}
