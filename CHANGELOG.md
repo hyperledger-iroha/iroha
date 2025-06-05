@@ -7,6 +7,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.0.0-rc.2.1] - 2025-06-05
+
+### 💼 Other
+
+- *(2.0.0-rc.2)* Include `wasm/Cargo.lock`, allow `trivial_numeric_casts`
+
 ## [2.0.0-rc.2.0] - 2025-05-08
 
 ### 🚀 Features
