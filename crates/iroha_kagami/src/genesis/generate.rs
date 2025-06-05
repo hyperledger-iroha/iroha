@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use color_eyre::eyre::WrapErr as _;
 use iroha_data_model::{isi::InstructionBox, parameter::Parameters, prelude::*};
 use iroha_executor_data_model::permission::{
-    domain::CanRegisterDomain, parameter::CanSetParameters,
+    domain::CanRegisterDomain, parameter::CanSetParameters, peer::CanManagePeers,
 };
 use iroha_genesis::{GenesisBuilder, RawGenesisTransaction, GENESIS_DOMAIN_ID};
 use iroha_test_samples::{gen_account_in, ALICE_ID, BOB_ID, CARPENTER_ID};
@@ -142,11 +142,50 @@ pub fn generate_default(
         grant_permission_to_register_domains.into(),
     ];
 
-    for isi in instructions {
+    for isi in instructions
+        .into_iter()
+        .chain(extension_from_test_genesis())
+    {
         builder = builder.append_instruction(isi);
     }
 
     Ok(builder.build_raw())
+}
+
+/// For testnet only
+fn extension_from_test_genesis() -> impl Iterator<Item = InstructionBox> {
+    use iroha_executor_data_model::permission::{
+        asset::CanMintAssetWithDefinition, domain::CanUnregisterDomain,
+        executor::CanUpgradeExecutor, role::CanManageRoles,
+    };
+
+    let rose_definition_id = "rose#wonderland".parse::<AssetDefinitionId>().unwrap();
+    let grant_modify_rose_permission = Grant::account_permission(
+        CanMintAssetWithDefinition {
+            asset_definition: rose_definition_id.clone(),
+        },
+        ALICE_ID.clone(),
+    );
+    let grant_manage_peers_permission = Grant::account_permission(CanManagePeers, ALICE_ID.clone());
+    let grant_manage_roles_permission = Grant::account_permission(CanManageRoles, ALICE_ID.clone());
+    let grant_unregister_wonderland_domain = Grant::account_permission(
+        CanUnregisterDomain {
+            domain: "wonderland".parse().unwrap(),
+        },
+        ALICE_ID.clone(),
+    );
+    let grant_upgrade_executor_permission =
+        Grant::account_permission(CanUpgradeExecutor, ALICE_ID.clone());
+
+    [
+        grant_modify_rose_permission,
+        grant_manage_peers_permission,
+        grant_manage_roles_permission,
+        grant_unregister_wonderland_domain,
+        grant_upgrade_executor_permission,
+    ]
+    .into_iter()
+    .map(Into::into)
 }
 
 fn generate_synthetic(
