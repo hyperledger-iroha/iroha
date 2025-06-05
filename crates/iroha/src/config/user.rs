@@ -18,9 +18,11 @@ use crate::{
 #[derive(Clone, Debug, ReadConfig)]
 #[allow(missing_docs)]
 pub struct Root {
+    #[config(env = "CHAIN")]
     pub chain: ChainId,
     #[config(env = "TORII_URL")]
     pub torii_url: WithOrigin<Url>,
+    #[config(env = "BASIC_AUTH")]
     pub basic_auth: Option<BasicAuth>,
     #[config(nested)]
     pub account: Account,
@@ -125,19 +127,31 @@ impl Root {
 #[derive(Debug, Clone, ReadConfig)]
 #[allow(missing_docs)]
 pub struct Account {
+    #[config(env = "ACCOUNT_DOMAIN")]
     pub domain: DomainId,
+    #[config(env = "ACCOUNT_PUBLIC_KEY")]
     pub public_key: WithOrigin<PublicKey>,
+    #[config(env = "ACCOUNT_PRIVATE_KEY")]
     pub private_key: WithOrigin<PrivateKey>,
 }
 
 #[derive(Debug, Clone, ReadConfig)]
 #[allow(missing_docs)]
 pub struct Transaction {
-    #[config(default = "super::DEFAULT_TRANSACTION_TIME_TO_LIVE.into()")]
+    #[config(
+        env = "TRANSACTION_TIME_TO_LIVE_MS",
+        default = "super::DEFAULT_TRANSACTION_TIME_TO_LIVE.into()"
+    )]
     pub time_to_live_ms: WithOrigin<DurationMs>,
-    #[config(default = "super::DEFAULT_TRANSACTION_STATUS_TIMEOUT.into()")]
+    #[config(
+        env = "TRANSACTION_STATUS_TIMEOUT_MS",
+        default = "super::DEFAULT_TRANSACTION_STATUS_TIMEOUT.into()"
+    )]
     pub status_timeout_ms: WithOrigin<DurationMs>,
-    #[config(default = "super::DEFAULT_TRANSACTION_NONCE")]
+    #[config(
+        env = "TRANSACTION_NONCE",
+        default = "super::DEFAULT_TRANSACTION_NONCE"
+    )]
     pub nonce: bool,
 }
 
@@ -151,12 +165,28 @@ mod tests {
 
     #[test]
     fn parses_all_envs() {
-        let env = MockEnv::from([("TORII_URL", "http://localhost:8080")]);
+        let env = MockEnv::from([
+            ("CHAIN", "00000000-0000-0000-0000-000000000000"),
+            ("TORII_URL", "http://localhost:8080"),
+            ("BASIC_AUTH", "mad_hatter:ilovetea"),
+            ("ACCOUNT_DOMAIN", "wonderland"),
+            (
+                "ACCOUNT_PUBLIC_KEY",
+                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            ),
+            (
+                "ACCOUNT_PRIVATE_KEY",
+                "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53",
+            ),
+            ("TRANSACTION_TIME_TO_LIVE_MS", "100_000"),
+            ("TRANSACTION_STATUS_TIMEOUT_MS", "15_000"),
+            ("TRANSACTION_NONCE", "false"),
+        ]);
 
-        let _ = ConfigReader::new()
+        let _root = ConfigReader::new()
             .with_env(env.clone())
             .read_and_complete::<Root>()
-            .expect_err("there are missing fields, but that of no concern");
+            .expect("should be able to be configured only from env vars");
 
         assert_eq!(env.unvisited(), HashSet::new());
         assert_eq!(env.unknown(), HashSet::new());

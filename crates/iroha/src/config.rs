@@ -3,7 +3,7 @@
 use core::str::FromStr;
 use std::{path::Path, time::Duration};
 
-use derive_more::Display;
+use derive_more::{Constructor, Display, From};
 use error_stack::ResultExt;
 use eyre::Result;
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
@@ -51,12 +51,32 @@ impl FromStr for WebLogin {
 }
 
 /// Basic Authentication credentials
-#[derive(Clone, Deserialize, Serialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug, Constructor, PartialEq, Eq)]
 pub struct BasicAuth {
     /// Login for Basic Authentication
     pub web_login: WebLogin,
     /// Password for Basic Authentication
     pub password: SecretString,
+}
+
+#[derive(Debug, Display, From)]
+#[allow(missing_docs)]
+pub struct BasicAuthParseError(String);
+
+impl std::error::Error for BasicAuthParseError {}
+
+impl FromStr for BasicAuth {
+    type Err = BasicAuthParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let Some((login, password)) = s.split_once(':') else {
+            return Err(format!("`login:password` expected, got {s}").into());
+        };
+        Ok(Self {
+            web_login: login.parse().expect("should have no colons"),
+            password: SecretString::new(password.into()),
+        })
+    }
 }
 
 /// Complete client configuration
@@ -102,6 +122,37 @@ mod tests {
     use iroha_config_base::env::MockEnv;
 
     use super::*;
+
+    #[test]
+    fn parse_basic_auth() {
+        let items = [
+            (
+                ":",
+                Some(BasicAuth::new(
+                    "".parse().unwrap(),
+                    SecretString::new(String::new()),
+                )),
+            ),
+            (
+                "login:password",
+                Some(BasicAuth::new(
+                    "login".parse().unwrap(),
+                    SecretString::new("password".into()),
+                )),
+            ),
+            (
+                "login:pass:word",
+                Some(BasicAuth::new(
+                    "login".parse().unwrap(),
+                    SecretString::new("pass:word".into()),
+                )),
+            ),
+            ("login password", None),
+        ];
+        for (str, opt) in items {
+            assert_eq!(str.parse::<BasicAuth>().ok(), opt)
+        }
+    }
 
     #[test]
     fn web_login_ok() {

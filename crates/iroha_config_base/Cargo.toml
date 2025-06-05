@@ -16,6 +16,7 @@ iroha_config_base_derive = { path = "../iroha_config_base_derive" }
 drop_bomb = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_with = { workspace = true, features = ["macros", "std"] }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 num-traits = "0.2.19"
 toml = { workspace = true }
