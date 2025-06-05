@@ -2,7 +2,6 @@
 **/storage/
 **/*.rs.bk
 **/rusty-tags.vi
-/**/Cargo.lock
 
 crates/iroha_config/__pycaсhe__
 **/__pycache__/*
