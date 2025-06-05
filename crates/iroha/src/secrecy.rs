@@ -5,7 +5,7 @@ use derive_more::Constructor;
 use serde::{Deserialize, Serialize, Serializer};
 
 /// String sensitive to printing and serialization
-#[derive(Clone, Deserialize, Constructor)]
+#[derive(Clone, Deserialize, Constructor, PartialEq, Eq)]
 pub struct SecretString(String);
 
 impl SecretString {
