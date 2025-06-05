@@ -2,7 +2,7 @@ name: Pull Request CI (Python Static Analysis)
 
 on:
   pull_request:
-    branches: [main]
+    branches: [testnet/2.0.0-rc.2]
     paths:
       - "**.py"
 
