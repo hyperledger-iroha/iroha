@@ -55,7 +55,7 @@ use crate::{
             },
             specialized::{LoadedAction, LoadedActionTrait},
         },
-        wasm, Execute,
+        wasm,
     },
     state::storage_transactions::{
         TransactionsBlock, TransactionsReadOnly, TransactionsStorage, TransactionsView,
@@ -1648,9 +1648,9 @@ impl StateTransaction<'_, '_> {
         event: EventBox,
     ) -> Result<(), TransactionRejectionReason> {
         let res = match executable {
-            ExecutableRef::Instructions(instructions) => self
-                .execute_instructions(instructions.iter().cloned(), authority)
-                .map_err(ValidationFail::from),
+            ExecutableRef::Instructions(instructions) => {
+                self.execute_instructions(instructions.iter().cloned(), authority)
+            }
             ExecutableRef::Wasm(blob_hash) => {
                 let module = self
                     .world
@@ -1689,9 +1689,10 @@ impl StateTransaction<'_, '_> {
         &mut self,
         instructions: impl IntoIterator<Item = InstructionBox>,
         authority: &AccountId,
-    ) -> Result<(), Error> {
+    ) -> Result<(), ValidationFail> {
+        let executor = self.world.executor.clone();
         instructions.into_iter().try_for_each(|instruction| {
-            instruction.execute(authority, self)?;
+            executor.execute_instruction(self, authority, instruction)?;
             Ok(())
         })
     }
