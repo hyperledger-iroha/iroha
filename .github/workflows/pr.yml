@@ -2,7 +2,7 @@ name: Pull Request CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [testnet/2.0.0-rc.2]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

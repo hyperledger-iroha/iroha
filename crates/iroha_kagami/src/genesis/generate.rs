@@ -9,7 +9,9 @@ use iroha_data_model::{isi::InstructionBox, parameter::Parameters, prelude::*};
 use iroha_executor_data_model::permission::{
     domain::CanRegisterDomain, parameter::CanSetParameters,
 };
-use iroha_genesis::{GenesisBuilder, RawGenesisTransaction, GENESIS_DOMAIN_ID};
+use iroha_genesis::{
+    GenesisBuilder, GenesisWasmAction, GenesisWasmTrigger, RawGenesisTransaction, GENESIS_DOMAIN_ID,
+};
 use iroha_test_samples::{gen_account_in, ALICE_ID, BOB_ID, CARPENTER_ID};
 
 use crate::{Outcome, RunArgs};
@@ -146,7 +148,68 @@ pub fn generate_default(
         builder = builder.append_instruction(isi);
     }
 
+    builder = extend_for_testnet(builder);
+
     Ok(builder.build_raw())
+}
+
+fn extend_for_testnet(mut builder: GenesisBuilder) -> GenesisBuilder {
+    use iroha_executor_data_model::permission::{
+        asset::CanMintAssetWithDefinition, domain::CanUnregisterDomain,
+        executor::CanUpgradeExecutor, peer::CanManagePeers, role::CanManageRoles,
+    };
+
+    // iroha_test_network::config::genesis
+    for extension_from_test_genesis in [
+        CanUpgradeExecutor.into(),
+        CanManagePeers.into(),
+        CanManageRoles.into(),
+        CanUnregisterDomain {
+            domain: "wonderland".parse().unwrap(),
+        }
+        .into(),
+        CanMintAssetWithDefinition {
+            asset_definition: "rose#wonderland".parse().unwrap(),
+        }
+        .into(),
+    ]
+    .into_iter()
+    .map(|permission: Permission| Grant::account_permission(permission, ALICE_ID.clone()))
+    {
+        builder = builder.append_instruction(extension_from_test_genesis);
+    }
+
+    for trigger_on_account_creation in [
+        ("airdrop", "trigger_airdrop.wasm"),
+        ("default_roles", "trigger_default_roles.wasm"),
+    ]
+    .into_iter()
+    .map(|(id, executable)| {
+        GenesisWasmTrigger::new(
+            id.parse().unwrap(),
+            GenesisWasmAction::new(
+                executable,
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                AccountEventFilter::new().for_events(AccountEventSet::Created),
+            ),
+        )
+    }) {
+        builder = builder.append_wasm_trigger(trigger_on_account_creation)
+    }
+
+    for other_prerequisite in [Register::role(
+        Role::new("volunteers".parse().unwrap(), ALICE_ID.clone())
+            .add_permission(CanRegisterDomain),
+    )
+    .into()]
+    .into_iter()
+    .map(|instruction: InstructionBox| instruction)
+    {
+        builder = builder.append_instruction(other_prerequisite);
+    }
+
+    builder
 }
 
 fn generate_synthetic(

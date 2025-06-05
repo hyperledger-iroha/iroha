@@ -1,6 +1,6 @@
 //! Various utilities
 
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use derive_more::Display;
 use drop_bomb::DropBomb;
@@ -23,6 +23,14 @@ impl DurationMs {
 impl From<Duration> for DurationMs {
     fn from(value: Duration) -> Self {
         Self(value)
+    }
+}
+
+impl FromStr for DurationMs {
+    type Err = serde_json::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s.replace('_', "").as_str())
     }
 }
 
@@ -250,5 +258,13 @@ mod tests {
         .expect("input is fine, should parse");
 
         assert_eq!(value.get(), Duration::from_millis(10_500));
+    }
+
+    #[test]
+    fn parse_duration_ms() {
+        assert_eq!(
+            "10_500".parse::<DurationMs>().ok(),
+            Some(DurationMs::from(Duration::from_millis(10_500)))
+        );
     }
 }

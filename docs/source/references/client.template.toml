@@ -1,19 +1,28 @@
+## `CHAIN` env var overwrites
 # chain =
 
-## Might be set via `TORII_URL` env var
+## `TORII_URL` env var overwrites
 # torii_url =
 
+## `BASIC_AUTH` env var overwrites
+## Example:
+## BASIC_AUTH="login:password"
 [basic_auth]
 # login =
 # password =
 
 [account]
+## `ACCOUNT_DOMAIN` env var overwrites
 # domain =
+## `ACCOUNT_PUBLIC_KEY` env var overwrites
 # public_key =
+## `ACCOUNT_PRIVATE_KEY` env var overwrites
 # private_key =
 
 [transaction]
+## `TRANSACTION_TIME_TO_LIVE_MS` env var overwrites
 # time_to_live_ms = 100_000
+## `TRANSACTION_STATUS_TIMEOUT_MS` env var overwrites
 # status_timeout_ms = 100_000
-## Nonce is TODO describe what it is
+## `TRANSACTION_NONCE` env var overwrites
 # nonce = false

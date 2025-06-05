@@ -56,7 +56,7 @@ case $1 in
         }
 
         command_base_for_default() {
-            echo "${bin_kagami[@]} swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev"
+            echo "${bin_kagami[@]} swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:testnet-2.0.0-rc.2"
         }
 
 
