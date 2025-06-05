@@ -19,6 +19,6 @@ cargo run --bin kagami -- markdown-help > ./crates/iroha_kagami/CommandLineHelp.
 # update docker compose files
 cargo run --bin kagami -- swarm -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.single.yml -F
 cargo run --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.local.yml -F
-cargo run --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev -o ./defaults/docker-compose.yml -F
+cargo run --bin kagami -- swarm -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:testnet-2.0.0-rc.2 -o ./defaults/docker-compose.yml -F
 # stage updates
 git add ./defaults/genesis.json ./docs/source/references/schema.json ./crates/iroha_cli/CommandLineHelp.md ./defaults/docker-compose.single.yml ./defaults/docker-compose.local.yml ./defaults/docker-compose.yml

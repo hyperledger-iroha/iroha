@@ -143,7 +143,7 @@ mod tests {
 
     use crate::Swarm;
 
-    const IMAGE: &str = "hyperledger/iroha:dev";
+    const IMAGE: &str = "hyperledger/iroha:testnet-2.0.0-rc.2";
     const PEER_CONFIG_PATH: &str = "./defaults";
     const TARGET_PATH: &str = "./defaults/docker-compose.yml";
 
@@ -179,7 +179,7 @@ mod tests {
 
             services:
               irohad0:
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 build: ..
                 pull_policy: never
                 environment:
@@ -236,7 +236,7 @@ mod tests {
 
             services:
               irohad0:
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 build: ..
                 pull_policy: build
                 environment:
@@ -292,7 +292,7 @@ mod tests {
 
             services:
               irohad0:
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 build: ..
                 pull_policy: build
                 environment:
@@ -336,7 +336,7 @@ mod tests {
               irohad1:
                 depends_on:
                 - irohad0
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 pull_policy: never
                 environment:
                   CHAIN: 00000000-0000-0000-0000-000000000000
@@ -357,7 +357,7 @@ mod tests {
               irohad2:
                 depends_on:
                 - irohad0
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 pull_policy: never
                 environment:
                   CHAIN: 00000000-0000-0000-0000-000000000000
@@ -378,7 +378,7 @@ mod tests {
               irohad3:
                 depends_on:
                 - irohad0
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 pull_policy: never
                 environment:
                   CHAIN: 00000000-0000-0000-0000-000000000000
@@ -410,7 +410,7 @@ mod tests {
         expect_test::expect!([r#"
             services:
               irohad0:
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 environment:
                   CHAIN: 00000000-0000-0000-0000-000000000000
                   PUBLIC_KEY: ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA
@@ -468,7 +468,7 @@ mod tests {
         expect_test::expect!([r#"
             services:
               irohad0:
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 pull_policy: always
                 environment:
                   CHAIN: 00000000-0000-0000-0000-000000000000
@@ -515,7 +515,7 @@ mod tests {
                       exec irohad
                   "
               irohad1:
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 pull_policy: always
                 environment:
                   CHAIN: 00000000-0000-0000-0000-000000000000
@@ -540,7 +540,7 @@ mod tests {
                   retries: 30
                   start_period: 4s
               irohad2:
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 pull_policy: always
                 environment:
                   CHAIN: 00000000-0000-0000-0000-000000000000
@@ -565,7 +565,7 @@ mod tests {
                   retries: 30
                   start_period: 4s
               irohad3:
-                image: hyperledger/iroha:dev
+                image: hyperledger/iroha:testnet-2.0.0-rc.2
                 pull_policy: always
                 environment:
                   CHAIN: 00000000-0000-0000-0000-000000000000
