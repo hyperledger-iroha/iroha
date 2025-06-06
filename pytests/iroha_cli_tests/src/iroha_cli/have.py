@@ -193,3 +193,15 @@ def transaction_hash() -> str:
     :return: The transaction hash as a string.
     """
     return extract_hash(iroha_cli.transaction_hash)
+
+def version() -> bool:
+    """
+    Check if the iroha_cli stdout output contains 3 lines.
+    """
+    def check_multiple_lines_text() -> bool:
+        if iroha_cli.stdout:
+            versions = iroha_cli.stdout.strip().split("\n")
+            if len(versions) == 3:
+                return True
+        return False
+    return iroha_cli.wait_for(check_multiple_lines_text)
