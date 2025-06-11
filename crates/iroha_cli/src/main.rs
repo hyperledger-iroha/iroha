@@ -1596,7 +1596,7 @@ mod transaction {
     pub struct Get {
         /// Hash of the transaction to retrieve
         #[arg(short('H'), long)]
-        pub hash: HashOf<SignedTransaction>,
+        pub hash: HashOf<TransactionEntrypoint>,
     }
 
     impl Run for Get {
@@ -1604,7 +1604,7 @@ mod transaction {
             let client = context.client_from_config();
             let transaction = client
                 .query(FindTransactions)
-                .filter_with(|txn| txn.value.hash.eq(self.hash))
+                .filter_with(|txn| txn.entrypoint_hash.eq(self.hash))
                 .execute_single()?;
             context.print_data(&transaction)
         }

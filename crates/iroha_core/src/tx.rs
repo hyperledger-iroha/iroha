@@ -201,10 +201,9 @@ impl StateBlock<'_> {
         &mut self,
         tx: AcceptedTransaction,
         wasm_cache: &mut WasmCache<'_, '_, '_>,
-    ) -> (HashOf<TransactionEntrypoint>, TransactionResult) {
+    ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         let mut state_transaction = self.transaction();
-        // Transmute: interpret the external transaction variant as a transaction entrypoint.
-        let hash = tx.0.hash().transmute();
+        let hash = tx.as_ref().hash_as_entrypoint();
         let result = Self::validate_transaction_internal(tx, &mut state_transaction, wasm_cache);
         if result.is_ok() {
             state_transaction.apply();
@@ -220,7 +219,7 @@ impl StateBlock<'_> {
         tx: AcceptedTransaction,
         state_transaction: &mut StateTransaction<'_, '_>,
         wasm_cache: &mut WasmCache<'_, '_, '_>,
-    ) -> TransactionResult {
+    ) -> TransactionResultInner {
         let authority = tx.as_ref().authority().clone();
 
         if state_transaction.world.accounts.get(&authority).is_none() {

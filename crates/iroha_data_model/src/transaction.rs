@@ -8,8 +8,8 @@ use core::{
     time::Duration,
 };
 
-use derive_more::{DebugCustom, Display, From, TryInto};
-use iroha_crypto::{Signature, SignatureOf};
+use derive_more::{DebugCustom, Deref, Display, From, TryInto};
+use iroha_crypto::{HashOf, Signature, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 #[cfg(feature = "std")]
@@ -180,6 +180,7 @@ mod model {
         TryInto,
         IntoSchema,
     )]
+    #[ffi_type]
     pub enum TransactionEntrypoint {
         /// User request that initiates a transaction.
         External(SignedTransaction),
@@ -203,6 +204,7 @@ mod model {
         IntoSchema,
     )]
     #[display(fmt = "TimeTriggerEntrypoint")]
+    #[ffi_type]
     pub struct TimeTriggerEntrypoint {
         /// Identifier for this trigger.
         pub id: TriggerId,
@@ -212,8 +214,32 @@ mod model {
         pub authority: AccountId,
     }
 
-    /// Either the sequence of data triggers on success, or the rejection reason on failure.
-    pub type TransactionResult = Result<DataTriggerSequence, error::TransactionRejectionReason>;
+    /// The outcome of processing a transaction:
+    /// either a sequence of data triggers, or a rejection reason.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        From,
+        Deref,
+        IntoSchema,
+    )]
+    #[display(fmt = "TransactionResult")]
+    #[ffi_type]
+    pub struct TransactionResult(pub TransactionResultInner);
+
+    /// The outcome of processing a transaction:
+    /// either a sequence of data triggers, or a rejection reason.
+    pub type TransactionResultInner =
+        Result<DataTriggerSequence, error::TransactionRejectionReason>;
 
     /// Sequence of data trigger execution steps.
     pub type DataTriggerSequence = Vec<DataTriggerStep>;
@@ -234,6 +260,7 @@ mod model {
         IntoSchema,
     )]
     #[display(fmt = "DataTriggerStep")]
+    #[ffi_type]
     pub struct DataTriggerStep {
         /// Identifier for this trigger.
         pub id: TriggerId,
@@ -254,10 +281,12 @@ mod model {
         Encode,
         Deserialize,
         Serialize,
+        From,
+        Deref,
         IntoSchema,
     )]
     #[display(fmt = "ExecutionStep")]
-
+    #[ffi_type]
     pub struct ExecutionStep(pub ConstVec<InstructionBox>);
 }
 
@@ -369,10 +398,16 @@ impl SignedTransaction {
         &tx.signature
     }
 
-    /// Calculate transaction [`Hash`](`iroha_crypto::HashOf`).
+    /// Hash for this external transaction.
     #[inline]
-    pub fn hash(&self) -> iroha_crypto::HashOf<Self> {
-        iroha_crypto::HashOf::new(self)
+    pub fn hash(&self) -> HashOf<Self> {
+        HashOf::new(self)
+    }
+
+    /// Hash for this external transaction as `TransactionEntrypoint`.
+    #[inline]
+    pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
+        HashOf::from_untyped_unchecked(self.hash().into())
     }
 }
 
@@ -385,8 +420,8 @@ impl From<SignedTransaction> for (AccountId, Executable) {
 }
 
 impl SignedTransactionV1 {
-    fn hash(&self) -> iroha_crypto::HashOf<SignedTransaction> {
-        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::HashOf::new(self).into())
+    fn hash(&self) -> HashOf<SignedTransaction> {
+        HashOf::from_untyped_unchecked(HashOf::new(self).into())
     }
 }
 
@@ -511,6 +546,54 @@ impl TransactionBuilder {
             payload: self.payload,
         }
         .into()
+    }
+}
+
+impl TransactionEntrypoint {
+    /// Account authorized to initiate this transaction.
+    #[inline]
+    pub fn authority(&self) -> &AccountId {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => entrypoint.authority(),
+            TransactionEntrypoint::Time(entrypoint) => &entrypoint.authority,
+        }
+    }
+
+    /// Hash for this transaction entrypoint.
+    ///
+    /// TODO: prevent divergent hashes caused by direct calls to `HashOf::new`,
+    /// leveraging specialization once it's stabilized (<https://github.com/rust-lang/rust/issues/31844>).
+    #[inline]
+    pub fn hash(&self) -> HashOf<Self> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => entrypoint.hash_as_entrypoint(),
+            TransactionEntrypoint::Time(entrypoint) => entrypoint.hash_as_entrypoint(),
+        }
+    }
+}
+
+impl TimeTriggerEntrypoint {
+    /// Hash for this time-triggered entrypoint as `TransactionEntrypoint`.
+    #[inline]
+    pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
+        HashOf::from_untyped_unchecked(HashOf::new(self).into())
+    }
+}
+
+impl TransactionResult {
+    /// Hash for this transaction result.
+    ///
+    /// TODO: prevent divergent hashes caused by direct calls to `HashOf::new`,
+    /// leveraging specialization once it's stabilized (<https://github.com/rust-lang/rust/issues/31844>).
+    #[inline]
+    pub fn hash(&self) -> HashOf<Self> {
+        Self::hash_from_inner(&self.0)
+    }
+
+    /// Hash for this transaction result computed from its inner representation.
+    #[inline]
+    pub fn hash_from_inner(inner: &TransactionResultInner) -> HashOf<Self> {
+        HashOf::from_untyped_unchecked(HashOf::new(inner).into())
     }
 }
 
@@ -827,7 +910,7 @@ pub mod prelude {
     pub use super::{
         error::prelude::*, DataTriggerSequence, DataTriggerStep, Executable, ExecutionStep,
         SignedTransaction, TimeTriggerEntrypoint, TransactionBuilder, TransactionEntrypoint,
-        TransactionResult, WasmSmartContract,
+        TransactionResult, TransactionResultInner, WasmSmartContract,
     };
 }
 

@@ -218,15 +218,16 @@ impl SignedBlock {
         &mut self,
         time_triggers: Vec<TimeTriggerEntrypoint>,
         hashes: Vec<HashOf<TransactionEntrypoint>>,
-        results: Vec<TransactionResult>,
+        results: Vec<TransactionResultInner>,
     ) {
         let SignedBlock::V1(block) = self;
 
-        let result_hashes = results.iter().map(HashOf::new);
+        let result_hashes = results.iter().map(TransactionResult::hash_from_inner);
         block.result.time_triggers = time_triggers;
         block.result.merkle = MerkleTree::from_iter(hashes);
         block.result.result_merkle = result_hashes.collect();
-        block.result.transaction_results = results;
+        block.result.transaction_results =
+            results.into_iter().map(TransactionResult::from).collect();
         block.payload.header.result_merkle_root = block.result.result_merkle.root();
     }
 
@@ -303,7 +304,7 @@ impl SignedBlock {
 
     /// Transaction entrypoints (external and time-triggered) in execution order.
     #[inline]
-    pub fn entrypoints_owned(
+    pub fn entrypoints_cloned(
         &self,
     ) -> impl ExactSizeIterator<Item = TransactionEntrypoint> + DoubleEndedIterator + '_ {
         EntrypointIterator::new(self)
@@ -426,7 +427,7 @@ impl SignedBlock {
 
         let merkle_root = transactions
             .iter()
-            .map(SignedTransaction::hash)
+            .map(SignedTransaction::hash_as_entrypoint)
             .collect::<MerkleTree<_>>()
             .root()
             .expect("Genesis block must have transactions");
@@ -434,7 +435,7 @@ impl SignedBlock {
         let header = BlockHeader {
             height: nonzero!(1_u64),
             prev_block_hash: None,
-            merkle_root: Some(merkle_root.transmute()),
+            merkle_root: Some(merkle_root),
             result_merkle_root: None,
             creation_time_ms,
             view_change_index: 0,
@@ -600,11 +601,11 @@ mod candidate {
             let expected_txs_hash = self
                 .transactions
                 .iter()
-                .map(SignedTransaction::hash)
+                .map(SignedTransaction::hash_as_entrypoint)
                 .collect::<MerkleTree<_>>()
                 .root();
 
-            if expected_txs_hash != actual_txs_hash.map(HashOf::transmute) {
+            if expected_txs_hash != actual_txs_hash {
                 return Err("Transactions' hash incorrect");
             }
 
