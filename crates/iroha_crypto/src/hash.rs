@@ -253,8 +253,7 @@ impl<T> HashOf<T> {
     /// Don't use this method if not required.
     #[inline]
     #[must_use]
-    // FIXME: temporary expose this method for convenience
-    pub const fn transmute<F>(self) -> HashOf<F> {
+    pub(crate) const fn transmute<F>(self) -> HashOf<F> {
         HashOf(self.0, PhantomData)
     }
 

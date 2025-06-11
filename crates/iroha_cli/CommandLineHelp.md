@@ -1237,7 +1237,7 @@ Retrieve details of a specific transaction
 
 ###### **Options:**
 
-* `-H`, `--hash <HASH>` — Hash of the transaction to retrieve
+* `-H`, `--hash <HASH>` — Hash of the transaction to retrieve (user request or time trigger)
 
 
 

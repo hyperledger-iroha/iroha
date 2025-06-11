@@ -1445,7 +1445,7 @@ impl<'state> StateBlock<'state> {
     ) -> (
         Vec<TimeTriggerEntrypoint>,
         Vec<HashOf<TransactionEntrypoint>>,
-        Vec<TransactionResult>,
+        Vec<TransactionResultInner>,
     ) {
         let time_event = self.create_time_event(block);
         self.world.external_event_buf.push(time_event.into());
@@ -1475,8 +1475,7 @@ impl<'state> StateBlock<'state> {
                     }
                 }
 
-                // Transmute: interpret the time-triggered variant as a transaction entrypoint.
-                let entrypoint_hash = HashOf::new(&entrypoint).transmute();
+                let entrypoint_hash = entrypoint.hash_as_entrypoint();
                 acc.0.push(entrypoint);
                 acc.1.push(entrypoint_hash);
                 acc.2.push(result);
@@ -1494,12 +1493,12 @@ impl<'state> StateBlock<'state> {
         trg_id: &TriggerId,
         action: &LoadedAction<TimeEventFilter>,
         time_event: &TimeEvent,
-    ) -> (TimeTriggerEntrypoint, TransactionResult) {
+    ) -> (TimeTriggerEntrypoint, TransactionResultInner) {
         let mut transaction = self.transaction();
 
         let mut entrypoint = TimeTriggerEntrypoint {
             id: trg_id.clone(),
-            instructions: ExecutionStep(ConstVec::new_empty()),
+            instructions: ConstVec::new_empty().into(),
             authority: action.authority().clone(),
         };
         match transaction.execute_trigger(
@@ -1640,7 +1639,7 @@ impl StateTransaction<'_, '_> {
     /// Perform a depth-first traversal of the trigger execution path, staging state changes.
     ///
     /// Returns the trigger sequence on success, or the rejection reason on failure.
-    pub(crate) fn execute_data_triggers_dfs(&mut self) -> TransactionResult {
+    pub(crate) fn execute_data_triggers_dfs(&mut self) -> TransactionResultInner {
         let mut stack: Vec<(DataEvent, TriggerId, u8)> = self
             .capture_data_events()
             .into_iter()

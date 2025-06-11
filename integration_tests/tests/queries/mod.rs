@@ -71,8 +71,11 @@ fn find_transactions_reversed() -> eyre::Result<()> {
     let txs = client.query(FindTransactions).execute_all()?;
 
     // check that latest transaction is register domain
-    let Executable::Instructions(instructions) = txs[0].as_ref().instructions() else {
-        panic!("Expected instructions");
+    let TransactionEntrypoint::External(entrypoint) = txs[0].entrypoint() else {
+        eyre::bail!("entrypoint should be external transaction");
+    };
+    let Executable::Instructions(instructions) = entrypoint.instructions() else {
+        eyre::bail!("entrypoint should be builtin instructions");
     };
     assert_eq!(instructions.len(), 1);
     assert_eq!(
