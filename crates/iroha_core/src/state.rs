@@ -1465,7 +1465,7 @@ impl<'state> StateBlock<'state> {
                 trg_id,
                 action.authority(),
                 action.executable(),
-                (*time_event).into(),
+                &(*time_event).into(),
             )
             .and_then(|()| transaction.execute_data_triggers_dfs())?;
         transaction
@@ -1520,7 +1520,7 @@ impl<'state> StateBlock<'state> {
             if block.error(idx).is_none() {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
-                transaction.apply_executable(tx.instructions(), tx.authority().clone());
+                transaction.apply_executable(tx.instructions(), tx.authority());
                 transaction
                     .execute_data_triggers_dfs()
                     .expect("should be no errors");
@@ -1570,7 +1570,7 @@ impl StateTransaction<'_, '_> {
             (action.authority().clone(), action.executable().clone())
         };
         self.world.external_event_buf.push(event.clone().into());
-        self.execute_trigger(id, &authority, &executable, event.into())?;
+        self.execute_trigger(id, &authority, &executable, &event.into())?;
         self.world.triggers.decrease_repeats([id].into_iter());
 
         Ok(())
@@ -1606,7 +1606,7 @@ impl StateTransaction<'_, '_> {
                 (action.authority().clone(), action.executable().clone())
             };
 
-            self.execute_trigger(&trg_id, &authority, &executable, event.clone().into())?;
+            self.execute_trigger(&trg_id, &authority, &executable, &event.into())?;
             let depleted = self.world.triggers.decrease_repeats([&trg_id].into_iter());
             stack.retain(|(_, trg_id, _)| !depleted.contains(trg_id));
 
@@ -1645,32 +1645,30 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         authority: &AccountId,
         executable: &ExecutableRef,
-        event: EventBox,
+        event: &EventBox,
     ) -> Result<(), TransactionRejectionReason> {
         let res = match executable {
-            ExecutableRef::Instructions(instructions) => self
-                .execute_instructions(instructions.iter().cloned(), authority)
-                .map_err(ValidationFail::from),
-            ExecutableRef::Wasm(blob_hash) => {
-                let module = self
-                    .world
-                    .triggers
-                    .get_compiled_contract(blob_hash)
-                    .expect("INTERNAL BUG: contract is not present")
-                    .clone();
-                wasm::RuntimeBuilder::<wasm::state::Trigger>::new()
-                    .with_config(self.world().parameters().smart_contract)
-                    .with_engine(self.engine.clone()) // Cloning engine is cheap
-                    .build()
-                    .and_then(|mut wasm_runtime| {
-                        wasm_runtime.execute_trigger_module(
-                            self,
-                            id,
-                            authority.clone(),
-                            &module,
-                            event,
-                        )
+            ExecutableRef::Instructions(instructions) => {
+                // Convert plain trigger modules to those ready for the executing by supplying execution context.
+                let instructions: Vec<_> = instructions
+                    .iter()
+                    .cloned()
+                    .map(|isi| -> InstructionBox {
+                        match isi {
+                            InstructionBox::ExecuteWasm(ExecuteWasmBox::Trigger(tg)) => {
+                                WasmExecutable::module(TriggerModule::from_event(
+                                    *tg.object().hash(),
+                                    id.clone(),
+                                    event.clone(),
+                                ))
+                                .into()
+                            }
+                            _ => isi,
+                        }
                     })
+                    .collect::<Vec<_>>();
+
+                self.execute_instructions(instructions.iter().cloned(), authority)
                     .map_err(ValidationFail::from)
             }
         };
@@ -1698,20 +1696,10 @@ impl StateTransaction<'_, '_> {
 
     /// Apply a non-erroneous executable in the given committed block.
     #[cfg(any(test, feature = "bench"))]
-    fn apply_executable(&mut self, executable: &Executable, authority: AccountId) {
+    fn apply_executable(&mut self, executable: &Executable, authority: &AccountId) {
         match executable {
             Executable::Instructions(instructions) => {
                 self.execute_instructions(instructions.iter().cloned(), &authority)
-                    .expect("should be no errors");
-            }
-            Executable::Wasm(bytes) => {
-                let mut wasm_runtime = wasm::RuntimeBuilder::<wasm::state::SmartContract>::new()
-                    .with_config(self.world().parameters().smart_contract)
-                    .with_engine(self.engine.clone()) // Cloning engine is cheap
-                    .build()
-                    .expect("failed to create wasm runtime");
-                wasm_runtime
-                    .execute(self, authority, bytes)
                     .expect("should be no errors");
             }
         }

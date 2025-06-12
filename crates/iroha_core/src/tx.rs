@@ -23,7 +23,7 @@ use iroha_macro::FromVariant;
 use mv::storage::StorageReadOnly;
 
 use crate::{
-    smartcontracts::{wasm, wasm::cache::WasmCache},
+    smartcontracts::wasm::cache::WasmCache,
     state::{StateBlock, StateTransaction},
 };
 
@@ -127,6 +127,54 @@ impl AcceptedTransaction {
 
         match &tx.instructions() {
             Executable::Instructions(instructions) => {
+                // First, validate supplied wasms.
+                instructions
+                    .iter()
+                    .filter_map(|i| match i {
+                        InstructionBox::ExecuteWasm(w) => Some(w),
+                        _ => None,
+                    })
+                    .try_for_each(|wasm| {
+                        // TODO: Can we check the number of instructions in wasm? Because we do this check
+                        // when executing wasm where we deny wasm if number of instructions exceeds the limit.
+                        //
+                        // Should we allow infinite instructions in wasm? And deny only based on fuel and size
+                        let smart_contract_size_limit = limits
+                            .smart_contract_size
+                            .get()
+                            .try_into()
+                            .expect("INTERNAL BUG: smart contract size exceeds usize::MAX");
+
+                        // Inputs are restricted to binaries only.
+                        // The error type will be changed after the instruction interface is fixed.
+                        let wasm = match wasm {
+                            ExecuteWasmBox::Smartcontract(w) => w,
+                            _ => {
+                                return Err(AcceptTransactionFail::TransactionLimit(
+                                    TransactionLimitError {
+                                        reason: "only `Smartcontract`-type WASM are allowed"
+                                            .to_string(),
+                                    },
+                                ))
+                            }
+                        };
+
+                        if wasm.object().size_bytes() > smart_contract_size_limit {
+                            Err(AcceptTransactionFail::TransactionLimit(
+                                TransactionLimitError {
+                                    reason: format!(
+                                        "WASM binary size is too large: max {}, got {} \
+                                (configured by \"Parameter::SmartContractLimits\")",
+                                        limits.smart_contract_size,
+                                        wasm.object().size_bytes()
+                                    ),
+                                },
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    })?;
+
                 let instruction_limit = limits
                     .max_instructions
                     .get()
@@ -140,30 +188,6 @@ impl AcceptedTransaction {
                                 "Too many instructions in payload, max number is {}, but got {}",
                                 limits.max_instructions,
                                 instructions.len()
-                            ),
-                        },
-                    ));
-                }
-            }
-            // TODO: Can we check the number of instructions in wasm? Because we do this check
-            // when executing wasm where we deny wasm if number of instructions exceeds the limit.
-            //
-            // Should we allow infinite instructions in wasm? And deny only based on fuel and size
-            Executable::Wasm(smart_contract) => {
-                let smart_contract_size_limit = limits
-                    .smart_contract_size
-                    .get()
-                    .try_into()
-                    .expect("INTERNAL BUG: smart contract size exceeds usize::MAX");
-
-                if smart_contract.size_bytes() > smart_contract_size_limit {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: format!(
-                                "WASM binary size is too large: max {}, got {} \
-                                (configured by \"Parameter::SmartContractLimits\")",
-                                limits.smart_contract_size,
-                                smart_contract.size_bytes()
                             ),
                         },
                     ));
@@ -208,7 +232,7 @@ impl StateBlock<'_> {
     ) -> Result<SignedTransaction, (Box<SignedTransaction>, TransactionRejectionReason)> {
         let mut state_transaction = self.transaction();
         if let Err(rejection_reason) =
-            Self::validate_transaction_internal(tx.clone(), &mut state_transaction, wasm_cache)
+            Self::validate_transaction_internal(&tx, &mut state_transaction, wasm_cache)
         {
             return Err((tx.0.into(), rejection_reason));
         }
@@ -218,7 +242,7 @@ impl StateBlock<'_> {
     }
 
     fn validate_transaction_internal(
-        tx: AcceptedTransaction,
+        tx: &AcceptedTransaction,
         state_transaction: &mut StateTransaction<'_, '_>,
         wasm_cache: &mut WasmCache<'_, '_, '_>,
     ) -> Result<(), TransactionRejectionReason> {
@@ -237,42 +261,11 @@ impl StateBlock<'_> {
             wasm_cache,
         )?;
 
-        if let (authority, Executable::Wasm(bytes)) = tx.into() {
-            Self::validate_wasm(authority, state_transaction, bytes)?
-        }
-
         debug!("Transaction validated successfully; processing data triggers");
         state_transaction.execute_data_triggers_dfs()?;
         debug!("Data triggers executed successfully");
 
         Ok(())
-    }
-
-    fn validate_wasm(
-        authority: AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-        wasm: WasmSmartContract,
-    ) -> Result<(), TransactionRejectionReason> {
-        debug!("Validating wasm");
-
-        wasm::RuntimeBuilder::<wasm::state::SmartContract>::new()
-            .build()
-            .and_then(|mut wasm_runtime| {
-                wasm_runtime.validate(
-                    state_transaction,
-                    authority,
-                    wasm,
-                    state_transaction
-                        .world
-                        .parameters
-                        .transaction
-                        .max_instructions,
-                )
-            })
-            .map_err(|error| WasmExecutionFail {
-                reason: format!("{:?}", eyre::Report::from(error)),
-            })
-            .map_err(TransactionRejectionReason::WasmExecution)
     }
 
     /// Validate transaction with runtime executors.

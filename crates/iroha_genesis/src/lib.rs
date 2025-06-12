@@ -45,7 +45,7 @@ pub struct RawGenesisTransaction {
     /// Path to the directory that contains *.wasm libraries
     wasm_dir: WasmPath,
     /// Triggers whose executable is wasm, not instructions
-    wasm_triggers: Vec<GenesisWasmTrigger>,
+    wasm_triggers: Vec<GenesisTriggerModule>,
     /// Initial topology
     topology: Vec<PeerId>,
 }
@@ -200,7 +200,7 @@ pub struct GenesisBuilder {
     parameters: Vec<Parameter>,
     instructions: Vec<InstructionBox>,
     wasm_dir: PathBuf,
-    wasm_triggers: Vec<GenesisWasmTrigger>,
+    wasm_triggers: Vec<GenesisTriggerModule>,
     topology: Vec<PeerId>,
 }
 
@@ -212,7 +212,7 @@ pub struct GenesisDomainBuilder {
     parameters: Vec<Parameter>,
     instructions: Vec<InstructionBox>,
     wasm_dir: PathBuf,
-    wasm_triggers: Vec<GenesisWasmTrigger>,
+    wasm_triggers: Vec<GenesisTriggerModule>,
     topology: Vec<PeerId>,
     domain_id: DomainId,
 }
@@ -272,7 +272,7 @@ impl GenesisBuilder {
     }
 
     /// Entry a wasm trigger to the end of entries.
-    pub fn append_wasm_trigger(mut self, wasm_trigger: GenesisWasmTrigger) -> Self {
+    pub fn append_wasm_trigger(mut self, wasm_trigger: GenesisTriggerModule) -> Self {
         self.wasm_triggers.push(wasm_trigger);
         self
     }
@@ -391,7 +391,7 @@ impl WasmPath {
 
 /// Human-readable alternative to [`Trigger`] whose action has wasm executable
 #[derive(Debug, Clone, Serialize, Deserialize, IntoSchema, Encode, Decode, Constructor)]
-pub struct GenesisWasmTrigger {
+pub struct GenesisTriggerModule {
     id: TriggerId,
     action: GenesisWasmAction,
 }
@@ -422,10 +422,10 @@ impl GenesisWasmAction {
     }
 }
 
-impl TryFrom<GenesisWasmTrigger> for Trigger {
+impl TryFrom<GenesisTriggerModule> for Trigger {
     type Error = eyre::Report;
 
-    fn try_from(value: GenesisWasmTrigger) -> Result<Self, Self::Error> {
+    fn try_from(value: GenesisTriggerModule) -> Result<Self, Self::Error> {
         Ok(Trigger::new(value.id, value.action.try_into()?))
     }
 }

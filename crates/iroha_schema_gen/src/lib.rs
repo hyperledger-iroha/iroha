@@ -249,6 +249,7 @@ types!(
     DomainProjection<PredicateMarker>,
     DomainProjection<SelectorMarker>,
     EventBox,
+    Option<EventBox>,
     EventFilterBox,
     EventMessage,
     EventSubscriptionRequest,
@@ -256,6 +257,9 @@ types!(
     ExecuteTrigger,
     ExecuteTriggerEvent,
     ExecuteTriggerEventFilter,
+    ExecuteWasmBox,
+    WasmExecutable<WasmSmartContract>,
+    WasmExecutable<TriggerModule>,
     ExecutionTime,
     Executor,
     ExecutorDataModel,
@@ -286,7 +290,7 @@ types!(
     FindTriggers,
     ForwardCursor,
     GenesisWasmAction,
-    GenesisWasmTrigger,
+    GenesisTriggerModule,
     Grant<Permission, Account>,
     Grant<Permission, Role>,
     Grant<RoleId, Account>,
@@ -596,7 +600,7 @@ types!(
     Vec<Domain>,
     Vec<DomainId>,
     Vec<EventFilterBox>,
-    Vec<GenesisWasmTrigger>,
+    Vec<GenesisTriggerModule>,
     Vec<InstructionBox>,
     Vec<Json>,
     Vec<Nft>,
@@ -634,8 +638,10 @@ types!(
     Vec<Trigger>,
     Vec<TriggerId>,
     Vec<u8>,
-    WasmExecutionFail,
+    WasmExecutionError,
     WasmSmartContract,
+    HashOf<WasmSmartContract>,
+    TriggerModule,
 
     (),
     [u16; 8],
@@ -673,6 +679,7 @@ pub mod complete_data_model {
             error::{
                 InstructionEvaluationError, InstructionExecutionError, InvalidParameterError,
                 MathError, MintabilityError, Mismatch, RepetitionError, TypeError,
+                WasmExecutionError,
             },
             InstructionType,
         },
@@ -696,7 +703,7 @@ pub mod complete_data_model {
         },
         Level,
     };
-    pub use iroha_genesis::{GenesisWasmAction, GenesisWasmTrigger, WasmPath};
+    pub use iroha_genesis::{GenesisTriggerModule, GenesisWasmAction, WasmPath};
     pub use iroha_primitives::{
         addr::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrHost, SocketAddrV4, SocketAddrV6},
         const_vec::ConstVec,

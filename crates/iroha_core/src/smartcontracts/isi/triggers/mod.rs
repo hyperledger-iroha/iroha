@@ -308,6 +308,64 @@ pub mod isi {
             Ok(())
         }
     }
+
+    use crate::smartcontracts::wasm;
+    impl Execute for WasmExecutable<WasmSmartContract> {
+        #[metrics(+"execute_wasm")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            error!("WASM IS EXECUTED");
+            let mut wasm_runtime = wasm::RuntimeBuilder::<wasm::state::SmartContract>::new()
+                .with_config(state_transaction.world().parameters().smart_contract)
+                .with_engine(state_transaction.engine().clone()) // Cloning engine is cheap
+                .build()
+                .expect("failed to create wasm runtime");
+            wasm_runtime
+                .execute(state_transaction, authority.clone(), self.object())
+                .map_err(|error| {
+                    Error::WasmExecution(crate::smartcontracts::isi::error::WasmExecutionError {
+                        reason: format!("{:?}", eyre::Report::from(error)),
+                    })
+                })
+        }
+    }
+
+    impl Execute for WasmExecutable<TriggerModule> {
+        #[metrics(+"execute_wasm_trigger")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let module = state_transaction
+                .world()
+                .triggers()
+                .get_compiled_contract(self.object().hash())
+                .expect("INTERNAL BUG: contract is not present")
+                .clone();
+            wasm::RuntimeBuilder::<wasm::state::Trigger>::new()
+                .with_config(state_transaction.world().parameters().smart_contract)
+                .with_engine(state_transaction.engine.clone()) // Cloning engine is cheap
+                .build()
+                .and_then(|mut wasm_runtime| {
+                    wasm_runtime.execute_trigger_module(
+                        state_transaction,
+                        self.object().id().as_ref().unwrap(),
+                        authority.clone(),
+                        &module,
+                        self.object().event().clone().unwrap(),
+                    )
+                })
+                .map_err(|error| {
+                    Error::WasmExecution(crate::smartcontracts::isi::error::WasmExecutionError {
+                        reason: format!("{:?}", eyre::Report::from(error)),
+                    })
+                })
+        }
+    }
 }
 
 pub mod query {

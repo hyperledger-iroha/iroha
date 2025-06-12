@@ -201,7 +201,6 @@ impl Client {
 
         let mut tx_builder = match instructions.into() {
             Executable::Instructions(instructions) => tx_builder.with_instructions(instructions),
-            Executable::Wasm(wasm) => tx_builder.with_wasm(wasm),
         };
 
         if let Some(transaction_ttl) = self.transaction_ttl {

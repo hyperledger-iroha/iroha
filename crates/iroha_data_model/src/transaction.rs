@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 pub use self::model::*;
 use crate::{
     account::AccountId,
-    isi::{Instruction, InstructionBox},
+    isi::{Instruction, InstructionBox, WasmExecutable},
     metadata::Metadata,
     ChainId,
 };
@@ -54,8 +54,8 @@ mod model {
         /// Ordered set of instructions.
         #[debug(fmt = "{_0:?}")]
         Instructions(ConstVec<InstructionBox>),
-        /// WebAssembly smartcontract
-        Wasm(WasmSmartContract),
+        // WebAssembly smartcontract
+        // Wasm(WasmSmartContract),
     }
 
     /// Wrapper for byte representation of [`Executable::Wasm`].
@@ -177,7 +177,12 @@ impl<T: IntoIterator<Item = impl Instruction>> From<T> for Executable {
 
 impl From<WasmSmartContract> for Executable {
     fn from(source: WasmSmartContract) -> Self {
-        Self::Wasm(source)
+        Self::Instructions(
+            [WasmExecutable::binary(source).into()]
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into(),
+        )
     }
 }
 
@@ -355,12 +360,6 @@ impl TransactionBuilder {
         self
     }
 
-    /// Add wasm to this transaction
-    pub fn with_wasm(mut self, wasm: WasmSmartContract) -> Self {
-        self.payload.instructions = wasm.into();
-        self
-    }
-
     /// Set executable for this transaction
     pub fn with_executable(mut self, executable: Executable) -> Self {
         self.payload.instructions = executable;
@@ -442,10 +441,9 @@ mod candidate {
 
         #[cfg(not(target_family = "wasm"))]
         fn validate_instructions(&self) -> Result<(), &'static str> {
-            if let Executable::Instructions(instructions) = &self.payload.instructions {
-                if instructions.is_empty() {
-                    return Err("Transaction is empty");
-                }
+            let Executable::Instructions(instructions) = &self.payload.instructions;
+            if instructions.is_empty() {
+                return Err("Transaction is empty");
             }
 
             Ok(())
@@ -580,30 +578,30 @@ pub mod error {
             pub reason: String,
         }
 
-        /// Transaction was rejected because execution of `WebAssembly` binary failed
-        #[derive(
-            Debug,
-            Display,
-            Clone,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Decode,
-            Encode,
-            Deserialize,
-            Serialize,
-            IntoSchema,
-        )]
-        #[display(fmt = "Failed to execute wasm binary: {reason}")]
-        #[serde(transparent)]
-        #[repr(transparent)]
-        // SAFETY: `WasmExecutionFail` has no trap representation in `String`
-        #[ffi_type(unsafe {robust})]
-        pub struct WasmExecutionFail {
-            /// Error which happened during execution
-            pub reason: String,
-        }
+        // /// Transaction was rejected because execution of `WebAssembly` binary failed
+        // #[derive(
+        //     Debug,
+        //     Display,
+        //     Clone,
+        //     PartialEq,
+        //     Eq,
+        //     PartialOrd,
+        //     Ord,
+        //     Decode,
+        //     Encode,
+        //     Deserialize,
+        //     Serialize,
+        //     IntoSchema,
+        // )]
+        // #[display(fmt = "Failed to execute wasm binary: {reason}")]
+        // #[serde(transparent)]
+        // #[repr(transparent)]
+        // // SAFETY: `WasmExecutionFail` has no trap representation in `String`
+        // #[ffi_type(unsafe {robust})]
+        // pub struct WasmExecutionFail {
+        //     /// Error which happened during execution
+        //     pub reason: String,
+        // }
 
         /// Possible reasons for trigger-specific execution failure.
         #[derive(
@@ -668,8 +666,8 @@ pub mod error {
             InstructionExecution(
                 #[cfg_attr(feature = "std", source)] Box<InstructionExecutionFail>,
             ),
-            /// Failure in WebAssembly execution
-            WasmExecution(#[cfg_attr(feature = "std", source)] WasmExecutionFail),
+            // /// Failure in WebAssembly execution
+            // WasmExecution(#[cfg_attr(feature = "std", source)] WasmExecutionFail),
             /// Execution of a time trigger or an invoked data trigger failed.
             TriggerExecution(#[cfg_attr(feature = "std", source)] TriggerExecutionFail),
         }
@@ -693,6 +691,7 @@ pub mod error {
                 Upgrade(_) => "upgrade",
                 Log(_) => "log",
                 Custom(_) => "custom",
+                ExecuteWasm(_) => "wasm",
             };
             write!(
                 f,
@@ -708,8 +707,8 @@ pub mod error {
     #[cfg(feature = "std")]
     impl std::error::Error for InstructionExecutionFail {}
 
-    #[cfg(feature = "std")]
-    impl std::error::Error for WasmExecutionFail {}
+    // #[cfg(feature = "std")]
+    // impl std::error::Error for WasmExecutionFail {}
 
     #[cfg(feature = "std")]
     impl std::error::Error for TriggerExecutionFail {}
@@ -718,8 +717,10 @@ pub mod error {
         //! The prelude re-exports most commonly used traits, structs and macros from this module.
 
         pub use super::{
-            InstructionExecutionFail, TransactionRejectionReason, TriggerExecutionFail,
-            WasmExecutionFail,
+            InstructionExecutionFail,
+            TransactionRejectionReason,
+            TriggerExecutionFail,
+            // WasmExecutionFail,
         };
     }
 }

@@ -19,6 +19,7 @@ pub use domain::{
 };
 pub use executor::visit_upgrade;
 use iroha_smart_contract::data_model::{prelude::*, visit::Visit};
+use iroha_smart_contract_utils::error;
 pub use isi::visit_custom_instruction;
 pub use log::visit_log;
 pub use nft::{
@@ -37,6 +38,7 @@ pub use trigger::{
     visit_register_trigger, visit_remove_trigger_key_value, visit_set_trigger_key_value,
     visit_unregister_trigger,
 };
+pub use wasm::{visit_execute_wasm_smartcontract, visit_execute_wasm_trigger};
 
 use crate::{
     deny, execute,
@@ -63,7 +65,7 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
     transaction: &SignedTransaction,
 ) {
     match transaction.instructions() {
-        Executable::Wasm(wasm) => executor.visit_wasm(wasm),
+        // Executable::Wasm(wasm) => executor.visit_wasm(wasm),
         Executable::Instructions(instructions) => {
             for isi in instructions {
                 if executor.verdict().is_ok() {
@@ -87,6 +89,10 @@ pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &In
         }
         InstructionBox::ExecuteTrigger(isi) => {
             executor.visit_execute_trigger(isi);
+        }
+        InstructionBox::ExecuteWasm(isi) => {
+            error!("VISITING WASM in CUSTOM EXECUTOR");
+            executor.visit_execute_wasm(isi);
         }
         InstructionBox::Burn(isi) => {
             executor.visit_burn(isi);
@@ -1531,6 +1537,24 @@ pub mod trigger {
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanUpgradeExecutor(_) => false,
         }
+    }
+}
+
+mod wasm {
+    use super::*;
+
+    pub fn visit_execute_wasm_smartcontract<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &WasmExecutable<WasmSmartContract>,
+    ) {
+        execute!(executor, isi);
+    }
+
+    pub fn visit_execute_wasm_trigger<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &WasmExecutable<TriggerModule>,
+    ) {
+        execute!(executor, isi);
     }
 }
 
