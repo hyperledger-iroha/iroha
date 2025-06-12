@@ -54,8 +54,6 @@ mod model {
         /// Ordered set of instructions.
         #[debug(fmt = "{_0:?}")]
         Instructions(ConstVec<InstructionBox>),
-        // WebAssembly smartcontract
-        // Wasm(WasmSmartContract),
     }
 
     /// Wrapper for byte representation of [`Executable::Wasm`].
@@ -578,31 +576,6 @@ pub mod error {
             pub reason: String,
         }
 
-        // /// Transaction was rejected because execution of `WebAssembly` binary failed
-        // #[derive(
-        //     Debug,
-        //     Display,
-        //     Clone,
-        //     PartialEq,
-        //     Eq,
-        //     PartialOrd,
-        //     Ord,
-        //     Decode,
-        //     Encode,
-        //     Deserialize,
-        //     Serialize,
-        //     IntoSchema,
-        // )]
-        // #[display(fmt = "Failed to execute wasm binary: {reason}")]
-        // #[serde(transparent)]
-        // #[repr(transparent)]
-        // // SAFETY: `WasmExecutionFail` has no trap representation in `String`
-        // #[ffi_type(unsafe {robust})]
-        // pub struct WasmExecutionFail {
-        //     /// Error which happened during execution
-        //     pub reason: String,
-        // }
-
         /// Possible reasons for trigger-specific execution failure.
         #[derive(
             Debug,
@@ -666,8 +639,6 @@ pub mod error {
             InstructionExecution(
                 #[cfg_attr(feature = "std", source)] Box<InstructionExecutionFail>,
             ),
-            // /// Failure in WebAssembly execution
-            // WasmExecution(#[cfg_attr(feature = "std", source)] WasmExecutionFail),
             /// Execution of a time trigger or an invoked data trigger failed.
             TriggerExecution(#[cfg_attr(feature = "std", source)] TriggerExecutionFail),
         }
@@ -706,9 +677,6 @@ pub mod error {
 
     #[cfg(feature = "std")]
     impl std::error::Error for InstructionExecutionFail {}
-
-    // #[cfg(feature = "std")]
-    // impl std::error::Error for WasmExecutionFail {}
 
     #[cfg(feature = "std")]
     impl std::error::Error for TriggerExecutionFail {}

@@ -130,7 +130,7 @@ pub trait Visit {
         visit_revoke_account_role(&Revoke<RoleId, Account>),
         visit_revoke_role_permission(&Revoke<Permission, Role>),
 
-        //
+        // Visit ExecuteWasmBox
         visit_execute_wasm_smartcontract(&WasmExecutable<WasmSmartContract>),
         visit_execute_wasm_trigger(&WasmExecutable<TriggerModule>),
     }
@@ -138,7 +138,6 @@ pub trait Visit {
 
 pub fn visit_transaction<V: Visit + ?Sized>(visitor: &mut V, transaction: &SignedTransaction) {
     match transaction.instructions() {
-        // Executable::Wasm(wasm) => visitor.visit_wasm(wasm),
         Executable::Instructions(instructions) => {
             for isi in instructions {
                 visitor.visit_instruction(isi);
@@ -370,7 +369,6 @@ leaf_visitors! {
     visit_upgrade(&Upgrade),
     visit_set_parameter(&SetParameter),
     visit_execute_trigger(&ExecuteTrigger),
-    // visit_execute_wasm(&ExecuteWasmBox),
     visit_execute_wasm_smartcontract(&WasmExecutable<WasmSmartContract>),
     visit_execute_wasm_trigger(&WasmExecutable<TriggerModule>),
     visit_log(&Log),

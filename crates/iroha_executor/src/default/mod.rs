@@ -19,7 +19,6 @@ pub use domain::{
 };
 pub use executor::visit_upgrade;
 use iroha_smart_contract::data_model::{prelude::*, visit::Visit};
-use iroha_smart_contract_utils::error;
 pub use isi::visit_custom_instruction;
 pub use log::visit_log;
 pub use nft::{
@@ -65,7 +64,6 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
     transaction: &SignedTransaction,
 ) {
     match transaction.instructions() {
-        // Executable::Wasm(wasm) => executor.visit_wasm(wasm),
         Executable::Instructions(instructions) => {
             for isi in instructions {
                 if executor.verdict().is_ok() {
@@ -91,7 +89,6 @@ pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &In
             executor.visit_execute_trigger(isi);
         }
         InstructionBox::ExecuteWasm(isi) => {
-            error!("VISITING WASM in CUSTOM EXECUTOR");
             executor.visit_execute_wasm(isi);
         }
         InstructionBox::Burn(isi) => {

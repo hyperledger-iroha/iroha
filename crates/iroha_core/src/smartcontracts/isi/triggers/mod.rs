@@ -317,7 +317,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            error!("WASM IS EXECUTED");
             let mut wasm_runtime = wasm::RuntimeBuilder::<wasm::state::SmartContract>::new()
                 .with_config(state_transaction.world().parameters().smart_contract)
                 .with_engine(state_transaction.engine().clone()) // Cloning engine is cheap

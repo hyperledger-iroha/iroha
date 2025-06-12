@@ -1699,7 +1699,7 @@ impl StateTransaction<'_, '_> {
     fn apply_executable(&mut self, executable: &Executable, authority: &AccountId) {
         match executable {
             Executable::Instructions(instructions) => {
-                self.execute_instructions(instructions.iter().cloned(), &authority)
+                self.execute_instructions(instructions.iter().cloned(), authority)
                     .expect("should be no errors");
             }
         }

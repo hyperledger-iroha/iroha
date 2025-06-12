@@ -324,19 +324,6 @@ pub trait SetReadOnly {
         } = action;
 
         let original_executable = match executable {
-            // ExecutableRef::Wasm(ref blob_hash) => {
-            //     let original_wasm = self
-            //         .get_original_contract(blob_hash)
-            //         .cloned()
-            //         .expect("No original smartcontract saved for trigger. This is a bug.");
-            //     // Executable::Wasm(original_wasm)
-            //     Executable::Instructions(
-            //         [WasmExecutable::binary(original_wasm).into()]
-            //             .into_iter()
-            //             .collect::<Vec<_>>()
-            //             .into(),
-            //     )
-            // }
             ExecutableRef::Instructions(isi) => {
                 Executable::Instructions(isi
                 .into_iter()
@@ -751,65 +738,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                         .collect::<Result<Vec<_>, _>>()?
                         .into(),
                 )
-                // if instructions.len() == 1 {
-                //     if let InstructionBox::ExecuteWasm(wasm_contract) = instructions[0].clone() {
-                //         let wasm_contract = match wasm_contract {
-                //             ExecuteWasmBox::Smartcontract(w) => w,
-                //             _ => panic!("unreachable"),
-                //         };
-                //         let hash = HashOf::new(wasm_contract.object());
-                //         // Store original executable representation to respond to queries with.
-                //         if let Some(WasmSmartContractEntry { count, .. }) =
-                //             self.contracts.get_mut(&hash)
-                //         {
-                //             // Considering 1 trigger registration takes 1 second,
-                //             // it would take 584 942 417 355 years to overflow.
-                //             *count = count.checked_add(1).expect(
-                //         "There is no way someone could register 2^64 amount of same triggers",
-                //     );
-                //             // Cloning module is cheap, under Arc inside
-                //         } else {
-                //             let module = wasm::load_module(engine, wasm_contract.object())?;
-                //             self.contracts.insert(
-                //                 hash,
-                //                 WasmSmartContractEntry {
-                //                     original_contract: wasm_contract.object().clone(),
-                //                     compiled_contract: module,
-                //                     count: NonZeroU64::MIN,
-                //                 },
-                //             );
-                //         }
-                //         ExecutableRef::Wasm(hash)
-                //     } else {
-                //         ExecutableRef::Instructions(instructions)
-                //     }
-                // } else {
-                //     ExecutableRef::Instructions(instructions)
-                // }
-            } // Executable::Wasm(bytes) => {
-              //     let hash = HashOf::new(&bytes);
-              //     // Store original executable representation to respond to queries with.
-              //     if let Some(WasmSmartContractEntry { count, .. }) = self.contracts.get_mut(&hash) {
-              //         // Considering 1 trigger registration takes 1 second,
-              //         // it would take 584 942 417 355 years to overflow.
-              //         *count = count.checked_add(1).expect(
-              //             "There is no way someone could register 2^64 amount of same triggers",
-              //         );
-              //         // Cloning module is cheap, under Arc inside
-              //     } else {
-              //         let module = wasm::load_module(engine, &bytes)?;
-              //         self.contracts.insert(
-              //             hash,
-              //             WasmSmartContractEntry {
-              //                 original_contract: bytes,
-              //                 compiled_contract: module,
-              //                 count: NonZeroU64::MIN,
-              //             },
-              //         );
-              //     }
-              //     ExecutableRef::Wasm(hash)
-              // }
-              // Executable::Instructions(instructions) => ExecutableRef::Instructions(instructions),
+            }
         };
         map(self).insert(
             trigger_id.clone(),
@@ -1021,8 +950,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
 /// Which can be used to obtain compiled by `wasmtime` module
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ExecutableRef {
-    /// Loaded WASM
-    // Wasm(HashOf<WasmSmartContract>),
     /// Vector of ISI
     Instructions(ConstVec<InstructionBox>),
 }
@@ -1030,7 +957,6 @@ pub enum ExecutableRef {
 impl core::fmt::Debug for ExecutableRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            // Self::Wasm(hash) => f.debug_tuple("Wasm").field(hash).finish(),
             Self::Instructions(instructions) => {
                 f.debug_tuple("Instructions").field(instructions).finish()
             }

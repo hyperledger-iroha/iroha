@@ -513,9 +513,7 @@ mod tests {
         {
             let transaction = transactions[0];
             let instructions = transaction.instructions();
-            let Executable::Instructions(instructions) = instructions else {
-                panic!("Expected instructions");
-            };
+            let Executable::Instructions(instructions) = instructions;
 
             assert_eq!(
                 instructions[0],
@@ -527,9 +525,7 @@ mod tests {
         // Second transaction
         let transaction = transactions[1];
         let instructions = transaction.instructions();
-        let Executable::Instructions(instructions) = instructions else {
-            panic!("Expected instructions");
-        };
+        let Executable::Instructions(instructions) = instructions;
 
         {
             let domain_id: DomainId = "wonderland".parse().unwrap();
