@@ -12,8 +12,8 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 pub use self::model::*;
 use crate::{
-    domain::prelude::*, metadata::Metadata, HasMetadata, Identifiable, ParseError, PublicKey,
-    Registered,
+    domain::prelude::*, metadata::Metadata, HasMetadata, Identifiable, IntoKeyValue, ParseError,
+    PublicKey, Registered,
 };
 
 #[model]
@@ -79,7 +79,6 @@ mod model {
 
     /// Read-only reference to [`Account`].
     /// Used in query filters to avoid copying.
-    #[derive(Copy, Clone)]
     pub struct AccountEntry<'world> {
         /// Identification of the [`Account`].
         pub id: &'world AccountId,
@@ -225,30 +224,24 @@ impl<'world> AccountEntry<'world> {
     pub fn metadata(&self) -> &Metadata {
         self.metadata
     }
-}
 
-impl From<AccountEntry<'_>> for Account {
-    fn from(value: AccountEntry) -> Self {
-        Self {
-            id: value.id.clone(),
-            metadata: value.metadata.clone(),
+    /// Converts to `Account`
+    pub fn to_owned(&self) -> Account {
+        Account {
+            id: self.id.clone(),
+            metadata: self.metadata.clone(),
         }
     }
 }
 
-impl From<&Account> for AccountValue {
-    fn from(account: &Account) -> Self {
-        Self {
-            metadata: account.metadata.clone(),
-        }
-    }
-}
-
-impl From<Account> for AccountValue {
-    fn from(account: Account) -> Self {
-        Self {
-            metadata: account.metadata,
-        }
+impl IntoKeyValue for Account {
+    type Key = AccountId;
+    type Value = AccountValue;
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        let value = AccountValue {
+            metadata: self.metadata,
+        };
+        (self.id, value)
     }
 }
 

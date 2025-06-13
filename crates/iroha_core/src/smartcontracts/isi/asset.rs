@@ -259,8 +259,8 @@ pub mod query {
             Ok(state_ro
                 .world()
                 .assets_iter()
-                .filter(move |&asset| filter.applies_to_entry(asset))
-                .map(Into::into))
+                .filter(move |asset| filter.applies_to_entry(asset))
+                .map(|asset| asset.to_owned()))
         }
     }
     impl ValidQuery for FindAssetsDefinitions {

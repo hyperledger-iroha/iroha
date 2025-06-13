@@ -361,8 +361,8 @@ pub mod query {
             Ok(state_ro
                 .world()
                 .accounts_iter()
-                .filter(move |&account| filter.applies_to_entry(account))
-                .map(Into::into))
+                .filter(move |account| filter.applies_to_entry(account))
+                .map(|account| account.to_owned()))
         }
     }
 
@@ -389,8 +389,8 @@ pub mod query {
                         ))
                         .is_some()
                 })
-                .filter(move |&account| filter.applies_to_entry(account))
-                .map(Into::into))
+                .filter(move |account| filter.applies_to_entry(account))
+                .map(|account| account.to_owned()))
         }
     }
 }

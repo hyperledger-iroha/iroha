@@ -86,19 +86,19 @@ where
 // Alternatively we can use `*Entry` classes directly in `type_descriptions!()`,
 // but because of lifetimes it will be very complicated.
 impl CompoundPredicate<Account> {
-    impl_applies!(applies_to_entry AccountEntry);
+    impl_applies!(applies_to_entry & AccountEntry);
 }
 
 impl CompoundPredicate<Asset> {
-    impl_applies!(applies_to_entry AssetEntry);
+    impl_applies!(applies_to_entry & AssetEntry);
 }
 
 impl CompoundPredicate<Nft> {
-    impl_applies!(applies_to_entry NftEntry);
+    impl_applies!(applies_to_entry & NftEntry);
 }
 
 impl AccountProjection<PredicateMarker> {
-    fn applies_to_entry(&self, input: AccountEntry) -> bool {
+    fn applies_to_entry(&self, input: &AccountEntry) -> bool {
         use AccountProjection::*;
         match self {
             Atom(atom) => match *atom {},
@@ -109,7 +109,7 @@ impl AccountProjection<PredicateMarker> {
 }
 
 impl AssetProjection<PredicateMarker> {
-    fn applies_to_entry(&self, input: AssetEntry) -> bool {
+    fn applies_to_entry(&self, input: &AssetEntry) -> bool {
         use AssetProjection::*;
         match self {
             Atom(atom) => match *atom {},
@@ -120,7 +120,7 @@ impl AssetProjection<PredicateMarker> {
 }
 
 impl NftProjection<PredicateMarker> {
-    fn applies_to_entry(&self, input: NftEntry) -> bool {
+    fn applies_to_entry(&self, input: &NftEntry) -> bool {
         use NftProjection::*;
         match self {
             Atom(atom) => match *atom {},

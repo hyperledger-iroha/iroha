@@ -7,7 +7,7 @@ use core::str::FromStr;
 use iroha_data_model_derive::model;
 
 pub use self::model::*;
-use crate::{metadata::Metadata, prelude::AccountId, ParseError, Registered};
+use crate::{metadata::Metadata, prelude::AccountId, IntoKeyValue, ParseError, Registered};
 
 #[model]
 mod model {
@@ -88,7 +88,6 @@ mod model {
 
     /// Read-only reference to [`Nft`].
     /// Used in query filters to avoid copying.
-    #[derive(Copy, Clone)]
     pub struct NftEntry<'world> {
         /// An Identification of the [`Nft`].
         pub id: &'world NftId,
@@ -187,33 +186,26 @@ impl<'world> NftEntry<'world> {
     pub fn owned_by(&self) -> &AccountId {
         self.owned_by
     }
-}
 
-impl From<NftEntry<'_>> for Nft {
-    fn from(value: NftEntry) -> Self {
-        Self {
-            id: value.id.clone(),
-            content: value.content.clone(),
-            owned_by: value.owned_by.clone(),
+    /// Converts to `Nft`
+    pub fn to_owned(&self) -> Nft {
+        Nft {
+            id: self.id.clone(),
+            content: self.content.clone(),
+            owned_by: self.owned_by.clone(),
         }
     }
 }
 
-impl From<&Nft> for NftValue {
-    fn from(nft: &Nft) -> Self {
-        Self {
-            content: nft.content.clone(),
-            owned_by: nft.owned_by.clone(),
-        }
-    }
-}
-
-impl From<Nft> for NftValue {
-    fn from(nft: Nft) -> Self {
-        Self {
-            content: nft.content,
-            owned_by: nft.owned_by,
-        }
+impl IntoKeyValue for Nft {
+    type Key = NftId;
+    type Value = NftValue;
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        let value = NftValue {
+            content: self.content,
+            owned_by: self.owned_by,
+        };
+        (self.id, value)
     }
 }
 

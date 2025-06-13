@@ -23,6 +23,7 @@ use iroha_data_model::{
     prelude::*,
     query::error::{FindError, QueryExecutionFail},
     role::RoleId,
+    IntoKeyValue,
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::Numeric;
@@ -346,7 +347,7 @@ impl World {
             .collect();
         let accounts = accounts
             .into_iter()
-            .map(|account| (account.id().clone(), account.into()))
+            .map(IntoKeyValue::into_key_value)
             .collect();
         let asset_definitions = asset_definitions
             .into_iter()
@@ -354,12 +355,9 @@ impl World {
             .collect();
         let assets = assets
             .into_iter()
-            .map(|asset| (asset.id().clone(), asset.into()))
+            .map(IntoKeyValue::into_key_value)
             .collect();
-        let nfts = nfts
-            .into_iter()
-            .map(|nft| (nft.id().clone(), nft.into()))
-            .collect();
+        let nfts = nfts.into_iter().map(IntoKeyValue::into_key_value).collect();
         Self {
             domains,
             accounts,
@@ -937,7 +935,8 @@ impl WorldTransaction<'_, '_> {
                 &mut self.internal_event_buf,
                 Some(AssetEvent::Created(asset.clone())),
             );
-            self.assets.insert(asset_id.clone(), asset.into());
+            let (asset_id, asset_value) = asset.into_key_value();
+            self.assets.insert(asset_id, asset_value);
         }
         Ok(self
             .assets

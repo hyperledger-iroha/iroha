@@ -26,7 +26,10 @@ impl Registrable for iroha_data_model::domain::NewDomain {
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
-    use iroha_data_model::isi::error::{InstructionExecutionError, RepetitionError};
+    use iroha_data_model::{
+        isi::error::{InstructionExecutionError, RepetitionError},
+        IntoKeyValue,
+    };
     use iroha_logger::prelude::*;
 
     use super::*;
@@ -39,7 +42,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account: Account = self.object.build(authority);
-            let account_id = account.id().clone();
+            let (account_id, account_value) = account.clone().into_key_value();
 
             if *account_id.domain() == *iroha_genesis::GENESIS_DOMAIN_ID {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -58,7 +61,7 @@ pub mod isi {
             state_transaction
                 .world
                 .accounts
-                .insert(account_id, (&account).into());
+                .insert(account_id, account_value);
 
             state_transaction
                 .world

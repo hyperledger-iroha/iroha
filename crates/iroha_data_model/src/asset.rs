@@ -17,7 +17,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 pub use self::model::*;
 use crate::{
     account::prelude::*, domain::prelude::*, ipfs::IpfsPath, metadata::Metadata, HasMetadata,
-    Identifiable, Name, ParseError, Registered,
+    Identifiable, IntoKeyValue, Name, ParseError, Registered,
 };
 
 /// [`AssetTotalQuantityMap`] provides an API to work with collection of key([`AssetDefinitionId`])-value([`Numeric`])
@@ -156,7 +156,6 @@ mod model {
 
     /// Read-only reference to [`Asset`].
     /// Used in query filters to avoid copying.
-    #[derive(Copy, Clone)]
     pub struct AssetEntry<'world> {
         /// Component Identification.
         pub id: &'world AssetId,
@@ -404,20 +403,22 @@ impl<'world> AssetEntry<'world> {
     pub fn value(&self) -> &Numeric {
         self.value
     }
-}
 
-impl From<AssetEntry<'_>> for Asset {
-    fn from(value: AssetEntry) -> Self {
-        Self {
-            id: value.id.clone(),
-            value: *value.value,
+    /// Converts to `Asset`
+    pub fn to_owned(&self) -> Asset {
+        Asset {
+            id: self.id.clone(),
+            value: *self.value,
         }
     }
 }
 
-impl From<Asset> for AssetValue {
-    fn from(asset: Asset) -> Self {
-        Self { value: asset.value }
+impl IntoKeyValue for Asset {
+    type Key = AssetId;
+    type Value = AssetValue;
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        let value = AssetValue { value: self.value };
+        (self.id, value)
     }
 }
 

@@ -22,7 +22,7 @@ impl Registrable for NewNft {
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
-    use iroha_data_model::{isi::error::RepetitionError, query::error::FindError};
+    use iroha_data_model::{isi::error::RepetitionError, query::error::FindError, IntoKeyValue};
     use iroha_telemetry::metrics;
 
     use super::*;
@@ -35,7 +35,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let nft = self.object.build(authority);
-            let nft_id = nft.id.clone();
+            let (nft_id, nft_value) = nft.clone().into_key_value();
 
             if state_transaction.world.nft(&nft_id).is_ok() {
                 return Err(RepetitionError {
@@ -49,7 +49,7 @@ pub mod isi {
                 .domain(&nft_id.domain)
                 .expect("INTERNAL BUG: Can't find domain of NFT to register");
 
-            state_transaction.world.nfts.insert(nft_id, (&nft).into());
+            state_transaction.world.nfts.insert(nft_id, nft_value);
 
             state_transaction
                 .world
@@ -195,8 +195,8 @@ pub mod query {
             Ok(state_ro
                 .world()
                 .nfts_iter()
-                .filter(move |&nft| filter.applies_to_entry(nft))
-                .map(Into::into))
+                .filter(move |nft| filter.applies_to_entry(nft))
+                .map(|nft| nft.to_owned()))
         }
     }
 }
