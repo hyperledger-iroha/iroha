@@ -447,6 +447,17 @@ pub trait Registered: Identifiable {
     type With;
 }
 
+/// Auxiliary trait for objects which are stored in parts in `World`.
+/// E.g. `Account` is stored as `AccountId`+`AccountEntry` in `World::accounts`
+pub trait IntoKeyValue {
+    /// Object ID
+    type Key;
+    /// Object data
+    type Value;
+    /// Method to split object into parts
+    fn into_key_value(self) -> (Self::Key, Self::Value);
+}
+
 mod ffi {
     //! Definitions and implementations of FFI related functionalities
 
