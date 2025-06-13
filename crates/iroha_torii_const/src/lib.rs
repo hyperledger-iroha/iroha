@@ -28,4 +28,6 @@ pub mod uri {
     pub const API_VERSION: &str = "/api_version";
     /// URI for getting cpu profile
     pub const PROFILE: &str = "/debug/pprof/profile";
+    /// URI for getting the server version
+    pub const SERVER_VERSION: &str = "/server_version";
 }
