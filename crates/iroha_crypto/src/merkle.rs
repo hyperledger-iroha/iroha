@@ -31,6 +31,17 @@ use crate::{Hash, HashOf};
 #[repr(transparent)]
 pub struct MerkleTree<T>(Vec<Option<HashOf<T>>>);
 
+/// A Merkle proof: index of a leaf among all leaves, and the ordered list of sibling hashes from the leaf up to the root.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, Deserialize, Serialize, IntoSchema,
+)]
+pub struct MerkleProof<T> {
+    /// Zero-based index of the leaf among all leaves.
+    leaf_index: u32,
+    /// Hashes of sibling nodes along the path from the leaf to the root (excluding the root).
+    sibling_hashes: Vec<Option<HashOf<T>>>,
+}
+
 /// Iterator over the leaf hashes of a [`MerkleTree`], yielding each leaf in left-to-right order.
 pub struct LeafHashIterator<'a, T> {
     tree: &'a MerkleTree<T>,
@@ -60,9 +71,29 @@ trait CompleteBinaryTree {
         (usize::BITS - self.len().leading_zeros()).saturating_sub(1)
     }
 
+    /// Returns the height of a complete binary tree with the given number of leaves.
+    fn height_from_n_leaves(n: usize) -> u32 {
+        usize::BITS - n.saturating_sub(1).leading_zeros()
+    }
+
     /// Returns the maximum number of nodes the tree can contain without increasing its height.
     fn capacity(&self) -> usize {
         (1 << (self.height() + 1)) - 1
+    }
+
+    /// Returns the index of the given leaf, in breadth-first order from the root.
+    fn index_in_tree(&self, leaf_index: usize) -> Option<usize> {
+        let index = Self::index_in_tree_unchecked(leaf_index, self.height() as usize);
+
+        (index < self.len()).then_some(index)
+    }
+
+    /// Returns the index of the given leaf, in breadth-first order from the root.
+    ///
+    /// Does not check if the result is within bounds.
+    fn index_in_tree_unchecked(leaf_index: usize, height: usize) -> usize {
+        let offset = (1 << height) - 1_usize;
+        offset.saturating_add(leaf_index)
     }
 
     /// Returns the index of the parent of the node at `index`, or `None` if the node is the root.
@@ -84,6 +115,15 @@ trait CompleteBinaryTree {
     fn r_child_index(&self, index: usize) -> Option<usize> {
         let index = (index << 1) + 2;
         (index < self.len()).then_some(index)
+    }
+
+    /// Returns the index of the sibling node of the node at `index`, if it exists.
+    fn sibling_index(&self, index: usize) -> Option<usize> {
+        if index.is_multiple_of(2) {
+            (0 < index).then(|| index - 1)
+        } else {
+            (index < self.len() - 1).then(|| index + 1)
+        }
     }
 
     /// Returns a reference to the left child of the node at `index`, if it exists.
@@ -113,7 +153,7 @@ impl<T> FromIterator<HashOf<T>> for MerkleTree<T> {
     fn from_iter<I: IntoIterator<Item = HashOf<T>>>(iter: I) -> Self {
         let mut queue = iter.into_iter().map(Some).collect::<VecDeque<_>>();
 
-        let height = usize::BITS - queue.len().saturating_sub(1).leading_zeros();
+        let height = Self::height_from_n_leaves(queue.len());
         let n_complement = (1 << height) - queue.len();
         for _ in 0..n_complement {
             queue.push_back(None);
@@ -175,6 +215,24 @@ impl<T> MerkleTree<T> {
         self.get(0).copied().map(HashOf::transmute)
     }
 
+    /// Constructs a Merkle proof for the leaf at the given index among all leaves.
+    pub fn get_proof(&self, leaf_index: u32) -> Option<MerkleProof<T>> {
+        let mut index = self.index_in_tree(leaf_index as usize)?;
+        let leaf = self.get(index).copied()?;
+        let mut sibling_hashes = vec![Some(leaf)];
+
+        while let Some(parent_index) = self.parent_index(index) {
+            let sibling = self.sibling_index(index).and_then(|i| self.get(i));
+            sibling_hashes.push(sibling.copied());
+            index = parent_index;
+        }
+
+        Some(MerkleProof {
+            leaf_index,
+            sibling_hashes,
+        })
+    }
+
     /// Appends a leaf hash to the tree and updates all affected parent nodes.
     pub fn add(&mut self, hash: HashOf<T>) {
         // If the tree is perfect, increment its height to double the leaf capacity.
@@ -223,13 +281,17 @@ impl<T> MerkleTree<T> {
     /// - If both children are present, concatenates their hashes.
     ///   The order is non-commutative and essential for index verification.
     /// - If only the left child is present, promotes it to the next level without hashing.
-    /// - If both children are absent, returns `None`.
+    /// - If the left child is absent, returns `None`.
     #[inline]
     fn pair_hash(l_node: Option<&HashOf<T>>, r_node: Option<&HashOf<T>>) -> Option<HashOf<T>> {
         let (l_hash, r_hash) = match (l_node, r_node) {
             (Some(l_hash), Some(r_hash)) => (l_hash, r_hash),
             (Some(l_hash), None) => return Some(*l_hash),
-            (None, Some(_)) => unreachable!("bug: right-only child in complete tree"),
+            (None, Some(_)) => {
+                // Invalid Merkle path: a right-only child cannot exist in a complete tree.
+                // Return None instead of panicking to allow graceful rejection during verification.
+                return None;
+            }
             (None, None) => return None,
         };
 
@@ -238,6 +300,43 @@ impl<T> MerkleTree<T> {
         concat[Hash::LENGTH..].copy_from_slice(r_hash.as_ref());
 
         Some(HashOf::from_untyped_unchecked(Hash::new(concat)))
+    }
+}
+
+impl<T> MerkleProof<T> {
+    /// Verifies the Merkle proof against the given root hash.
+    /// Returns true if the computed root from the proof matches the given root.
+    pub fn verify(self, root: &HashOf<MerkleTree<T>>, max_height: usize) -> bool {
+        // A proof with no valid leaf is invalid by definition.
+        if !self.sibling_hashes.first().is_some_and(Option::is_some) {
+            return false;
+        }
+        let height = self.sibling_hashes.len() - 1;
+        // Reject if the proof claims a tree taller than allowed.
+        if max_height < height {
+            return false;
+        }
+        let mut index = MerkleTree::<T>::index_in_tree_unchecked(self.leaf_index as usize, height);
+        let Some(computed_root) = self
+            .sibling_hashes
+            .into_iter()
+            .reduce(|acc, e| {
+                let (l_node, r_node) = match index % 2 {
+                    0 => (e, acc),
+                    1 => (acc, e),
+                    _ => unreachable!(),
+                };
+                index = index.saturating_sub(1) >> 1;
+
+                MerkleTree::pair_hash(l_node.as_ref(), r_node.as_ref())
+            })
+            .expect("bug: reduce returned None despite non-empty sibling_hashes")
+        else {
+            // pair_hash returned None, implying the proof path is malformed.
+            return false;
+        };
+
+        *root == computed_root.transmute()
     }
 }
 
@@ -283,8 +382,8 @@ impl<T> ExactSizeIterator for LeafHashIterator<'_, T> {
 
 impl<'a, T> LeafHashIterator<'a, T> {
     fn new(tree: &'a MerkleTree<T>) -> Self {
-        let last_capacity = (1 << tree.height()) - 1;
-        let n_leaves = tree.len() - last_capacity;
+        let offset = (1 << tree.height()) - 1;
+        let n_leaves = tree.len() - offset;
 
         Self {
             tree,
@@ -359,5 +458,39 @@ mod tests {
 
         assert_eq!(growing_tree.root(), tree.root());
         assert_eq!(growing_tree, tree);
+    }
+
+    #[test]
+    fn provides_and_verifies_inclusion_proofs() {
+        let hashes = test_hashes(5);
+        let tree: MerkleTree<_> = hashes.clone().into_iter().collect();
+
+        // Generate proofs.
+        let mut proofs: Vec<_> = (0..5).map(|i| tree.get_proof(i).unwrap()).collect();
+
+        // Verify: valid proofs should succeed.
+        for proof in proofs.clone() {
+            // Assumes up to 2^9 (512) transactions per block.
+            assert!(proof.verify(&tree.root().unwrap(), 9));
+        }
+
+        // Mirror the leaf index to invalidate proofs.
+        let mirror_index = |index: usize| {
+            let height = MerkleTree::<()>::height_from_n_leaves(5);
+            let capacity_for_leaves = 1 << height;
+            let mirrored = capacity_for_leaves - 1 - index;
+            println!("mirroring index from {index} to {mirrored}");
+            u32::try_from(mirrored).unwrap()
+        };
+
+        // Corrupt each proof by modifying its leaf index.
+        for (i, proof) in proofs.iter_mut().enumerate() {
+            proof.leaf_index = mirror_index(i);
+        }
+
+        // Verify: corrupted proofs should fail.
+        for proof in proofs {
+            assert!(!proof.verify(&tree.root().unwrap(), 9));
+        }
     }
 }
