@@ -207,9 +207,8 @@ impl<T> MerkleTree<T> {
                 1 => (&node, self.get_r_child(parent_index)),
                 _ => unreachable!(),
             };
-            let parent_node = r_node_opt.map_or(*l_node, |r_node| {
-                Self::pair_hash(l_node.as_ref(), r_node.as_ref())
-            });
+            let r_node = r_node_opt.unwrap_or(l_node);
+            let parent_node = Self::pair_hash(l_node.as_ref(), r_node.as_ref());
             let parent_mut = self.0.get_mut(parent_index).unwrap();
             *parent_mut = parent_node;
             index = parent_index;
@@ -218,20 +217,26 @@ impl<T> MerkleTree<T> {
     }
 
     /// Combines two child hashes into a parent hash.
+    ///
+    /// Pre-hash processing:
+    /// - If both children are present, concatenates their hashes.
+    ///   The order is non-commutative and essential for index verification.
+    /// - If only the left child is present, promotes it to the next level without hashing.
+    /// - If both children are absent, returns `None`.
+    #[inline]
     fn pair_hash(l_node: Option<&HashOf<T>>, r_node: Option<&HashOf<T>>) -> Option<HashOf<T>> {
         let (l_hash, r_hash) = match (l_node, r_node) {
             (Some(l_hash), Some(r_hash)) => (l_hash, r_hash),
             (Some(l_hash), None) => return Some(*l_hash),
-            (None, Some(_)) => unreachable!(),
+            (None, Some(_)) => unreachable!("bug: right-only child in complete tree"),
             (None, None) => return None,
         };
-        let sum: Vec<_> = l_hash
-            .as_ref()
-            .iter()
-            .zip(r_hash.as_ref().iter())
-            .map(|(l, r)| l.wrapping_add(*r))
-            .collect();
-        Some(HashOf::from_untyped_unchecked(Hash::new(sum)))
+
+        let mut concat = [0u8; Hash::LENGTH * 2];
+        concat[..Hash::LENGTH].copy_from_slice(l_hash.as_ref());
+        concat[Hash::LENGTH..].copy_from_slice(r_hash.as_ref());
+
+        Some(HashOf::from_untyped_unchecked(Hash::new(concat)))
     }
 }
 
@@ -294,7 +299,7 @@ mod tests {
     use crate::Hash;
 
     fn test_hashes(n_hashes: u8) -> Vec<HashOf<()>> {
-        (1..=n_hashes)
+        (0..n_hashes)
             .map(|i| Hash::prehashed([i; Hash::LENGTH]))
             .map(HashOf::from_untyped_unchecked)
             .collect()
@@ -302,18 +307,17 @@ mod tests {
 
     #[test]
     fn construction() {
-        let tree = test_hashes(5).into_iter().collect::<MerkleTree<_>>();
-        //               #-: iteration order
-        //               9b: first 2 hex of hash
+        let tree: MerkleTree<_> = test_hashes(5).into_iter().collect();
+        //               a3: first 2 hex digits of the hash
         //         ______/\______
-        //       #-              #-
-        //       0a              05
+        //       60              04
         //     __/\__          __/\__
-        //   #-      #-      #-      #-
-        //   fc      17      05      **
+        //   43      46      04      **
         //   /\      /\      /
-        // #0  #1  #2  #3  #4
-        // 01  02  03  04  05
+        // 00  01  02  03  04
+        for (i, node) in tree.0.iter().enumerate() {
+            println!("{i:02}th node: {node:?}")
+        }
         assert_eq!(tree.height(), 3);
         assert_eq!(tree.len(), 12);
         assert!(matches!(tree.get(6), Some(None)));
