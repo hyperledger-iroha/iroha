@@ -89,12 +89,18 @@ impl<T: Write> RunArgs<T> for MarkdownHelp {
 
 #[cfg(test)]
 mod tests {
-    use clap::Error;
+    use clap::{CommandFactory, Error};
 
-    use super::Args;
+    use super::{Args, Parser};
+    use crate::wasm;
 
     fn parse(args: &str) -> Result<Args, Error> {
-        <Args as clap::Parser>::try_parse_from(args.split(' '))
+        Args::try_parse_from(args.split(' '))
+    }
+
+    #[test]
+    fn verify_args() {
+        Args::command().debug_assert();
     }
 
     #[test]
@@ -157,5 +163,33 @@ mod tests {
             -o test.yml",
         )
         .is_err())
+    }
+
+    #[test]
+    fn wasm_command() {
+        parse("kagami wasm build ./test --out-file 1").unwrap();
+        parse("kagami wasm check ./test").unwrap();
+
+        let Args::Wasm(wasm::Args::Check { common, .. }) = Args::try_parse_from([
+            "kagami",
+            "wasm",
+            "check",
+            "./path",
+            "--cargo-args=--locked --frozen",
+        ])
+        .unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(common.cargo_args.0, vec!["--locked", "--frozen"]);
+
+        Args::try_parse_from([
+            "kagami",
+            "wasm",
+            "build",
+            "./path",
+            "--cargo-args=--locked --frozen",
+            "--out-file=test.wasm",
+        ])
+        .unwrap();
     }
 }
