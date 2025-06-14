@@ -98,14 +98,14 @@ trait CompleteBinaryTree {
 }
 
 impl<T> CompleteBinaryTree for MerkleTree<T> {
-    type NodeValue = Option<HashOf<T>>;
+    type NodeValue = HashOf<T>;
 
     fn len(&self) -> usize {
         self.0.len()
     }
 
     fn get(&self, index: usize) -> Option<&Self::NodeValue> {
-        self.0.get(index)
+        self.0.get(index).and_then(|opt| opt.as_ref())
     }
 }
 
@@ -172,7 +172,7 @@ impl<'a, T> MerkleTree<T> {
 impl<T> MerkleTree<T> {
     /// Returns the hash of the root node, or `None` if the tree has no nodes.
     pub fn root(&self) -> Option<HashOf<Self>> {
-        self.get(0).and_then(|node| node.map(HashOf::transmute))
+        self.get(0).copied().map(HashOf::transmute)
     }
 
     /// Appends a leaf hash to the tree and updates all affected parent nodes.
@@ -199,17 +199,18 @@ impl<T> MerkleTree<T> {
 
     /// Recomputes hashes along the path from the leaf at `index` up to the root.
     fn update(&mut self, mut index: usize) {
-        let Some(node) = self.get(index) else { return };
-        let mut node = *node;
+        let mut node = self.get(index).copied();
         while let Some(parent_index) = self.parent_index(index) {
-            let (l_node, r_node_opt) = match index % 2 {
-                0 => (self.get_l_child(parent_index).unwrap(), Some(&node)),
-                1 => (&node, self.get_r_child(parent_index)),
+            let (l_node, r_node) = match index % 2 {
+                0 => (self.get_l_child(parent_index), node.as_ref()),
+                1 => (node.as_ref(), self.get_r_child(parent_index)),
                 _ => unreachable!(),
             };
-            let r_node = r_node_opt.unwrap_or(l_node);
-            let parent_node = Self::pair_hash(l_node.as_ref(), r_node.as_ref());
-            let parent_mut = self.0.get_mut(parent_index).unwrap();
+            let parent_node = Self::pair_hash(l_node, r_node);
+            let parent_mut = self
+                .0
+                .get_mut(parent_index)
+                .expect("bug: missing parent node at computed index");
             *parent_mut = parent_node;
             index = parent_index;
             node = parent_node;
@@ -250,8 +251,8 @@ impl<T> Iterator for LeafHashIterator<'_, T> {
         let leaf = self
             .tree
             .get_leaf(self.index)
-            .and_then(|opt| opt.as_ref().copied())
-            .unwrap();
+            .copied()
+            .expect("bug: missing leaf at valid index");
         // Increment the front index eagerly.
         self.index += 1;
         Some(leaf)
@@ -268,8 +269,8 @@ impl<T> DoubleEndedIterator for LeafHashIterator<'_, T> {
         let leaf = self
             .tree
             .get_leaf(self.index_back)
-            .and_then(|opt| opt.as_ref().copied())
-            .unwrap();
+            .copied()
+            .expect("bug: missing leaf at valid index");
         Some(leaf)
     }
 }
@@ -306,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn construction() {
+    fn builds_tree_from_hashes() {
         let tree: MerkleTree<_> = test_hashes(5).into_iter().collect();
         //               a3: first 2 hex digits of the hash
         //         ______/\______
@@ -320,13 +321,13 @@ mod tests {
         }
         assert_eq!(tree.height(), 3);
         assert_eq!(tree.len(), 12);
-        assert!(matches!(tree.get(6), Some(None)));
-        assert!(matches!(tree.get(11), Some(Some(_))));
+        assert!(tree.get(6).is_none());
+        assert!(tree.get(11).is_some());
         assert!(tree.get(12).is_none());
     }
 
     #[test]
-    fn iteration() {
+    fn iterates_over_leaves() {
         let hashes = test_hashes(5);
         let tree: MerkleTree<_> = hashes.clone().into_iter().collect();
         let leaves: Vec<_> = tree.leaves().collect();
@@ -347,16 +348,16 @@ mod tests {
     }
 
     #[test]
-    fn reproduction() {
+    fn grows_incrementally_and_matches_prebuilt_tree() {
         let hashes = test_hashes(5);
         let tree: MerkleTree<_> = hashes.clone().into_iter().collect();
 
-        let mut tree_reproduced = MerkleTree::default();
+        let mut growing_tree = MerkleTree::default();
         for hash in hashes {
-            tree_reproduced.add(hash);
+            growing_tree.add(hash);
         }
 
-        assert_eq!(tree_reproduced.root(), tree.root());
-        assert_eq!(tree_reproduced, tree);
+        assert_eq!(growing_tree.root(), tree.root());
+        assert_eq!(growing_tree, tree);
     }
 }
