@@ -1,7 +1,7 @@
 use eyre::{Ok, Result};
 use futures_util::StreamExt;
 use iroha::{
-    // crypto::MerkleProof,
+    crypto::MerkleProof,
     data_model::{events::pipeline::BlockEventFilter, prelude::*},
 };
 use iroha_test_network::*;
@@ -73,7 +73,7 @@ async fn query_returns_complete_execution_log() -> Result<()> {
     // Query the committed transaction by its entrypoint hash.
     let committed_tx: CommittedTransaction = test_client
         .query(FindTransactions::new())
-        .filter_with(|tx| tx.entrypoint_hash.eq(entrypoint_hash))
+        .filter_with(|tx| tx.entrypoint_proof.matches_hash(entrypoint_hash))
         // FIXME: execute_single is not working for some reason.
         // .execute_single()?;
         .execute_all()?
@@ -85,13 +85,35 @@ async fn query_returns_complete_execution_log() -> Result<()> {
     assert_eq!(*committed_tx.block_hash(), block_hash);
 
     // Verify inclusion proof for the transaction entrypoint.
-    // let proof: MerkleProof<TransactionEntrypoint>;
-    // let root = header
-    //     .merkle_root()
-    //     .expect("non-empty block should have a Merkle root");
-    // assert!(proof.verify(&root, 9)); // Assumes up to 2^9 (512) transactions per block.
+    let proof: MerkleProof<TransactionEntrypoint> = committed_tx.entrypoint_proof().clone();
+    assert_eq!(
+        *proof
+            .sibling_hashes
+            .first()
+            .and_then(Option::as_ref)
+            .unwrap(),
+        entrypoint_hash
+    );
+    let root = header
+        .merkle_root()
+        .expect("non-empty block should have a Merkle root");
+    assert!(proof.verify(&root, 9)); // Assumes up to 2^9 (512) transactions per block.
 
     // Verify inclusion proof for the transaction result.
+    let proof: MerkleProof<TransactionResult> = committed_tx.result_proof().clone();
+    let result_hash = committed_tx.result().hash();
+    assert_eq!(
+        *proof
+            .sibling_hashes
+            .first()
+            .and_then(Option::as_ref)
+            .unwrap(),
+        result_hash
+    );
+    let root = header
+        .result_merkle_root()
+        .expect("non-empty block should have a Merkle root");
+    assert!(proof.verify(&root, 9));
 
     Ok(())
 }

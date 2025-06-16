@@ -4,7 +4,7 @@
 use alloc::{format, string::String, vec::Vec};
 
 use derive_where::derive_where;
-use iroha_crypto::{HashOf, PublicKey};
+use iroha_crypto::{HashOf, MerkleProof, PublicKey};
 use iroha_primitives::{json::Json, numeric::Numeric};
 
 // used in the macro
@@ -292,18 +292,18 @@ type_descriptions! {
     SignedBlock[SignedBlockProjection, SignedBlockPrototype]: BlockHeader, HashOf<BlockHeader> {
         header(Header, SignedBlockHeaderProjector): BlockHeader,
     }
-    HashOf<TransactionEntrypoint>[TransactionEntrypointHashProjection, TransactionEntrypointHashPrototype] {}
+    MerkleProof<TransactionEntrypoint>[TransactionEntrypointProofProjection, TransactionEntrypointProofPrototype] {}
     #[custom_evaluate]
     TransactionEntrypoint[TransactionEntrypointProjection, TransactionEntrypointPrototype]: AccountId, DomainId, Name, PublicKey {
         authority(Authority, TransactionEntrypointAuthorityProjector): AccountId,
     }
-    HashOf<TransactionResult>[TransactionResultHashProjection, TransactionResultHashPrototype] {}
+    MerkleProof<TransactionResult>[TransactionResultProofProjection, TransactionResultProofPrototype] {}
     TransactionResult[TransactionResultProjection, TransactionResultPrototype] {}
-    CommittedTransaction[CommittedTransactionProjection, CommittedTransactionPrototype]: HashOf<BlockHeader>, HashOf<TransactionEntrypoint>, TransactionEntrypoint, HashOf<TransactionResult>, TransactionResult, AccountId, DomainId, Name, PublicKey {
+    CommittedTransaction[CommittedTransactionProjection, CommittedTransactionPrototype]: HashOf<BlockHeader>, MerkleProof<TransactionEntrypoint>, TransactionEntrypoint, MerkleProof<TransactionResult>, TransactionResult, AccountId, DomainId, Name, PublicKey {
         block_hash(BlockHash, CommittedTransactionBlockHashProjector): HashOf<BlockHeader>,
-        entrypoint_hash(TransactionEntrypointHash, CommittedTransactionEntrypointHashProjector): HashOf<TransactionEntrypoint>,
+        entrypoint_proof(TransactionEntrypointProof, CommittedTransactionEntrypointProofProjector): MerkleProof<TransactionEntrypoint>,
         entrypoint(TransactionEntrypoint, CommittedTransactionEntrypointProjector): TransactionEntrypoint,
-        result_hash(TransactionResultHash, CommittedTransactionResultHashProjector): HashOf<TransactionResult>,
+        result_proof(TransactionResultProof, CommittedTransactionResultProofProjector): MerkleProof<TransactionResult>,
         result(TransactionResult, CommittedTransactionResultProjector): TransactionResult,
     }
 

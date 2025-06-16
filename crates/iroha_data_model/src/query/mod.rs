@@ -13,7 +13,7 @@ use alloc::{
 use std::vec;
 
 use derive_more::Constructor;
-use iroha_crypto::{PublicKey, SignatureOf};
+use iroha_crypto::{MerkleProof, PublicKey, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_primitives::{json::Json, numeric::Numeric};
@@ -156,9 +156,9 @@ mod model {
         Permission(Vec<Permission>),
         CommittedTransaction(Vec<CommittedTransaction>),
         TransactionResult(Vec<TransactionResult>),
-        TransactionResultHash(Vec<HashOf<TransactionResult>>),
+        TransactionResultProof(Vec<MerkleProof<TransactionResult>>),
         TransactionEntrypoint(Vec<TransactionEntrypoint>),
-        TransactionEntrypointHash(Vec<HashOf<TransactionEntrypoint>>),
+        TransactionEntrypointProof(Vec<MerkleProof<TransactionEntrypoint>>),
         Peer(Vec<PeerId>),
         RoleId(Vec<RoleId>),
         TriggerId(Vec<TriggerId>),
@@ -280,12 +280,12 @@ mod model {
     pub struct CommittedTransaction {
         /// Hash of the block containing this transaction.
         pub block_hash: HashOf<BlockHeader>,
-        /// Hash of this transaction entrypoint.
-        pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+        /// Merkle inclusion proof for the transaction entrypoint.
+        pub entrypoint_proof: MerkleProof<TransactionEntrypoint>,
         /// The initial execution step of the transaction.
         pub entrypoint: TransactionEntrypoint,
-        /// Hash of this transaction result.
-        pub result_hash: HashOf<TransactionResult>,
+        /// Merkle inclusion proof for the transaction result.
+        pub result_proof: MerkleProof<TransactionResult>,
         /// The result of executing the transaction (trigger sequence or rejection).
         pub result: TransactionResult,
     }
@@ -320,9 +320,9 @@ impl QueryOutputBatchBox {
             (Self::Permission(v1), Self::Permission(v2)) => v1.extend(v2),
             (Self::CommittedTransaction(v1), Self::CommittedTransaction(v2)) => v1.extend(v2),
             (Self::TransactionResult(v1), Self::TransactionResult(v2)) => v1.extend(v2),
-            (Self::TransactionResultHash(v1), Self::TransactionResultHash(v2)) => v1.extend(v2),
+            (Self::TransactionResultProof(v1), Self::TransactionResultProof(v2)) => v1.extend(v2),
             (Self::TransactionEntrypoint(v1), Self::TransactionEntrypoint(v2)) => v1.extend(v2),
-            (Self::TransactionEntrypointHash(v1), Self::TransactionEntrypointHash(v2)) => {
+            (Self::TransactionEntrypointProof(v1), Self::TransactionEntrypointProof(v2)) => {
                 v1.extend(v2)
             }
             (Self::Peer(v1), Self::Peer(v2)) => v1.extend(v2),
@@ -362,9 +362,9 @@ impl QueryOutputBatchBox {
             Self::Permission(v) => v.len(),
             Self::CommittedTransaction(v) => v.len(),
             Self::TransactionResult(v) => v.len(),
-            Self::TransactionResultHash(v) => v.len(),
+            Self::TransactionResultProof(v) => v.len(),
             Self::TransactionEntrypoint(v) => v.len(),
-            Self::TransactionEntrypointHash(v) => v.len(),
+            Self::TransactionEntrypointProof(v) => v.len(),
             Self::Peer(v) => v.len(),
             Self::RoleId(v) => v.len(),
             Self::TriggerId(v) => v.len(),

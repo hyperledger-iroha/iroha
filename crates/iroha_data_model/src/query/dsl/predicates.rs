@@ -3,7 +3,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{format, string::String, vec::Vec};
 
-use iroha_crypto::{HashOf, PublicKey};
+use iroha_crypto::{HashOf, MerkleProof, PublicKey};
 use iroha_primitives::{json::Json, numeric::Numeric};
 
 use crate::{
@@ -27,8 +27,8 @@ use crate::{
                 NamePrototype, NftIdPrototype, NftPrototype, NumericPrototype, ParameterPrototype,
                 PeerIdPrototype, PermissionPrototype, PublicKeyPrototype, RoleIdPrototype,
                 RolePrototype, SignedBlockPrototype, StringPrototype,
-                TransactionEntrypointHashPrototype, TransactionEntrypointPrototype,
-                TransactionResultHashPrototype, TransactionResultPrototype, TriggerIdPrototype,
+                TransactionEntrypointProofPrototype, TransactionEntrypointPrototype,
+                TransactionResultProofPrototype, TransactionResultPrototype, TriggerIdPrototype,
                 TriggerPrototype,
             },
             CompoundPredicate, ObjectProjector, PredicateMarker,
@@ -307,17 +307,17 @@ impl_predicate_atom! {
         /// Checks if the block is empty (has no transactions)
         IsEmpty [is_empty] => input.is_empty(),
     }
-    TransactionEntrypointHashPredicateAtom(input: HashOf<TransactionEntrypoint>) [TransactionEntrypointHashPrototype] {
+    TransactionEntrypointProofPredicateAtom(input: MerkleProof<TransactionEntrypoint>) [TransactionEntrypointProofPrototype] {
         /// Returns true if the entrypoint hash matches the specified hash.
-        Equals(expected: HashOf<TransactionEntrypoint>) [eq] => input == expected,
+        MatchesHash(expected: HashOf<TransactionEntrypoint>) [matches_hash] => input.sibling_hashes.first().and_then(Option::as_ref).is_some_and(|hash| hash == expected),
     }
     TransactionEntrypointPredicateAtom(input: TransactionEntrypoint) [TransactionEntrypointPrototype] {
         /// Returns true if the entrypoint is an user request.
         IsExternal [is_external] => matches!(input, TransactionEntrypoint::External(_)),
     }
-    TransactionResultHashPredicateAtom(input: HashOf<TransactionResult>) [TransactionResultHashPrototype] {
+    TransactionResultProofPredicateAtom(input: MerkleProof<TransactionResult>) [TransactionResultProofPrototype] {
         /// Returns true if the result hash matches the specified hash.
-        Equals(expected: HashOf<TransactionResult>) [eq] => input == expected,
+        MatchesHash(expected: HashOf<TransactionResult>) [matches_hash] => input.sibling_hashes.first().and_then(Option::as_ref).is_some_and(|hash| hash == expected),
     }
     TransactionResultPredicateAtom(input: TransactionResult) [TransactionResultPrototype] {
         /// Returns true if the transaction succeeded.
@@ -369,8 +369,8 @@ pub mod prelude {
         JsonPredicateAtom, MetadataPredicateAtom, NftIdPredicateAtom, NftPredicateAtom,
         NumericPredicateAtom, ParameterPredicateAtom, PeerIdPredicateAtom, PermissionPredicateAtom,
         PublicKeyPredicateAtom, RoleIdPredicateAtom, RolePredicateAtom, SignedBlockPredicateAtom,
-        StringPredicateAtom, TransactionEntrypointHashPredicateAtom,
-        TransactionEntrypointPredicateAtom, TransactionResultHashPredicateAtom,
-        TransactionResultPredicateAtom, TriggerIdPredicateAtom, TriggerPredicateAtom,
+        StringPredicateAtom, TransactionEntrypointPredicateAtom,
+        TransactionEntrypointProofPredicateAtom, TransactionResultPredicateAtom,
+        TransactionResultProofPredicateAtom, TriggerIdPredicateAtom, TriggerPredicateAtom,
     };
 }

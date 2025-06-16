@@ -7,7 +7,7 @@ use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::{fmt::Display, num::NonZeroU64, time::Duration};
 
 use derive_more::Display;
-use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
+use iroha_crypto::{HashOf, MerkleProof, MerkleTree, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
@@ -339,6 +339,30 @@ impl SignedBlock {
         block.result.merkle.leaves()
     }
 
+    /// Merkle inclusion proofs of each transaction entrypoint (external and time-triggered) in execution order.
+    /// Indices align with those of the entrypoints.
+    #[inline]
+    pub fn entrypoint_proofs(
+        &self,
+    ) -> impl ExactSizeIterator<Item = MerkleProof<TransactionEntrypoint>> + DoubleEndedIterator + '_
+    {
+        let SignedBlock::V1(block) = self;
+        let n_leaves: u32 = block
+            .result
+            .merkle
+            .leaves()
+            .len()
+            .try_into()
+            .expect("bug: leaf count exceeded u32::MAX");
+        (0..n_leaves).map(|i| {
+            block
+                .result
+                .merkle
+                .get_proof(i)
+                .expect("bug: missing Merkle proof at valid index")
+        })
+    }
+
     /// Transaction entrypoints (external and time-triggered) in execution order.
     #[inline]
     pub fn entrypoints_cloned(
@@ -355,6 +379,30 @@ impl SignedBlock {
     ) -> impl ExactSizeIterator<Item = HashOf<TransactionResult>> + DoubleEndedIterator + '_ {
         let SignedBlock::V1(block) = self;
         block.result.result_merkle.leaves()
+    }
+
+    /// Merkle inclusion proofs of each transaction result (trigger sequence or rejection reason) in execution order.
+    /// Indices align with those of the entrypoints.
+    #[inline]
+    pub fn result_proofs(
+        &self,
+    ) -> impl ExactSizeIterator<Item = MerkleProof<TransactionResult>> + DoubleEndedIterator + '_
+    {
+        let SignedBlock::V1(block) = self;
+        let n_leaves: u32 = block
+            .result
+            .result_merkle
+            .leaves()
+            .len()
+            .try_into()
+            .expect("bug: leaf count exceeded u32::MAX");
+        (0..n_leaves).map(|i| {
+            block
+                .result
+                .result_merkle
+                .get_proof(i)
+                .expect("bug: missing Merkle proof at valid index")
+        })
     }
 
     /// Actual transaction results (trigger sequence or rejection reason) in execution order.

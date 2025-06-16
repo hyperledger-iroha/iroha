@@ -588,7 +588,7 @@ mod tests {
         let not_found = FindTransactions::new()
             .execute(
                 CompoundPredicate::<CommittedTransaction>::build(|tx| {
-                    tx.entrypoint_hash.eq(wrong_hash)
+                    tx.entrypoint_proof.matches_hash(wrong_hash)
                 }),
                 &state_view,
             )
@@ -599,7 +599,8 @@ mod tests {
         let found_accepted = FindTransactions::new()
             .execute(
                 CompoundPredicate::<CommittedTransaction>::build(|tx| {
-                    tx.entrypoint_hash.eq(va_tx.as_ref().hash_as_entrypoint())
+                    tx.entrypoint_proof
+                        .matches_hash(va_tx.as_ref().hash_as_entrypoint())
                 }),
                 &state_view,
             )
@@ -610,7 +611,7 @@ mod tests {
         if found_accepted.result.is_err() {
             assert_eq!(
                 va_tx.as_ref().hash_as_entrypoint(),
-                found_accepted.entrypoint_hash
+                found_accepted.entrypoint.hash()
             )
         }
         Ok(())

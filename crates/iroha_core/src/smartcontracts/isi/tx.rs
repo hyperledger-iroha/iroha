@@ -26,21 +26,21 @@ impl ValidQuery for FindTransactions {
                 let block_hash = block.hash();
 
                 // Iterate over transactions in descending order (most recent first).
-                let entrypoint_hashes = block.entrypoint_hashes().rev();
+                let entrypoint_proofs = block.entrypoint_proofs().rev();
                 let entrypoints = block.entrypoints_cloned().rev();
-                let result_hashes = block.result_hashes().rev();
+                let result_proofs = block.result_proofs().rev();
                 let results = block.results().cloned().rev();
 
-                entrypoint_hashes
+                entrypoint_proofs
                     .zip(entrypoints)
-                    .zip(result_hashes)
+                    .zip(result_proofs)
                     .zip(results)
-                    .map(|(((entrypoint_hash, entrypoint), result_hash), result)| {
+                    .map(|(((entrypoint_proof, entrypoint), result_proof), result)| {
                         CommittedTransaction {
                             block_hash,
-                            entrypoint_hash,
+                            entrypoint_proof,
                             entrypoint,
-                            result_hash,
+                            result_proof,
                             result,
                         }
                     })

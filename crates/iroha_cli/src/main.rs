@@ -1604,7 +1604,7 @@ mod transaction {
             let client = context.client_from_config();
             let transaction = client
                 .query(FindTransactions)
-                .filter_with(|txn| txn.entrypoint_hash.eq(self.hash))
+                .filter_with(|txn| txn.entrypoint_proof.matches_hash(self.hash))
                 .execute_single()?;
             context.print_data(&transaction)
         }
