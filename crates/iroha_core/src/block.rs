@@ -243,7 +243,8 @@ mod chained {
     impl BlockBuilder<Chained> {
         /// Sign this block and get [`NewBlock`].
         pub fn sign(self, private_key: &PrivateKey) -> WithEvents<NewBlock> {
-            let signature = BlockSignature(0, SignatureOf::new(private_key, &self.0.header));
+            let signature =
+                BlockSignature(0, SignatureOf::from_hash(private_key, self.0.header.hash()));
 
             WithEvents::new(NewBlock {
                 signature,
@@ -339,7 +340,10 @@ mod new {
 
         #[cfg(test)]
         pub(crate) fn update_header(self, header: BlockHeader, private_key: &PrivateKey) -> Self {
-            let signature = BlockSignature(0, iroha_crypto::SignatureOf::new(private_key, &header));
+            let signature = BlockSignature(
+                0,
+                iroha_crypto::SignatureOf::from_hash(private_key, header.hash()),
+            );
 
             Self {
                 signature,
@@ -397,7 +401,10 @@ mod valid {
 
             signature
                 .1
-                .verify(topology.leader().public_key(), &block.payload().header)
+                .verify_hash(
+                    topology.leader().public_key(),
+                    block.payload().header.hash(),
+                )
                 .map_err(|_err| LeaderMissing)?;
 
             Ok(())
@@ -425,7 +432,7 @@ mod valid {
 
                     signature
                         .1
-                        .verify(signatory.public_key(), &block.payload().header)
+                        .verify_hash(signatory.public_key(), block.payload().header.hash())
                         .map_err(|_err| UnknownSignature)?;
 
                     Ok(())
@@ -463,7 +470,10 @@ mod valid {
 
             signature
                 .1
-                .verify(topology.proxy_tail().public_key(), &block.payload().header)
+                .verify_hash(
+                    topology.proxy_tail().public_key(),
+                    block.payload().header.hash(),
+                )
                 .map_err(|_err| ProxyTailMissing)?;
 
             Ok(())
@@ -733,7 +743,10 @@ mod valid {
 
             signature
                 .1
-                .verify(signatory.public_key(), &self.as_ref().payload().header)
+                .verify_hash(
+                    signatory.public_key(),
+                    self.as_ref().payload().header.hash(),
+                )
                 .map_err(|_err| UnknownSignature)?;
 
             self.0.add_signature(signature).map_err(|_err| Other)
@@ -914,7 +927,7 @@ mod valid {
         };
         signature
             .1
-            .verify(&genesis_account.signatory, &block.payload().header)
+            .verify_hash(&genesis_account.signatory, block.payload().header.hash())
             .map_err(|_| InvalidGenesisError::InvalidSignature)?;
 
         let transactions = block.payload().transactions.as_slice();
@@ -953,7 +966,7 @@ mod valid {
                 .map(|(i, key_pair)| {
                     BlockSignature(
                         i as u64,
-                        SignatureOf::new(key_pair.private_key(), &payload.header),
+                        SignatureOf::from_hash(key_pair.private_key(), payload.header.hash()),
                     )
                 })
                 .try_for_each(|signature| block.add_signature(signature, &topology))
@@ -1018,7 +1031,7 @@ mod valid {
                 .map(|(i, key_pair)| {
                     BlockSignature(
                         i as u64,
-                        SignatureOf::new(key_pair.private_key(), &payload.header),
+                        SignatureOf::from_hash(key_pair.private_key(), payload.header.hash()),
                     )
                 })
                 .try_for_each(|signature| block.add_signature(signature, &topology))
