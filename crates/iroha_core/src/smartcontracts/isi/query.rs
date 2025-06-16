@@ -609,7 +609,7 @@ mod tests {
         if found_accepted.result.is_err() {
             assert_eq!(
                 va_tx.as_ref().hash_as_entrypoint(),
-                found_accepted.entrypoint_hash
+                found_accepted.entrypoint.hash()
             )
         }
         Ok(())

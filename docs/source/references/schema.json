@@ -1197,12 +1197,20 @@
         "type": "HashOf<TransactionEntrypoint>"
       },
       {
+        "name": "entrypoint_proof",
+        "type": "MerkleProof<TransactionEntrypoint>"
+      },
+      {
         "name": "entrypoint",
         "type": "TransactionEntrypoint"
       },
       {
         "name": "result_hash",
         "type": "HashOf<TransactionResult>"
+      },
+      {
+        "name": "result_proof",
+        "type": "MerkleProof<TransactionResult>"
       },
       {
         "name": "result",
@@ -2788,6 +2796,30 @@
       }
     ]
   },
+  "MerkleProof<TransactionEntrypoint>": {
+    "Struct": [
+      {
+        "name": "leaf_index",
+        "type": "u32"
+      },
+      {
+        "name": "audit_path",
+        "type": "Vec<Option<HashOf<TransactionEntrypoint>>>"
+      }
+    ]
+  },
+  "MerkleProof<TransactionResult>": {
+    "Struct": [
+      {
+        "name": "leaf_index",
+        "type": "u32"
+      },
+      {
+        "name": "audit_path",
+        "type": "Vec<Option<HashOf<TransactionResult>>>"
+      }
+    ]
+  },
   "MerkleTree<SignedTransaction>": {
     "Vec": "HashOf<SignedTransaction>"
   },
@@ -3484,6 +3516,12 @@
   },
   "Option<HashOf<SignedTransaction>>": {
     "Option": "HashOf<SignedTransaction>"
+  },
+  "Option<HashOf<TransactionEntrypoint>>": {
+    "Option": "HashOf<TransactionEntrypoint>"
+  },
+  "Option<HashOf<TransactionResult>>": {
+    "Option": "HashOf<TransactionResult>"
   },
   "Option<IpfsPath>": {
     "Option": "IpfsPath"
@@ -6353,6 +6391,12 @@
   },
   "Vec<Numeric>": {
     "Vec": "Numeric"
+  },
+  "Vec<Option<HashOf<TransactionEntrypoint>>>": {
+    "Vec": "Option<HashOf<TransactionEntrypoint>>"
+  },
+  "Vec<Option<HashOf<TransactionResult>>>": {
+    "Vec": "Option<HashOf<TransactionResult>>"
   },
   "Vec<Parameter>": {
     "Vec": "Parameter"

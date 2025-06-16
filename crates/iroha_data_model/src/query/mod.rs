@@ -13,7 +13,7 @@ use alloc::{
 use std::vec;
 
 use derive_more::Constructor;
-use iroha_crypto::{PublicKey, SignatureOf};
+use iroha_crypto::{MerkleProof, PublicKey, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_primitives::{json::Json, numeric::Numeric};
@@ -280,12 +280,16 @@ mod model {
     pub struct CommittedTransaction {
         /// Hash of the block containing this transaction.
         pub block_hash: HashOf<BlockHeader>,
-        /// Hash of this transaction entrypoint.
+        /// Hash of the transaction entrypoint.
         pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+        /// Merkle inclusion proof for the transaction entrypoint.
+        pub entrypoint_proof: MerkleProof<TransactionEntrypoint>,
         /// The initial execution step of the transaction.
         pub entrypoint: TransactionEntrypoint,
-        /// Hash of this transaction result.
+        /// Hash of the transaction result.
         pub result_hash: HashOf<TransactionResult>,
+        /// Merkle inclusion proof for the transaction result.
+        pub result_proof: MerkleProof<TransactionResult>,
         /// The result of executing the transaction (trigger sequence or rejection).
         pub result: TransactionResult,
     }

@@ -1,7 +1,7 @@
 use eyre::{Ok, Result};
 use futures_util::StreamExt;
 use iroha::{
-    // crypto::MerkleProof,
+    crypto::MerkleProof,
     data_model::{events::pipeline::BlockEventFilter, prelude::*},
 };
 use iroha_test_network::*;
@@ -88,13 +88,20 @@ async fn query_returns_complete_execution_log() -> Result<()> {
     assert_eq!(*committed_tx.block_hash(), block_hash);
 
     // Verify inclusion proof for the transaction entrypoint.
-    // let proof: MerkleProof<TransactionEntrypoint>;
-    // let root = header
-    //     .merkle_root()
-    //     .expect("non-empty block should have a Merkle root");
-    // assert!(proof.verify(&root, 9)); // Assumes up to 2^9 (512) transactions per block.
+    let leaf = committed_tx.entrypoint().hash();
+    let proof: MerkleProof<TransactionEntrypoint> = committed_tx.entrypoint_proof().clone();
+    let root = header
+        .merkle_root()
+        .expect("non-empty block should have a Merkle root");
+    assert!(proof.verify(&leaf, &root, 9)); // Assumes up to 2^9 (512) transactions per block.
 
     // Verify inclusion proof for the transaction result.
+    let leaf = committed_tx.result().hash();
+    let proof: MerkleProof<TransactionResult> = committed_tx.result_proof().clone();
+    let root = header
+        .result_merkle_root()
+        .expect("non-empty block should have a Merkle root");
+    assert!(proof.verify(&leaf, &root, 9));
 
     Ok(())
 }

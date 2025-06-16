@@ -27,23 +27,37 @@ impl ValidQuery for FindTransactions {
 
                 // Iterate over transactions in descending order (most recent first).
                 let entrypoint_hashes = block.entrypoint_hashes().rev();
+                let entrypoint_proofs = block.entrypoint_proofs().rev();
                 let entrypoints = block.entrypoints_cloned().rev();
                 let result_hashes = block.result_hashes().rev();
+                let result_proofs = block.result_proofs().rev();
                 let results = block.results().cloned().rev();
 
                 entrypoint_hashes
+                    .zip(entrypoint_proofs)
                     .zip(entrypoints)
                     .zip(result_hashes)
+                    .zip(result_proofs)
                     .zip(results)
-                    .map(|(((entrypoint_hash, entrypoint), result_hash), result)| {
-                        CommittedTransaction {
-                            block_hash,
-                            entrypoint_hash,
-                            entrypoint,
-                            result_hash,
+                    .map(
+                        |(
+                            (
+                                (((entrypoint_hash, entrypoint_proof), entrypoint), result_hash),
+                                result_proof,
+                            ),
                             result,
-                        }
-                    })
+                        )| {
+                            CommittedTransaction {
+                                block_hash,
+                                entrypoint_hash,
+                                entrypoint_proof,
+                                entrypoint,
+                                result_hash,
+                                result_proof,
+                                result,
+                            }
+                        },
+                    )
                     .collect::<Vec<_>>()
             })
             .filter(move |tx| filter.applies(tx)))
@@ -92,8 +106,10 @@ mod tests {
 
         // All entrypoint-related iterators yield the same number of elements.
         assert_eq!(10, block.entrypoint_hashes().len());
+        assert_eq!(10, block.entrypoint_proofs().len());
         assert_eq!(10, block.entrypoints_cloned().len());
         assert_eq!(10, block.result_hashes().len());
+        assert_eq!(10, block.result_proofs().len());
         assert_eq!(10, block.results().len());
         assert_eq!(6, block.external_transactions().len());
         assert_eq!(4, block.time_triggers().len());
