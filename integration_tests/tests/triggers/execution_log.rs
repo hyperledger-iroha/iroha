@@ -14,12 +14,12 @@ use tokio::{
 
 /// # Scenario
 ///
-/// 1. Client sends a query request with a transaction hash to a node.
-/// 2. Node retrieves the transaction and its associated data trigger execution log from block storage.
-/// 3. Node returns the complete transaction details to the client.
-/// 4. Client verifies and accepts the returned transaction data.
+/// 1. Client queries a transaction by its entrypoint hash.
+/// 2. Node returns the transaction with both entrypoint and result, each accompanied by its Merkle proof.
+/// 3a. If proofs are valid, the client accepts the data.
+/// 3b. If proofs are invalid or tampered with, the client rejects the data.
 #[tokio::test]
-async fn query_returns_complete_execution_log() -> Result<()> {
+async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()> {
     let alice_rose: AssetId = format!("rose##{}", *ALICE_ID).parse().unwrap();
     let bob_rose: AssetId = format!("rose##{}", *BOB_ID).parse().unwrap();
     let user_instruction = Transfer::asset_numeric(alice_rose.clone(), 5u32, BOB_ID.clone());
@@ -95,6 +95,15 @@ async fn query_returns_complete_execution_log() -> Result<()> {
         .expect("non-empty block should have a Merkle root");
     assert!(proof.verify(&leaf, &root, 9)); // Assumes up to 2^9 (512) transactions per block.
 
+    // Fault injection: proof should now fail for a tampered entrypoint.
+    let mut tampered_tx = committed_tx.clone();
+    let self_transfer = Transfer::asset_numeric(alice_rose, 100u32, ALICE_ID.clone());
+    // Inject a zero-net-effect, self-neutralizing instruction.
+    tampered_tx.inject_instructions([self_transfer]);
+    let leaf = tampered_tx.entrypoint().hash();
+    let bad_proof = tampered_tx.entrypoint_proof().clone();
+    assert!(!bad_proof.verify(&leaf, &root, 9));
+
     // Verify inclusion proof for the transaction result.
     let leaf = committed_tx.result().hash();
     let proof: MerkleProof<TransactionResult> = committed_tx.result_proof().clone();
@@ -103,15 +112,12 @@ async fn query_returns_complete_execution_log() -> Result<()> {
         .expect("non-empty block should have a Merkle root");
     assert!(proof.verify(&leaf, &root, 9));
 
+    // Fault injection: proof should fail for a tampered result.
+    let mut tampered_tx = committed_tx.clone();
+    tampered_tx.swap_result();
+    let leaf = tampered_tx.result().hash();
+    let bad_proof = tampered_tx.result_proof().clone();
+    assert!(!bad_proof.verify(&leaf, &root, 9));
+
     Ok(())
 }
-
-/// # Scenario
-///
-/// 1. Client sends a query request with a transaction hash to a node.
-/// 2. Node retrieves the transaction and its associated data trigger execution log from block storage.
-///    FAULT INJECTION: block storage returns an altered execution log.
-/// 3. Node returns the tampered transaction details to the client.
-/// 4. Client verifies and detects the tampering in the transaction data.
-#[test]
-fn query_returns_tampered_execution_log() {}

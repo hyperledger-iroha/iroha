@@ -409,6 +409,23 @@ impl SignedTransaction {
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
         HashOf::from_untyped_unchecked(self.hash().into())
     }
+
+    /// Injects a set of fictitious instructions into the transaction payload for testing.
+    ///
+    /// Only available when the `fault_injection` feature is enabled.
+    #[cfg(feature = "fault_injection")]
+    pub fn inject_instructions(
+        &mut self,
+        extra_instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
+    ) {
+        let SignedTransaction::V1(tx) = self;
+        let Executable::Instructions(instructions) = &mut tx.payload.instructions else {
+            unimplemented!("Wasm executables are not subject to fault injection")
+        };
+        let mut modified = instructions.clone().into_vec();
+        modified.extend(extra_instructions.into_iter().map(Into::into));
+        *instructions = modified.into();
+    }
 }
 
 #[cfg(feature = "transparent_api")]

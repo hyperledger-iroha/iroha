@@ -44,6 +44,13 @@ use crate::{
     transaction::SignedTransaction,
     trigger::{Trigger, TriggerId},
 };
+#[cfg(feature = "fault_injection")]
+use crate::{
+    prelude::{
+        InstructionBox, TransactionEntrypoint, TransactionRejectionReason, TransactionResult,
+    },
+    ValidationFail,
+};
 
 pub mod builder;
 pub mod dsl;
@@ -292,6 +299,44 @@ mod model {
         pub result_proof: MerkleProof<TransactionResult>,
         /// The result of executing the transaction (trigger sequence or rejection).
         pub result: TransactionResult,
+    }
+}
+
+#[cfg(feature = "fault_injection")]
+impl CommittedTransaction {
+    /// Injects a set of fictitious instructions into the transaction payload to simulate tampering.
+    ///
+    /// Only available when the `fault_injection` feature is enabled.
+    pub fn inject_instructions(
+        &mut self,
+        extra_instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
+    ) {
+        match &mut self.entrypoint {
+            TransactionEntrypoint::External(entrypoint) => {
+                entrypoint.inject_instructions(extra_instructions);
+            }
+            TransactionEntrypoint::Time(_) => {
+                unimplemented!("time-triggered entrypoints are not subject to fault injection")
+            }
+        }
+        // Update the leaf hash to match the tampered entrypoint.
+        self.entrypoint_hash = self.entrypoint.hash();
+    }
+
+    /// Swaps the transaction result between `Ok` and `Err` to simulate tampering.
+    ///
+    /// Only available when the `fault_injection` feature is enabled.
+    pub fn swap_result(&mut self) {
+        let TransactionResult(result) = &mut self.result;
+        *result = if result.is_ok() {
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::InternalError("result swapped".into()),
+            ))
+        } else {
+            Ok(Vec::new())
+        };
+        // Update the leaf hash to match the tampered result.
+        self.result_hash = self.result.hash();
     }
 }
 
