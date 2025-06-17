@@ -30,12 +30,13 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Login to Soramitsu Harbor
-        uses: docker/login-action@v3
-        with:
-          registry: docker.soramitsu.co.jp
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_TOKEN }}
+      # FIXME: fails for some reason
+      # - name: Login to Soramitsu Harbor
+      #   uses: docker/login-action@v3
+      #   with:
+      #     registry: docker.soramitsu.co.jp
+      #     username: ${{ secrets.HARBOR_USERNAME }}
+      #     password: ${{ secrets.HARBOR_TOKEN }}
       - name: Set up Docker Buildx
         id: buildx
         if: always()
@@ -64,9 +65,10 @@ jobs:
           push: true
           file: Dockerfile.cross
           platforms: linux/amd64,linux/arm64
+          # FIXME: cannot push to Soramitsu: 401 unauthorized
+          # docker.soramitsu.co.jp/hyperledger/iroha:${{ env.TAG_BASE }}-profiling-${{ github.sha }}
           tags: |
             hyperledger/iroha:${{ env.TAG_BASE }}-profiling-${{ github.sha }}
-            docker.soramitsu.co.jp/hyperledger/iroha:${{ env.TAG_BASE }}-profiling-${{ github.sha }}
           labels: commit=${{ github.sha }}
           build-args: |
             "PROFILE=profiling"
