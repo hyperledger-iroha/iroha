@@ -25,6 +25,8 @@ http = ["std"]
 ffi_export = ["std", "iroha_ffi", "iroha_primitives/ffi_export", "iroha_crypto/ffi_export"]
 # Expose API for mutating structures (Internal use only)
 transparent_api = []
+# Enable fault injection to simulate malicious data tampering during testing.
+fault_injection = []
 
 [dependencies]
 iroha_data_model_derive = { path = "../iroha_data_model_derive" }
