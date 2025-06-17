@@ -1594,9 +1594,9 @@ mod transaction {
 
     #[derive(clap::Args, Debug)]
     pub struct Get {
-        /// Hash of the transaction to retrieve
+        /// Hash of the transaction to retrieve (user request or time trigger).
         #[arg(short('H'), long)]
-        pub hash: HashOf<SignedTransaction>,
+        pub hash: HashOf<TransactionEntrypoint>,
     }
 
     impl Run for Get {
@@ -1604,7 +1604,7 @@ mod transaction {
             let client = context.client_from_config();
             let transaction = client
                 .query(FindTransactions)
-                .filter_with(|txn| txn.value.hash.eq(self.hash))
+                .filter_with(|txn| txn.entrypoint_proof.matches_hash(self.hash))
                 .execute_single()?;
             context.print_data(&transaction)
         }

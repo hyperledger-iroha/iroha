@@ -507,7 +507,10 @@ mod tests {
         // In real cases executor should be constructed from a wasm blob
         let finished_genesis = genesis_builder.build_and_sign(&KeyPair::random())?;
 
-        let transactions = &finished_genesis.0.transactions().collect::<Vec<_>>();
+        let transactions = &finished_genesis
+            .0
+            .external_transactions()
+            .collect::<Vec<_>>();
 
         // First transaction
         {

@@ -91,7 +91,7 @@
   },
   {
     "TriggerCompleted": {
-      "trigger_id": "time-carol-dave",
+      "trigger_id": "time-carol-dave-0",
       "outcome": "Success"
     }
   },
