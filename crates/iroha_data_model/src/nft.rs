@@ -8,7 +8,9 @@ use iroha_data_model_derive::model;
 use serde::{Deserialize, Serialize};
 
 pub use self::model::*;
-use crate::{metadata::Metadata, prelude::AccountId, IntoKeyValue, ParseError, Registered};
+use crate::{
+    metadata::Metadata, prelude::AccountId, IntoKeyValue, ParseError, Registered, Registrable,
+};
 
 #[model]
 mod model {
@@ -160,6 +162,19 @@ impl FromStr for NftId {
 
 impl Registered for Nft {
     type With = NewNft;
+}
+
+impl Registrable for NewNft {
+    type Target = Nft;
+
+    #[inline]
+    fn build(self, authority: &AccountId) -> Self::Target {
+        Self::Target {
+            id: self.id,
+            content: self.content,
+            owned_by: authority.clone(),
+        }
+    }
 }
 
 impl<'world> NftEntry<'world> {

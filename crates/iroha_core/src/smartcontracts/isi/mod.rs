@@ -12,6 +12,7 @@ pub mod tx;
 pub mod world;
 
 use eyre::Result;
+pub use iroha_data_model::Registrable;
 use iroha_data_model::{
     isi::{error::InstructionExecutionError as Error, *},
     prelude::*,
@@ -24,15 +25,6 @@ use crate::{
     smartcontracts::triggers::set::SetReadOnly,
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
 };
-
-/// Trait for proxy objects used for registration.
-pub trait Registrable {
-    /// Constructed type
-    type Target;
-
-    /// Construct [`Self::Target`]
-    fn build(self, authority: &AccountId) -> Self::Target;
-}
 
 impl Execute for InstructionBox {
     fn execute(

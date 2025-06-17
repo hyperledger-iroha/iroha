@@ -429,6 +429,15 @@ pub trait Identifiable: Ord + Eq {
     fn id(&self) -> &Self::Id;
 }
 
+/// Trait for proxy objects used for registration.
+pub trait Registrable {
+    /// Constructed type
+    type Target;
+
+    /// Construct [`Self::Target`] with given authority
+    fn build(self, authority: &crate::account::AccountId) -> Self::Target;
+}
+
 /// Trait that marks the entity as having metadata.
 pub trait HasMetadata {
     // type Metadata = metadata::Metadata;

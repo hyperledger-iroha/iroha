@@ -17,7 +17,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 pub use self::model::*;
 use crate::{
     account::prelude::*, domain::prelude::*, ipfs::IpfsPath, metadata::Metadata, HasMetadata,
-    Identifiable, IntoKeyValue, Name, ParseError, Registered,
+    Identifiable, IntoKeyValue, Name, ParseError, Registered, Registrable,
 };
 
 /// [`AssetTotalQuantityMap`] provides an API to work with collection of key([`AssetDefinitionId`])-value([`Numeric`])
@@ -383,6 +383,23 @@ impl Registered for Asset {
 
 impl Registered for AssetDefinition {
     type With = NewAssetDefinition;
+}
+
+impl Registrable for NewAssetDefinition {
+    type Target = AssetDefinition;
+
+    #[inline]
+    fn build(self, authority: &AccountId) -> Self::Target {
+        Self::Target {
+            id: self.id,
+            spec: self.spec,
+            mintable: self.mintable,
+            logo: self.logo,
+            metadata: self.metadata,
+            owned_by: authority.clone(),
+            total_quantity: Numeric::ZERO,
+        }
+    }
 }
 
 impl<'world> AssetEntry<'world> {

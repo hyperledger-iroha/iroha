@@ -4,19 +4,6 @@ use iroha_telemetry::metrics;
 
 use super::prelude::*;
 
-impl Registrable for NewNft {
-    type Target = Nft;
-
-    #[inline]
-    fn build(self, authority: &AccountId) -> Self::Target {
-        Self::Target {
-            id: self.id,
-            content: self.content,
-            owned_by: authority.clone(),
-        }
-    }
-}
-
 /// ISI module contains all instructions related to NFTs:
 /// - register/unregister NFT
 /// - update metadata

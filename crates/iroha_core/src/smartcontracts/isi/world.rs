@@ -5,15 +5,6 @@ use iroha_telemetry::metrics;
 use super::prelude::*;
 use crate::prelude::*;
 
-impl Registrable for NewRole {
-    type Target = Role;
-
-    #[inline]
-    fn build(self, _authority: &AccountId) -> Self::Target {
-        self.inner
-    }
-}
-
 /// Iroha Special Instructions that have `World` as their target.
 pub mod isi {
     use eyre::Result;
