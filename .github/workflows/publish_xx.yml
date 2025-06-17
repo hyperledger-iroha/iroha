@@ -52,9 +52,10 @@ jobs:
           push: true
           file: Dockerfile.cross
           platforms: linux/amd64,linux/arm64
+          # FIXME: cannot push to Soramitsu: 401 unauthorized
+          # docker.soramitsu.co.jp/hyperledger/iroha:${{ env.TAG_BASE }}-${{ github.sha }}
           tags: |
             hyperledger/iroha:${{ env.TAG_BASE }}-${{ github.sha }}
-            docker.soramitsu.co.jp/hyperledger/iroha:${{ env.TAG_BASE }}-${{ github.sha }}
           labels: commit=${{ github.sha }}
           context: .
 
