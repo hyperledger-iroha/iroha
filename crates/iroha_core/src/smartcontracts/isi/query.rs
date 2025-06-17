@@ -358,7 +358,6 @@ mod tests {
         block::*,
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::isi::Registrable as _,
         state::{State, World},
         sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,

@@ -519,6 +519,6 @@ pub mod prelude {
         executor::prelude::*, isi::prelude::*, metadata::prelude::*, name::prelude::*,
         nft::prelude::*, parameter::prelude::*, peer::prelude::*, permission::prelude::*,
         query::prelude::*, role::prelude::*, transaction::prelude::*, trigger::prelude::*, ChainId,
-        EnumTryAsError, HasMetadata, IdBox, Identifiable, ValidationFail,
+        EnumTryAsError, HasMetadata, IdBox, Identifiable, Registrable, ValidationFail,
     };
 }
