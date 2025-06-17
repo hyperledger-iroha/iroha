@@ -120,6 +120,10 @@ mod model {
 
         #[debug(fmt = "{_0:?}")]
         Custom(CustomInstruction),
+
+        #[debug(fmt = "{_0:?}")]
+        #[enum_ref(transparent)]
+        ExecuteWasm(ExecuteWasmBox),
     }
 }
 
@@ -177,6 +181,8 @@ impl_instruction! {
     SetParameter,
     Upgrade,
     ExecuteTrigger,
+    WasmExecutable<WasmSmartContract>,
+    WasmExecutable<TriggerModule>,
     Log,
 }
 
@@ -935,6 +941,71 @@ mod transparent {
     }
 
     isi! {
+        #[derive(Display)]
+        #[display(fmt = "EXECUTE wasm")]
+        /// Generic instruction for executing wasm smartcontracts and triggers.
+        pub struct WasmExecutable<T> {
+            /// Executable object `T`.
+            pub object: T,
+        }
+    }
+
+    isi! {
+        #[derive(Display)]
+        #[display(fmt = "EXECUTE wasm")]
+        /// Temporary stub to handle trigger executions.
+        /// Triggers need `TriggerId` and `EventBox` for the execution context.
+        pub struct TriggerModule {
+            /// Precompiled trigger module hash.
+            pub hash: HashOf<WasmSmartContract>,
+            /// Execution context: `TriggerId`
+            pub id: Option<TriggerId>,
+            /// Execution context: `EventBox`
+            pub event: Option<EventBox>,
+        }
+    }
+
+    impl TriggerModule {
+        /// Build `TriggerModule` from the precompiled module.
+        pub fn from_hash(hash: HashOf<WasmSmartContract>) -> Self {
+            Self {
+                hash,
+                id: None,
+                event: None,
+            }
+        }
+        /// Build ready-to-execute `TriggerModule`.
+        pub fn from_event(hash: HashOf<WasmSmartContract>, id: TriggerId, event: EventBox) -> Self {
+            Self {
+                hash,
+                id: Some(id),
+                event: Some(event),
+            }
+        }
+    }
+
+    impl WasmExecutable<WasmSmartContract> {
+        /// Wasm executable from binary source.
+        pub fn binary(wasm: WasmSmartContract) -> Self {
+            Self { object: wasm }
+        }
+    }
+
+    impl WasmExecutable<TriggerModule> {
+        /// Wasm executable from trigger module [should be restricted].
+        pub fn module(module: TriggerModule) -> Self {
+            Self { object: module }
+        }
+    }
+
+    impl_into_box! {
+        WasmExecutable<WasmSmartContract> |
+        WasmExecutable<TriggerModule>
+    => ExecuteWasmBox => InstructionBox[ExecuteWasm],
+    => ExecuteWasmBoxRef<'a> => InstructionBoxRef<'a>[ExecuteWasm]
+    }
+
+    isi! {
         /// Generic instruction for upgrading runtime objects.
         #[derive(Constructor, Display)]
         #[display(fmt = "UPGRADE")]
@@ -1011,6 +1082,21 @@ macro_rules! isi_box {
         $($meta)*
         $item
     };
+}
+
+isi_box! {
+    #[strum_discriminants(
+        vis(pub(crate)),
+        name(WasmType),
+        derive(Encode),
+    )]
+    /// Enum with all supported [`WasmExecutable`] instructions.
+    pub enum ExecuteWasmBox {
+        /// Execute [`WasmSmartContract`].
+        Smartcontract(WasmExecutable<WasmSmartContract>),
+        /// Execute [`TriggerModule`] .
+        Trigger(WasmExecutable<TriggerModule>),
+    }
 }
 
 isi_box! {
@@ -1265,7 +1351,38 @@ pub mod error {
                 #[skip_try_from]
                 String,
             ),
+
+            /// Failure in WebAssembly execution
+            WasmExecution(#[cfg_attr(feature = "std", source)] WasmExecutionError),
         }
+
+        /// Instruction execution failed because execution of `WebAssembly` binary failed
+        #[derive(
+            Debug,
+            Display,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Decode,
+            Encode,
+            Deserialize,
+            Serialize,
+            IntoSchema,
+        )]
+        #[display(fmt = "Error in executing wasm binary: {reason}")]
+        #[serde(transparent)]
+        #[repr(transparent)]
+        // SAFETY: `WasmExecutionError` has no trap representation in `String`
+        #[ffi_type(unsafe {robust})]
+        pub struct WasmExecutionError {
+            /// Error which happened during execution
+            pub reason: String,
+        }
+
+        #[cfg(feature = "std")]
+        impl std::error::Error for WasmExecutionError {}
 
         /// Evaluation error. This error indicates instruction is not a valid Iroha DSL
         #[derive(
@@ -1485,9 +1602,9 @@ pub mod error {
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{
-        Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox, InstructionBox, Log,
-        Mint, MintBox, Register, RegisterBox, RemoveKeyValue, RemoveKeyValueBox, Revoke, RevokeBox,
-        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferBox, Unregister,
-        UnregisterBox, Upgrade,
+        Burn, BurnBox, CustomInstruction, ExecuteTrigger, ExecuteWasmBox, Grant, GrantBox,
+        InstructionBox, Log, Mint, MintBox, Register, RegisterBox, RemoveKeyValue,
+        RemoveKeyValueBox, Revoke, RevokeBox, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
+        TransferBox, TriggerModule, Unregister, UnregisterBox, Upgrade, WasmExecutable,
     };
 }
