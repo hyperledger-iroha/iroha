@@ -679,10 +679,6 @@ mod tests {
         key: iroha_crypto::PrivateKey,
     }
 
-    static TOPOLOGY: LazyLock<Topology> = LazyLock::new(|| {
-        let leader: PeerId = iroha_crypto::KeyPair::random().into_parts().0.into();
-        Topology::new([leader])
-    });
     static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
         let (id, key_pair) = gen_account_in(GENESIS_DOMAIN_ID.clone());
         Credential {
@@ -901,19 +897,17 @@ mod tests {
 
     impl SandboxBlock<'_> {
         fn apply(&mut self) -> Vec<EventBox> {
-            let valid = ValidBlock::validate(
+            let valid = ValidBlock::validate_unchecked(
                 core::mem::take(&mut self.block).unwrap(),
-                &TOPOLOGY,
-                &CHAIN_ID,
-                &GENESIS_ACCOUNT.id,
                 &mut self.state,
             )
-            .unpack(|_| {})
-            .unwrap();
-
-            let committed = valid.commit(&TOPOLOGY).unpack(|_| {}).unwrap();
-            self.state
-                .apply_without_execution(&committed, TOPOLOGY.iter().cloned().collect())
+            .unpack(|_| {});
+            let committed = valid.commit_unchecked().unpack(|_| {});
+            self.state.apply_without_execution(
+                &committed,
+                // topology in state is only used by sumeragi
+                vec![],
+            )
         }
 
         fn assert_balances(&self, expected: impl Into<AccountBalance>) {
