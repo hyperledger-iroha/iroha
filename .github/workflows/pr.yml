@@ -3,6 +3,10 @@ name: Pull Request CI
 on:
   pull_request:
     branches: [main]
+    paths_ignore:
+      - ".github/workflows/publish*"
+      - ".github/workflows/ci_image.yml"
+      - "Dockerfile*"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
