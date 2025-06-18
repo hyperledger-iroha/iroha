@@ -77,24 +77,6 @@ mod model {
         pub metadata: Metadata,
     }
 
-    /// Read-only reference to [`Account`].
-    /// Used in query filters to avoid copying.
-    pub struct AccountEntry<'world> {
-        /// Identification of the [`Account`].
-        pub id: &'world AccountId,
-        /// Metadata of this account as a key-value store.
-        pub metadata: &'world Metadata,
-    }
-
-    /// [`Account`] without `id`.
-    /// Needed only for [`World::accounts`] map to reduce memory usage.
-    /// In other places use [`Account`] directly.
-    #[derive(Clone, Deserialize, Serialize)]
-    pub struct AccountValue {
-        /// Metadata of this account as a key-value store.
-        pub metadata: Metadata,
-    }
-
     /// Builder which should be submitted in a transaction to create a new [`Account`]
     #[derive(
         DebugCustom, Display, Clone, IdEqOrdHash, Decode, Encode, Serialize, Deserialize, IntoSchema,
@@ -109,6 +91,24 @@ mod model {
         /// Metadata that should be submitted with the builder
         pub metadata: Metadata,
     }
+}
+
+/// Read-only reference to [`Account`].
+/// Used in query filters to avoid copying.
+pub struct AccountEntry<'world> {
+    /// Identification of the [`Account`].
+    pub id: &'world AccountId,
+    /// Metadata of this account as a key-value store.
+    pub metadata: &'world Metadata,
+}
+
+/// [`Account`] without `id`.
+/// Needed only for [`World::accounts`] map to reduce memory usage.
+/// In other places use [`Account`] directly.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct AccountValue {
+    /// Metadata of this account as a key-value store.
+    pub metadata: Metadata,
 }
 
 impl AccountId {

@@ -5,6 +5,7 @@ use alloc::{format, string::String, vec::Vec};
 use core::str::FromStr;
 
 use iroha_data_model_derive::model;
+use serde::{Deserialize, Serialize};
 
 pub use self::model::*;
 use crate::{metadata::Metadata, prelude::AccountId, IntoKeyValue, ParseError, Registered};
@@ -16,7 +17,6 @@ mod model {
     use iroha_data_model_derive::IdEqOrdHash;
     use iroha_schema::IntoSchema;
     use parity_scale_codec::{Decode, Encode};
-    use serde::{Deserialize, Serialize};
     use serde_with::{DeserializeFromStr, SerializeDisplay};
 
     use super::*;
@@ -86,28 +86,6 @@ mod model {
         pub owned_by: AccountId,
     }
 
-    /// Read-only reference to [`Nft`].
-    /// Used in query filters to avoid copying.
-    pub struct NftEntry<'world> {
-        /// An Identification of the [`Nft`].
-        pub id: &'world NftId,
-        /// Content of the [`Nft`], as a key-value store.
-        pub content: &'world Metadata,
-        /// The account that owns this NFT.
-        pub owned_by: &'world AccountId,
-    }
-
-    /// [`Nft`] without `id` field.
-    /// Needed only for [`World::nfts`] map to reduce memory usage.
-    /// In other places use [`Nft`] directly.
-    #[derive(Clone, Deserialize, Serialize)]
-    pub struct NftValue {
-        /// Content of the [`Nft`], as a key-value store.
-        pub content: Metadata,
-        /// The account that owns this NFT.
-        pub owned_by: AccountId,
-    }
-
     /// Builder which can be submitted in a transaction to create a new [`Nft`]
     #[derive(
         Debug, Display, Clone, IdEqOrdHash, Decode, Encode, Deserialize, Serialize, IntoSchema,
@@ -121,6 +99,28 @@ mod model {
         /// Content of the [`Nft`], as a key-value store.
         pub content: Metadata,
     }
+}
+
+/// Read-only reference to [`Nft`].
+/// Used in query filters to avoid copying.
+pub struct NftEntry<'world> {
+    /// An Identification of the [`Nft`].
+    pub id: &'world NftId,
+    /// Content of the [`Nft`], as a key-value store.
+    pub content: &'world Metadata,
+    /// The account that owns this NFT.
+    pub owned_by: &'world AccountId,
+}
+
+/// [`Nft`] without `id` field.
+/// Needed only for [`World::nfts`] map to reduce memory usage.
+/// In other places use [`Nft`] directly.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct NftValue {
+    /// Content of the [`Nft`], as a key-value store.
+    pub content: Metadata,
+    /// The account that owns this NFT.
+    pub owned_by: AccountId,
 }
 
 impl Nft {

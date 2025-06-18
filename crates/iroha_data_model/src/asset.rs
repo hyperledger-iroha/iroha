@@ -154,24 +154,6 @@ mod model {
         pub value: Numeric,
     }
 
-    /// Read-only reference to [`Asset`].
-    /// Used in query filters to avoid copying.
-    pub struct AssetEntry<'world> {
-        /// Component Identification.
-        pub id: &'world AssetId,
-        /// Asset's Quantity.
-        pub value: &'world Numeric,
-    }
-
-    /// [`Asset`] without `id` field.
-    /// Needed only for [`World::assets`] map to reduce memory usage.
-    /// In other places use [`Asset`] directly.
-    #[derive(Clone, Deserialize, Serialize)]
-    pub struct AssetValue {
-        /// Asset's Quantity.
-        pub value: Numeric,
-    }
-
     /// Builder which can be submitted in a transaction to create a new [`AssetDefinition`]
     #[derive(
         Debug, Display, Clone, IdEqOrdHash, Decode, Encode, Deserialize, Serialize, IntoSchema,
@@ -224,6 +206,24 @@ mod model {
         Not,
         // TODO: Support more variants using bit-compacted tag, and `u32` mintability tokens.
     }
+}
+
+/// Read-only reference to [`Asset`].
+/// Used in query filters to avoid copying.
+pub struct AssetEntry<'world> {
+    /// Component Identification.
+    pub id: &'world AssetId,
+    /// Asset's Quantity.
+    pub value: &'world Numeric,
+}
+
+/// [`Asset`] without `id` field.
+/// Needed only for [`World::assets`] map to reduce memory usage.
+/// In other places use [`Asset`] directly.
+#[derive(Copy, Clone, Deserialize, Serialize)]
+pub struct AssetValue {
+    /// Asset's Quantity.
+    pub value: Numeric,
 }
 
 impl AssetDefinition {
