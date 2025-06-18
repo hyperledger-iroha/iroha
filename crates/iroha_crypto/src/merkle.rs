@@ -424,12 +424,12 @@ mod tests {
 
         let mut leaves_iter = tree.leaves();
         assert_eq!(leaves_iter.len(), 5);
-        assert_eq!(leaves_iter.next(), Some(hashes[0]));
-        assert_eq!(leaves_iter.next_back(), Some(hashes[4]));
+        assert_eq!(leaves_iter.next(), Some(leaves[0]));
+        assert_eq!(leaves_iter.next_back(), Some(leaves[4]));
         assert_eq!(leaves_iter.len(), 3);
-        assert_eq!(leaves_iter.next(), Some(hashes[1]));
-        assert_eq!(leaves_iter.next_back(), Some(hashes[3]));
-        assert_eq!(leaves_iter.next(), Some(hashes[2]));
+        assert_eq!(leaves_iter.next(), Some(leaves[1]));
+        assert_eq!(leaves_iter.next_back(), Some(leaves[3]));
+        assert_eq!(leaves_iter.next(), Some(leaves[2]));
         assert_eq!(leaves_iter.len(), 0);
         assert_eq!(leaves_iter.next_back(), None);
         assert_eq!(leaves_iter.next(), None);
@@ -438,12 +438,12 @@ mod tests {
 
     #[test]
     fn grows_incrementally_and_matches_prebuilt_tree() {
-        let hashes = test_hashes(5);
-        let tree: MerkleTree<_> = hashes.clone().into_iter().collect();
+        let leaves = test_hashes(5);
+        let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
 
         let mut growing_tree = MerkleTree::default();
-        for hash in hashes {
-            growing_tree.add(hash);
+        for leaf in leaves {
+            growing_tree.add(leaf);
         }
 
         assert_eq!(growing_tree.root(), tree.root());
