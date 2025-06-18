@@ -31,15 +31,15 @@ use crate::{Hash, HashOf};
 #[repr(transparent)]
 pub struct MerkleTree<T>(Vec<Option<HashOf<T>>>);
 
-/// A Merkle proof: index of a leaf among all leaves, and the ordered list of sibling hashes from the leaf up to the root.
+/// A Merkle proof: index of a leaf among all leaves, and the shortest list of additional nodes to recompute the root.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, Deserialize, Serialize, IntoSchema,
 )]
 pub struct MerkleProof<T> {
     /// Zero-based index of the leaf among all leaves.
     leaf_index: u32,
-    /// Hashes of sibling nodes along the path from the leaf to the root (excluding the root).
-    sibling_hashes: Vec<Option<HashOf<T>>>,
+    /// List of missing nodes required to recompute the nodes leading from a leaf to the root.
+    audit_path: Vec<Option<HashOf<T>>>,
 }
 
 /// Iterator over the leaf hashes of a [`MerkleTree`], yielding each leaf in left-to-right order.
@@ -218,18 +218,17 @@ impl<T> MerkleTree<T> {
     /// Constructs a Merkle proof for the leaf at the given index among all leaves.
     pub fn get_proof(&self, leaf_index: u32) -> Option<MerkleProof<T>> {
         let mut index = self.index_in_tree(leaf_index as usize)?;
-        let leaf = self.get(index).copied()?;
-        let mut sibling_hashes = vec![Some(leaf)];
+        let mut audit_path = Vec::new();
 
         while let Some(parent_index) = self.parent_index(index) {
             let sibling = self.sibling_index(index).and_then(|i| self.get(i));
-            sibling_hashes.push(sibling.copied());
+            audit_path.push(sibling.copied());
             index = parent_index;
         }
 
         Some(MerkleProof {
             leaf_index,
-            sibling_hashes,
+            audit_path,
         })
     }
 
@@ -304,34 +303,25 @@ impl<T> MerkleTree<T> {
 }
 
 impl<T> MerkleProof<T> {
-    /// Verifies the Merkle proof against the given root hash.
+    /// Verifies the Merkle proof against the given leaf and root hash.
     /// Returns true if the computed root from the proof matches the given root.
-    pub fn verify(self, root: &HashOf<MerkleTree<T>>, max_height: usize) -> bool {
-        // A proof with no valid leaf is invalid by definition.
-        if !self.sibling_hashes.first().is_some_and(Option::is_some) {
-            return false;
-        }
-        let height = self.sibling_hashes.len() - 1;
+    pub fn verify(self, leaf: &HashOf<T>, root: &HashOf<MerkleTree<T>>, max_height: usize) -> bool {
+        let height = self.audit_path.len();
         // Reject if the proof claims a tree taller than allowed.
         if max_height < height {
             return false;
         }
         let mut index = MerkleTree::<T>::index_in_tree_unchecked(self.leaf_index as usize, height);
-        let Some(computed_root) = self
-            .sibling_hashes
-            .into_iter()
-            .reduce(|acc, e| {
-                let (l_node, r_node) = match index % 2 {
-                    0 => (e, acc),
-                    1 => (acc, e),
-                    _ => unreachable!(),
-                };
-                index = index.saturating_sub(1) >> 1;
+        let Some(computed_root) = self.audit_path.into_iter().fold(Some(*leaf), |acc, e| {
+            let (l_node, r_node) = match index % 2 {
+                0 => (e, acc),
+                1 => (acc, e),
+                _ => unreachable!(),
+            };
+            index = index.saturating_sub(1) >> 1;
 
-                MerkleTree::pair_hash(l_node.as_ref(), r_node.as_ref())
-            })
-            .expect("bug: reduce returned None despite non-empty sibling_hashes")
-        else {
+            MerkleTree::pair_hash(l_node.as_ref(), r_node.as_ref())
+        }) else {
             // pair_hash returned None, implying the proof path is malformed.
             return false;
         };
@@ -462,16 +452,16 @@ mod tests {
 
     #[test]
     fn provides_and_verifies_inclusion_proofs() {
-        let hashes = test_hashes(5);
-        let tree: MerkleTree<_> = hashes.clone().into_iter().collect();
+        let leaves = test_hashes(5);
+        let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
 
         // Generate proofs.
         let mut proofs: Vec<_> = (0..5).map(|i| tree.get_proof(i).unwrap()).collect();
 
         // Verify: valid proofs should succeed.
-        for proof in proofs.clone() {
+        for (leaf, proof) in leaves.iter().zip(proofs.clone()) {
             // Assumes up to 2^9 (512) transactions per block.
-            assert!(proof.verify(&tree.root().unwrap(), 9));
+            assert!(proof.verify(leaf, &tree.root().unwrap(), 9));
         }
 
         // Mirror the leaf index to invalidate proofs.
@@ -489,8 +479,8 @@ mod tests {
         }
 
         // Verify: corrupted proofs should fail.
-        for proof in proofs {
-            assert!(!proof.verify(&tree.root().unwrap(), 9));
+        for (leaf, proof) in leaves.iter().zip(proofs) {
+            assert!(!proof.verify(leaf, &tree.root().unwrap(), 9));
         }
     }
 }
