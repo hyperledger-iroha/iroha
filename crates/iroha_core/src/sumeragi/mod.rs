@@ -276,7 +276,7 @@ impl AsRef<ValidBlock> for VotingBlock<'_> {
 
 impl VotingBlock<'_> {
     /// Construct new `VotingBlock` with current time.
-    fn new(block: ValidBlock, state_block: StateBlock<'_>) -> VotingBlock {
+    pub fn new(block: ValidBlock, state_block: StateBlock<'_>) -> VotingBlock {
         VotingBlock {
             block,
             voted_at: Instant::now(),
