@@ -304,6 +304,7 @@ impl Client {
     ) -> Result<HashOf<SignedTransaction>> {
         let (init_sender, init_receiver) = tokio::sync::oneshot::channel();
         let hash = transaction.hash();
+        tracing::debug!(%hash, ?transaction, "Submitting transaction");
 
         thread::scope(|spawner| {
             let submitter_handle = spawner.spawn(move || -> Result<()> {
