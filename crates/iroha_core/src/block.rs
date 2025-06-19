@@ -199,7 +199,7 @@ mod pending {
                     .map(AsRef::as_ref)
                     .map(SignedTransaction::hash)
                     .collect::<MerkleTree<_>>()
-                    .hash(),
+                    .root(),
                 creation_time_ms: creation_time
                     .as_millis()
                     .try_into()

@@ -38,7 +38,7 @@ pub use hash::*;
 use iroha_macro::ffi_impl_opaque;
 use iroha_primitives::const_vec::{ConstVec, ToConstVec};
 use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
-pub use merkle::MerkleTree;
+pub use merkle::{MerkleProof, MerkleTree};
 #[cfg(not(feature = "ffi_import"))]
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize, Serializer};

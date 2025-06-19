@@ -333,7 +333,7 @@ impl SignedBlock {
             .iter()
             .map(SignedTransaction::hash)
             .collect::<MerkleTree<_>>()
-            .hash()
+            .root()
             .expect("Genesis block must have transactions");
         let creation_time_ms = Self::get_genesis_block_creation_time(&transactions);
         let header = BlockHeader {
@@ -432,7 +432,7 @@ mod candidate {
                 .iter()
                 .map(SignedTransaction::hash)
                 .collect::<MerkleTree<_>>()
-                .hash();
+                .root();
 
             if expected_txs_hash != actual_txs_hash {
                 return Err("Transactions' hash incorrect");
