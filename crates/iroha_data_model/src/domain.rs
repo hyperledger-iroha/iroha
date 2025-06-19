@@ -13,6 +13,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 pub use self::model::*;
 use crate::{
     ipfs::IpfsPath, metadata::Metadata, prelude::*, HasMetadata, Identifiable, Name, Registered,
+    Registrable,
 };
 
 #[model]
@@ -137,6 +138,20 @@ impl HasMetadata for Domain {
 
 impl Registered for Domain {
     type With = NewDomain;
+}
+
+impl Registrable for NewDomain {
+    type Target = Domain;
+
+    #[inline]
+    fn build(self, authority: &AccountId) -> Self::Target {
+        Self::Target {
+            id: self.id,
+            metadata: self.metadata,
+            logo: self.logo,
+            owned_by: authority.clone(),
+        }
+    }
 }
 
 impl Domain {

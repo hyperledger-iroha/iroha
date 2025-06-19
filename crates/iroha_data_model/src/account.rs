@@ -13,7 +13,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 pub use self::model::*;
 use crate::{
     domain::prelude::*, metadata::Metadata, HasMetadata, Identifiable, IntoKeyValue, ParseError,
-    PublicKey, Registered,
+    PublicKey, Registered, Registrable,
 };
 
 #[model]
@@ -177,6 +177,18 @@ impl HasMetadata for Account {
 
 impl Registered for Account {
     type With = NewAccount;
+}
+
+impl Registrable for NewAccount {
+    type Target = Account;
+
+    #[inline]
+    fn build(self, _authority: &AccountId) -> Self::Target {
+        Account {
+            id: self.id,
+            metadata: self.metadata,
+        }
+    }
 }
 
 impl FromStr for AccountId {

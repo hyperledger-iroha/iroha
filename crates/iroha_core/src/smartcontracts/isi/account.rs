@@ -6,15 +6,6 @@ use iroha_telemetry::metrics;
 
 use super::prelude::*;
 
-impl Registrable for iroha_data_model::account::NewAccount {
-    type Target = Account;
-
-    #[inline]
-    fn build(self, _authority: &AccountId) -> Self::Target {
-        self.into_account()
-    }
-}
-
 /// All instructions related to accounts:
 /// - minting/burning public key into account signatories
 /// - minting/burning signature condition check

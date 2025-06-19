@@ -6,20 +6,6 @@ use iroha_telemetry::metrics;
 
 use super::super::isi::prelude::*;
 
-impl Registrable for iroha_data_model::domain::NewDomain {
-    type Target = Domain;
-
-    #[inline]
-    fn build(self, authority: &AccountId) -> Self::Target {
-        Self::Target {
-            id: self.id,
-            metadata: self.metadata,
-            logo: self.logo,
-            owned_by: authority.clone(),
-        }
-    }
-}
-
 /// ISI module contains all instructions related to domains:
 /// - creating/changing assets
 /// - registering/unregistering accounts
