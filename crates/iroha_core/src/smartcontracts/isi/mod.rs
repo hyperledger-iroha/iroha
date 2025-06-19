@@ -270,7 +270,8 @@ mod tests {
             .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
         state_block.commit();
-        let nft = state.view().world.nft(&nft_id)?;
+        let state_view = state.view();
+        let nft = state_view.world.nft(&nft_id)?;
         let value = nft.content.get(&key).cloned();
         assert_eq!(value, Some(vec![1_u32, 2_u32, 3_u32,].into()));
         Ok(())

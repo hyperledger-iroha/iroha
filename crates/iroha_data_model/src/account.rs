@@ -12,8 +12,8 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 pub use self::model::*;
 use crate::{
-    domain::prelude::*, metadata::Metadata, HasMetadata, Identifiable, ParseError, PublicKey,
-    Registered,
+    domain::prelude::*, metadata::Metadata, HasMetadata, Identifiable, IntoKeyValue, ParseError,
+    PublicKey, Registered,
 };
 
 #[model]
@@ -91,6 +91,24 @@ mod model {
         /// Metadata that should be submitted with the builder
         pub metadata: Metadata,
     }
+}
+
+/// Read-only reference to [`Account`].
+/// Used in query filters to avoid copying.
+pub struct AccountEntry<'world> {
+    /// Identification of the [`Account`].
+    pub id: &'world AccountId,
+    /// Metadata of this account as a key-value store.
+    pub metadata: &'world Metadata,
+}
+
+/// [`Account`] without `id`.
+/// Needed only for [`World::accounts`] map to reduce memory usage.
+/// In other places use [`Account`] directly.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct AccountValue {
+    /// Metadata of this account as a key-value store.
+    pub metadata: Metadata,
 }
 
 impl AccountId {
@@ -185,6 +203,45 @@ impl FromStr for AccountId {
                 Ok(Self::new(domain_id, signatory))
             }
         }
+    }
+}
+
+impl<'world> AccountEntry<'world> {
+    /// Constructor
+    pub fn new(id: &'world AccountId, value: &'world AccountValue) -> Self {
+        Self {
+            id,
+            metadata: &value.metadata,
+        }
+    }
+
+    /// Getter for `id`
+    pub fn id(&self) -> &AccountId {
+        self.id
+    }
+
+    /// Getter for `metadata`
+    pub fn metadata(&self) -> &Metadata {
+        self.metadata
+    }
+
+    /// Converts to `Account`
+    pub fn to_owned(&self) -> Account {
+        Account {
+            id: self.id.clone(),
+            metadata: self.metadata.clone(),
+        }
+    }
+}
+
+impl IntoKeyValue for Account {
+    type Key = AccountId;
+    type Value = AccountValue;
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        let value = AccountValue {
+            metadata: self.metadata,
+        };
+        (self.id, value)
     }
 }
 

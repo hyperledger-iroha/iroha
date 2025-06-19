@@ -17,7 +17,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 pub use self::model::*;
 use crate::{
     account::prelude::*, domain::prelude::*, ipfs::IpfsPath, metadata::Metadata, HasMetadata,
-    Identifiable, Name, ParseError, Registered,
+    Identifiable, IntoKeyValue, Name, ParseError, Registered,
 };
 
 /// [`AssetTotalQuantityMap`] provides an API to work with collection of key([`AssetDefinitionId`])-value([`Numeric`])
@@ -208,6 +208,24 @@ mod model {
     }
 }
 
+/// Read-only reference to [`Asset`].
+/// Used in query filters to avoid copying.
+pub struct AssetEntry<'world> {
+    /// Component Identification.
+    pub id: &'world AssetId,
+    /// Asset's Quantity.
+    pub value: &'world Numeric,
+}
+
+/// [`Asset`] without `id` field.
+/// Needed only for [`World::assets`] map to reduce memory usage.
+/// In other places use [`Asset`] directly.
+#[derive(Copy, Clone, Deserialize, Serialize)]
+pub struct AssetValue {
+    /// Asset's Quantity.
+    pub value: Numeric,
+}
+
 impl AssetDefinition {
     /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
     #[must_use]
@@ -365,6 +383,43 @@ impl Registered for Asset {
 
 impl Registered for AssetDefinition {
     type With = NewAssetDefinition;
+}
+
+impl<'world> AssetEntry<'world> {
+    /// Constructor
+    pub fn new(id: &'world AssetId, value: &'world AssetValue) -> Self {
+        Self {
+            id,
+            value: &value.value,
+        }
+    }
+
+    /// Getter for `id`
+    pub fn id(&self) -> &AssetId {
+        self.id
+    }
+
+    /// Getter for `value`
+    pub fn value(&self) -> &Numeric {
+        self.value
+    }
+
+    /// Converts to `Asset`
+    pub fn to_owned(&self) -> Asset {
+        Asset {
+            id: self.id.clone(),
+            value: *self.value,
+        }
+    }
+}
+
+impl IntoKeyValue for Asset {
+    type Key = AssetId;
+    type Value = AssetValue;
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        let value = AssetValue { value: self.value };
+        (self.id, value)
+    }
 }
 
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
