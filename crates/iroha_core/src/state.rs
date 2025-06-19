@@ -1552,7 +1552,7 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         event: ExecuteTriggerEvent,
     ) -> Result<(), TransactionRejectionReason> {
-        let (authority, executable) = {
+        let executable = {
             let action = self
                 .world
                 .triggers
@@ -1561,15 +1561,16 @@ impl StateTransaction<'_, '_> {
                 .ok_or_else(|| FindError::Trigger(id.clone()))
                 .map_err(Error::from)
                 .map_err(ValidationFail::from)?;
+
             assert!(
                 !action.repeats.is_depleted(),
                 "orphaned trigger was not removed"
             );
 
-            (action.authority().clone(), action.executable().clone())
+            action.executable().clone()
         };
         self.world.external_event_buf.push(event.clone().into());
-        self.execute_trigger(id, &authority, &executable, event.into())?;
+        self.execute_trigger(id, event.clone().authority(), &executable, event.into())?;
         self.world.triggers.decrease_repeats([id].into_iter());
 
         Ok(())
