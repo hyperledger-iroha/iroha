@@ -1,6 +1,7 @@
 use std::{
     io::{BufWriter, Write},
     path::PathBuf,
+    str::FromStr,
 };
 
 use clap::{Args as ClapArgs, Subcommand};
@@ -36,24 +37,42 @@ pub enum Args {
 pub struct CommonArgs {
     /// Path to the smartcontract
     path: PathBuf,
+    /// Extra arguments to pass to `cargo`, e.g. `--locked`
+    #[arg(long, require_equals(true), default_value = "")]
+    pub(crate) cargo_args: CargoArgs,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CargoArgs(pub Vec<String>);
+
+impl FromStr for CargoArgs {
+    type Err = shell_words::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        shell_words::split(s).map(|args| Self(args))
+    }
 }
 
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self {
             Args::Check {
-                common: CommonArgs { path },
+                common: CommonArgs { path, cargo_args },
                 profile,
             } => {
-                let builder = Builder::new(&path, profile).show_output();
+                let builder = Builder::new(&path, profile)
+                    .cargo_args(cargo_args.0)
+                    .show_output();
                 builder.check()?;
             }
             Args::Build {
-                common: CommonArgs { path },
+                common: CommonArgs { path, cargo_args },
                 out_file,
                 profile,
             } => {
-                let builder = Builder::new(&path, profile).show_output();
+                let builder = Builder::new(&path, profile)
+                    .cargo_args(cargo_args.0)
+                    .show_output();
 
                 let output = {
                     // not showing the spinner here, cargo does a progress bar for us
