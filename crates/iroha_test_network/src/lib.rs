@@ -700,8 +700,7 @@ impl NetworkPeer {
                 .unwrap();
             tasks.spawn(async move {
                 let mut lines = BufReader::new(output).lines();
-                while let Ok(Some(mut line)) = lines.next_line().await {
-                    line.push('\n');
+                while let Ok(Some(line)) = lines.next_line().await {
                     file.write_all(line.as_bytes())
                         .await
                         .expect("writing logs to file shouldn't fail");
