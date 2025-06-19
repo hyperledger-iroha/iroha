@@ -1466,7 +1466,7 @@ impl<'state> StateBlock<'state> {
                 action.executable(),
                 (*time_event).into(),
             )
-            .and_then(|()| transaction.execute_data_triggers_dfs())?;
+            .and_then(|()| transaction.execute_data_triggers_dfs(action.authority()))?;
         transaction
             .world
             .triggers
@@ -1521,7 +1521,7 @@ impl<'state> StateBlock<'state> {
                 let mut transaction = self.transaction();
                 transaction.apply_executable(tx.instructions(), tx.authority().clone());
                 transaction
-                    .execute_data_triggers_dfs()
+                    .execute_data_triggers_dfs(tx.authority())
                     .expect("should be no errors");
                 transaction.apply();
             }
@@ -1552,7 +1552,7 @@ impl StateTransaction<'_, '_> {
         id: &TriggerId,
         event: ExecuteTriggerEvent,
     ) -> Result<(), TransactionRejectionReason> {
-        let (authority, executable) = {
+        let executable = {
             let action = self
                 .world
                 .triggers
@@ -1561,22 +1561,26 @@ impl StateTransaction<'_, '_> {
                 .ok_or_else(|| FindError::Trigger(id.clone()))
                 .map_err(Error::from)
                 .map_err(ValidationFail::from)?;
+
             assert!(
                 !action.repeats.is_depleted(),
                 "orphaned trigger was not removed"
             );
 
-            (action.authority().clone(), action.executable().clone())
+            action.executable().clone()
         };
         self.world.external_event_buf.push(event.clone().into());
-        self.execute_trigger(id, &authority, &executable, event.into())?;
+        self.execute_trigger(id, event.clone().authority(), &executable, event.into())?;
         self.world.triggers.decrease_repeats([id].into_iter());
 
         Ok(())
     }
 
     /// Perform a depth-first traversal of the trigger execution path.
-    pub(crate) fn execute_data_triggers_dfs(&mut self) -> Result<(), TransactionRejectionReason> {
+    pub(crate) fn execute_data_triggers_dfs(
+        &mut self,
+        authority: &AccountId,
+    ) -> Result<(), TransactionRejectionReason> {
         let mut stack: Vec<(DataEvent, TriggerId, u8)> = self
             .capture_data_events()
             .into_iter()
@@ -1590,22 +1594,23 @@ impl StateTransaction<'_, '_> {
             if max_depth < depth {
                 return Err(TriggerExecutionFail::MaxDepthExceeded.into());
             }
-            let (authority, executable) = {
+            let executable = {
                 let action = self
                     .world
                     .triggers
                     .data_triggers()
                     .get(&trg_id)
                     .expect("stack should reference existing data trigger IDs");
+
                 assert!(
                     !action.repeats.is_depleted(),
                     "orphaned trigger was not removed"
                 );
 
-                (action.authority().clone(), action.executable().clone())
+                action.executable().clone()
             };
 
-            self.execute_trigger(&trg_id, &authority, &executable, event.clone().into())?;
+            self.execute_trigger(&trg_id, authority, &executable, event.clone().into())?;
             let depleted = self.world.triggers.decrease_repeats([&trg_id].into_iter());
             stack.retain(|(_, trg_id, _)| !depleted.contains(trg_id));
 
