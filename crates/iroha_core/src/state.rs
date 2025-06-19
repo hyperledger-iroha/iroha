@@ -6,7 +6,8 @@ use std::{
 use eyre::Result;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    account::AccountId,
+    account::{AccountEntry, AccountValue},
+    asset::{AssetEntry, AssetValue},
     block::{BlockHeader, SignedBlock},
     events::{
         pipeline::BlockEvent,
@@ -19,11 +20,13 @@ use iroha_data_model::{
         error::{InstructionExecutionError as Error, MathError},
         InstructionBoxHashed,
     },
+    nft::{NftEntry, NftValue},
     parameter::Parameters,
     permission::Permissions,
     prelude::*,
     query::error::{FindError, QueryExecutionFail},
     role::RoleId,
+    IntoKeyValue,
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::Numeric;
@@ -58,7 +61,7 @@ use crate::{
             },
             specialized::{LoadedAction, LoadedActionTrait},
         },
-        wasm, Execute,
+        wasm,
     },
     state::storage_transactions::{
         TransactionsBlock, TransactionsReadOnly, TransactionsStorage, TransactionsView,
@@ -79,13 +82,13 @@ pub struct World {
     /// Registered domains.
     pub(crate) domains: Storage<DomainId, Domain>,
     /// Registered accounts.
-    pub(crate) accounts: Storage<AccountId, Account>,
+    pub(crate) accounts: Storage<AccountId, AccountValue>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: Storage<AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
-    pub(crate) assets: Storage<AssetId, Asset>,
+    pub(crate) assets: Storage<AssetId, AssetValue>,
     /// Non fungible assets.
-    pub(crate) nfts: Storage<NftId, Nft>,
+    pub(crate) nfts: Storage<NftId, NftValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: Storage<RoleId, Role>,
     /// Permission tokens of an account.
@@ -111,13 +114,13 @@ pub struct WorldBlock<'world> {
     /// Registered domains.
     pub(crate) domains: StorageBlock<'world, DomainId, Domain>,
     /// Registered accounts.
-    pub(crate) accounts: StorageBlock<'world, AccountId, Account>,
+    pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageBlock<'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
-    pub(crate) assets: StorageBlock<'world, AssetId, Asset>,
+    pub(crate) assets: StorageBlock<'world, AssetId, AssetValue>,
     /// Registered NFTs.
-    pub(crate) nfts: StorageBlock<'world, NftId, Nft>,
+    pub(crate) nfts: StorageBlock<'world, NftId, NftValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageBlock<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -143,14 +146,14 @@ pub struct WorldTransaction<'block, 'world> {
     /// Registered domains.
     pub(crate) domains: StorageTransaction<'block, 'world, DomainId, Domain>,
     /// Registered accounts.
-    pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, Account>,
+    pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
     /// Registered asset definitions.
     pub(crate) asset_definitions:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
-    pub(crate) assets: StorageTransaction<'block, 'world, AssetId, Asset>,
+    pub(crate) assets: StorageTransaction<'block, 'world, AssetId, AssetValue>,
     /// Registered NFTs.
-    pub(crate) nfts: StorageTransaction<'block, 'world, NftId, Nft>,
+    pub(crate) nfts: StorageTransaction<'block, 'world, NftId, NftValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageTransaction<'block, 'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -179,13 +182,13 @@ pub struct WorldView<'world> {
     /// Registered domains.
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
     /// Registered accounts.
-    pub(crate) accounts: StorageView<'world, AccountId, Account>,
+    pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageView<'world, AssetDefinitionId, AssetDefinition>,
     /// Registered assets.
-    pub(crate) assets: StorageView<'world, AssetId, Asset>,
+    pub(crate) assets: StorageView<'world, AssetId, AssetValue>,
     /// Registered NFTs.
-    pub(crate) nfts: StorageView<'world, NftId, Nft>,
+    pub(crate) nfts: StorageView<'world, NftId, NftValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageView<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -323,21 +326,23 @@ impl World {
         A: IntoIterator<Item = Account>,
         Ad: IntoIterator<Item = AssetDefinition>,
     {
-        Self::with_assets(domains, accounts, asset_definitions, [])
+        Self::with_assets(domains, accounts, asset_definitions, [], [])
     }
 
     /// Creates a [`World`] with these [`Domain`]s and [`Peer`]s.
-    pub fn with_assets<D, A, Ad, As>(
+    pub fn with_assets<D, A, Ad, As, N>(
         domains: D,
         accounts: A,
         asset_definitions: Ad,
         assets: As,
+        nfts: N,
     ) -> Self
     where
         D: IntoIterator<Item = Domain>,
         A: IntoIterator<Item = Account>,
         Ad: IntoIterator<Item = AssetDefinition>,
         As: IntoIterator<Item = Asset>,
+        N: IntoIterator<Item = Nft>,
     {
         let domains = domains
             .into_iter()
@@ -345,18 +350,23 @@ impl World {
             .collect();
         let accounts = accounts
             .into_iter()
-            .map(|account| (account.id().clone(), account))
+            .map(IntoKeyValue::into_key_value)
             .collect();
         let asset_definitions = asset_definitions
             .into_iter()
             .map(|ad| (ad.id().clone(), ad))
             .collect();
-        let assets = assets.into_iter().map(|ad| (ad.id().clone(), ad)).collect();
+        let assets = assets
+            .into_iter()
+            .map(IntoKeyValue::into_key_value)
+            .collect();
+        let nfts = nfts.into_iter().map(IntoKeyValue::into_key_value).collect();
         Self {
             domains,
             accounts,
             asset_definitions,
             assets,
+            nfts,
             ..Self::new()
         }
     }
@@ -427,10 +437,10 @@ pub trait WorldReadOnly {
     fn parameters(&self) -> &Parameters;
     fn peers(&self) -> &Peers;
     fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain>;
-    fn accounts(&self) -> &impl StorageReadOnly<AccountId, Account>;
+    fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue>;
     fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition>;
-    fn assets(&self) -> &impl StorageReadOnly<AssetId, Asset>;
-    fn nfts(&self) -> &impl StorageReadOnly<NftId, Nft>;
+    fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue>;
+    fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue>;
     fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
     fn account_permissions(&self) -> &impl StorageReadOnly<AccountId, Permissions>;
     fn account_roles(&self) -> &impl StorageReadOnly<RoleIdWithOwner, ()>;
@@ -474,22 +484,18 @@ pub trait WorldReadOnly {
 
     /// Iterate accounts in domain
     #[allow(clippy::type_complexity)]
-    fn accounts_in_domain_iter<'slf>(
-        &'slf self,
-        id: &DomainId,
-    ) -> core::iter::Map<
-        RangeIter<'slf, AccountId, Account>,
-        fn((&'slf AccountId, &'slf Account)) -> &'slf Account,
-    > {
+    fn accounts_in_domain_iter(&self, id: &DomainId) -> impl Iterator<Item = AccountEntry> {
         self.accounts()
             .range::<dyn AsAccountIdDomainCompare>(AccountByDomainBounds::new(id))
-            .map(|(_, account)| account)
+            .map(|(id, value)| AccountEntry::new(id, value))
     }
 
     /// Returns reference for accounts map
     #[inline]
-    fn accounts_iter(&self) -> impl Iterator<Item = &Account> {
-        self.accounts().iter().map(|(_, account)| account)
+    fn accounts_iter(&self) -> impl Iterator<Item = AccountEntry> {
+        self.accounts()
+            .iter()
+            .map(|(id, value)| AccountEntry::new(id, value))
     }
 
     /// Iterate asset definitions in domain
@@ -514,22 +520,18 @@ pub trait WorldReadOnly {
 
     /// Iterate assets in account
     #[allow(clippy::type_complexity)]
-    fn assets_in_account_iter<'slf>(
-        &'slf self,
-        id: &AccountId,
-    ) -> core::iter::Map<
-        RangeIter<'slf, AssetId, Asset>,
-        fn((&'slf AssetId, &'slf Asset)) -> &'slf Asset,
-    > {
+    fn assets_in_account_iter(&self, id: &AccountId) -> impl Iterator<Item = AssetEntry> {
         self.assets()
             .range::<dyn AsAssetIdAccountCompare>(AssetByAccountBounds::new(id))
-            .map(|(_, a)| a)
+            .map(|(id, value)| AssetEntry::new(id, value))
     }
 
     /// Returns reference for asset definitions map
     #[inline]
-    fn assets_iter(&self) -> impl Iterator<Item = &Asset> {
-        self.assets().iter().map(|(_, a)| a)
+    fn assets_iter(&self) -> impl Iterator<Item = AssetEntry> {
+        self.assets()
+            .iter()
+            .map(|(id, value)| AssetEntry::new(id, value))
     }
 
     // Account-related methods
@@ -538,9 +540,10 @@ pub trait WorldReadOnly {
     ///
     /// # Errors
     /// Fails if there is no domain or account
-    fn account(&self, id: &AccountId) -> Result<&Account, FindError> {
+    fn account<'a>(&'a self, id: &'a AccountId) -> Result<AccountEntry<'a>, FindError> {
         self.accounts()
             .get(id)
+            .map(|value| AccountEntry::new(id, value))
             .ok_or_else(|| FindError::Account(id.clone()))
     }
 
@@ -548,15 +551,12 @@ pub trait WorldReadOnly {
     ///
     /// # Errors
     /// Fails if there is no domain or account
-    fn map_account<'slf, T>(
-        &'slf self,
+    fn map_account<T>(
+        &self,
         id: &AccountId,
-        f: impl FnOnce(&'slf Account) -> T,
+        f: impl FnOnce(AccountEntry) -> T,
     ) -> Result<T, QueryExecutionFail> {
-        let account = self
-            .accounts()
-            .get(id)
-            .ok_or(FindError::Account(id.clone()))?;
+        let account = self.account(id)?;
         Ok(f(account))
     }
 
@@ -623,13 +623,13 @@ pub trait WorldReadOnly {
     /// - No such [`Asset`]
     /// - The [`Account`] with which the [`Asset`] is associated doesn't exist.
     /// - The [`Domain`] with which the [`Account`] is associated doesn't exist.
-    fn asset(&self, id: &AssetId) -> Result<Asset, QueryExecutionFail> {
+    fn asset<'a>(&'a self, id: &'a AssetId) -> Result<AssetEntry<'a>, QueryExecutionFail> {
         self.map_account(&id.account, |_| ())?;
 
         self.assets()
             .get(id)
+            .map(|value| AssetEntry::new(id, value))
             .ok_or_else(|| QueryExecutionFail::from(FindError::Asset(id.clone().into())))
-            .cloned()
     }
 
     // AssetDefinition-related methods
@@ -659,29 +659,27 @@ pub trait WorldReadOnly {
     ///
     /// # Errors
     /// - NFT entry not found
-    fn nft(&self, nft_id: &NftId) -> Result<Nft, FindError> {
+    fn nft<'a>(&'a self, nft_id: &'a NftId) -> Result<NftEntry<'a>, FindError> {
         self.nfts()
             .get(nft_id)
+            .map(|value| NftEntry::new(nft_id, value))
             .ok_or_else(|| FindError::Nft(nft_id.clone()))
-            .cloned()
     }
 
     /// Returns reference for NFTs map
     #[inline]
-    fn nfts_iter(&self) -> impl Iterator<Item = &Nft> {
-        self.nfts().iter().map(|(_, nft)| nft)
+    fn nfts_iter(&self) -> impl Iterator<Item = NftEntry> {
+        self.nfts()
+            .iter()
+            .map(|(id, value)| NftEntry::new(id, value))
     }
 
     /// Iterate NFTs in domain
     #[allow(clippy::type_complexity)]
-    fn nfts_in_domain_iter<'slf>(
-        &'slf self,
-        id: &DomainId,
-    ) -> core::iter::Map<RangeIter<'slf, NftId, Nft>, fn((&'slf NftId, &'slf Nft)) -> &'slf Nft>
-    {
+    fn nfts_in_domain_iter(&self, id: &DomainId) -> impl Iterator<Item = NftEntry> {
         self.nfts()
             .range::<dyn AsNftIdDomainCompare>(NftByDomainBounds::new(id))
-            .map(|(_, ad)| ad)
+            .map(|(id, value)| NftEntry::new(id, value))
     }
 
     // Role-related methods
@@ -709,16 +707,16 @@ macro_rules! impl_world_ro {
             fn domains(&self) -> &impl StorageReadOnly<DomainId, Domain> {
                 &self.domains
             }
-            fn accounts(&self) -> &impl StorageReadOnly<AccountId, Account> {
+            fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue> {
                 &self.accounts
             }
             fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition> {
                 &self.asset_definitions
             }
-            fn assets(&self) -> &impl StorageReadOnly<AssetId, Asset> {
+            fn assets(&self) -> &impl StorageReadOnly<AssetId, AssetValue> {
                 &self.assets
             }
-            fn nfts(&self) -> &impl StorageReadOnly<NftId, Nft> {
+            fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue> {
                 &self.nfts
             }
             fn roles(&self) -> &impl StorageReadOnly<RoleId, Role> {
@@ -859,7 +857,7 @@ impl WorldTransaction<'_, '_> {
     ///
     /// # Errors
     /// Fail if domain or account not found
-    pub fn account_mut(&mut self, id: &AccountId) -> Result<&mut Account, FindError> {
+    pub fn account_mut(&mut self, id: &AccountId) -> Result<&mut AccountValue, FindError> {
         self.accounts
             .get_mut(id)
             .ok_or_else(|| FindError::Account(id.clone()))
@@ -911,7 +909,7 @@ impl WorldTransaction<'_, '_> {
     ///
     /// # Errors
     /// If domain, account or asset not found
-    pub fn asset_mut(&mut self, id: &AssetId) -> Result<&mut Asset, FindError> {
+    pub fn asset_mut(&mut self, id: &AssetId) -> Result<&mut AssetValue, FindError> {
         let _ = self.account(&id.account)?;
         self.assets
             .get_mut(id)
@@ -927,7 +925,7 @@ impl WorldTransaction<'_, '_> {
         &mut self,
         asset_id: &AssetId,
         default_asset_value: impl Into<Numeric>,
-    ) -> Result<&mut Asset, Error> {
+    ) -> Result<&mut AssetValue, Error> {
         self.domain(&asset_id.definition.domain)?;
         self.asset_definition(&asset_id.definition)?;
         self.account(&asset_id.account)?;
@@ -940,7 +938,8 @@ impl WorldTransaction<'_, '_> {
                 &mut self.internal_event_buf,
                 Some(AssetEvent::Created(asset.clone())),
             );
-            self.assets.insert(asset_id.clone(), asset);
+            let (asset_id, asset_value) = asset.into_key_value();
+            self.assets.insert(asset_id, asset_value);
         }
         Ok(self
             .assets
@@ -1025,7 +1024,7 @@ impl WorldTransaction<'_, '_> {
     ///
     /// # Errors
     /// If NFT not found
-    pub fn nft_mut(&mut self, id: &NftId) -> Result<&mut Nft, FindError> {
+    pub fn nft_mut(&mut self, id: &NftId) -> Result<&mut NftValue, FindError> {
         self.nfts
             .get_mut(id)
             .ok_or_else(|| FindError::Nft(id.clone()))
@@ -1702,9 +1701,10 @@ impl StateTransaction<'_, '_> {
         &mut self,
         instructions: impl IntoIterator<Item = InstructionBox>,
         authority: &AccountId,
-    ) -> Result<(), Error> {
+    ) -> Result<(), ValidationFail> {
+        let executor = self.world.executor.clone();
         instructions.into_iter().try_for_each(|instruction| {
-            instruction.execute(authority, self)?;
+            executor.execute_instruction(self, authority, instruction)?;
             Ok(())
         })
     }

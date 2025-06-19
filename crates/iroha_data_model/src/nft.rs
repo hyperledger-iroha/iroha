@@ -5,9 +5,12 @@ use alloc::{format, string::String, vec::Vec};
 use core::str::FromStr;
 
 use iroha_data_model_derive::model;
+use serde::{Deserialize, Serialize};
 
 pub use self::model::*;
-use crate::{metadata::Metadata, ParseError, Registered};
+use crate::{
+    metadata::Metadata, prelude::AccountId, IntoKeyValue, ParseError, Registered, Registrable,
+};
 
 #[model]
 mod model {
@@ -16,7 +19,6 @@ mod model {
     use iroha_data_model_derive::IdEqOrdHash;
     use iroha_schema::IntoSchema;
     use parity_scale_codec::{Decode, Encode};
-    use serde::{Deserialize, Serialize};
     use serde_with::{DeserializeFromStr, SerializeDisplay};
 
     use super::*;
@@ -101,6 +103,28 @@ mod model {
     }
 }
 
+/// Read-only reference to [`Nft`].
+/// Used in query filters to avoid copying.
+pub struct NftEntry<'world> {
+    /// An Identification of the [`Nft`].
+    pub id: &'world NftId,
+    /// Content of the [`Nft`], as a key-value store.
+    pub content: &'world Metadata,
+    /// The account that owns this NFT.
+    pub owned_by: &'world AccountId,
+}
+
+/// [`Nft`] without `id` field.
+/// Needed only for [`World::nfts`] map to reduce memory usage.
+/// In other places use [`Nft`] directly.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct NftValue {
+    /// Content of the [`Nft`], as a key-value store.
+    pub content: Metadata,
+    /// The account that owns this NFT.
+    pub owned_by: AccountId,
+}
+
 impl Nft {
     /// Constructor
     pub fn new(id: NftId, content: Metadata) -> <Self as Registered>::With {
@@ -138,6 +162,66 @@ impl FromStr for NftId {
 
 impl Registered for Nft {
     type With = NewNft;
+}
+
+impl Registrable for NewNft {
+    type Target = Nft;
+
+    #[inline]
+    fn build(self, authority: &AccountId) -> Self::Target {
+        Self::Target {
+            id: self.id,
+            content: self.content,
+            owned_by: authority.clone(),
+        }
+    }
+}
+
+impl<'world> NftEntry<'world> {
+    /// Constructor
+    pub fn new(id: &'world NftId, value: &'world NftValue) -> Self {
+        Self {
+            id,
+            content: &value.content,
+            owned_by: &value.owned_by,
+        }
+    }
+
+    /// Getter for `id`
+    pub fn id(&self) -> &NftId {
+        self.id
+    }
+
+    /// Getter for `content`
+    pub fn content(&self) -> &Metadata {
+        self.content
+    }
+
+    /// Getter for `owned_by`
+    pub fn owned_by(&self) -> &AccountId {
+        self.owned_by
+    }
+
+    /// Converts to `Nft`
+    pub fn to_owned(&self) -> Nft {
+        Nft {
+            id: self.id.clone(),
+            content: self.content.clone(),
+            owned_by: self.owned_by.clone(),
+        }
+    }
+}
+
+impl IntoKeyValue for Nft {
+    type Key = NftId;
+    type Value = NftValue;
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        let value = NftValue {
+            content: self.content,
+            owned_by: self.owned_by,
+        };
+        (self.id, value)
+    }
 }
 
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.

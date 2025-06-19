@@ -412,7 +412,6 @@ pub mod tests {
         block::ValidBlock,
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::isi::Registrable as _,
         state::{State, World},
     };
 

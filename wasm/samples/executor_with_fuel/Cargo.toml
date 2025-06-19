@@ -1,0 +1,17 @@
+[package]
+name = "executor_with_fuel"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[lib]
+crate-type = ['cdylib']
+
+[dependencies]
+iroha_executor.workspace = true
+
+panic-halt.workspace = true
+dlmalloc.workspace = true

@@ -52,6 +52,10 @@ mod export {
     pub const EXECUTE_QUERY: &str = "execute_query";
     pub const SET_DATA_MODEL: &str = "set_data_model";
 
+    pub const CONSUME_FUEL: &str = "consume_fuel";
+    pub const ADD_FUEL: &str = "add_fuel";
+    pub const GET_FUEL: &str = "get_fuel";
+
     pub const DBG: &str = "dbg";
     pub const LOG: &str = "log";
 }
@@ -1199,6 +1203,38 @@ where
     }
 }
 
+impl<S> Runtime<S> {
+    fn consume_fuel(
+        mut caller: ::wasmtime::Caller<S>,
+        offset: ::iroha_wasm_codec::WasmUsize,
+        len: ::iroha_wasm_codec::WasmUsize,
+    ) -> ::wasmtime::Result<()> {
+        let memory = Runtime::<S>::get_memory(&mut caller).expect("Checked at instantiation step");
+        let fuel: u64 = ::iroha_wasm_codec::decode_from_memory(&memory, &caller, offset, len)
+            .map_err(|e| Error::ExportFnCall(ExportFnCallError::ExecutionLimitsExceeded(e)))?;
+
+        let current = caller.get_fuel()?;
+        caller.set_fuel(current.saturating_sub(fuel))
+    }
+
+    fn add_fuel(
+        mut caller: ::wasmtime::Caller<S>,
+        offset: ::iroha_wasm_codec::WasmUsize,
+        len: ::iroha_wasm_codec::WasmUsize,
+    ) -> ::wasmtime::Result<()> {
+        let memory = Runtime::<S>::get_memory(&mut caller).expect("Checked at instantiation step");
+        let fuel: u64 = ::iroha_wasm_codec::decode_from_memory(&memory, &caller, offset, len)
+            .map_err(|e| Error::ExportFnCall(ExportFnCallError::ExecutionLimitsExceeded(e)))?;
+
+        let current = caller.get_fuel()?;
+        caller.set_fuel(current.saturating_add(fuel))
+    }
+
+    fn get_fuel(caller: ::wasmtime::Caller<S>) -> ::wasmtime::Result<u64> {
+        caller.get_fuel()
+    }
+}
+
 /// Marker trait to auto-implement [`import_traits::SetExecutorDataModel`] for a concrete [`Runtime`].
 ///
 /// Useful because *Executor* exposes more entrypoints than just `migrate()` which is the
@@ -1510,6 +1546,13 @@ macro_rules! create_imports {
                     |caller: ::wasmtime::Caller<$ty>, offset, len| Runtime::dbg(caller, offset, len),
                 )
             })
+            .and_then(|l| {
+                l.func_wrap(
+                    WASM_MODULE,
+                    export::GET_FUEL,
+                    |caller: ::wasmtime::Caller<$ty>| Runtime::get_fuel(caller),
+                )
+            })
             $(.and_then(|l| {
                 l.func_wrap(
                     WASM_MODULE,
@@ -1577,6 +1620,8 @@ impl<'wrld, 'block, 'state>
                 export::EXECUTE_ISI => |caller: ::wasmtime::Caller<state::executor::ExecuteTransaction<'wrld, 'block, 'state>>, offset, len| Runtime::execute_instruction(caller, offset, len),
                 export::EXECUTE_QUERY => |caller: ::wasmtime::Caller<state::executor::ExecuteTransaction<'wrld, 'block, 'state>>, offset, len| Runtime::execute_query(caller, offset, len),
                 export::SET_DATA_MODEL => |caller: ::wasmtime::Caller<state::executor::ExecuteTransaction<'wrld, 'block, 'state>>, offset, len| Runtime::set_data_model(caller, offset, len),
+                export::ADD_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::add_fuel(caller, offset, len),
+                export::CONSUME_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::consume_fuel(caller, offset, len),
             )?;
             Ok(linker)
         })
@@ -1601,6 +1646,8 @@ impl<'wrld, 'block, 'state>
                 export::EXECUTE_ISI => |caller: ::wasmtime::Caller<state::executor::ExecuteInstruction<'wrld, 'block, 'state>>, offset, len| Runtime::execute_instruction(caller, offset, len),
                 export::EXECUTE_QUERY => |caller: ::wasmtime::Caller<state::executor::ExecuteInstruction<'wrld, 'block, 'state>>, offset, len| Runtime::execute_query(caller, offset, len),
                 export::SET_DATA_MODEL => |caller: ::wasmtime::Caller<state::executor::ExecuteInstruction<'wrld, 'block, 'state>>, offset, len| Runtime::set_data_model(caller, offset, len),
+                export::ADD_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::add_fuel(caller, offset, len),
+                export::CONSUME_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::consume_fuel(caller, offset, len),
             )?;
             Ok(linker)
         })
@@ -1622,6 +1669,8 @@ impl<'wrld, S: StateReadOnly> RuntimeBuilder<state::executor::ValidateQuery<'wrl
                 export::EXECUTE_ISI => |caller: ::wasmtime::Caller<state::executor::ValidateQuery<'_, S>>, offset, len| Runtime::execute_instruction(caller, offset, len),
                 export::EXECUTE_QUERY => |caller: ::wasmtime::Caller<state::executor::ValidateQuery<'_, S>>, offset, len| Runtime::execute_query(caller, offset, len),
                 export::SET_DATA_MODEL => |caller: ::wasmtime::Caller<state::executor::ValidateQuery<'_, S>>, offset, len| Runtime::set_data_model(caller, offset, len),
+                export::ADD_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::add_fuel(caller, offset, len),
+                export::CONSUME_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::consume_fuel(caller, offset, len),
             )?;
             Ok(linker)
         })
@@ -1643,6 +1692,8 @@ impl<'wrld, 'block, 'state> RuntimeBuilder<state::executor::Migrate<'wrld, 'bloc
                 export::EXECUTE_ISI => |caller: ::wasmtime::Caller<state::executor::Migrate<'wrld, 'block, 'state>>, offset, len| Runtime::execute_instruction(caller, offset, len),
                 export::EXECUTE_QUERY => |caller: ::wasmtime::Caller<state::executor::Migrate<'wrld, 'block, 'state>>, offset, len| Runtime::execute_query(caller, offset, len),
                 export::SET_DATA_MODEL => |caller: ::wasmtime::Caller<state::executor::Migrate<'wrld, 'block, 'state>>, offset, len| Runtime::set_data_model(caller, offset, len),
+                export::ADD_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::add_fuel(caller, offset, len),
+                export::CONSUME_FUEL => |caller: ::wasmtime::Caller<_>, offset, len| Runtime::consume_fuel(caller, offset, len),
             )?;
             Ok(linker)
         })
@@ -1674,10 +1725,7 @@ mod tests {
     use tokio::test;
 
     use super::*;
-    use crate::{
-        block::ValidBlock, kura::Kura, query::store::LiveQueryStore,
-        smartcontracts::isi::Registrable as _, state::State, World,
-    };
+    use crate::{block::ValidBlock, kura::Kura, query::store::LiveQueryStore, state::State, World};
 
     fn world_with_test_account(authority: &AccountId) -> World {
         let domain_id = authority.domain.clone();

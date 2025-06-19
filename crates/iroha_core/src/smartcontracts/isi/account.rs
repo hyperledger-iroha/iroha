@@ -6,15 +6,6 @@ use iroha_telemetry::metrics;
 
 use super::prelude::*;
 
-impl Registrable for iroha_data_model::account::NewAccount {
-    type Target = Account;
-
-    #[inline]
-    fn build(self, _authority: &AccountId) -> Self::Target {
-        self.into_account()
-    }
-}
-
 /// All instructions related to accounts:
 /// - minting/burning public key into account signatories
 /// - minting/burning signature condition check
@@ -361,8 +352,8 @@ pub mod query {
             Ok(state_ro
                 .world()
                 .accounts_iter()
-                .filter(move |&account| filter.applies(account))
-                .cloned())
+                .filter(move |account| filter.applies_to_entry(account))
+                .map(|account| account.to_owned()))
         }
     }
 
@@ -389,8 +380,8 @@ pub mod query {
                         ))
                         .is_some()
                 })
-                .filter(move |&account| filter.applies(account))
-                .cloned())
+                .filter(move |account| filter.applies_to_entry(account))
+                .map(|account| account.to_owned()))
         }
     }
 }
