@@ -46,7 +46,7 @@ pub trait Visit {
         visit_upgrade(&Upgrade),
 
         visit_execute_trigger(&ExecuteTrigger),
-        visit_execute_wasm(&ExecuteWasmBox),
+        visit_execute_wasm_smartcontract(&WasmExecutable<WasmSmartContract>),
         visit_set_parameter(&SetParameter),
         visit_log(&Log),
         visit_custom_instruction(&CustomInstruction),
@@ -129,10 +129,6 @@ pub trait Visit {
         visit_revoke_account_permission(&Revoke<Permission, Account>),
         visit_revoke_account_role(&Revoke<RoleId, Account>),
         visit_revoke_role_permission(&Revoke<Permission, Role>),
-
-        // Visit ExecuteWasmBox
-        visit_execute_wasm_smartcontract(&WasmExecutable<WasmSmartContract>),
-        visit_execute_wasm_trigger(&WasmExecutable<TriggerModule>),
     }
 }
 
@@ -222,7 +218,9 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         InstructionBox::Unregister(variant_value) => visitor.visit_unregister(variant_value),
         InstructionBox::Upgrade(variant_value) => visitor.visit_upgrade(variant_value),
         InstructionBox::Custom(custom) => visitor.visit_custom_instruction(custom),
-        InstructionBox::ExecuteWasm(variant_value) => visitor.visit_execute_wasm(variant_value),
+        InstructionBox::ExecuteWasm(variant_value) => {
+            visitor.visit_execute_wasm_smartcontract(variant_value)
+        }
     }
 }
 
@@ -235,13 +233,6 @@ pub fn visit_register<V: Visit + ?Sized>(visitor: &mut V, isi: &RegisterBox) {
         RegisterBox::Nft(obj) => visitor.visit_register_nft(obj),
         RegisterBox::Role(obj) => visitor.visit_register_role(obj),
         RegisterBox::Trigger(obj) => visitor.visit_register_trigger(obj),
-    }
-}
-
-pub fn visit_execute_wasm<V: Visit + ?Sized>(visitor: &mut V, isi: &ExecuteWasmBox) {
-    match isi {
-        ExecuteWasmBox::Smartcontract(obj) => visitor.visit_execute_wasm_smartcontract(obj),
-        ExecuteWasmBox::Trigger(obj) => visitor.visit_execute_wasm_trigger(obj),
     }
 }
 
@@ -370,7 +361,6 @@ leaf_visitors! {
     visit_set_parameter(&SetParameter),
     visit_execute_trigger(&ExecuteTrigger),
     visit_execute_wasm_smartcontract(&WasmExecutable<WasmSmartContract>),
-    visit_execute_wasm_trigger(&WasmExecutable<TriggerModule>),
     visit_log(&Log),
     visit_custom_instruction(&CustomInstruction),
 

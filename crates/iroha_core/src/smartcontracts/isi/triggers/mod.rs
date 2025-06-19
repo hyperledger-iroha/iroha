@@ -352,10 +352,10 @@ pub mod isi {
                 .and_then(|mut wasm_runtime| {
                     wasm_runtime.execute_trigger_module(
                         state_transaction,
-                        self.object().id().as_ref().unwrap(),
+                        self.object().id(),
                         authority.clone(),
                         &module,
-                        self.object().event().clone().unwrap(),
+                        self.object().event().clone(),
                     )
                 })
                 .map_err(|error| {

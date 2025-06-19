@@ -145,20 +145,6 @@ impl AcceptedTransaction {
                             .try_into()
                             .expect("INTERNAL BUG: smart contract size exceeds usize::MAX");
 
-                        // Inputs are restricted to binaries only.
-                        // The error type will be changed after the instruction interface is fixed.
-                        let wasm = match wasm {
-                            ExecuteWasmBox::Smartcontract(w) => w,
-                            _ => {
-                                return Err(AcceptTransactionFail::TransactionLimit(
-                                    TransactionLimitError {
-                                        reason: "only `Smartcontract`-type WASM are allowed"
-                                            .to_string(),
-                                    },
-                                ))
-                            }
-                        };
-
                         if wasm.object().size_bytes() > smart_contract_size_limit {
                             Err(AcceptTransactionFail::TransactionLimit(
                                 TransactionLimitError {

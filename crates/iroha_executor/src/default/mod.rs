@@ -37,7 +37,7 @@ pub use trigger::{
     visit_register_trigger, visit_remove_trigger_key_value, visit_set_trigger_key_value,
     visit_unregister_trigger,
 };
-pub use wasm::{visit_execute_wasm_smartcontract, visit_execute_wasm_trigger};
+pub use wasm::visit_execute_wasm_smartcontract;
 
 use crate::{
     deny, execute,
@@ -89,7 +89,7 @@ pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &In
             executor.visit_execute_trigger(isi);
         }
         InstructionBox::ExecuteWasm(isi) => {
-            executor.visit_execute_wasm(isi);
+            executor.visit_execute_wasm_smartcontract(isi);
         }
         InstructionBox::Burn(isi) => {
             executor.visit_burn(isi);
@@ -1543,13 +1543,6 @@ mod wasm {
     pub fn visit_execute_wasm_smartcontract<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &WasmExecutable<WasmSmartContract>,
-    ) {
-        execute!(executor, isi);
-    }
-
-    pub fn visit_execute_wasm_trigger<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &WasmExecutable<TriggerModule>,
     ) {
         execute!(executor, isi);
     }

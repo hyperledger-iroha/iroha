@@ -14,7 +14,10 @@ use std::{fmt, marker::PhantomData, num::NonZeroU64};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     events::EventFilter,
-    isi::error::{InstructionExecutionError, MathError},
+    isi::{
+        error::{InstructionExecutionError, MathError},
+        InstructionBoxHashed,
+    },
     prelude::*,
     query::error::FindError,
     transaction::WasmSmartContract,
@@ -274,6 +277,32 @@ impl<'de> DeserializeSeed<'de> for WasmSeed<'_, WasmSmartContractEntry> {
         deserializer.deserialize_map(WasmSmartContractEntryVisitor { loader: self })
     }
 }
+
+/// Converts [`InstructionBoxHashed`] to [`InstructionBox`].
+/// `wasm_hash_resolver` is required to obtain wasm bytes from hash
+pub fn hashed_to_isi<F>(isi_hashed: InstructionBoxHashed, wasm_hash_resolver: F) -> InstructionBox
+where
+    F: FnOnce(HashOf<WasmSmartContract>) -> InstructionBox,
+{
+    match isi_hashed {
+        InstructionBoxHashed::Register(o) => InstructionBox::Register(o),
+        InstructionBoxHashed::Unregister(o) => InstructionBox::Unregister(o),
+        InstructionBoxHashed::Mint(o) => InstructionBox::Mint(o),
+        InstructionBoxHashed::Burn(o) => InstructionBox::Burn(o),
+        InstructionBoxHashed::Transfer(o) => InstructionBox::Transfer(o),
+        InstructionBoxHashed::SetKeyValue(o) => InstructionBox::SetKeyValue(o),
+        InstructionBoxHashed::RemoveKeyValue(o) => InstructionBox::RemoveKeyValue(o),
+        InstructionBoxHashed::Grant(o) => InstructionBox::Grant(o),
+        InstructionBoxHashed::Revoke(o) => InstructionBox::Revoke(o),
+        InstructionBoxHashed::ExecuteTrigger(o) => InstructionBox::ExecuteTrigger(o),
+        InstructionBoxHashed::SetParameter(o) => InstructionBox::SetParameter(o),
+        InstructionBoxHashed::Upgrade(o) => InstructionBox::Upgrade(o),
+        InstructionBoxHashed::Log(o) => InstructionBox::Log(o),
+        InstructionBoxHashed::Custom(o) => InstructionBox::Custom(o),
+        InstructionBoxHashed::ExecuteWasm(o) => wasm_hash_resolver(o),
+    }
+}
+
 /// Trait to perform read-only operations on [`SetBlock`], [`SetTransaction`] and [`SetView`]
 #[allow(missing_docs)]
 pub trait SetReadOnly {
@@ -289,9 +318,9 @@ pub trait SetReadOnly {
     fn contracts(&self)
         -> &impl StorageReadOnly<HashOf<WasmSmartContract>, WasmSmartContractEntry>;
 
-    /// Get original [`WasmSmartContract`] for [`TriggerId`].
-    /// Returns `None` if there's no [`Trigger`]
-    /// with specified `id` that has WASM executable
+    /// Get original [`WasmSmartContract`] for [`HashOf<WasmSmartContract>`].
+    /// Returns `None` if there's no [`WasmSmartContract`]
+    /// with specified `hash`
     #[inline]
     fn get_original_contract(
         &self,
@@ -324,24 +353,21 @@ pub trait SetReadOnly {
         } = action;
 
         let original_executable = match executable {
-            ExecutableRef::Instructions(isi) => {
-                Executable::Instructions(isi
-                .into_iter()
-                .map(|isi| -> InstructionBox{
-                    match isi {
-                        InstructionBox::ExecuteWasm(ExecuteWasmBox::Trigger(trigger_module)) => {
-                            WasmExecutable::binary(self
-                                .get_original_contract(trigger_module.object().hash())
-                                .cloned()
-                                .expect("No original smartcontract saved for trigger. This is a bug.")).into()
-                        }
-                        _ => isi
-                    }
-                })
-                .collect::<Vec<_>>()
-                .into()
-            )
-            },
+            ExecutableRef::Instructions(isi) => Executable::Instructions(
+                isi.into_iter()
+                    .map(|isi| -> InstructionBox {
+                        hashed_to_isi(isi, |hash| -> InstructionBox {
+                            WasmExecutable::binary(
+                                self.get_original_contract(&hash).cloned().expect(
+                                    "No original smartcontract saved for trigger. This is a bug.",
+                                ),
+                            )
+                            .into()
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
         };
 
         SpecializedAction {
@@ -702,11 +728,9 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 ExecutableRef::Instructions(
                     instructions
                         .into_iter()
-                        .map(|isi| -> Result<InstructionBox> {
+                        .map(|isi| -> Result<InstructionBoxHashed> {
                             match isi {
-                                InstructionBox::ExecuteWasm(ExecuteWasmBox::Smartcontract(
-                                    wasm,
-                                )) => {
+                                InstructionBox::ExecuteWasm(ref wasm) => {
                                     let hash = HashOf::new(wasm.object());
                                     // Store original executable representation to respond to queries with.
                                     if let Some(WasmSmartContractEntry { count, .. }) =
@@ -729,10 +753,11 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                                             },
                                         );
                                     }
-                                    Ok(WasmExecutable::module(TriggerModule::from_hash(hash))
-                                        .into())
+                                    Ok(isi.into())
+                                    // Ok(WasmExecutable::module(TriggerModule::from_hash(hash))
+                                    // .into())
                                 }
-                                _ => Ok(isi),
+                                _ => Ok(isi.into()),
                             }
                         })
                         .collect::<Result<Vec<_>, _>>()?
@@ -951,7 +976,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ExecutableRef {
     /// Vector of ISI
-    Instructions(ConstVec<InstructionBox>),
+    Instructions(ConstVec<InstructionBoxHashed>),
 }
 
 impl core::fmt::Debug for ExecutableRef {

@@ -153,7 +153,6 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_burn_trigger_repetitions(operation: &Burn<u32, Trigger>)",
         "fn visit_execute_trigger(operation: &ExecuteTrigger)",
         "fn visit_execute_wasm_smartcontract(operation: &WasmExecutable<WasmSmartContract>)",
-        "fn visit_execute_wasm_trigger(operation: &WasmExecutable<TriggerModule>)",
         "fn visit_set_parameter(operation: &SetParameter)",
         "fn visit_upgrade(operation: &Upgrade)",
         "fn visit_log(operation: &Log)",

@@ -15,7 +15,10 @@ use iroha_data_model::{
         EventBox,
     },
     executor::ExecutorDataModel,
-    isi::error::{InstructionExecutionError as Error, MathError},
+    isi::{
+        error::{InstructionExecutionError as Error, MathError},
+        InstructionBoxHashed,
+    },
     parameter::Parameters,
     permission::Permissions,
     prelude::*,
@@ -49,7 +52,7 @@ use crate::{
     smartcontracts::{
         triggers::{
             set::{
-                ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
+                hashed_to_isi, ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
                 SetReadOnly as TriggerSetReadOnly, SetTransaction as TriggerSetTransaction,
                 SetView as TriggerSetView,
             },
@@ -1647,31 +1650,31 @@ impl StateTransaction<'_, '_> {
         executable: &ExecutableRef,
         event: &EventBox,
     ) -> Result<(), TransactionRejectionReason> {
-        let res = match executable {
-            ExecutableRef::Instructions(instructions) => {
-                // Convert plain trigger modules to those ready for the executing by supplying execution context.
-                let instructions: Vec<_> = instructions
-                    .iter()
-                    .cloned()
-                    .map(|isi| -> InstructionBox {
-                        match isi {
-                            InstructionBox::ExecuteWasm(ExecuteWasmBox::Trigger(tg)) => {
-                                WasmExecutable::module(TriggerModule::from_event(
-                                    *tg.object().hash(),
-                                    id.clone(),
-                                    event.clone(),
-                                ))
-                                .into()
-                            }
-                            _ => isi,
-                        }
-                    })
-                    .collect::<Vec<_>>();
-
-                self.execute_instructions(instructions.iter().cloned(), authority)
-                    .map_err(ValidationFail::from)
+        let ExecutableRef::Instructions(instructions) = executable;
+        let res = instructions.iter().cloned().try_for_each(|isi| {
+            // First, convert to the original InstructionBox
+            // In the case of wasm execution, execute as trigger module
+            let original_isi = hashed_to_isi(isi.clone(), |hash| -> InstructionBox {
+                WasmExecutable::binary(
+                    self.world()
+                        .triggers()
+                        .get_original_contract(&hash)
+                        .expect("No smartcontracts saved for trigger. This is a bug.")
+                        .clone(),
+                )
+                .into()
+            });
+            {
+                if let InstructionBoxHashed::ExecuteWasm(hash) = isi {
+                    let trigger_execute =
+                        WasmExecutable::module(TriggerModule::new(hash, id.clone(), event.clone()));
+                    trigger_execute.execute(authority, self)
+                } else {
+                    original_isi.execute(authority, self)
+                }
             }
-        };
+            .map_err(ValidationFail::from)
+        });
 
         let outcome = match &res {
             Ok(()) => TriggerCompletedOutcome::Success,
@@ -1683,17 +1686,6 @@ impl StateTransaction<'_, '_> {
         res.map_err(Into::into)
     }
 
-    fn execute_instructions(
-        &mut self,
-        instructions: impl IntoIterator<Item = InstructionBox>,
-        authority: &AccountId,
-    ) -> Result<(), Error> {
-        instructions.into_iter().try_for_each(|instruction| {
-            instruction.execute(authority, self)?;
-            Ok(())
-        })
-    }
-
     /// Apply a non-erroneous executable in the given committed block.
     #[cfg(any(test, feature = "bench"))]
     fn apply_executable(&mut self, executable: &Executable, authority: &AccountId) {
@@ -1703,6 +1695,18 @@ impl StateTransaction<'_, '_> {
                     .expect("should be no errors");
             }
         }
+    }
+
+    #[allow(dead_code)]
+    fn execute_instructions(
+        &mut self,
+        instructions: impl IntoIterator<Item = InstructionBox>,
+        authority: &AccountId,
+    ) -> Result<(), Error> {
+        instructions.into_iter().try_for_each(|instruction| {
+            instruction.execute(authority, self)?;
+            Ok(())
+        })
     }
 }
 

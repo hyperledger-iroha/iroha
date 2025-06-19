@@ -64,19 +64,19 @@ impl Execute for InstructionBox {
     }
 }
 
-impl Execute for ExecuteWasmBox {
-    #[iroha_logger::log(name = "wasm", skip_all, fields(id))]
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        match self {
-            Self::Smartcontract(isi) => isi.execute(authority, state_transaction),
-            Self::Trigger(isi) => isi.execute(authority, state_transaction),
-        }
-    }
-}
+// impl Execute for ExecuteWasmBox {
+//     #[iroha_logger::log(name = "wasm", skip_all, fields(id))]
+//     fn execute(
+//         self,
+//         authority: &AccountId,
+//         state_transaction: &mut StateTransaction<'_, '_>,
+//     ) -> Result<(), Error> {
+//         match self {
+//             Self::Smartcontract(isi) => isi.execute(authority, state_transaction),
+//             // Self::Trigger(isi) => isi.execute(authority, state_transaction),
+//         }
+//     }
+// }
 
 impl Execute for RegisterBox {
     #[iroha_logger::log(name = "register", skip_all, fields(id))]

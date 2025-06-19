@@ -123,7 +123,65 @@ mod model {
 
         #[debug(fmt = "{_0:?}")]
         #[enum_ref(transparent)]
-        ExecuteWasm(ExecuteWasmBox),
+        ExecuteWasm(WasmExecutable<WasmSmartContract>),
+    }
+
+    #[derive(
+        DebugCustom,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        EnumDiscriminants,
+        FromVariant,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    pub enum InstructionBoxHashed {
+        Register(RegisterBox),
+        Unregister(UnregisterBox),
+        Mint(MintBox),
+        Burn(BurnBox),
+        Transfer(TransferBox),
+        SetKeyValue(SetKeyValueBox),
+        RemoveKeyValue(RemoveKeyValueBox),
+        Grant(GrantBox),
+        Revoke(RevokeBox),
+        ExecuteTrigger(ExecuteTrigger),
+        SetParameter(SetParameter),
+        Upgrade(Upgrade),
+        Log(Log),
+        Custom(CustomInstruction),
+        ExecuteWasm(HashOf<WasmSmartContract>),
+    }
+
+    impl From<InstructionBox> for InstructionBoxHashed {
+        fn from(isi: InstructionBox) -> Self {
+            match isi {
+                InstructionBox::Register(o) => InstructionBoxHashed::Register(o),
+                InstructionBox::Unregister(o) => InstructionBoxHashed::Unregister(o),
+                InstructionBox::Mint(o) => InstructionBoxHashed::Mint(o),
+                InstructionBox::Burn(o) => InstructionBoxHashed::Burn(o),
+                InstructionBox::Transfer(o) => InstructionBoxHashed::Transfer(o),
+                InstructionBox::SetKeyValue(o) => InstructionBoxHashed::SetKeyValue(o),
+                InstructionBox::RemoveKeyValue(o) => InstructionBoxHashed::RemoveKeyValue(o),
+                InstructionBox::Grant(o) => InstructionBoxHashed::Grant(o),
+                InstructionBox::Revoke(o) => InstructionBoxHashed::Revoke(o),
+                InstructionBox::ExecuteTrigger(o) => InstructionBoxHashed::ExecuteTrigger(o),
+                InstructionBox::SetParameter(o) => InstructionBoxHashed::SetParameter(o),
+                InstructionBox::Upgrade(o) => InstructionBoxHashed::Upgrade(o),
+                InstructionBox::Log(o) => InstructionBoxHashed::Log(o),
+                InstructionBox::Custom(o) => InstructionBoxHashed::Custom(o),
+                InstructionBox::ExecuteWasm(o) => {
+                    InstructionBoxHashed::ExecuteWasm(HashOf::new(o.object()))
+                }
+            }
+        }
     }
 }
 
@@ -182,7 +240,6 @@ impl_instruction! {
     Upgrade,
     ExecuteTrigger,
     WasmExecutable<WasmSmartContract>,
-    WasmExecutable<TriggerModule>,
     Log,
 }
 
@@ -952,35 +1009,22 @@ mod transparent {
 
     isi! {
         #[derive(Display)]
-        #[display(fmt = "EXECUTE wasm")]
-        /// Temporary stub to handle trigger executions.
-        /// Triggers need `TriggerId` and `EventBox` for the execution context.
+        #[display(fmt = "EXECUTE wasm tigger module {hash} trigger for {id}")]
+        /// Internal instruction to handle wasm trigger executions.
         pub struct TriggerModule {
             /// Precompiled trigger module hash.
             pub hash: HashOf<WasmSmartContract>,
             /// Execution context: `TriggerId`
-            pub id: Option<TriggerId>,
+            pub id: TriggerId,
             /// Execution context: `EventBox`
-            pub event: Option<EventBox>,
+            pub event: EventBox,
         }
     }
 
     impl TriggerModule {
-        /// Build `TriggerModule` from the precompiled module.
-        pub fn from_hash(hash: HashOf<WasmSmartContract>) -> Self {
-            Self {
-                hash,
-                id: None,
-                event: None,
-            }
-        }
         /// Build ready-to-execute `TriggerModule`.
-        pub fn from_event(hash: HashOf<WasmSmartContract>, id: TriggerId, event: EventBox) -> Self {
-            Self {
-                hash,
-                id: Some(id),
-                event: Some(event),
-            }
+        pub fn new(hash: HashOf<WasmSmartContract>, id: TriggerId, event: EventBox) -> Self {
+            Self { hash, id, event }
         }
     }
 
@@ -998,12 +1042,12 @@ mod transparent {
         }
     }
 
-    impl_into_box! {
-        WasmExecutable<WasmSmartContract> |
-        WasmExecutable<TriggerModule>
-    => ExecuteWasmBox => InstructionBox[ExecuteWasm],
-    => ExecuteWasmBoxRef<'a> => InstructionBoxRef<'a>[ExecuteWasm]
-    }
+    // impl_into_box! {
+    //     WasmExecutable<WasmSmartContract>
+    //     // WasmExecutable<TriggerModule>
+    // => ExecuteWasmBox => InstructionBox[ExecuteWasm],
+    // => ExecuteWasmBoxRef<'a> => InstructionBoxRef<'a>[ExecuteWasm]
+    // }
 
     isi! {
         /// Generic instruction for upgrading runtime objects.
@@ -1084,20 +1128,20 @@ macro_rules! isi_box {
     };
 }
 
-isi_box! {
-    #[strum_discriminants(
-        vis(pub(crate)),
-        name(WasmType),
-        derive(Encode),
-    )]
-    /// Enum with all supported [`WasmExecutable`] instructions.
-    pub enum ExecuteWasmBox {
-        /// Execute [`WasmSmartContract`].
-        Smartcontract(WasmExecutable<WasmSmartContract>),
-        /// Execute [`TriggerModule`] .
-        Trigger(WasmExecutable<TriggerModule>),
-    }
-}
+// isi_box! {
+//     #[strum_discriminants(
+//         vis(pub(crate)),
+//         name(WasmType),
+//         derive(Encode),
+//     )]
+//     /// Enum with all supported [`WasmExecutable`] instructions.
+//     pub enum ExecuteWasmBox {
+//         /// Execute [`WasmSmartContract`].
+//         Smartcontract(WasmExecutable<WasmSmartContract>),
+//         // /// Execute [`TriggerModule`] .
+//         // Trigger(WasmExecutable<TriggerModule>),
+//     }
+// }
 
 isi_box! {
     #[strum_discriminants(
@@ -1602,9 +1646,9 @@ pub mod error {
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{
-        Burn, BurnBox, CustomInstruction, ExecuteTrigger, ExecuteWasmBox, Grant, GrantBox,
-        InstructionBox, Log, Mint, MintBox, Register, RegisterBox, RemoveKeyValue,
-        RemoveKeyValueBox, Revoke, RevokeBox, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
-        TransferBox, TriggerModule, Unregister, UnregisterBox, Upgrade, WasmExecutable,
+        Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox, InstructionBox, Log,
+        Mint, MintBox, Register, RegisterBox, RemoveKeyValue, RemoveKeyValueBox, Revoke, RevokeBox,
+        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferBox, TriggerModule,
+        Unregister, UnregisterBox, Upgrade, WasmExecutable,
     };
 }
