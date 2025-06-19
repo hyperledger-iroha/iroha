@@ -61,7 +61,7 @@ use crate::{
             },
             specialized::{LoadedAction, LoadedActionTrait},
         },
-        wasm,
+        wasm, Execute,
     },
     state::storage_transactions::{
         TransactionsBlock, TransactionsReadOnly, TransactionsStorage, TransactionsView,

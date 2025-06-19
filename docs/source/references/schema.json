@@ -2037,20 +2037,6 @@
       }
     ]
   },
-  "ExecuteWasmBox": {
-    "Enum": [
-      {
-        "tag": "Smartcontract",
-        "discriminant": 0,
-        "type": "WasmExecutable<WasmSmartContract>"
-      },
-      {
-        "tag": "Trigger",
-        "discriminant": 1,
-        "type": "WasmExecutable<TriggerModule>"
-      }
-    ]
-  },
   "ExecutionTime": {
     "Enum": [
       {
@@ -2348,7 +2334,6 @@
   "HashOf<MerkleTree<SignedTransaction>>": "Hash",
   "HashOf<SignedTransaction>": "Hash",
   "HashOf<Vec<InstructionBox>>": "Hash",
-  "HashOf<WasmSmartContract>": "Hash",
   "IdBox": {
     "Enum": [
       {
@@ -2478,7 +2463,7 @@
       {
         "tag": "ExecuteWasm",
         "discriminant": 14,
-        "type": "ExecuteWasmBox"
+        "type": "WasmExecutable<WasmSmartContract>"
       }
     ]
   },
@@ -3419,9 +3404,6 @@
   },
   "Option<DomainId>": {
     "Option": "DomainId"
-  },
-  "Option<EventBox>": {
-    "Option": "EventBox"
   },
   "Option<ForwardCursor>": {
     "Option": "ForwardCursor"
@@ -5903,22 +5885,6 @@
       }
     ]
   },
-  "TriggerModule": {
-    "Struct": [
-      {
-        "name": "hash",
-        "type": "HashOf<WasmSmartContract>"
-      },
-      {
-        "name": "id",
-        "type": "Option<TriggerId>"
-      },
-      {
-        "name": "event",
-        "type": "Option<EventBox>"
-      }
-    ]
-  },
   "TriggerNumberOfExecutionsChanged": {
     "Struct": [
       {
@@ -6311,14 +6277,6 @@
   },
   "Vec<u8>": {
     "Vec": "u8"
-  },
-  "WasmExecutable<TriggerModule>": {
-    "Struct": [
-      {
-        "name": "object",
-        "type": "TriggerModule"
-      }
-    ]
   },
   "WasmExecutable<WasmSmartContract>": {
     "Struct": [
