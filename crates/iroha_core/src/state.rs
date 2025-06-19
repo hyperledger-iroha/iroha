@@ -1433,8 +1433,8 @@ impl<'state> StateBlock<'state> {
     }
 
     /// Execute all time triggers matching the given block.
-    pub(crate) fn execute_time_triggers(&mut self, block_header: BlockHeader) {
-        let time_event = self.create_time_event(block_header);
+    pub(crate) fn execute_time_triggers(&mut self, block_header: &BlockHeader) {
+        let time_event = self.create_time_event(&block_header);
         self.world.external_event_buf.push(time_event.into());
         let matched: Vec<_> = self.world.triggers.match_time_event(time_event).collect();
 
@@ -1477,7 +1477,7 @@ impl<'state> StateBlock<'state> {
     }
 
     /// Create time event using previous and current blocks.
-    fn create_time_event(&self, block_header: BlockHeader) -> TimeEvent {
+    fn create_time_event(&self, block_header: &BlockHeader) -> TimeEvent {
         let to = block_header.creation_time();
 
         let since = self.latest_block().map_or(to, |latest_block| {
@@ -1505,7 +1505,7 @@ impl<'state> StateBlock<'state> {
     pub fn apply(&mut self, block: &CommittedBlock, topology: Vec<PeerId>) -> Vec<EventBox> {
         self.apply_transactions(block);
         debug!(height = %self.height(), "Transactions applied");
-        self.execute_time_triggers(block.as_ref().header());
+        self.execute_time_triggers(&block.as_ref().header());
         debug!(height = %self.height(), "Time triggers executed");
         self.apply_without_execution(block, topology)
     }

@@ -651,7 +651,7 @@ mod valid {
                         acc
                     });
             block.set_transaction_errors(errors);
-            state_block.execute_time_triggers(block.header());
+            state_block.execute_time_triggers(&block.header());
         }
 
         /// Like [`Self::validate`], but without the static check part.
