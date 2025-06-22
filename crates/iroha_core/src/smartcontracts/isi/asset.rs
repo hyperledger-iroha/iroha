@@ -10,23 +10,6 @@ use iroha_telemetry::metrics;
 
 use super::prelude::*;
 
-impl Registrable for NewAssetDefinition {
-    type Target = AssetDefinition;
-
-    #[inline]
-    fn build(self, authority: &AccountId) -> Self::Target {
-        Self::Target {
-            id: self.id,
-            spec: self.spec,
-            mintable: self.mintable,
-            logo: self.logo,
-            metadata: self.metadata,
-            owned_by: authority.clone(),
-            total_quantity: Numeric::ZERO,
-        }
-    }
-}
-
 /// ISI module contains all instructions related to assets:
 /// - minting/burning assets
 /// - update metadata
@@ -259,8 +242,8 @@ pub mod query {
             Ok(state_ro
                 .world()
                 .assets_iter()
-                .filter(move |&asset| filter.applies(asset))
-                .cloned())
+                .filter(move |asset| filter.applies_to_entry(asset))
+                .map(|asset| asset.to_owned()))
         }
     }
     impl ValidQuery for FindAssetsDefinitions {

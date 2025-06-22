@@ -12,6 +12,7 @@ pub mod tx;
 pub mod world;
 
 use eyre::Result;
+pub use iroha_data_model::Registrable;
 use iroha_data_model::{
     isi::{error::InstructionExecutionError as Error, *},
     prelude::*,
@@ -24,15 +25,6 @@ use crate::{
     smartcontracts::triggers::set::SetReadOnly,
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
 };
-
-/// Trait for proxy objects used for registration.
-pub trait Registrable {
-    /// Constructed type
-    type Target;
-
-    /// Construct [`Self::Target`]
-    fn build(self, authority: &AccountId) -> Self::Target;
-}
 
 impl Execute for InstructionBox {
     fn execute(
@@ -270,7 +262,8 @@ mod tests {
             .execute(&account_id, &mut state_transaction)?;
         state_transaction.apply();
         state_block.commit();
-        let nft = state.view().world.nft(&nft_id)?;
+        let state_view = state.view();
+        let nft = state_view.world.nft(&nft_id)?;
         let value = nft.content.get(&key).cloned();
         assert_eq!(value, Some(vec![1_u32, 2_u32, 3_u32,].into()));
         Ok(())

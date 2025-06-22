@@ -9,7 +9,7 @@ pub use self::model::*;
 use crate::{
     account::AccountId,
     permission::{Permission, Permissions},
-    Identifiable, Name, Registered,
+    Identifiable, Name, Registered, Registrable,
 };
 
 #[model]
@@ -129,6 +129,15 @@ impl NewRole {
 
 impl Registered for Role {
     type With = NewRole;
+}
+
+impl Registrable for NewRole {
+    type Target = Role;
+
+    #[inline]
+    fn build(self, _authority: &AccountId) -> Self::Target {
+        self.inner
+    }
 }
 
 /// The prelude re-exports most commonly used traits, structs and macros from this module.

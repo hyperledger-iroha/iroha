@@ -222,9 +222,9 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         wasm_cache: &mut WasmCache<'_, '_, '_>,
     ) -> Result<(), TransactionRejectionReason> {
-        let authority = tx.as_ref().authority();
+        let authority = tx.as_ref().authority().clone();
 
-        if state_transaction.world.accounts.get(authority).is_none() {
+        if state_transaction.world.accounts.get(&authority).is_none() {
             return Err(TransactionRejectionReason::AccountDoesNotExist(
                 FindError::Account(authority.clone()),
             ));
@@ -242,7 +242,7 @@ impl StateBlock<'_> {
         }
 
         debug!("Transaction validated successfully; processing data triggers");
-        state_transaction.execute_data_triggers_dfs()?;
+        state_transaction.execute_data_triggers_dfs(&authority)?;
         debug!("Data triggers executed successfully");
 
         Ok(())
@@ -715,7 +715,7 @@ mod tests {
                     .iter()
                     .map(|(name, num)| Asset::new(asset(name), *num));
 
-                World::with_assets([domain], accounts, [asset_def], assets)
+                World::with_assets([domain], accounts, [asset_def], assets, [])
             };
             let kura = crate::kura::Kura::blank_kura_for_testing();
             let query_handle = crate::query::store::LiveQueryStore::start_test();

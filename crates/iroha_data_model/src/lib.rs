@@ -429,6 +429,15 @@ pub trait Identifiable: Ord + Eq {
     fn id(&self) -> &Self::Id;
 }
 
+/// Trait for proxy objects used for registration.
+pub trait Registrable {
+    /// Constructed type
+    type Target;
+
+    /// Construct [`Self::Target`] with given authority
+    fn build(self, authority: &crate::account::AccountId) -> Self::Target;
+}
+
 /// Trait that marks the entity as having metadata.
 pub trait HasMetadata {
     // type Metadata = metadata::Metadata;
@@ -445,6 +454,17 @@ pub trait Registered: Identifiable {
     /// would be empty, to save space you create a builder for it, and
     /// set `With` to the builder's type.
     type With;
+}
+
+/// Auxiliary trait for objects which are stored in parts in `World`.
+/// E.g. `Account` is stored as `AccountId`+`AccountEntry` in `World::accounts`
+pub trait IntoKeyValue {
+    /// Object ID
+    type Key;
+    /// Object data
+    type Value;
+    /// Method to split object into parts
+    fn into_key_value(self) -> (Self::Key, Self::Value);
 }
 
 mod ffi {
@@ -499,6 +519,6 @@ pub mod prelude {
         executor::prelude::*, isi::prelude::*, metadata::prelude::*, name::prelude::*,
         nft::prelude::*, parameter::prelude::*, peer::prelude::*, permission::prelude::*,
         query::prelude::*, role::prelude::*, transaction::prelude::*, trigger::prelude::*, ChainId,
-        EnumTryAsError, HasMetadata, IdBox, Identifiable, ValidationFail,
+        EnumTryAsError, HasMetadata, IdBox, Identifiable, Registrable, ValidationFail,
     };
 }

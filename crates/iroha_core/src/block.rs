@@ -1175,8 +1175,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        kura::Kura, query::store::LiveQueryStore, smartcontracts::isi::Registrable as _,
-        state::State, sumeragi::network_topology::test_topology,
+        kura::Kura, query::store::LiveQueryStore, state::State,
+        sumeragi::network_topology::test_topology,
     };
 
     #[test]

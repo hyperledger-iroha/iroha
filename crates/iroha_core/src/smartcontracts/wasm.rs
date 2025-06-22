@@ -1743,10 +1743,7 @@ mod tests {
     use tokio::test;
 
     use super::*;
-    use crate::{
-        block::ValidBlock, kura::Kura, query::store::LiveQueryStore,
-        smartcontracts::isi::Registrable as _, state::State, World,
-    };
+    use crate::{block::ValidBlock, kura::Kura, query::store::LiveQueryStore, state::State, World};
 
     fn world_with_test_account(authority: &AccountId) -> World {
         let domain_id = authority.domain.clone();
