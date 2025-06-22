@@ -501,20 +501,11 @@ mod candidate {
                 return Err("Genesis transaction must not contain errors");
             }
 
-            for transaction in transactions {
-                let Executable::Instructions(_) = transaction.instructions() else {
-                    return Err("Genesis transaction must contain instructions");
-                };
-            }
-
             let Some(transaction_executor) = transactions.first() else {
                 return Err("Genesis block must contain at least one transaction");
             };
             let Executable::Instructions(instructions_executor) =
-                transaction_executor.instructions()
-            else {
-                return Err("Genesis transaction must contain instructions");
-            };
+                transaction_executor.instructions();
             let [crate::isi::InstructionBox::Upgrade(_)] = instructions_executor.as_ref() else {
                 return Err(
                     "First transaction must contain single `Upgrade` instruction to set executor",

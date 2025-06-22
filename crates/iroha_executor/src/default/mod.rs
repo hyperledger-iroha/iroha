@@ -37,6 +37,7 @@ pub use trigger::{
     visit_register_trigger, visit_remove_trigger_key_value, visit_set_trigger_key_value,
     visit_unregister_trigger,
 };
+pub use wasm::visit_execute_wasm_smartcontract;
 
 use crate::{
     deny, execute,
@@ -63,7 +64,6 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
     transaction: &SignedTransaction,
 ) {
     match transaction.instructions() {
-        Executable::Wasm(wasm) => executor.visit_wasm(wasm),
         Executable::Instructions(instructions) => {
             for isi in instructions {
                 if executor.verdict().is_ok() {
@@ -87,6 +87,9 @@ pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &In
         }
         InstructionBox::ExecuteTrigger(isi) => {
             executor.visit_execute_trigger(isi);
+        }
+        InstructionBox::ExecuteWasm(isi) => {
+            executor.visit_execute_wasm_smartcontract(isi);
         }
         InstructionBox::Burn(isi) => {
             executor.visit_burn(isi);
@@ -1531,6 +1534,17 @@ pub mod trigger {
             | AnyPermission::CanModifyNftMetadata(_)
             | AnyPermission::CanUpgradeExecutor(_) => false,
         }
+    }
+}
+
+mod wasm {
+    use super::*;
+
+    pub fn visit_execute_wasm_smartcontract<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &WasmExecutable<WasmSmartContract>,
+    ) {
+        execute!(executor, isi);
     }
 }
 
