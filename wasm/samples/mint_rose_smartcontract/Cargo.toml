@@ -1,0 +1,19 @@
+[package]
+name = "mint_rose_smartcontract"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[lib]
+crate-type = ['cdylib']
+
+[dependencies]
+iroha_smart_contract.workspace = true
+
+panic-halt.workspace = true
+dlmalloc.workspace = true
+parity-scale-codec.workspace = true
+nonzero_ext.workspace = true

@@ -1202,6 +1202,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mint_rose_smartcontract"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "dlmalloc",
+ "iroha_smart_contract",
+ "nonzero_ext",
+ "panic-halt",
+ "parity-scale-codec",
+]
+
+[[package]]
 name = "mint_rose_trigger_data_model"
 version = "2.0.0-rc.2.0"
 dependencies = [

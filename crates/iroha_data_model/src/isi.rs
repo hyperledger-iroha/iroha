@@ -1414,6 +1414,7 @@ pub mod error {
             Deserialize,
             Serialize,
             IntoSchema,
+            Getters,
         )]
         #[display(fmt = "Error in executing wasm binary: {reason}")]
         #[serde(transparent)]
@@ -1422,6 +1423,7 @@ pub mod error {
         #[ffi_type(unsafe {robust})]
         pub struct WasmExecutionError {
             /// Error which happened during execution
+            #[getset(get = "pub")]
             pub reason: String,
         }
 
