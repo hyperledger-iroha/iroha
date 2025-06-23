@@ -326,7 +326,7 @@ mod model {
         /// It's different from [`crate::transaction::error::TransactionRejectionReason::LimitCheck`] because it depends on
         /// executor.
         TooComplex,
-        /// Internal error occurred, please contact the support or check the logs if you are the node owner
+        /// Internal error occurred, please contact the support or check the logs if you are the node owner: {0}
         ///
         /// Usually means a bug inside **Runtime Executor** or **Iroha** implementation.
         InternalError(
