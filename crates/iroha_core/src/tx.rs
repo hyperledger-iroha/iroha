@@ -352,7 +352,6 @@ mod tests {
         block::{BlockBuilder, ValidBlock},
         smartcontracts::isi::Registrable,
         state::{State, StateBlock, StateReadOnly, World},
-        sumeragi::network_topology::Topology,
     };
 
     mod time_trigger {

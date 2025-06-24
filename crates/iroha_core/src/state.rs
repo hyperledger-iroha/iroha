@@ -1434,7 +1434,7 @@ impl<'state> StateBlock<'state> {
 
     /// Execute all time triggers matching the given block.
     pub(crate) fn execute_time_triggers(&mut self, block_header: &BlockHeader) {
-        let time_event = self.create_time_event(&block_header);
+        let time_event = self.create_time_event(block_header);
         self.world.external_event_buf.push(time_event.into());
         let matched: Vec<_> = self.world.triggers.match_time_event(time_event).collect();
 
