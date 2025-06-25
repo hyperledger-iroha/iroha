@@ -3839,6 +3839,7 @@ dependencies = [
  "tokio",
  "tower-http",
  "tungstenite 0.21.0",
+ "vergen",
 ]
 
 [[package]]

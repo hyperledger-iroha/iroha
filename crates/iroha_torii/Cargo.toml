@@ -57,5 +57,8 @@ nonzero_ext = { workspace = true }
 pretty-error-debug = "0.3.0"
 tungstenite = { workspace = true }
 
+[build-dependencies]
+vergen = { version = "8.3.1", default-features = false }
+
 [dev-dependencies]
 http-body-util = "0.1.2"
