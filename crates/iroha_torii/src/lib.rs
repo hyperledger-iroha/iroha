@@ -250,6 +250,11 @@ impl Torii {
                 }),
             );
 
+        let router = router.route(
+            uri::SERVER_VERSION,
+            get(move || async move { routing::handle_server_version() }),
+        );
+
         router.layer((
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::default().include_headers(true)),

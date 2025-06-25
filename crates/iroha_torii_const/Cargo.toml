@@ -19,3 +19,5 @@ workspace = true
 
 [dependencies]
 iroha_primitives.workspace = true
+
+serde = { workspace = true, features = ["derive"] }

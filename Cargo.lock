@@ -3847,6 +3847,7 @@ name = "iroha_torii_const"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_primitives",
+ "serde",
 ]
 
 [[package]]

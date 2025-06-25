@@ -1,4 +1,5 @@
 //! Constant values used in Torii that might be re-used by client libraries as well.
+use serde::{Deserialize, Serialize};
 
 pub mod uri {
     //! URI that Torii uses to route incoming requests.
@@ -28,4 +29,15 @@ pub mod uri {
     pub const API_VERSION: &str = "/api_version";
     /// URI for getting cpu profile
     pub const PROFILE: &str = "/debug/pprof/profile";
+    /// URI for getting the server version
+    pub const SERVER_VERSION: &str = "/server_version";
+}
+
+/// Response body for GET server version request
+#[derive(Deserialize, Serialize)]
+pub struct Version {
+    /// The version string (e.g., from `CARGO_PKG_VERSION`)
+    pub version: String,
+    /// The git commit SHA
+    pub git_sha: String,
 }
