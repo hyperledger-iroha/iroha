@@ -17,7 +17,7 @@ pub use iroha_config::client_api::ConfigGetDTO;
 use iroha_config::client_api::ConfigUpdateDTO;
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, Uptime};
-use iroha_torii_const::{uri as torii_uri, Version};
+use iroha_torii_shared::{uri as torii_uri, Version};
 use iroha_version::prelude::*;
 use parity_scale_codec::DecodeAll;
 use rand::Rng;

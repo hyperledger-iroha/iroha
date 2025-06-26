@@ -16,7 +16,7 @@ use iroha_data_model::{
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::Status;
-use iroha_torii_const::Version;
+use iroha_torii_shared::Version;
 use tokio::task;
 
 use super::*;

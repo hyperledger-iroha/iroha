@@ -33,7 +33,7 @@ use iroha_core::{
 use iroha_data_model::{peer::Peer, ChainId};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
-use iroha_torii_const::uri;
+use iroha_torii_shared::uri;
 use tokio::{net::TcpListener, sync::watch};
 use tower_http::{
     timeout::TimeoutLayer,

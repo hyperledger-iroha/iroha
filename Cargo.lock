@@ -3116,7 +3116,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_telemetry",
  "iroha_test_samples",
- "iroha_torii_const",
+ "iroha_torii_shared",
  "iroha_version",
  "parity-scale-codec",
  "rand",
@@ -3827,7 +3827,7 @@ dependencies = [
  "iroha_schema",
  "iroha_schema_gen",
  "iroha_telemetry",
- "iroha_torii_const",
+ "iroha_torii_shared",
  "iroha_version",
  "nonzero_ext",
  "parity-scale-codec",
@@ -3843,7 +3843,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "iroha_torii_const"
+name = "iroha_torii_shared"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_primitives",
