@@ -1440,13 +1440,13 @@ impl<'state> StateBlock<'state> {
     /// and the third contains their corresponding results.
     pub(crate) fn execute_time_triggers(
         &mut self,
-        block: &SignedBlock,
+        block_header: &BlockHeader,
     ) -> (
         Vec<TimeTriggerEntrypoint>,
         Vec<HashOf<TransactionEntrypoint>>,
         Vec<TransactionResultInner>,
     ) {
-        let time_event = self.create_time_event(block);
+        let time_event = self.create_time_event(block_header);
         self.world.external_event_buf.push(time_event.into());
         let matched: Vec<_> = self.world.triggers.match_time_event(time_event).collect();
 
@@ -1459,7 +1459,7 @@ impl<'state> StateBlock<'state> {
                     Err(reason) => {
                         iroha_logger::debug!(
                             trigger=%trg_id,
-                            block=%block.hash(),
+                            block=%block_header.hash(),
                             reason=?reason,
                             "Time trigger and its chained data triggers failed to execute"
                         );
@@ -1467,7 +1467,7 @@ impl<'state> StateBlock<'state> {
                     Ok(trigger_sequence) => {
                         iroha_logger::debug!(
                             trigger=%trg_id,
-                            block=%block.hash(),
+                            block=%block_header.hash(),
                             trigger_sequence=?trigger_sequence,
                             "Time trigger and its chained data triggers successfully executed"
                         );
@@ -1533,8 +1533,8 @@ impl<'state> StateBlock<'state> {
     }
 
     /// Create time event using previous and current blocks.
-    fn create_time_event(&self, block: &SignedBlock) -> TimeEvent {
-        let to = block.header().creation_time();
+    fn create_time_event(&self, block_header: &BlockHeader) -> TimeEvent {
+        let to = block_header.creation_time();
 
         let since = self.latest_block().map_or(to, |latest_block| {
             let header = latest_block.header();
@@ -1561,7 +1561,7 @@ impl<'state> StateBlock<'state> {
     pub fn apply(&mut self, block: &CommittedBlock, topology: Vec<PeerId>) -> Vec<EventBox> {
         self.apply_transactions(block);
         debug!(height = %self.height(), "Transactions applied");
-        self.execute_time_triggers(block.as_ref());
+        self.execute_time_triggers(&block.as_ref().header());
         debug!(height = %self.height(), "Time triggers executed");
         self.apply_without_execution(block, topology)
     }

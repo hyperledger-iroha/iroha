@@ -232,13 +232,13 @@ impl SignedBlock {
     pub fn presigned(
         signature: BlockSignature,
         header: BlockHeader,
-        transactions: impl IntoIterator<Item = SignedTransaction>,
+        transactions: Vec<SignedTransaction>,
     ) -> SignedBlock {
         SignedBlockV1 {
             signatures: vec![signature],
             payload: BlockPayload {
                 header,
-                transactions: transactions.into_iter().collect(),
+                transactions,
             },
             result: BlockResult::default(),
         }
