@@ -166,13 +166,13 @@ impl SignedBlock {
     pub fn presigned(
         signature: BlockSignature,
         header: BlockHeader,
-        transactions: impl IntoIterator<Item = SignedTransaction>,
+        transactions: Vec<SignedTransaction>,
     ) -> SignedBlock {
         SignedBlockV1 {
             signatures: vec![signature],
             payload: BlockPayload {
                 header,
-                transactions: transactions.into_iter().collect(),
+                transactions,
             },
             errors: BTreeMap::new(),
         }
@@ -183,15 +183,10 @@ impl SignedBlock {
     #[cfg(feature = "transparent_api")]
     pub fn set_transaction_errors(
         &mut self,
-        errors: impl IntoIterator<Item = (usize, TransactionRejectionReason)>,
+        errors: BTreeMap<u64, TransactionRejectionReason>,
     ) -> &mut Self {
         let SignedBlock::V1(block) = self;
-
-        block.errors = errors
-            .into_iter()
-            .map(|(idx, error)| (idx as u64, error))
-            .collect();
-
+        block.errors = errors;
         self
     }
 

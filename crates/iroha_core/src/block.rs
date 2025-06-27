@@ -1,17 +1,58 @@
-//! This module contains block structures for each state. Transitions are modeled as follows:
-//! 1. If a new block is constructed by the node:
-//!    `BlockBuilder<Pending>` -> `BlockBuilder<Chained>` -> `ValidBlock` -> `CommittedBlock`
-//! 2. If a block is received, i.e. deserialized:
-//!    `SignedBlock` -> `ValidBlock` -> `CommittedBlock`
-//!    blocks are organized into a linear sequence over time (also known as the block chain).
+//! Modeling block transitions.
+//!
+//! Operations on blocks:
+//!
+//! 1. Static analysis of the block. This is a _fallible_ operation
+//! 2. Execution of transactions and time triggers. This is an _infallible_ operation. If there are errors during
+//!    transaction execution, they are recorded in the block.
+//! 3. Voting
+//! 4. Pre-commit signatures check
+//! 5. Apply & commit
+//!
+//! Operations 1 + 2 form a process we call _validation_.
+//!
+//! Block lifecycle stages:
+//!
+//! 1. Block is created by the node ([`NewBlock`]). Such blocks are assumed to be valid and do not
+//!    require static validation to transform to [`ValidBlock`].
+//! 2. Block is received/deserialized from disk (as [`SignedBlock`]). Such blocks require static
+//!    validation before execution to transition to [`ValidBlock`].
+//! 3. Block is valid ([`ValidBlock`]). It is always created in pair with [`crate::state::StateBlock`]
+//!    containing the applied state changes from the block. Transaction errors are written to the
+//!    block.
+//! 4. Voting block ([`VotingBlock`]). Valid block might not have sufficient signatures to be committed.
+//!    Voting block is a wrappper around [`ValidBlock`] and its [`crate::state::StateBlock`] intended to
+//!    collect the signatures in order to transition to [`CommittedBlock`]
+//! 5. Block is committed ([`CommittedBlock`]). Created from [`ValidBlock`], ensuring the
+//!    signatures meet the conditions for commit (e.g. proxy tail has signed the block).
+//!
+//! ### Scenario: this node creates a block
+//!
+//! Flow: [`BlockBuilder::new`], [`BlockBuilder::chain`], [`BlockBuilder::sign`],
+//! [`NewBlock::validate_and_record_transactions`] (infallible), [`VotingBlock::new`], [`ValidBlock::commit`]
+//!
+//! ### Scenario: receive a created block
+//!
+//! Flow: Having [`SignedBlock`], [`ValidBlock::validate_keep_voting_block`], [`VotingBlock::new`],
+//! [`ValidBlock::commit`]
+//!
+//! ### Scenario: receive a block via block sync
+//!
+//! Flow: Having [`SignedBlock`], [`ValidBlock::commit_keep_voting_block`]
+//!
+//! ### Scenario: genesis (init or receive), replay kura blocks
+//!
+//! Flow: Having [`SignedBlock`], [`ValidBlock::validate`], [`ValidBlock::commit`]
+//!
+//! ### Scenario: plain block execution
+//!
+//! Flow: Having [`SignedBlock`], [`ValidBlock::validate_unchecked`] (infallible),
+//! [`ValidBlock::commit_unchecked`] (infallible)
 use std::time::Duration;
 
 use iroha_crypto::{HashOf, KeyPair, MerkleTree};
 use iroha_data_model::{
-    block::*,
-    events::prelude::*,
-    peer::PeerId,
-    transaction::{error::TransactionRejectionReason, SignedTransaction},
+    block::*, events::prelude::*, peer::PeerId, transaction::SignedTransaction,
 };
 use thiserror::Error;
 
@@ -23,17 +64,6 @@ use crate::{
     sumeragi::{network_topology::Topology, VotingBlock},
     tx::AcceptTransactionFail,
 };
-
-/// Error during transaction validation
-#[derive(Debug, displaydoc::Display, PartialEq, Eq, Error)]
-pub enum TransactionValidationError {
-    /// Failed to accept transaction
-    Accept(#[from] AcceptTransactionFail),
-    /// A transaction is marked as accepted, but is actually invalid
-    NotValid(#[from] TransactionRejectionReason),
-    /// A transaction is marked as rejected, but is actually valid
-    RejectedIsValid,
-}
 
 /// Errors occurred on block validation
 #[derive(Debug, displaydoc::Display, PartialEq, Eq, Error)]
@@ -56,8 +86,8 @@ pub enum BlockValidationError {
     },
     /// The transaction hash stored in the block header does not match the actual transaction hash
     TransactionHashMismatch,
-    /// Error during transaction validation
-    TransactionValidation(#[from] TransactionValidationError),
+    /// Cannot accept a transaction
+    TransactionAccept(#[from] AcceptTransactionFail),
     /// Mismatch between the actual and expected topology. Expected: {expected:?}, actual: {actual:?}
     TopologyMismatch {
         /// Expected value
@@ -254,10 +284,8 @@ mod chained {
 }
 
 mod new {
-    use std::collections::BTreeMap;
-
     use super::*;
-    use crate::{smartcontracts::wasm::cache::WasmCache, state::StateBlock};
+    use crate::state::StateBlock;
 
     /// First stage in the life-cycle of a block.
     ///
@@ -270,42 +298,12 @@ mod new {
     }
 
     impl NewBlock {
-        /// Validate each transaction in the block, apply resulting state changes,
-        /// and record any errors back into the block.
+        /// Transition to [`ValidBlock`]. Skips static checks and only applies state changes.
         pub fn validate_and_record_transactions(
             self,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<ValidBlock> {
-            let mut wasm_cache = WasmCache::new();
-            let errors = self
-                .transactions
-                .iter()
-                // FIXME: Redundant clone
-                .cloned()
-                .enumerate()
-                .fold(BTreeMap::new(), |mut acc, (idx, tx)| {
-                    if let Err((rejected_tx, error)) =
-                        state_block.validate_transaction(tx, &mut wasm_cache)
-                    {
-                        iroha_logger::debug!(
-                            block=%self.header.hash(),
-                            tx=%rejected_tx.hash(),
-                            reason=?error,
-                            "Transaction rejected"
-                        );
-
-                        acc.insert(idx, error);
-                    }
-
-                    acc
-                });
-
-            let mut block: SignedBlock = self.into();
-            block.set_transaction_errors(errors);
-            state_block.execute_time_triggers(&block);
-
-            // FIXME: Don't create a ValidBlock that deviates from the result of ValidBlock::validate.
-            WithEvents::new(ValidBlock(block))
+            ValidBlock::validate_unchecked(self.into(), state_block)
         }
 
         /// Block signature
@@ -340,14 +338,15 @@ mod new {
             SignedBlock::presigned(
                 block.signature,
                 block.header,
-                block.transactions.into_iter().map(Into::into),
+                // FIXME: transmute somehow
+                block.transactions.into_iter().map(Into::into).collect(),
             )
         }
     }
 }
 
 mod valid {
-    use std::time::SystemTime;
+    use std::{collections::BTreeMap, time::SystemTime};
 
     use commit::CommittedBlock;
     use iroha_data_model::{account::AccountId, events::pipeline::PipelineEventBox, ChainId};
@@ -454,21 +453,8 @@ mod valid {
 
             Ok(())
         }
-
         /// Validate the given block, apply resulting state changes,
         /// and record any transaction errors back into the block.
-        ///
-        /// # Errors
-        ///
-        /// - There is a mismatch between candidate block height and actual blockchain height
-        /// - There is a mismatch between candidate block previous block hash and actual previous block hash
-        /// - Block is not signed by the leader
-        /// - Block has unknown signatories
-        /// - Block has incorrect signatures
-        /// - Topology field is incorrect
-        /// - Block has committed transactions
-        /// - Error during validation of individual transactions
-        /// - Transaction in the genesis block is not signed by the genesis public key
         pub fn validate(
             mut block: SignedBlock,
             topology: &Topology,
@@ -476,28 +462,24 @@ mod valid {
             genesis_account: &AccountId,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<Result<ValidBlock, Error>> {
-            if let Err(error) =
-                Self::validate_header(&block, topology, genesis_account, state_block, false)
-            {
-                return WithEvents::new(Err((block.into(), error)));
-            }
-
-            if let Err(error) = Self::validate_and_record_transactions(
-                &mut block,
+            if let Err(error) = Self::validate_static(
+                &block,
+                topology,
                 expected_chain_id,
                 genesis_account,
                 state_block,
+                false,
             ) {
-                return WithEvents::new(Err((block.into(), error.into())));
+                return WithEvents::new(Err((Box::new(block), error)));
             }
-
+            Self::validate_and_record_transactions(&mut block, state_block);
             WithEvents::new(Ok(ValidBlock(block)))
         }
 
-        /// Same as `validate` but:
-        /// * Block header will be validated with read-only state
-        /// * If block header is valid, `voting_block` will be released,
-        ///   and transactions will be validated with write state
+        /// Same as [`Self::validate`] but:
+        /// * Block will be validated (statically checked) with read-only state
+        /// * If block is valid, voting block will be released,
+        ///   and transactions will be validated (executed) with write state
         pub fn validate_keep_voting_block<'state>(
             mut block: SignedBlock,
             topology: &Topology,
@@ -507,12 +489,16 @@ mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            if let Err(error) =
-                Self::validate_header(&block, topology, genesis_account, &state.view(), soft_fork)
-            {
-                return WithEvents::new(Err((block.into(), error)));
+            if let Err(error) = Self::validate_static(
+                &block,
+                topology,
+                expected_chain_id,
+                genesis_account,
+                &state.view(),
+                soft_fork,
+            ) {
+                return WithEvents::new(Err((Box::new(block), error)));
             }
-
             // Release block writer before creating new one
             let _ = voting_block.take();
             let mut state_block = if soft_fork {
@@ -520,22 +506,15 @@ mod valid {
             } else {
                 state.block(block.header())
             };
-
-            if let Err(error) = Self::validate_and_record_transactions(
-                &mut block,
-                expected_chain_id,
-                genesis_account,
-                &mut state_block,
-            ) {
-                return WithEvents::new(Err((block.into(), error.into())));
-            }
-
+            Self::validate_and_record_transactions(&mut block, &mut state_block);
             WithEvents::new(Ok((ValidBlock(block), state_block)))
         }
 
-        fn validate_header(
+        /// All static checks of the block.
+        fn validate_static(
             block: &SignedBlock,
             topology: &Topology,
+            chain_id: &ChainId,
             genesis_account: &AccountId,
             state: &impl StateReadOnlyWithTransactions,
             soft_fork: bool,
@@ -562,6 +541,7 @@ mod valid {
                 });
             }
 
+            // TODO: inject TimeSource
             let now = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap();
@@ -605,14 +585,31 @@ mod valid {
                 Self::verify_no_undefined_signatures(block, topology)?;
             }
 
-            if block.transactions().any(|tx| {
-                state
+            let (max_clock_drift, tx_params) = {
+                let params = state.world().parameters();
+                (params.sumeragi().max_clock_drift(), params.transaction())
+            };
+
+            for tx in block.transactions() {
+                if state
                     .transactions()
                     .get(&tx.hash())
                     // In case of soft-fork transaction is check if it was added at the same height as candidate block
                     .is_some_and(|height| height.get() < expected_block_height)
-            }) {
-                return Err(BlockValidationError::HasCommittedTransactions);
+                {
+                    return Err(BlockValidationError::HasCommittedTransactions);
+                }
+
+                if block.header().is_genesis() {
+                    AcceptedTransaction::validate_genesis(
+                        tx,
+                        chain_id,
+                        max_clock_drift,
+                        genesis_account,
+                    )?;
+                } else {
+                    AcceptedTransaction::validate(tx, chain_id, max_clock_drift, tx_params)?;
+                }
             }
 
             Ok(())
@@ -620,61 +617,56 @@ mod valid {
 
         /// Validate each transaction in the block, apply resulting state changes,
         /// and record any errors back into the block.
+        ///
+        /// Must be called with a **block that is _assumed_ to be valid**.
         fn validate_and_record_transactions(
             block: &mut SignedBlock,
-            expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
             state_block: &mut StateBlock<'_>,
-        ) -> Result<(), TransactionValidationError> {
-            let (max_clock_drift, tx_limits) = {
-                let params = state_block.world().parameters();
-                (params.sumeragi().max_clock_drift(), params.transaction)
-            };
-
+        ) {
             let mut wasm_cache = WasmCache::new();
-            let errors = block
-                .transactions()
-                // FIXME: Redundant clone
-                .cloned()
-                .enumerate()
-                .try_fold(Vec::new(), |mut acc, (idx, tx)| {
-                    let accepted_tx = if block.header().is_genesis() {
-                        AcceptedTransaction::accept_genesis(
-                            tx,
-                            expected_chain_id,
-                            max_clock_drift,
-                            genesis_account,
-                        )
-                    } else {
-                        AcceptedTransaction::accept(
-                            tx,
-                            expected_chain_id,
-                            max_clock_drift,
-                            tx_limits,
-                        )
-                    }?;
+            let errors =
+                block
+                    .transactions()
+                    .enumerate()
+                    .fold(BTreeMap::new(), |mut acc, (idx, tx)| {
+                        if let Err((rejected_tx, reason)) = state_block.validate_transaction(
+                            // NOTE: function is called with the assumption that the transactions are
+                            //       acceptable
+                            AcceptedTransaction::new_unchecked(
+                                // FIXME: cloning is unnecessary; use Cow?
+                                tx.clone(),
+                            ),
+                            &mut wasm_cache,
+                        ) {
+                            iroha_logger::debug!(
+                                tx=%rejected_tx.hash(),
+                                block=%block.header().hash(),
+                                ?reason,
+                                "Transaction rejected"
+                            );
 
-                    if let Err((rejected_tx, error)) =
-                        state_block.validate_transaction(accepted_tx, &mut wasm_cache)
-                    {
-                        iroha_logger::debug!(
-                            tx=%rejected_tx.hash(),
-                            block=%block.hash(),
-                            reason=?error,
-                            "Transaction rejected"
-                        );
+                            acc.insert(idx as u64, reason);
+                        }
 
-                        acc.push((idx, error));
-                    }
-
-                    Ok::<_, TransactionValidationError>(acc)
-                })?;
-
+                        acc
+                    });
             block.set_transaction_errors(errors);
+            state_block.execute_time_triggers(&block.header());
+        }
 
-            state_block.execute_time_triggers(block);
-
-            Ok(())
+        /// Like [`Self::validate`], but without the static check part.
+        ///
+        /// Useful for cases when the block is assumed to be valid:
+        ///
+        /// - When block is created by the node
+        /// - For Explorer, which is not interested in validation and only needs
+        ///   state changes
+        pub fn validate_unchecked(
+            mut block: SignedBlock,
+            state_block: &mut StateBlock<'_>,
+        ) -> WithEvents<ValidBlock> {
+            Self::validate_and_record_transactions(&mut block, state_block);
+            WithEvents::new(ValidBlock(block))
         }
 
         /// Add additional signature for [`Self`]
@@ -740,7 +732,7 @@ mod valid {
             WithEvents::new(result)
         }
 
-        /// commit block to the store.
+        /// Transition block to [`CommittedBlock`].
         ///
         /// # Errors
         ///
@@ -751,18 +743,23 @@ mod valid {
             topology: &Topology,
         ) -> WithEvents<Result<CommittedBlock, (Box<ValidBlock>, BlockValidationError)>> {
             WithEvents::new(match Self::is_commit(self.as_ref(), topology) {
-                Err(err) => Err((self.into(), err)),
+                Err(err) => Err((Box::new(self), err.into())),
                 Ok(()) => Ok(CommittedBlock(self)),
             })
         }
 
+        /// Like [`Self::commit`], but without block signature checks.
+        ///
+        /// Useful e.g. for Explorer, which assumes all blocks from Iroha are valid, and
+        /// only executes them to produce state changes.
+        pub fn commit_unchecked(self) -> WithEvents<CommittedBlock> {
+            WithEvents::new(CommittedBlock(self))
+        }
+
         /// Validate and commit block if possible.
         ///
-        /// This method is different from calling [`ValidBlock::validate_keep_voting_block`] and [`ValidBlock::commit`] in the following ways:
-        /// - signatures are checked eagerly so voting block is kept if block doesn't have valid signatures
-        ///
-        /// # Errors
-        /// Combinations of errors from [`ValidBlock::validate_keep_voting_block`] and [`ValidBlock::commit`].
+        /// The difference from calling [`Self::validate_keep_voting_block`] + [`ValidBlock::commit`]
+        /// is that signatures are eagerly checked first.
         #[allow(clippy::too_many_arguments)]
         pub fn commit_keep_voting_block<'state, F: Fn(PipelineEventBox)>(
             block: SignedBlock,
@@ -775,7 +772,7 @@ mod valid {
             send_events: F,
         ) -> WithEvents<Result<(CommittedBlock, StateBlock<'state>), Error>> {
             if let Err(err) = Self::is_commit(&block, topology) {
-                return WithEvents::new(Err((block.into(), err)));
+                return WithEvents::new(Err((Box::new(block), err.into())));
             }
 
             WithEvents::new(
@@ -799,7 +796,10 @@ mod valid {
         ///
         /// - Block is not signed by the proxy tail
         /// - Block doesn't have enough signatures
-        fn is_commit(block: &SignedBlock, topology: &Topology) -> Result<(), BlockValidationError> {
+        fn is_commit(
+            block: &SignedBlock,
+            topology: &Topology,
+        ) -> Result<(), SignatureVerificationError> {
             if !block.header().is_genesis() {
                 Self::verify_proxy_tail_signature(block, topology)?;
 
@@ -808,8 +808,7 @@ mod valid {
                     return Err(SignatureVerificationError::NotEnoughSignatures {
                         votes_count,
                         min_votes_for_commit: topology.min_votes_for_commit(),
-                    }
-                    .into());
+                    });
                 }
             }
 
@@ -855,7 +854,11 @@ mod valid {
             Self(SignedBlock::presigned(
                 unverified_block.signature,
                 unverified_block.header,
-                unverified_block.transactions.into_iter().map(Into::into),
+                unverified_block
+                    .transactions
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             ))
         }
     }
@@ -1411,7 +1414,7 @@ mod tests {
         let tx = TransactionBuilder::new(chain_id.clone(), genesis_wrong_account_id.clone())
             .with_instructions([isi])
             .sign(genesis_wrong_key.private_key());
-        let tx = AcceptedTransaction(tx);
+        let tx = AcceptedTransaction::new_unchecked(tx);
 
         // Create genesis block
         let transactions = vec![tx];

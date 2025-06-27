@@ -1,6 +1,5 @@
 //! `Transaction`-related functionality of Iroha.
 //!
-//!
 //! Types represent various stages of a `Transaction`'s lifecycle. For
 //! example, `Transaction` is the start, when a transaction had been
 //! received by Torii.
@@ -30,7 +29,7 @@ use crate::{
 /// `AcceptedTransaction` — a transaction accepted by Iroha peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct AcceptedTransaction(pub(super) SignedTransaction);
+pub struct AcceptedTransaction(SignedTransaction);
 
 /// Verification failed of some signature due to following reason
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,7 +64,7 @@ pub enum AcceptTransactionFail {
 }
 
 impl AcceptedTransaction {
-    fn validate(
+    fn validate_common(
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
@@ -88,38 +87,39 @@ impl AcceptedTransaction {
 
         Ok(())
     }
-    /// Accept genesis transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
+
+    /// Like [`Self::accept_genesis`], but without wrapping.
     ///
     /// # Errors
     ///
-    /// - if transaction chain id doesn't match
-    pub fn accept_genesis(
-        tx: SignedTransaction,
+    /// See [`AcceptTransactionFail`]
+    pub fn validate_genesis(
+        tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         genesis_account: &AccountId,
-    ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate(&tx, expected_chain_id, max_clock_drift)?;
+    ) -> Result<(), AcceptTransactionFail> {
+        Self::validate_common(tx, expected_chain_id, max_clock_drift)?;
 
         if genesis_account != tx.authority() {
             return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
         }
 
-        Ok(Self(tx))
+        Ok(())
     }
 
-    /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
+    /// Like [`Self::accept`], but without wrapping.
     ///
     /// # Errors
     ///
-    /// - if it does not adhere to limits
-    pub fn accept(
-        tx: SignedTransaction,
+    /// See [`AcceptTransactionFail`]
+    pub fn validate(
+        tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-    ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate(&tx, expected_chain_id, max_clock_drift)?;
+    ) -> Result<(), AcceptTransactionFail> {
+        Self::validate_common(tx, expected_chain_id, max_clock_drift)?;
 
         if *iroha_genesis::GENESIS_DOMAIN_ID == *tx.authority().domain() {
             return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
@@ -171,7 +171,41 @@ impl AcceptedTransaction {
             }
         }
 
-        Ok(Self(tx))
+        Ok(())
+    }
+
+    /// Accept genesis transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`]
+    pub fn accept_genesis(
+        tx: SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        genesis_account: &AccountId,
+    ) -> Result<Self, AcceptTransactionFail> {
+        Self::validate_genesis(&tx, expected_chain_id, max_clock_drift, genesis_account)
+            .map(|()| Self(tx))
+    }
+
+    /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`]
+    pub fn accept(
+        tx: SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+    ) -> Result<Self, AcceptTransactionFail> {
+        Self::validate(&tx, expected_chain_id, max_clock_drift, limits).map(|()| Self(tx))
+    }
+
+    /// Assume the transaction is acceptable.
+    pub fn new_unchecked(tx: SignedTransaction) -> Self {
+        Self(tx)
     }
 }
 
@@ -318,7 +352,6 @@ mod tests {
         block::{BlockBuilder, ValidBlock},
         smartcontracts::isi::Registrable,
         state::{State, StateBlock, StateReadOnly, World},
-        sumeragi::network_topology::Topology,
     };
 
     mod time_trigger {
@@ -645,10 +678,6 @@ mod tests {
         key: iroha_crypto::PrivateKey,
     }
 
-    static TOPOLOGY: LazyLock<Topology> = LazyLock::new(|| {
-        let leader: PeerId = iroha_crypto::KeyPair::random().into_parts().0.into();
-        Topology::new([leader])
-    });
     static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
         let (id, key_pair) = gen_account_in(GENESIS_DOMAIN_ID.clone());
         Credential {
@@ -867,19 +896,17 @@ mod tests {
 
     impl SandboxBlock<'_> {
         fn apply(&mut self) -> Vec<EventBox> {
-            let valid = ValidBlock::validate(
+            let valid = ValidBlock::validate_unchecked(
                 core::mem::take(&mut self.block).unwrap(),
-                &TOPOLOGY,
-                &CHAIN_ID,
-                &GENESIS_ACCOUNT.id,
                 &mut self.state,
             )
-            .unpack(|_| {})
-            .unwrap();
-
-            let committed = valid.commit(&TOPOLOGY).unpack(|_| {}).unwrap();
-            self.state
-                .apply_without_execution(&committed, TOPOLOGY.iter().cloned().collect())
+            .unpack(|_| {});
+            let committed = valid.commit_unchecked().unpack(|_| {});
+            self.state.apply_without_execution(
+                &committed,
+                // topology in state is only used by sumeragi
+                vec![],
+            )
         }
 
         fn assert_balances(&self, expected: impl Into<AccountBalance>) {
