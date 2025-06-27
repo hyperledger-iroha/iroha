@@ -222,14 +222,15 @@ mod pending {
                     },
                 ),
                 prev_block_hash: prev_block.map(SignedBlock::hash),
-                transactions_hash: self
+                merkle_root: self
                     .0
                     .transactions
                     .iter()
                     .map(AsRef::as_ref)
-                    .map(SignedTransaction::hash)
+                    .map(SignedTransaction::hash_as_entrypoint)
                     .collect::<MerkleTree<_>>()
                     .root(),
+                result_merkle_root: None,
                 creation_time_ms: creation_time
                     .as_millis()
                     .try_into()
@@ -272,7 +273,8 @@ mod chained {
     impl BlockBuilder<Chained> {
         /// Sign this block and get [`NewBlock`].
         pub fn sign(self, private_key: &PrivateKey) -> WithEvents<NewBlock> {
-            let signature = BlockSignature(0, SignatureOf::new(private_key, &self.0.header));
+            let signature =
+                BlockSignature(0, SignatureOf::from_hash(private_key, self.0.header.hash()));
 
             WithEvents::new(NewBlock {
                 signature,
@@ -323,7 +325,10 @@ mod new {
 
         #[cfg(test)]
         pub(crate) fn update_header(self, header: BlockHeader, private_key: &PrivateKey) -> Self {
-            let signature = BlockSignature(0, iroha_crypto::SignatureOf::new(private_key, &header));
+            let signature = BlockSignature(
+                0,
+                iroha_crypto::SignatureOf::from_hash(private_key, header.hash()),
+            );
 
             Self {
                 signature,
@@ -346,7 +351,7 @@ mod new {
 }
 
 mod valid {
-    use std::{collections::BTreeMap, time::SystemTime};
+    use std::time::SystemTime;
 
     use commit::CommittedBlock;
     use iroha_data_model::{account::AccountId, events::pipeline::PipelineEventBox, ChainId};
@@ -382,7 +387,10 @@ mod valid {
 
             signature
                 .1
-                .verify(topology.leader().public_key(), &block.payload().header)
+                .verify_hash(
+                    topology.leader().public_key(),
+                    block.payload().header.hash(),
+                )
                 .map_err(|_err| LeaderMissing)?;
 
             Ok(())
@@ -410,7 +418,7 @@ mod valid {
 
                     signature
                         .1
-                        .verify(signatory.public_key(), &block.payload().header)
+                        .verify_hash(signatory.public_key(), block.payload().header.hash())
                         .map_err(|_err| UnknownSignature)?;
 
                     Ok(())
@@ -448,7 +456,10 @@ mod valid {
 
             signature
                 .1
-                .verify(topology.proxy_tail().public_key(), &block.payload().header)
+                .verify_hash(
+                    topology.proxy_tail().public_key(),
+                    block.payload().header.hash(),
+                )
                 .map_err(|_err| ProxyTailMissing)?;
 
             Ok(())
@@ -590,7 +601,7 @@ mod valid {
                 (params.sumeragi().max_clock_drift(), params.transaction())
             };
 
-            for tx in block.transactions() {
+            for tx in block.external_transactions() {
                 if state
                     .transactions()
                     .get(&tx.hash())
@@ -616,7 +627,7 @@ mod valid {
         }
 
         /// Validate each transaction in the block, apply resulting state changes,
-        /// and record any errors back into the block.
+        /// and record results back into the block.
         ///
         /// Must be called with a **block that is _assumed_ to be valid**.
         fn validate_and_record_transactions(
@@ -624,34 +635,47 @@ mod valid {
             state_block: &mut StateBlock<'_>,
         ) {
             let mut wasm_cache = WasmCache::new();
-            let errors =
-                block
-                    .transactions()
-                    .enumerate()
-                    .fold(BTreeMap::new(), |mut acc, (idx, tx)| {
-                        if let Err((rejected_tx, reason)) = state_block.validate_transaction(
-                            // NOTE: function is called with the assumption that the transactions are
-                            //       acceptable
-                            AcceptedTransaction::new_unchecked(
-                                // FIXME: cloning is unnecessary; use Cow?
-                                tx.clone(),
-                            ),
-                            &mut wasm_cache,
-                        ) {
+            let (mut hashes, mut results) = block.external_transactions().cloned().fold(
+                (Vec::new(), Vec::new()),
+                |mut acc, tx| {
+                    // NOTE: function is called with the assumption that the transactions are acceptable
+                    // FIXME: cloning is unnecessary; use Cow?
+                    let accepted_tx = AcceptedTransaction::new_unchecked(tx.clone());
+
+                    let (hash, result) =
+                        state_block.validate_transaction(accepted_tx, &mut wasm_cache);
+
+                    match &result {
+                        Err(reason) => {
                             iroha_logger::debug!(
-                                tx=%rejected_tx.hash(),
-                                block=%block.header().hash(),
-                                ?reason,
+                                tx=%hash,
+                                block=%block.hash(),
+                                reason=?reason,
                                 "Transaction rejected"
                             );
-
-                            acc.insert(idx as u64, reason);
                         }
+                        Ok(trigger_sequence) => {
+                            iroha_logger::debug!(
+                                tx=%hash,
+                                block=%block.hash(),
+                                trigger_sequence=?trigger_sequence,
+                                "Transaction approved"
+                            );
+                        }
+                    }
 
-                        acc
-                    });
-            block.set_transaction_errors(errors);
-            state_block.execute_time_triggers(&block.header());
+                    acc.0.push(hash);
+                    acc.1.push(result);
+                    acc
+                },
+            );
+
+            let (time_trgs, mut time_trg_hashes, mut time_trg_results) =
+                state_block.execute_time_triggers(&block.header());
+            hashes.append(&mut time_trg_hashes);
+            results.append(&mut time_trg_results);
+
+            block.set_transaction_results(time_trgs, hashes, results);
         }
 
         /// Like [`Self::validate`], but without the static check part.
@@ -694,7 +718,10 @@ mod valid {
 
             signature
                 .1
-                .verify(signatory.public_key(), &self.as_ref().payload().header)
+                .verify_hash(
+                    signatory.public_key(),
+                    self.as_ref().payload().header.hash(),
+                )
                 .map_err(|_err| UnknownSignature)?;
 
             self.0.add_signature(signature).map_err(|_err| Other)
@@ -834,12 +861,12 @@ mod valid {
             leader_private_key: &PrivateKey,
             f: impl FnOnce(&mut BlockHeader),
         ) -> Self {
-            let transactions_hash =
-                HashOf::from_untyped_unchecked(Hash::prehashed([1; Hash::LENGTH]));
+            let merkle_root = HashOf::from_untyped_unchecked(Hash::prehashed([1; Hash::LENGTH]));
             let mut header = BlockHeader {
                 height: nonzero_ext::nonzero!(2_u64),
                 prev_block_hash: None,
-                transactions_hash: Some(transactions_hash),
+                merkle_root: Some(merkle_root),
+                result_merkle_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
             };
@@ -886,7 +913,7 @@ mod valid {
         };
         signature
             .1
-            .verify(&genesis_account.signatory, &block.payload().header)
+            .verify_hash(&genesis_account.signatory, block.payload().header.hash())
             .map_err(|_| InvalidGenesisError::InvalidSignature)?;
 
         let transactions = block.payload().transactions.as_slice();
@@ -925,7 +952,7 @@ mod valid {
                 .map(|(i, key_pair)| {
                     BlockSignature(
                         i as u64,
-                        SignatureOf::new(key_pair.private_key(), &payload.header),
+                        SignatureOf::from_hash(key_pair.private_key(), payload.header.hash()),
                     )
                 })
                 .try_for_each(|signature| block.add_signature(signature, &topology))
@@ -990,7 +1017,7 @@ mod valid {
                 .map(|(i, key_pair)| {
                     BlockSignature(
                         i as u64,
-                        SignatureOf::new(key_pair.private_key(), &payload.header),
+                        SignatureOf::from_hash(key_pair.private_key(), payload.header.hash()),
                     )
                 })
                 .try_for_each(|signature| block.add_signature(signature, &topology))
@@ -1120,18 +1147,21 @@ mod event {
             let block_height = self.as_ref().header().height;
 
             let block = self.as_ref();
-            let tx_events = block.transactions().enumerate().map(move |(idx, tx)| {
-                let status = block.error(idx).map_or_else(
-                    || TransactionStatus::Approved,
-                    |error| TransactionStatus::Rejected(Box::new(error.clone())),
-                );
+            let tx_events = block
+                .external_transactions()
+                .enumerate()
+                .map(move |(idx, tx)| {
+                    let status = block.error(idx).map_or_else(
+                        || TransactionStatus::Approved,
+                        |error| TransactionStatus::Rejected(Box::new(error.clone())),
+                    );
 
-                TransactionEvent {
-                    block_height: Some(block_height),
-                    hash: tx.hash(),
-                    status,
-                }
-            });
+                    TransactionEvent {
+                        block_height: Some(block_height),
+                        hash: tx.hash(),
+                        status,
+                    }
+                });
 
             let block_event = core::iter::once(BlockEvent {
                 header: self.as_ref().header(),
@@ -1241,7 +1271,7 @@ mod tests {
         state_block.commit();
 
         // The 1st transaction should be confirmed and the 2nd rejected
-        assert_eq!(*valid_block.as_ref().errors().next().unwrap().0, 1);
+        assert_eq!(valid_block.as_ref().errors().next().unwrap().0, 1);
     }
 
     #[tokio::test]
@@ -1310,7 +1340,7 @@ mod tests {
 
         // The 1st transaction should fail and 2nd succeed
         let mut errors = valid_block.as_ref().errors();
-        assert_eq!(0, *errors.next().unwrap().0);
+        assert_eq!(0, errors.next().unwrap().0);
         assert!(errors.next().is_none());
     }
 
@@ -1367,7 +1397,7 @@ mod tests {
         // The 1st transaction should be rejected
         assert_eq!(
             0,
-            *errors.next().unwrap().0,
+            errors.next().unwrap().0,
             "The first transaction should be rejected, as it contains `Fail`."
         );
 

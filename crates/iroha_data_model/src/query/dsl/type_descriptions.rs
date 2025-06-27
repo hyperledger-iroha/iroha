@@ -28,7 +28,7 @@ use crate::{
         CommittedTransaction, QueryOutputBatchBox,
     },
     role::{Role, RoleId},
-    transaction::{error::TransactionRejectionReason, SignedTransaction},
+    transaction::{TransactionEntrypoint, TransactionResult},
     trigger::{action, Trigger, TriggerId},
 };
 
@@ -292,17 +292,19 @@ type_descriptions! {
     SignedBlock[SignedBlockProjection, SignedBlockPrototype]: BlockHeader, HashOf<BlockHeader> {
         header(Header, SignedBlockHeaderProjector): BlockHeader,
     }
-    HashOf<SignedTransaction>[TransactionHashProjection, TransactionHashPrototype] {}
-    #[custom_evaluate] // hash needs to be computed on-the-fly
-    SignedTransaction[SignedTransactionProjection, SignedTransactionPrototype]: HashOf<SignedTransaction>, AccountId, DomainId, Name, PublicKey {
-        hash(Hash, SignedTransactionHashProjector): HashOf<SignedTransaction>,
-        authority(Authority, SignedTransactionAuthorityProjector): AccountId,
+    HashOf<TransactionEntrypoint>[TransactionEntrypointHashProjection, TransactionEntrypointHashPrototype] {}
+    #[custom_evaluate]
+    TransactionEntrypoint[TransactionEntrypointProjection, TransactionEntrypointPrototype]: AccountId, DomainId, Name, PublicKey {
+        authority(Authority, TransactionEntrypointAuthorityProjector): AccountId,
     }
-    Option<TransactionRejectionReason>[TransactionErrorProjection, TransactionErrorPrototype] {}
-    CommittedTransaction[CommittedTransactionProjection, CommittedTransactionPrototype]: HashOf<BlockHeader>, SignedTransaction, HashOf<SignedTransaction>, AccountId, DomainId, Name, PublicKey, Option<TransactionRejectionReason> {
+    HashOf<TransactionResult>[TransactionResultHashProjection, TransactionResultHashPrototype] {}
+    TransactionResult[TransactionResultProjection, TransactionResultPrototype] {}
+    CommittedTransaction[CommittedTransactionProjection, CommittedTransactionPrototype]: HashOf<BlockHeader>, HashOf<TransactionEntrypoint>, TransactionEntrypoint, HashOf<TransactionResult>, TransactionResult, AccountId, DomainId, Name, PublicKey {
         block_hash(BlockHash, CommittedTransactionBlockHashProjector): HashOf<BlockHeader>,
-        value(Value, CommittedTransactionValueProjector): SignedTransaction,
-        error(Error, CommittedTransactionErrorProjector): Option<TransactionRejectionReason>,
+        entrypoint_hash(TransactionEntrypointHash, CommittedTransactionEntrypointHashProjector): HashOf<TransactionEntrypoint>,
+        entrypoint(TransactionEntrypoint, CommittedTransactionEntrypointProjector): TransactionEntrypoint,
+        result_hash(TransactionResultHash, CommittedTransactionResultHashProjector): HashOf<TransactionResult>,
+        result(TransactionResult, CommittedTransactionResultProjector): TransactionResult,
     }
 
     // domain
@@ -535,43 +537,40 @@ impl EvaluateSelector<SignedBlock> for SignedBlockProjection<SelectorMarker> {
     }
 }
 
-impl EvaluatePredicate<SignedTransaction> for SignedTransactionProjection<PredicateMarker> {
-    fn applies(&self, input: &SignedTransaction) -> bool {
+impl EvaluatePredicate<TransactionEntrypoint> for TransactionEntrypointProjection<PredicateMarker> {
+    fn applies(&self, input: &TransactionEntrypoint) -> bool {
         match self {
-            SignedTransactionProjection::Atom(atom) => atom.applies(input),
-            SignedTransactionProjection::Hash(hash) => hash.applies(&input.hash()),
-            SignedTransactionProjection::Authority(authority) => {
+            TransactionEntrypointProjection::Atom(atom) => atom.applies(input),
+            TransactionEntrypointProjection::Authority(authority) => {
                 authority.applies(input.authority())
             }
         }
     }
 }
 
-impl EvaluateSelector<SignedTransaction> for SignedTransactionProjection<SelectorMarker> {
+impl EvaluateSelector<TransactionEntrypoint> for TransactionEntrypointProjection<SelectorMarker> {
     #[expect(single_use_lifetimes)] // FP, the suggested change is not allowed on stable
     fn project_clone<'a>(
         &self,
-        batch: impl Iterator<Item = &'a SignedTransaction>,
+        batch: impl Iterator<Item = &'a TransactionEntrypoint>,
     ) -> Result<QueryOutputBatchBox, QueryExecutionFail> {
         match self {
-            SignedTransactionProjection::Atom(()) => Ok(batch.cloned().collect::<Vec<_>>().into()),
-            SignedTransactionProjection::Hash(hash) => {
-                hash.project(batch.map(SignedTransaction::hash))
+            TransactionEntrypointProjection::Atom(()) => {
+                Ok(batch.cloned().collect::<Vec<_>>().into())
             }
-            SignedTransactionProjection::Authority(authority) => {
-                authority.project_clone(batch.map(SignedTransaction::authority))
+            TransactionEntrypointProjection::Authority(authority) => {
+                authority.project_clone(batch.map(TransactionEntrypoint::authority))
             }
         }
     }
 
     fn project(
         &self,
-        batch: impl Iterator<Item = SignedTransaction>,
+        batch: impl Iterator<Item = TransactionEntrypoint>,
     ) -> Result<QueryOutputBatchBox, QueryExecutionFail> {
         match self {
-            SignedTransactionProjection::Atom(()) => Ok(batch.collect::<Vec<_>>().into()),
-            SignedTransactionProjection::Hash(hash) => hash.project(batch.map(|item| item.hash())),
-            SignedTransactionProjection::Authority(authority) => {
+            TransactionEntrypointProjection::Atom(()) => Ok(batch.collect::<Vec<_>>().into()),
+            TransactionEntrypointProjection::Authority(authority) => {
                 authority.project(batch.map(|item| item.authority().clone()))
             }
         }
