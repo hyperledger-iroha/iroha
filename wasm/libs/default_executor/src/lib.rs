@@ -8,7 +8,7 @@ extern crate panic_halt;
 extern crate alloc;
 
 use dlmalloc::GlobalDlmalloc;
-use iroha_executor::{data_model::block::BlockHeader, prelude::*};
+use iroha_executor::{data_model::block::NewBlockHeader, prelude::*};
 
 #[global_allocator]
 static ALLOC: GlobalDlmalloc = GlobalDlmalloc;
@@ -26,7 +26,7 @@ struct Executor {
 }
 
 impl Executor {
-    fn ensure_genesis(curr_block: BlockHeader) {
+    fn ensure_genesis(curr_block: NewBlockHeader) {
         if !curr_block.is_genesis() {
             dbg_panic!(
                 "Default Executor is intended to be used only in genesis. \

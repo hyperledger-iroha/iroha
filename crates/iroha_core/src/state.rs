@@ -8,7 +8,7 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     account::{AccountEntry, AccountValue},
     asset::{AssetEntry, AssetValue},
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, NewBlockHeader, SignedBlock},
     events::{
         pipeline::BlockEvent,
         time::TimeEvent,
@@ -259,7 +259,7 @@ pub struct StateBlock<'state> {
     /// Lock to prevent getting inconsistent view of the state
     view_lock: &'state parking_lot::RwLock<()>,
 
-    pub(crate) curr_block: BlockHeader,
+    pub(crate) curr_block: NewBlockHeader,
 }
 
 /// Struct for single transaction's aggregated changes
@@ -283,7 +283,7 @@ pub struct StateTransaction<'block, 'state> {
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
 
-    pub(crate) curr_block: BlockHeader,
+    pub(crate) curr_block: NewBlockHeader,
 }
 
 /// Consistent point in time view of the [`State`]
@@ -1155,7 +1155,7 @@ impl State {
     }
 
     /// Create structure to execute a block
-    pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
+    pub fn block(&self, curr_block: NewBlockHeader) -> StateBlock<'_> {
         StateBlock {
             world: self.world.block(),
             block_hashes: self.block_hashes.block(),
@@ -1173,7 +1173,7 @@ impl State {
     }
 
     /// Create structure to execute a block while reverting changes made in the latest block
-    pub fn block_and_revert(&self, curr_block: BlockHeader) -> StateBlock<'_> {
+    pub fn block_and_revert(&self, curr_block: NewBlockHeader) -> StateBlock<'_> {
         StateBlock {
             world: self.world.block_and_revert(),
             block_hashes: self.block_hashes.block_and_revert(),
@@ -2411,7 +2411,7 @@ mod tests {
     };
 
     /// Used to inject faulty payload for testing
-    fn new_dummy_block_with_payload(f: impl FnOnce(&mut BlockHeader)) -> CommittedBlock {
+    fn new_dummy_block_with_payload(f: impl FnOnce(&mut NewBlockHeader)) -> CommittedBlock {
         let (leader_public_key, leader_private_key) = iroha_crypto::KeyPair::random().into_parts();
         let peer_id = PeerId::new(leader_public_key);
         let topology = Topology::new(vec![peer_id]);
@@ -2437,7 +2437,7 @@ mod tests {
                 header.prev_block_hash = block_hashes.last().copied();
             });
 
-            let mut state_block = state.block(block.as_ref().header());
+            let mut state_block = state.block(block.as_ref().header().regress());
             block_hashes.push(block.as_ref().hash());
             let _events = state_block.apply(&block, Vec::new());
             state_block.commit();
@@ -2468,7 +2468,7 @@ mod tests {
                 header.height = NonZeroU64::new(i as u64).unwrap();
             });
 
-            let mut state_block = state.block(block.as_ref().header());
+            let mut state_block = state.block(block.as_ref().header().regress());
             let _events = state_block.apply(&block, Vec::new());
             state_block.commit();
             kura.store_block(block);

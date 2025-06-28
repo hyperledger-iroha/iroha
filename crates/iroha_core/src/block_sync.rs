@@ -419,8 +419,8 @@ pub mod message {
                 assert!(matches!(candidate.validate(), Err(ShareBlocksError::Empty)))
             }
 
-            #[test]
-            fn candidate_height_missed() {
+            #[tokio::test]
+            async fn candidate_height_missed() {
                 let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
                 let leader_peer_id = PeerId::new(leader_public_key);
                 let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
@@ -439,8 +439,8 @@ pub mod message {
                 ))
             }
 
-            #[test]
-            fn candidate_prev_block_hash_mismatch() {
+            #[tokio::test]
+            async fn candidate_prev_block_hash_mismatch() {
                 let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
                 let leader_peer_id = PeerId::new(leader_public_key);
                 let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
@@ -461,8 +461,8 @@ pub mod message {
                 ))
             }
 
-            #[test]
-            fn candidate_ok() {
+            #[tokio::test]
+            async fn candidate_ok() {
                 let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
                 let leader_peer_id = PeerId::new(leader_public_key);
                 let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();

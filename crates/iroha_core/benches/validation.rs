@@ -8,6 +8,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::{isi::Registrable as _, wasm::cache::WasmCache, Execute},
     state::{State, World},
+    sumeragi::network_topology::Topology,
 };
 use iroha_data_model::{
     account::AccountId, isi::InstructionBox, prelude::*, transaction::TransactionBuilder,
@@ -67,9 +68,8 @@ fn build_test_and_transient_state() -> State {
             tx_limits,
         )
         .unwrap()])
-        .chain(0, state.view().latest_block().as_deref())
-        .sign(key_pair.private_key())
-        .unpack(|_| {});
+        .chain(0, state.view().latest_block().as_deref());
+
         let mut state_block = state.block(unverified_block.header());
         let mut state_transaction = state_block.transaction();
         let path_to_executor = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -155,9 +155,8 @@ fn validate_transaction(criterion: &mut Criterion) {
         tx_limits,
     )
     .unwrap()])
-    .chain(0, state.view().latest_block().as_deref())
-    .sign(key_pair.private_key())
-    .unpack(|_| {});
+    .chain(0, state.view().latest_block().as_deref());
+
     let transaction = AcceptedTransaction::accept(
         build_test_transaction(chain_id.clone()).sign(STARTER_KEYPAIR.private_key()),
         &chain_id,
@@ -208,18 +207,23 @@ fn sign_blocks(criterion: &mut Criterion) {
         tx_limits,
     )
     .expect("Failed to accept transaction.");
-    let (_, peer_private_key) = KeyPair::random().into_parts();
+    let leader_keypair = KeyPair::random();
+    let topology = Topology::new([PeerId::new(leader_keypair.public_key().clone())]);
 
     let mut count = 0;
 
-    let block =
+    let unverified_block =
         BlockBuilder::new(vec![transaction]).chain(0, state.view().latest_block().as_deref());
+    let mut state_block = state.block(unverified_block.header());
+    let unsigned_block = unverified_block.validate_unchecked(&mut state_block);
 
     let _ = criterion.bench_function("sign_block", |b| {
         b.iter_batched(
-            || block.clone(),
-            |block| {
-                let _: NewBlock = block.sign(&peer_private_key).unpack(|_| {});
+            || unsigned_block.clone(),
+            |unsigned_block| {
+                let _: ValidBlock = unsigned_block
+                    .sign(&leader_keypair, &topology)
+                    .unpack(|_| {});
                 count += 1;
             },
             BatchSize::SmallInput,

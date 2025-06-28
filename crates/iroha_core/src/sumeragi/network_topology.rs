@@ -329,8 +329,8 @@ mod tests {
         assert_eq!(topology.0, vec![peer0, peer2, peer5, peer7])
     }
 
-    #[test]
-    fn filter_by_role() {
+    #[tokio::test]
+    async fn filter_by_role() {
         let key_pairs = core::iter::repeat_with(KeyPair::random)
             .take(7)
             .collect::<Vec<_>>();
@@ -367,8 +367,8 @@ mod tests {
         assert!(observing_peers_signatures.iter().map(|s| s.index).eq(5..7));
     }
 
-    #[test]
-    fn filter_by_role_1() {
+    #[tokio::test]
+    async fn filter_by_role_1() {
         let key_pairs = core::iter::repeat_with(KeyPair::random)
             .take(7)
             .collect::<Vec<_>>();
@@ -400,8 +400,8 @@ mod tests {
         assert!(observing_peers_signatures.next().is_none());
     }
 
-    #[test]
-    fn filter_by_role_2() {
+    #[tokio::test]
+    async fn filter_by_role_2() {
         let key_pairs = core::iter::repeat_with(KeyPair::random)
             .take(7)
             .collect::<Vec<_>>();
@@ -435,8 +435,8 @@ mod tests {
         assert!(observing_peers_signatures.next().is_none());
     }
 
-    #[test]
-    fn filter_by_role_3() {
+    #[tokio::test]
+    async fn filter_by_role_3() {
         let key_pairs = core::iter::repeat_with(KeyPair::random)
             .take(7)
             .collect::<Vec<_>>();
