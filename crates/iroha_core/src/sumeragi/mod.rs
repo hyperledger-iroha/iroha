@@ -100,8 +100,10 @@ impl SumeragiHandle {
         topology.nth_rotation(block.header().view_change_index as usize);
 
         let block = ValidBlock::validate(block.clone(), topology, chain_id, state_block)
-            .unpack(|e| {
-                let _ = events_sender.send(e.into());
+            .map(|validation| {
+                validation.finish_without_signing().unpack(|e| {
+                    let _ = events_sender.send(e.into());
+                })
             })
             .expect("INTERNAL BUG: Invalid block stored in Kura")
             .commit(topology)
@@ -178,7 +180,7 @@ impl SumeragiStartArgs {
         }
 
         for block in blocks_iter {
-            let mut state_block = state.block(block.header());
+            let mut state_block = state.block(block.header().regress());
             SumeragiHandle::replay_block(
                 &common_config.chain,
                 &block,
@@ -248,7 +250,7 @@ pub const TELEMETRY_INTERVAL: Duration = Duration::from_secs(5);
 /// Structure represents a block that is currently in discussion.
 pub struct VotingBlock<'state> {
     /// Valid Block
-    block: ValidBlock,
+    pub block: ValidBlock,
     /// At what time has this peer voted for this block
     pub voted_at: Instant,
     /// State after applying transactions to it but before it was committed

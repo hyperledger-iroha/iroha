@@ -30,7 +30,7 @@ pub fn create_block<'a>(
     account_id: AccountId,
     account_private_key: &PrivateKey,
     topology: &Topology,
-    peer_private_key: &PrivateKey,
+    peer_key_pair: &KeyPair,
 ) -> (CommittedBlock, StateBlock<'a>) {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
@@ -50,13 +50,12 @@ pub fn create_block<'a>(
         tx_limits,
     )
     .unwrap()])
-    .chain(0, state.view().latest_block().as_deref())
-    .sign(peer_private_key)
-    .unpack(|_| {});
+    .chain(0, state.view().latest_block().as_deref());
 
     let mut state_block = state.block(unverified_block.header());
     let block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
+        .validate_unchecked(&mut state_block)
+        .sign(peer_key_pair, topology)
         .unpack(|_| {})
         .commit(topology)
         .unpack(|_| {})
@@ -224,9 +223,7 @@ pub fn build_state(rt: &tokio::runtime::Handle, account_id: &AccountId) -> State
             tx_limits,
         )
         .unwrap()])
-        .chain(0, state.view().latest_block().as_deref())
-        .sign(&private_key)
-        .unpack(|_| {});
+        .chain(0, state.view().latest_block().as_deref());
         let mut state_block = state.block(unverified_block.header());
 
         state_block.world.parameters.transaction =

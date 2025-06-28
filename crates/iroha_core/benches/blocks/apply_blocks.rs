@@ -27,8 +27,8 @@ impl StateApplyBlocks {
         let assets_per_domain = 100;
         let (domain_ids, account_ids, asset_definition_ids) =
             generate_ids(domains, accounts_per_domain, assets_per_domain);
-        let (peer_public_key, peer_private_key) = KeyPair::random().into_parts();
-        let peer_id = PeerId::new(peer_public_key);
+        let peer_key_pair = KeyPair::random();
+        let peer_id = PeerId::new(peer_key_pair.public_key().clone());
         let topology = Topology::new(vec![peer_id]);
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let state = build_state(rt, &alice_id);
@@ -52,7 +52,7 @@ impl StateApplyBlocks {
                         alice_id.clone(),
                         alice_keypair.private_key(),
                         &topology,
-                        &peer_private_key,
+                        &peer_key_pair,
                     );
                     let _events =
                         state_block.apply_without_execution(&block, topology.as_ref().to_owned());
@@ -85,7 +85,7 @@ impl StateApplyBlocks {
         }: &Self,
     ) {
         for (block, i) in blocks.iter().zip(1..) {
-            let mut state_block = state.block(block.as_ref().header());
+            let mut state_block = state.block(block.as_ref().header().regress());
             let _events = state_block.apply(block, topology.as_ref().to_owned());
             state_block.commit();
             assert_eq!(state.view().height(), i);

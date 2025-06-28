@@ -946,7 +946,7 @@ mod tests {
     };
     use iroha_futures::supervisor::Supervisor;
     use iroha_genesis::{GenesisBuilder, GENESIS_ACCOUNT_ID};
-    use iroha_test_samples::{gen_account_in, ALICE_ID, ALICE_KEYPAIR, PEER_KEYPAIR};
+    use iroha_test_samples::{gen_account_in, ALICE_ID, ALICE_KEYPAIR};
     use nonzero_ext::nonzero;
     use tempfile::TempDir;
 
@@ -957,7 +957,6 @@ mod tests {
         smartcontracts::Registrable,
         state::State,
         sumeragi::network_topology::Topology,
-        tx::AcceptedTransaction,
         StateReadOnly, World,
     };
 
@@ -1053,8 +1052,8 @@ mod tests {
         assert_eq!(0, block_store.read_index_count().unwrap());
     }
 
-    #[test]
-    fn append_block_to_chain_increases_block_count() {
+    #[tokio::test]
+    async fn append_block_to_chain_increases_block_count() {
         let dir = tempfile::tempdir().unwrap();
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
@@ -1069,8 +1068,8 @@ mod tests {
         assert_eq!(append_count, block_store.read_index_count().unwrap());
     }
 
-    #[test]
-    fn append_block_to_chain_increases_hashes_count() {
+    #[tokio::test]
+    async fn append_block_to_chain_increases_hashes_count() {
         let dir = tempfile::tempdir().unwrap();
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
@@ -1085,8 +1084,8 @@ mod tests {
         assert_eq!(append_count, block_store.read_hashes_count().unwrap());
     }
 
-    #[test]
-    fn append_block_to_chain_write_correct_hashes() {
+    #[tokio::test]
+    async fn append_block_to_chain_write_correct_hashes() {
         let dir = tempfile::tempdir().unwrap();
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
@@ -1105,8 +1104,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn append_block_to_chain_places_blocks_correctly_in_data_file() {
+    #[tokio::test]
+    async fn append_block_to_chain_places_blocks_correctly_in_data_file() {
         let dir = tempfile::tempdir().unwrap();
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
@@ -1244,11 +1243,12 @@ mod tests {
         .expect("genesis block should be built");
 
         {
-            let mut state_block = state.block(genesis.0.header());
+            let mut state_block = state.block(genesis.0.header().regress());
             let block_genesis =
                 ValidBlock::validate(genesis.0.clone(), &topology, &chain_id, &mut state_block)
-                    .unpack(|_| {})
                     .unwrap()
+                    .sign_as_leader(&leader_private_key)
+                    .unpack(|_| {})
                     .commit(&topology)
                     .unpack(|_| {})
                     .unwrap();
@@ -1275,15 +1275,15 @@ mod tests {
         let tx2 =
             crate::AcceptedTransaction::accept(tx2, &chain_id, max_clock_drift, tx_limits).unwrap();
 
+        let latest_block_before_fork = state.view().latest_block();
         {
-            let unverified_block = BlockBuilder::new(vec![tx1.clone()])
-                .chain(0, state.view().latest_block().as_deref())
-                .sign(&leader_private_key)
-                .unpack(|_| {});
+            let unverified_block =
+                BlockBuilder::new(vec![tx1.clone()]).chain(0, latest_block_before_fork.as_deref());
 
             let mut state_block = state.block(unverified_block.header());
             let block = unverified_block
-                .validate_and_record_transactions(&mut state_block)
+                .validate_unchecked(&mut state_block)
+                .sign_as_leader(&leader_private_key)
                 .unpack(|_| {})
                 .commit(&topology)
                 .unpack(|_| {})
@@ -1296,14 +1296,13 @@ mod tests {
         thread::sleep(BLOCK_FLUSH_TIMEOUT);
 
         {
-            let unverified_block_soft_fork = BlockBuilder::new(vec![tx1])
-                .chain(1, Some(&genesis.0))
-                .sign(&leader_private_key)
-                .unpack(|_| {});
+            let unverified_block_soft_fork =
+                BlockBuilder::new(vec![tx1]).chain(1, latest_block_before_fork.as_deref());
 
             let mut state_block = state.block_and_revert(unverified_block_soft_fork.header());
             let block_soft_fork = unverified_block_soft_fork
-                .validate_and_record_transactions(&mut state_block)
+                .validate_unchecked(&mut state_block)
+                .sign_as_leader(&leader_private_key)
                 .unpack(|_| {})
                 .commit(&topology)
                 .unpack(|_| {})
@@ -1317,14 +1316,13 @@ mod tests {
         thread::sleep(BLOCK_FLUSH_TIMEOUT);
 
         {
-            let unverified_block_next = BlockBuilder::new(vec![tx2])
-                .chain(0, state.view().latest_block().as_deref())
-                .sign(&leader_private_key)
-                .unpack(|_| {});
+            let unverified_block_next =
+                BlockBuilder::new(vec![tx2]).chain(0, state.view().latest_block().as_deref());
 
             let mut state_block = state.block(unverified_block_next.header());
             let block_next = unverified_block_next
-                .validate_and_record_transactions(&mut state_block)
+                .validate_unchecked(&mut state_block)
+                .sign_as_leader(&leader_private_key)
                 .unpack(|_| {})
                 .commit(&topology)
                 .unpack(|_| {})
@@ -1352,27 +1350,20 @@ mod tests {
         }
 
         fn next(&mut self) -> Arc<SignedBlock> {
-            let tx = {
-                let builder = TransactionBuilder::new(ChainId::from("test"), ALICE_ID.to_owned());
+            let builder = TransactionBuilder::new(ChainId::from("test"), ALICE_ID.to_owned());
 
-                let tx = if self.blocks.is_empty() {
-                    builder.with_instructions([Upgrade::new(Executor::new(
-                        WasmSmartContract::from_compiled(vec![]),
-                    ))])
-                } else {
-                    builder.with_instructions([Log::new(Level::INFO, "test".to_owned())])
-                }
-                .sign(ALICE_KEYPAIR.private_key());
-
-                AcceptedTransaction::new_unchecked(tx)
-            };
+            let tx = if self.blocks.is_empty() {
+                builder.with_instructions([Upgrade::new(Executor::new(
+                    WasmSmartContract::from_compiled(vec![]),
+                ))])
+            } else {
+                builder.with_instructions([Log::new(Level::INFO, "test".to_owned())])
+            }
+            .sign(ALICE_KEYPAIR.private_key());
 
             let prev = self.blocks.last().cloned();
-            let block: SignedBlock = BlockBuilder::new(vec![tx])
-                .chain(0, prev.as_ref().map(AsRef::as_ref))
-                .sign(PEER_KEYPAIR.private_key())
-                .unpack(|_| {})
-                .into();
+            let block = BlockBuilder::new(vec![]).chain(0, prev.as_ref().map(AsRef::as_ref));
+            let block = SignedBlock::new_unverified_unsigned(block.header(), vec![tx]);
 
             let block = Arc::new(block);
             self.blocks.push(block.clone());

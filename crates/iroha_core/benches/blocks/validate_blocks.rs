@@ -12,7 +12,7 @@ pub struct StateValidateBlocks {
     account_private_key: PrivateKey,
     account_id: AccountId,
     topology: Topology,
-    peer_private_key: PrivateKey,
+    peer_key_pair: KeyPair,
 }
 
 impl StateValidateBlocks {
@@ -29,8 +29,8 @@ impl StateValidateBlocks {
         let assets_per_domain = 100;
         let (domain_ids, account_ids, asset_definition_ids) =
             generate_ids(domains, accounts_per_domain, assets_per_domain);
-        let (peer_public_key, peer_private_key) = KeyPair::random().into_parts();
-        let peer_id = PeerId::new(peer_public_key);
+        let peer_key_pair = KeyPair::random();
+        let peer_id = PeerId::new(peer_key_pair.public_key().clone());
         let topology = Topology::new(vec![peer_id]);
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let state = build_state(rt, &alice_id);
@@ -50,7 +50,7 @@ impl StateValidateBlocks {
             account_private_key: alice_keypair.private_key().clone(),
             account_id: alice_id,
             topology,
-            peer_private_key,
+            peer_key_pair,
         }
     }
 
@@ -69,7 +69,7 @@ impl StateValidateBlocks {
             account_private_key,
             account_id,
             topology,
-            peer_private_key,
+            peer_key_pair,
         }: Self,
     ) {
         for (instructions, i) in instructions.into_iter().zip(1..) {
@@ -79,7 +79,7 @@ impl StateValidateBlocks {
                 account_id.clone(),
                 &account_private_key,
                 &topology,
-                &peer_private_key,
+                &peer_key_pair,
             );
             let _events = state_block.apply_without_execution(&block, topology.as_ref().to_owned());
             assert_eq!(state_block.height(), i);

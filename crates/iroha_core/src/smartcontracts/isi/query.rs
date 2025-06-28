@@ -411,12 +411,12 @@ mod tests {
             let peer_id = PeerId::new(peer_public_key);
             let topology = Topology::new(vec![peer_id]);
             let unverified_first_block = BlockBuilder::new(transactions.clone())
-                .chain(0, state.view().latest_block().as_deref())
-                .sign(&peer_private_key)
-                .unpack(|_| {});
+                .chain(0, state.view().latest_block().as_deref());
+
             let mut state_block = state.block(unverified_first_block.header());
             let first_block = unverified_first_block
-                .validate_and_record_transactions(&mut state_block)
+                .validate_unchecked(&mut state_block)
+                .sign_as_leader(&peer_private_key)
                 .unpack(|_| {})
                 .commit(&topology)
                 .unpack(|_| {})
@@ -428,13 +428,12 @@ mod tests {
 
             for _ in 1u64..blocks {
                 let unverified_block = BlockBuilder::new(transactions.clone())
-                    .chain(0, state.view().latest_block().as_deref())
-                    .sign(&peer_private_key)
-                    .unpack(|_| {});
-                let mut state_block = state.block(unverified_block.header());
+                    .chain(0, state.view().latest_block().as_deref());
 
+                let mut state_block = state.block(unverified_block.header());
                 let block = unverified_block
-                    .validate_and_record_transactions(&mut state_block)
+                    .validate_unchecked(&mut state_block)
+                    .sign_as_leader(&peer_private_key)
                     .unpack(|_| {})
                     .commit(&topology)
                     .unpack(|_| {})
@@ -605,16 +604,16 @@ mod tests {
 
         let va_tx = AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_limits)?;
 
-        let (peer_public_key, _) = KeyPair::random().into_parts();
+        let (peer_public_key, peer_private_key) = KeyPair::random().into_parts();
         let peer_id = PeerId::new(peer_public_key);
         let topology = Topology::new(vec![peer_id]);
-        let unverified_block = BlockBuilder::new(vec![va_tx.clone()])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(ALICE_KEYPAIR.private_key())
-            .unpack(|_| {});
+        let unverified_block =
+            BlockBuilder::new(vec![va_tx.clone()]).chain(0, state.view().latest_block().as_deref());
+
         let mut state_block = state.block(unverified_block.header());
         let vcb = unverified_block
-            .validate_and_record_transactions(&mut state_block)
+            .validate_unchecked(&mut state_block)
+            .sign_as_leader(&peer_private_key)
             .unpack(|_| {})
             .commit(&topology)
             .unpack(|_| {})

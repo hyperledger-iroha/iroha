@@ -5,7 +5,7 @@ use iroha_macro::*;
 use parity_scale_codec::{Decode, Encode};
 
 use super::view_change;
-use crate::block::{CommittedBlock, NewBlock, ValidBlock};
+use crate::block::{CommittedBlock, ValidBlock};
 
 #[allow(clippy::enum_variant_names)]
 /// Message's variants that are used by peers to communicate in the process of consensus.
@@ -43,20 +43,11 @@ pub struct BlockCreated {
     pub block: SignedBlock,
 }
 
-impl From<&NewBlock> for BlockCreated {
-    fn from(block: &NewBlock) -> Self {
+impl From<&ValidBlock> for BlockCreated {
+    /// Converts a validated and signed `ValidBlock` into a `BlockCreated` message.
+    fn from(block: &ValidBlock) -> Self {
         Self {
-            // TODO: Redundant clone
-            block: block.clone().into(),
-        }
-    }
-}
-
-impl From<&SignedBlock> for BlockCreated {
-    fn from(block: &SignedBlock) -> Self {
-        Self {
-            // TODO: Redundant clone
-            block: block.clone(),
+            block: block.as_ref().clone(),
         }
     }
 }
