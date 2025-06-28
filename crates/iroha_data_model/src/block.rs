@@ -4,7 +4,7 @@
 
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, collections::BTreeSet, format, string::String, vec::Vec};
-use core::{fmt::Display, num::NonZeroU64, time::Duration};
+use core::{fmt::Display, time::Duration};
 #[cfg(feature = "std")]
 use std::collections::BTreeSet;
 
@@ -22,6 +22,8 @@ use crate::transaction::{error::TransactionRejectionReason, prelude::*};
 
 #[model]
 mod model {
+    use core::num::NonZeroU64;
+
     use getset::{CopyGetters, Getters};
 
     use super::*;
@@ -59,6 +61,8 @@ mod model {
         pub merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
         /// Merkle root of this block's transaction results.
         /// None if there are no transactions (empty block).
+        /// Skips encoding and decoding to avoid affecting the block hash.
+        #[codec(skip)]
         #[getset(get_copy = "pub")]
         pub result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
         /// Creation timestamp as Unix time in milliseconds.
@@ -189,52 +193,10 @@ impl BlockHeader {
         Duration::from_millis(self.creation_time_ms)
     }
 
-    /// Returns the consensus-level hash of the block header,
-    /// excluding the `result_merkle_root` field.
-    ///
-    /// TODO: prevent divergent hashes caused by direct calls to `HashOf::new`,
-    /// leveraging specialization once it's stabilized (<https://github.com/rust-lang/rust/issues/31844>).
+    /// Calculate block hash
     #[inline]
     pub fn hash(&self) -> HashOf<BlockHeader> {
-        self.hash_without_results()
-    }
-
-    /// Computes the header hash without including `result_merkle_root`.
-    #[inline]
-    fn hash_without_results(&self) -> HashOf<BlockHeader> {
-        /// A view of `BlockHeader` used for consensus hashing, omitting the execution results.
-        #[derive(Encode)]
-        struct BlockHeaderForConsensus {
-            height: NonZeroU64,
-            prev_block_hash: Option<HashOf<BlockHeader>>,
-            // FIXME #5473: address inconsistency introduced by time-triggered entrypoints
-            merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-            creation_time_ms: u64,
-            view_change_index: u32,
-        }
-
-        impl From<&BlockHeader> for BlockHeaderForConsensus {
-            fn from(value: &BlockHeader) -> Self {
-                let BlockHeader {
-                    height,
-                    prev_block_hash,
-                    merkle_root,
-                    result_merkle_root: _,
-                    creation_time_ms,
-                    view_change_index,
-                } = *value;
-
-                Self {
-                    height,
-                    prev_block_hash,
-                    merkle_root,
-                    creation_time_ms,
-                    view_change_index,
-                }
-            }
-        }
-
-        HashOf::from_untyped_unchecked(HashOf::new(&BlockHeaderForConsensus::from(self)).into())
+        HashOf::new(self)
     }
 }
 
@@ -476,7 +438,7 @@ impl SignedBlock {
 
         block.signatures.insert(BlockSignature::new(
             signatory as u64,
-            SignatureOf::from_hash(private_key, block.payload.header.hash()),
+            SignatureOf::new(private_key, &block.payload.header),
         ));
     }
 

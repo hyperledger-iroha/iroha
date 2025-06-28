@@ -797,10 +797,6 @@
         "type": "Option<HashOf<MerkleTree<TransactionEntrypoint>>>"
       },
       {
-        "name": "result_merkle_root",
-        "type": "Option<HashOf<MerkleTree<TransactionResult>>>"
-      },
-      {
         "name": "creation_time_ms",
         "type": "u64"
       },
@@ -2384,7 +2380,6 @@
   "Hash": "Array<u8, 32>",
   "HashOf<BlockHeader>": "Hash",
   "HashOf<MerkleTree<TransactionEntrypoint>>": "Hash",
-  "HashOf<MerkleTree<TransactionResult>>": "Hash",
   "HashOf<SignedTransaction>": "Hash",
   "HashOf<TransactionEntrypoint>": "Hash",
   "HashOf<TransactionResult>": "Hash",
@@ -3484,9 +3479,6 @@
   },
   "Option<HashOf<MerkleTree<TransactionEntrypoint>>>": {
     "Option": "HashOf<MerkleTree<TransactionEntrypoint>>"
-  },
-  "Option<HashOf<MerkleTree<TransactionResult>>>": {
-    "Option": "HashOf<MerkleTree<TransactionResult>>"
   },
   "Option<HashOf<SignedTransaction>>": {
     "Option": "HashOf<SignedTransaction>"
