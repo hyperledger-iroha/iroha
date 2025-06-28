@@ -61,8 +61,6 @@ mod model {
         pub merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
         /// Merkle root of this block's transaction results.
         /// None if there are no transactions (empty block).
-        /// Skips encoding and decoding to avoid affecting the block hash.
-        #[codec(skip)]
         #[getset(get_copy = "pub")]
         pub result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
         /// Creation timestamp as Unix time in milliseconds.
