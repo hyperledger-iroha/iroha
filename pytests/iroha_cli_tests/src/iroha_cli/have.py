@@ -193,3 +193,33 @@ def transaction_hash() -> str:
     :return: The transaction hash as a string.
     """
     return extract_hash(iroha_cli.transaction_hash)
+
+
+def lines_count(expected: int) -> bool:
+    """
+    Check if the iroha_cli stdout output contains the expected number of lines.
+    """
+
+    def check_lines_count() -> bool:
+        stdout = iroha_cli.stdout
+        if stdout:
+            lines = stdout.strip().split("\n")
+            return len(lines) == expected
+        return False
+
+    return iroha_cli.wait_for(check_lines_count)
+
+
+def line_starts_with(expected: str, index: int = 0) -> bool:
+    """
+    Check if the iroha_cli stdout output contains the expected line.
+    """
+
+    def check_line() -> bool:
+        stdout = iroha_cli.stdout
+        if stdout is None:
+            return False
+        lines = stdout.strip().split("\n")
+        return lines[index].startswith(expected)
+
+    return iroha_cli.wait_for(check_line)

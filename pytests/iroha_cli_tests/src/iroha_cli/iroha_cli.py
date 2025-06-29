@@ -497,3 +497,11 @@ class IrohaCli:
         :type value: Config
         """
         self._config = value
+
+    def version(self):
+        """
+        Appends the 'version' command to the command list and executes it.
+        """
+        self.command.append("version")
+        self.execute()
+        return self

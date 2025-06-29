@@ -121,6 +121,7 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha executor data-model`↴](#iroha-executor-data-model)
 * [`iroha executor upgrade`↴](#iroha-executor-upgrade)
 * [`iroha markdown-help`↴](#iroha-markdown-help)
+* [`iroha version`↴](#iroha-version)
 
 ## `iroha`
 
@@ -145,6 +146,7 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
 * `trigger` — Read and write triggers
 * `executor` — Read and write the executor
 * `markdown-help` — Output CLI documentation in Markdown format
+* `version` — Show versions and git SHA of client and server
 
 ###### **Options:**
 
@@ -1613,6 +1615,14 @@ Upgrade the executor
 Output CLI documentation in Markdown format
 
 **Usage:** `iroha markdown-help`
+
+
+
+## `iroha version`
+
+Show versions and git SHA of client and server
+
+**Usage:** `iroha version`
 
 
 

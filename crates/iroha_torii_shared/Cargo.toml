@@ -1,5 +1,5 @@
 [package]
-name = "iroha_torii_const"
+name = "iroha_torii_shared"
 
 edition.workspace = true
 version.workspace = true
@@ -19,3 +19,5 @@ workspace = true
 
 [dependencies]
 iroha_primitives.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
