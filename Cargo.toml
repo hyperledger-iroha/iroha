@@ -17,7 +17,7 @@ categories = ["cryptography::cryptocurrencies"]
 iroha_core = { version = "=2.0.0-rc.2.0 ", path = "crates/iroha_core" }
 
 iroha_torii = { version = "=2.0.0-rc.2.0", path = "crates/iroha_torii" }
-iroha_torii_const = { version = "=2.0.0-rc.2.0", path = "crates/iroha_torii_const" }
+iroha_torii_shared = { version = "=2.0.0-rc.2.0", path = "crates/iroha_torii_shared" }
 
 iroha = { version = "=2.0.0-rc.2.0", path = "crates/iroha" }
 

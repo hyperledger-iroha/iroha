@@ -32,7 +32,7 @@ iroha_primitives = { workspace = true, features = ["std"] }
 iroha_logger = { workspace = true }
 iroha_data_model = { workspace = true, features = ["http"] }
 iroha_version = { workspace = true }
-iroha_torii_const = { workspace = true }
+iroha_torii_shared = { workspace = true }
 iroha_futures = { workspace = true }
 iroha_macro = { workspace = true }
 iroha_schema = { workspace = true, optional = true }
@@ -56,6 +56,9 @@ pprof = { git = " https://github.com/Erigara/pprof-rs", branch = "fix_pointer_al
 nonzero_ext = { workspace = true }
 pretty-error-debug = "0.3.0"
 tungstenite = { workspace = true }
+
+[build-dependencies]
+vergen = { workspace = true }
 
 [dev-dependencies]
 http-body-util = "0.1.2"

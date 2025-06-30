@@ -33,7 +33,7 @@ use iroha_core::{
 use iroha_data_model::{peer::Peer, ChainId};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
-use iroha_torii_const::uri;
+use iroha_torii_shared::uri;
 use tokio::{net::TcpListener, sync::watch};
 use tower_http::{
     timeout::TimeoutLayer,
@@ -249,6 +249,11 @@ impl Torii {
                     }
                 }),
             );
+
+        let router = router.route(
+            uri::SERVER_VERSION,
+            get(move || async move { routing::handle_server_version() }),
+        );
 
         router.layer((
             TraceLayer::new_for_http()
