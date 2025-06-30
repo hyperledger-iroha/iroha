@@ -182,6 +182,7 @@ impl BlockHeader {
         struct BlockHeaderForConsensus {
             height: NonZeroU64,
             prev_block_hash: Option<HashOf<BlockHeader>>,
+            // FIXME #5473: address inconsistency introduced by time-triggered entrypoints
             merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
             creation_time_ms: u64,
             view_change_index: u32,
