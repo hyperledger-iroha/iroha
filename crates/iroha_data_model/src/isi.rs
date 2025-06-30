@@ -1434,7 +1434,7 @@ pub mod error {
             TimeTriggerInThePast,
         }
 
-        /// Repetition of of `{instruction}` for id `{id}`
+        /// Repetition of `{instruction}` for id `{id}`
         #[derive(
             Debug,
             displaydoc::Display,
