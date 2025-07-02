@@ -1,4 +1,4 @@
-//! Structures, traits and impls related to `Paramater`s.
+//! Structures, traits and impls related to `Parameter`s.
 #[cfg(not(feature = "std"))]
 use alloc::{collections::btree_map, format, string::String, vec::Vec};
 use core::{num::NonZeroU64, time::Duration};
