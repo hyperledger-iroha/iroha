@@ -13,8 +13,9 @@ use iroha_executor_data_model::permission::{
     nft::{CanRegisterNft, CanUnregisterNft},
     trigger::CanUnregisterTrigger,
 };
+use iroha_genesis::GENESIS_ACCOUNT_ID;
 use iroha_test_network::*;
-use iroha_test_samples::{gen_account_in, ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
+use iroha_test_samples::{gen_account_in, ALICE_ID, BOB_ID};
 
 #[test]
 fn domain_owner_domain_permissions() -> Result<()> {
@@ -392,7 +393,7 @@ fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
     let foo_domain: DomainId = "foo".parse()?;
     let user1 = AccountId::new(users_domain.clone(), KeyPair::random().into_parts().0);
     let user2 = AccountId::new(users_domain.clone(), KeyPair::random().into_parts().0);
-    let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    let genesis_account = GENESIS_ACCOUNT_ID.clone();
 
     let (network, _rt) = NetworkBuilder::new()
         .with_genesis_instruction(Register::domain(Domain::new(users_domain.clone())))

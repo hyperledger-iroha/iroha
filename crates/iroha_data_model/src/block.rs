@@ -316,12 +316,9 @@ impl SignedBlock {
         Ok(core::mem::replace(&mut block.signatures, signatures))
     }
 
-    /// Creates genesis block signed with genesis private key (and not signed by any peer)
+    /// Creates genesis block not signed by any peer.
     #[cfg(feature = "std")]
-    pub fn genesis(
-        transactions: Vec<SignedTransaction>,
-        private_key: &iroha_crypto::PrivateKey,
-    ) -> SignedBlock {
+    pub fn genesis(transactions: Vec<SignedTransaction>, creation_time_ms: u64) -> SignedBlock {
         use nonzero_ext::nonzero;
 
         let transactions_hash = transactions
@@ -330,7 +327,6 @@ impl SignedBlock {
             .collect::<MerkleTree<_>>()
             .root()
             .expect("Genesis block must have transactions");
-        let creation_time_ms = Self::get_genesis_block_creation_time(&transactions);
         let header = BlockHeader {
             height: nonzero!(1_u64),
             prev_block_hash: None,
@@ -339,39 +335,15 @@ impl SignedBlock {
             view_change_index: 0,
         };
 
-        let signature = BlockSignature(0, SignatureOf::new(private_key, &header));
-        let payload = BlockPayload {
-            header,
-            transactions,
-        };
-
         SignedBlockV1 {
-            signatures: vec![signature],
-            payload,
+            signatures: Vec::new(),
+            payload: BlockPayload {
+                header,
+                transactions,
+            },
             errors: BTreeMap::new(),
         }
         .into()
-    }
-
-    #[cfg(feature = "std")]
-    fn get_genesis_block_creation_time(transactions: &[SignedTransaction]) -> u64 {
-        use std::time::SystemTime;
-
-        let latest_txn_time = transactions
-            .iter()
-            .map(SignedTransaction::creation_time)
-            .max()
-            .expect("INTERNAL BUG: Genesis block is empty");
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap();
-        now
-            // We have invariant that "transaction creation time" < "block creation time"
-            // See `BlockPayloadCandidate::validate_header`
-            .max(latest_txn_time + Duration::from_millis(1))
-            .as_millis()
-            .try_into()
-            .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX")
     }
 }
 

@@ -97,11 +97,10 @@ impl AcceptedTransaction {
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
-        genesis_account: &AccountId,
     ) -> Result<(), AcceptTransactionFail> {
         Self::validate_common(tx, expected_chain_id, max_clock_drift)?;
 
-        if genesis_account != tx.authority() {
+        if *iroha_genesis::GENESIS_ACCOUNT_ID != *tx.authority() {
             return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
         }
 
@@ -200,10 +199,8 @@ impl AcceptedTransaction {
         tx: SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
-        genesis_account: &AccountId,
     ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate_genesis(&tx, expected_chain_id, max_clock_drift, genesis_account)
-            .map(|()| Self(tx))
+        Self::validate_genesis(&tx, expected_chain_id, max_clock_drift).map(|()| Self(tx))
     }
 
     /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].

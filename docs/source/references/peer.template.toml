@@ -16,7 +16,6 @@
 # trusted_peers =
 
 [genesis]
-# public_key =
 # file =
 
 [network]

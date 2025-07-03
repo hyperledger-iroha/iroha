@@ -44,7 +44,6 @@ enum Args {
     /// Generate the schema used for code generation in Iroha SDKs
     Schema(schema::Args),
     /// Commands related to genesis
-    #[clap(subcommand)]
     Genesis(genesis::Args),
     /// Commands related to codec
     Codec(codec::Args),
