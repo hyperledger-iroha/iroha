@@ -31,15 +31,17 @@ use crate::{Hash, HashOf};
 #[repr(transparent)]
 pub struct MerkleTree<T>(Vec<Option<HashOf<T>>>);
 
-/// A Merkle proof: index of a leaf among all leaves, and the shortest list of additional nodes to recompute the root.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, Deserialize, Serialize, IntoSchema,
-)]
-pub struct MerkleProof<T> {
-    /// Zero-based index of the leaf among all leaves.
-    leaf_index: u32,
-    /// List of missing nodes required to recompute the nodes leading from a leaf to the root.
-    audit_path: Vec<Option<HashOf<T>>>,
+crate::ffi::ffi_item! {
+    /// A Merkle proof: index of a leaf among all leaves, and the shortest list of additional nodes to recompute the root.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, Deserialize, Serialize, IntoSchema,
+    )]
+    pub struct MerkleProof<T> {
+        /// Zero-based index of the leaf among all leaves.
+        leaf_index: u32,
+        /// List of missing nodes required to recompute the nodes leading from a leaf to the root.
+        audit_path: Vec<Option<HashOf<T>>>,
+    }
 }
 
 /// Iterator over the leaf hashes of a [`MerkleTree`], yielding each leaf in left-to-right order.
@@ -312,10 +314,10 @@ impl<T> MerkleProof<T> {
             return false;
         }
         let mut index = MerkleTree::<T>::index_in_tree_unchecked(self.leaf_index as usize, height);
-        let Some(computed_root) = self.audit_path.into_iter().fold(Some(*leaf), |acc, e| {
+        let Some(computed_root) = self.audit_path.into_iter().try_fold(*leaf, |acc, e| {
             let (l_node, r_node) = match index % 2 {
-                0 => (e, acc),
-                1 => (acc, e),
+                0 => (e, Some(acc)),
+                1 => (Some(acc), e),
                 _ => unreachable!(),
             };
             index = index.saturating_sub(1) >> 1;

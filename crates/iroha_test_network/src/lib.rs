@@ -811,7 +811,7 @@ impl NetworkPeer {
 
                         while let Some(Ok(block)) = blocks.next().await {
                             let height = block.header().height().get();
-                            let is_empty = block.header().transactions_hash().is_none();
+                            let is_empty = block.header().merkle_root().is_none();
                             assert_eq!(height, block_height.total + 1);
                             block_height.total += 1;
                             if !is_empty {
