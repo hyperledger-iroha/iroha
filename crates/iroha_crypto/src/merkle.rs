@@ -119,7 +119,7 @@ trait CompleteBinaryTree {
 
     /// Returns the index of the sibling node of the node at `index`, if it exists.
     fn sibling_index(&self, index: usize) -> Option<usize> {
-        if index.is_multiple_of(2) {
+        if index % 2 == 0 {
             (0 < index).then(|| index - 1)
         } else {
             (index < self.len() - 1).then(|| index + 1)
