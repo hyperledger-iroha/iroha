@@ -10,7 +10,6 @@
 use std::time::{Duration, SystemTime};
 
 use eyre::Result;
-use iroha_crypto::SignatureOf;
 pub use iroha_data_model::prelude::*;
 use iroha_data_model::{
     isi::error::Mismatch,
