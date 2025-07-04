@@ -658,3 +658,8 @@ pub mod error {
     #[cfg(feature = "std")]
     impl std::error::Error for BlockRejectionReason {}
 }
+
+pub mod prelude {
+    //! For glob-import
+    pub use super::{error::BlockRejectionReason, BlockHeader, BlockSignature, SignedBlock};
+}
