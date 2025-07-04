@@ -3,10 +3,16 @@
 //! `Block`s are organised into a linear sequence over time (also known as the block chain).
 
 #[cfg(not(feature = "std"))]
-use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
+    format,
+    string::String,
+    vec::Vec,
+};
 use core::{fmt::Display, time::Duration};
 #[cfg(feature = "std")]
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use derive_more::Display;
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
@@ -68,7 +74,18 @@ mod model {
     }
 
     #[derive(
-        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Serialize, IntoSchema,
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Encode,
+        Serialize,
+        IntoSchema,
+        Deserialize,
+        Decode,
     )]
     #[display(fmt = "({header})")]
     #[allow(missing_docs)]
@@ -104,13 +121,24 @@ mod model {
     /// Signed block
     #[version_with_scale(version = 1, versioned_alias = "SignedBlock")]
     #[derive(
-        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Serialize, IntoSchema,
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Encode,
+        Serialize,
+        IntoSchema,
+        Decode,
+        Deserialize,
     )]
     #[display(fmt = "{}", "self.header()")]
     #[ffi_type]
     pub struct SignedBlockV1 {
         /// Signatures of peers which approved this block.
-        pub(super) signatures: Vec<BlockSignature>,
+        pub(super) signatures: BTreeSet<BlockSignature>,
         /// Block payload
         pub(super) payload: BlockPayload,
         /// Collection of rejection reasons for every transaction if exists
@@ -169,7 +197,7 @@ impl SignedBlock {
         transactions: Vec<SignedTransaction>,
     ) -> SignedBlock {
         SignedBlockV1 {
-            signatures: vec![signature],
+            signatures: [signature].into_iter().collect(),
             payload: BlockPayload {
                 header,
                 transactions,
@@ -255,7 +283,7 @@ impl SignedBlock {
     pub fn sign(&mut self, private_key: &iroha_crypto::PrivateKey, signatory: usize) {
         let SignedBlock::V1(block) = self;
 
-        block.signatures.push(BlockSignature(
+        block.signatures.insert(BlockSignature(
             signatory as u64,
             SignatureOf::new(private_key, &block.payload.header),
         ));
@@ -275,7 +303,7 @@ impl SignedBlock {
         }
 
         let SignedBlock::V1(block) = self;
-        block.signatures.push(signature);
+        block.signatures.insert(signature);
 
         Ok(())
     }
@@ -288,13 +316,8 @@ impl SignedBlock {
     #[cfg(feature = "transparent_api")]
     pub fn replace_signatures(
         &mut self,
-        signatures: Vec<BlockSignature>,
-    ) -> Result<Vec<BlockSignature>, iroha_crypto::Error> {
-        #[cfg(not(feature = "std"))]
-        use alloc::collections::BTreeSet;
-        #[cfg(feature = "std")]
-        use std::collections::BTreeSet;
-
+        signatures: BTreeSet<BlockSignature>,
+    ) -> Result<BTreeSet<BlockSignature>, iroha_crypto::Error> {
         if signatures.is_empty() {
             return Err(iroha_crypto::Error::Signing("Signatures empty".to_owned()));
         }
@@ -346,7 +369,7 @@ impl SignedBlock {
         };
 
         SignedBlockV1 {
-            signatures: vec![signature],
+            signatures: [signature].into_iter().collect(),
             payload,
             errors: BTreeMap::new(),
         }
@@ -384,188 +407,6 @@ impl BlockSignature {
     /// Signature itself
     pub fn payload(&self) -> &SignatureOf<BlockHeader> {
         &self.1
-    }
-}
-
-mod candidate {
-    use parity_scale_codec::Input;
-
-    use super::*;
-
-    #[derive(Decode, Deserialize)]
-    struct SignedBlockCandidate {
-        signatures: Vec<BlockSignature>,
-        payload: BlockPayload,
-        errors: BTreeMap<u64, TransactionRejectionReason>,
-    }
-
-    #[derive(Decode, Deserialize)]
-    struct BlockPayloadCandidate {
-        header: BlockHeader,
-        transactions: Vec<SignedTransaction>,
-    }
-
-    impl BlockPayloadCandidate {
-        fn validate(self) -> Result<BlockPayload, &'static str> {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                self.validate_header()?;
-            }
-
-            Ok(BlockPayload {
-                header: self.header,
-                transactions: self.transactions,
-            })
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        fn validate_header(&self) -> Result<(), &'static str> {
-            let actual_txs_hash = self.header.transactions_hash;
-
-            let expected_txs_hash = self
-                .transactions
-                .iter()
-                .map(SignedTransaction::hash)
-                .collect::<MerkleTree<_>>()
-                .root();
-
-            if expected_txs_hash != actual_txs_hash {
-                return Err("Transactions' hash incorrect");
-            }
-
-            self.transactions.iter().try_for_each(|tx| {
-                if tx.creation_time() >= self.header.creation_time() {
-                    return Err("Transaction creation time is ahead of block creation time");
-                }
-
-                Ok(())
-            })?;
-
-            Ok(())
-        }
-    }
-
-    impl SignedBlockCandidate {
-        fn validate(self) -> Result<SignedBlockV1, &'static str> {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                self.validate_signatures()?;
-
-                if self.payload.header.height.get() == 1 {
-                    self.validate_genesis()?;
-                }
-            }
-
-            Ok(SignedBlockV1 {
-                signatures: self.signatures,
-                payload: self.payload,
-                errors: self.errors,
-            })
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        fn validate_signatures(&self) -> Result<(), &'static str> {
-            #[cfg(not(feature = "std"))]
-            use alloc::collections::BTreeSet;
-            #[cfg(feature = "std")]
-            use std::collections::BTreeSet;
-
-            if self.signatures.is_empty() && self.payload.header.height.get() != 1 {
-                return Err("Block missing signatures");
-            }
-
-            self.signatures
-                .iter()
-                .map(|signature| signature.0)
-                .try_fold(BTreeSet::new(), |mut acc, elem| {
-                    if !acc.insert(elem) {
-                        return Err("Duplicate signature in block");
-                    }
-
-                    Ok(acc)
-                })?;
-
-            Ok(())
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        fn validate_genesis(&self) -> Result<(), &'static str> {
-            let transactions = self.payload.transactions.as_slice();
-
-            if !self.errors.is_empty() {
-                return Err("Genesis transaction must not contain errors");
-            }
-
-            for transaction in transactions {
-                let Executable::Instructions(_) = transaction.instructions() else {
-                    return Err("Genesis transaction must contain instructions");
-                };
-            }
-
-            let Some(transaction_executor) = transactions.first() else {
-                return Err("Genesis block must contain at least one transaction");
-            };
-            let Executable::Instructions(instructions_executor) =
-                transaction_executor.instructions()
-            else {
-                return Err("Genesis transaction must contain instructions");
-            };
-            let [crate::isi::InstructionBox::Upgrade(_)] = instructions_executor.as_ref() else {
-                return Err(
-                    "First transaction must contain single `Upgrade` instruction to set executor",
-                );
-            };
-
-            if transactions.len() > 5 {
-                return Err(
-                    "Genesis block must have 1 to 5 transactions (executor upgrade, parameters, ordinary instructions, wasm trigger registrations, initial topology)",
-                );
-            }
-
-            Ok(())
-        }
-    }
-
-    impl Decode for super::BlockPayload {
-        fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
-            BlockPayloadCandidate::decode(input)?
-                .validate()
-                .map_err(Into::into)
-        }
-    }
-
-    impl<'de> Deserialize<'de> for super::BlockPayload {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            use serde::de::Error as _;
-
-            BlockPayloadCandidate::deserialize(deserializer)?
-                .validate()
-                .map_err(D::Error::custom)
-        }
-    }
-
-    impl Decode for SignedBlockV1 {
-        fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
-            SignedBlockCandidate::decode(input)?
-                .validate()
-                .map_err(Into::into)
-        }
-    }
-
-    impl<'de> Deserialize<'de> for SignedBlockV1 {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            use serde::de::Error as _;
-
-            SignedBlockCandidate::deserialize(deserializer)?
-                .validate()
-                .map_err(D::Error::custom)
-        }
     }
 }
 

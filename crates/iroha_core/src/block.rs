@@ -84,8 +84,8 @@ pub enum BlockValidationError {
         /// Actual value
         actual: usize,
     },
-    /// The transaction hash stored in the block header does not match the actual transaction hash
-    TransactionHashMismatch,
+    /// The transactions hash stored in the block header does not match the actual transaction hash
+    TransactionsHashMismatch,
     /// Cannot accept a transaction
     TransactionAccept(#[from] AcceptTransactionFail),
     /// Mismatch between the actual and expected topology. Expected: {expected:?}, actual: {actual:?}
@@ -105,6 +105,8 @@ pub enum BlockValidationError {
     BlockInThePast,
     /// Block's creation time is later than the current node local time
     BlockInTheFuture,
+    /// Some transaction in the block is created after the block itself
+    TransactionInTheFuture,
 }
 
 /// Error during signature verification
@@ -136,6 +138,14 @@ pub enum InvalidGenesisError {
     InvalidSignature,
     /// Genesis transaction must be authorized by genesis account
     UnexpectedAuthority,
+    /// Genesis transactions must not contain errors
+    ContainsErrors,
+    /// Genesis transaction must contain instructions
+    NotInstructions,
+    /// Genesis block must have 1 to 5 transactions (executor upgrade, parameters, ordinary instructions, wasm trigger registrations, initial topology)
+    BadTransactionsAmount,
+    /// First transaction must contain single `Upgrade` instruction to set executor
+    MustUpgrade,
 }
 
 /// Builder for blocks
@@ -346,10 +356,16 @@ mod new {
 }
 
 mod valid {
-    use std::{collections::BTreeMap, time::SystemTime};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        time::SystemTime,
+    };
 
     use commit::CommittedBlock;
-    use iroha_data_model::{account::AccountId, events::pipeline::PipelineEventBox, ChainId};
+    use iroha_data_model::{
+        account::AccountId, events::pipeline::PipelineEventBox, isi::InstructionBox,
+        prelude::Executable, ChainId,
+    };
 
     use super::*;
     use crate::{
@@ -546,7 +562,8 @@ mod valid {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap();
             let max_clock_drift = state.world().parameters().sumeragi.max_clock_drift();
-            if block.header().creation_time().saturating_sub(now) > max_clock_drift {
+            let block_creation_time = block.header().creation_time();
+            if block_creation_time.saturating_sub(now) > max_clock_drift {
                 return Err(BlockValidationError::BlockInTheFuture);
             }
 
@@ -600,6 +617,10 @@ mod valid {
                     return Err(BlockValidationError::HasCommittedTransactions);
                 }
 
+                if tx.creation_time() >= block_creation_time {
+                    return Err(BlockValidationError::TransactionInTheFuture);
+                }
+
                 if block.header().is_genesis() {
                     AcceptedTransaction::validate_genesis(
                         tx,
@@ -610,6 +631,18 @@ mod valid {
                 } else {
                     AcceptedTransaction::validate(tx, chain_id, max_clock_drift, tx_params)?;
                 }
+            }
+
+            // TODO: can it be done in a single iteration over block transactions above?
+            let expected_txs_hash = block
+                .transactions()
+                .map(SignedTransaction::hash)
+                .collect::<MerkleTree<_>>()
+                .root();
+            let actual_txs_hash = block.header().transactions_hash();
+
+            if expected_txs_hash != actual_txs_hash {
+                return Err(BlockValidationError::TransactionsHashMismatch);
             }
 
             Ok(())
@@ -710,9 +743,9 @@ mod valid {
         /// - Replacement signatures contain duplicate signatures
         pub fn replace_signatures(
             &mut self,
-            signatures: Vec<BlockSignature>,
+            signatures: BTreeSet<BlockSignature>,
             topology: &Topology,
-        ) -> WithEvents<Result<Vec<BlockSignature>, SignatureVerificationError>> {
+        ) -> WithEvents<Result<BTreeSet<BlockSignature>, SignatureVerificationError>> {
             let Ok(prev_signatures) = self.0.replace_signatures(signatures) else {
                 return WithEvents::new(Err(SignatureVerificationError::Other));
             };
@@ -875,11 +908,14 @@ mod valid {
         }
     }
 
-    // See also [SignedBlockCandidate::validate_genesis]
     fn check_genesis_block(
         block: &SignedBlock,
         genesis_account: &AccountId,
     ) -> Result<(), InvalidGenesisError> {
+        if block.errors().len() > 0 {
+            return Err(InvalidGenesisError::ContainsErrors);
+        }
+
         let signatures = block.signatures().collect::<Vec<_>>();
         let [signature] = signatures.as_slice() else {
             return Err(InvalidGenesisError::InvalidSignature);
@@ -890,9 +926,20 @@ mod valid {
             .map_err(|_| InvalidGenesisError::InvalidSignature)?;
 
         let transactions = block.payload().transactions.as_slice();
-        for transaction in transactions {
+        if transactions.is_empty() || transactions.len() > 5 {
+            return Err(InvalidGenesisError::BadTransactionsAmount);
+        }
+        for (i, transaction) in transactions.iter().enumerate() {
             if transaction.authority() != genesis_account {
                 return Err(InvalidGenesisError::UnexpectedAuthority);
+            }
+            let Executable::Instructions(isi) = transaction.instructions() else {
+                return Err(InvalidGenesisError::NotInstructions);
+            };
+            if i == 0 {
+                let [InstructionBox::Upgrade(_)] = isi.as_ref() else {
+                    return Err(InvalidGenesisError::MustUpgrade);
+                };
             }
         }
         Ok(())
@@ -1039,6 +1086,8 @@ mod commit {
 }
 
 mod event {
+    use std::collections::BTreeSet;
+
     use new::NewBlock;
 
     use super::*;
@@ -1079,11 +1128,11 @@ mod event {
             }
         }
     }
-    impl WithEvents<Result<Vec<BlockSignature>, SignatureVerificationError>> {
+    impl WithEvents<Result<BTreeSet<BlockSignature>, SignatureVerificationError>> {
         pub fn unpack<F: Fn(PipelineEventBox)>(
             self,
             f: F,
-        ) -> Result<Vec<BlockSignature>, SignatureVerificationError> {
+        ) -> Result<BTreeSet<BlockSignature>, SignatureVerificationError> {
             match self.0 {
                 Ok(ok) => Ok(ok),
                 Err(err) => Err(WithEvents(err).unpack(f)),
