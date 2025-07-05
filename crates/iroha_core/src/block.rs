@@ -203,14 +203,10 @@ mod pending {
 
             // NOTE: Lower time bound must always be upheld for a valid block
             // If the clock has drifted too far this block will be rejected
-            let creation_time = [
-                now,
-                latest_txn_time + Self::TIME_PADDING,
-                prev_block_time + Self::TIME_PADDING,
-            ]
-            .into_iter()
-            .max()
-            .unwrap();
+            let creation_time = [now, latest_txn_time, prev_block_time + Self::TIME_PADDING]
+                .into_iter()
+                .max()
+                .unwrap();
 
             BlockHeader {
                 height: prev_block.map(|block| block.header().height).map_or_else(

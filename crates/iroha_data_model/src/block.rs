@@ -434,7 +434,7 @@ mod candidate {
             }
 
             self.transactions.iter().try_for_each(|tx| {
-                if tx.creation_time() >= self.header.creation_time() {
+                if tx.creation_time() > self.header.creation_time() {
                     return Err("Transaction creation time is ahead of block creation time");
                 }
 
