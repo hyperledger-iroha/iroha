@@ -390,8 +390,9 @@ mod tests {
             };
 
             let valid_tx = {
+                let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
                 let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-                    .with_instructions::<InstructionBox>([])
+                    .with_instructions([ok_instruction])
                     .sign(ALICE_KEYPAIR.private_key());
                 AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_limits)?
             };
@@ -552,8 +553,9 @@ mod tests {
             (params.sumeragi().max_clock_drift(), params.transaction)
         };
 
+        let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
         let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-            .with_instructions::<InstructionBox>([])
+            .with_instructions([ok_instruction])
             .sign(ALICE_KEYPAIR.private_key());
 
         let va_tx = AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_limits)?;
