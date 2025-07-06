@@ -1248,6 +1248,7 @@ impl<S> Runtime<S> {
         caller.set_fuel(current.saturating_add(fuel))
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     fn get_fuel(caller: ::wasmtime::Caller<S>) -> ::wasmtime::Result<u64> {
         caller.get_fuel()
     }

@@ -108,5 +108,5 @@ fn should_fail_if_asset_not_found() {
     assert!(result
         .unwrap_err()
         .chain()
-        .any(|e| e.to_string() == format!("Failed to find asset: `{}`", asset_id)));
+        .any(|e| e.to_string() == format!("Failed to find asset: `{asset_id}`")));
 }
