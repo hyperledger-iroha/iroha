@@ -457,10 +457,13 @@ mod valid {
             use SignatureVerificationError::ProxyTailMissing;
             let proxy_tail_idx = topology.proxy_tail_index();
 
-            let signature = block.signatures().next_back().ok_or(ProxyTailMissing)?;
-            if proxy_tail_idx != usize::try_from(signature.0).map_err(|_err| ProxyTailMissing)? {
-                return Err(ProxyTailMissing);
-            }
+            let signature = block
+                .signatures()
+                .find(|x| {
+                    let idx = usize::try_from(x.0).expect("there could not be so many signatures");
+                    idx == proxy_tail_idx
+                })
+                .ok_or(ProxyTailMissing)?;
 
             signature
                 .1
