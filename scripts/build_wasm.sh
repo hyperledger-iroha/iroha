@@ -68,10 +68,10 @@ build() {
             )
             ;;
         "samples")
-            NAMES=("$(
+            NAMES=($(
                 cargo metadata --no-deps --manifest-path "$CARGO_DIR/Cargo.toml" --format-version=1 |
                 jq '.packages | map(select(.targets[].kind | contains(["cdylib"]))) | map(.manifest_path | split("/")) | map(select(.[-3] == "samples")) | map(.[-2]) | .[]' -r
-            )")
+            ))
     ;; esac
 
     mkdir -p "$TARGET_DIR/$1"
