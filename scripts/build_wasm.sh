@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e;
+set -euo pipefail
 
 DEFAULTS_DIR="defaults"
 CARGO_DIR="wasm"
@@ -8,10 +8,10 @@ PROFILE="release"
 SHOW_HELP=false
 
 # Makes possible to set `BIN_KAGAMI=target/release/kagami` without running cargo
-if [ -n "$BIN_KAGAMI" ]; then
-    bin_kagami=("$BIN_KAGAMI")
+if [[ -n "${BIN_KAGAMI:-}" ]]; then
+  read -r -a bin_kagami <<< "$BIN_KAGAMI"
 else
-    bin_kagami=(cargo run --release --bin kagami --)
+  bin_kagami=(cargo run --release --bin kagami --)
 fi
 
 main() {
@@ -32,7 +32,7 @@ main() {
         esac
     done
 
-    if $SHOW_HELP; then
+    if "$SHOW_HELP"; then
         print_help
         exit 0
     fi
@@ -55,7 +55,7 @@ main() {
                 ;;
             *)
                 echo "error: unrecognized target: $target. Target can be either [libs, samples, all]"
-        esac
+        ;; esac
     done
 }
 
@@ -72,12 +72,12 @@ build() {
                 cargo metadata --no-deps --manifest-path "$CARGO_DIR/Cargo.toml" --format-version=1 |
                 jq '.packages | map(select(.targets[].kind | contains(["cdylib"]))) | map(.manifest_path | split("/")) | map(select(.[-3] == "samples")) | map(.[-2]) | .[]' -r
             ))
-    esac
+    ;; esac
 
     mkdir -p "$TARGET_DIR/$1"
-    for name in ${NAMES[@]}; do
+    for name in "${NAMES[@]}"; do
         out_file="$TARGET_DIR/$1/$name.wasm"
-        "${bin_kagami[@]}" wasm build "$CARGO_DIR/$1/$name" --profile=$PROFILE --out-file "$out_file"
+        "${bin_kagami[@]}" wasm build "$CARGO_DIR/$1/$name" --profile="$PROFILE" --out-file "$out_file" --cargo-args="--locked"
     done
 
     echo "profile = \"${PROFILE}\"" > "$TARGET_DIR/build_config.toml"
@@ -89,15 +89,15 @@ build() {
 command() {
     case $1 in
         "libs")
-            build $1
+            build "$1"
             cp -r "$TARGET_DIR/$1" "$DEFAULTS_DIR/"
             mv "$DEFAULTS_DIR/$1/default_executor.wasm" "$DEFAULTS_DIR/executor.wasm"
             echo "info: copied wasm $1 to $DEFAULTS_DIR/$1/"
             echo "info: copied default executor to $DEFAULTS_DIR/executor.wasm"
             ;;
         "samples")
-            build $1
-    esac
+            build "$1"
+    ;; esac
 }
 
 
