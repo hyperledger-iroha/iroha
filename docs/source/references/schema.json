@@ -903,9 +903,15 @@
     ]
   },
   "BlockSignature": {
-    "Tuple": [
-      "u64",
-      "SignatureOf<BlockHeader>"
+    "Struct": [
+      {
+        "name": "index",
+        "type": "u64"
+      },
+      {
+        "name": "signature",
+        "type": "SignatureOf<BlockHeader>"
+      }
     ]
   },
   "BlockStatus": {
