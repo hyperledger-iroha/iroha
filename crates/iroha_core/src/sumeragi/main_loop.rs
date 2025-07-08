@@ -751,7 +751,7 @@ impl Sumeragi {
                             .block
                             // NOTE: The manipulation of the topology relies upon all peers seeing the same signature set.
                             // Therefore we must clear the signatures and accept what the proxy tail has giveth.
-                            .replace_signatures(signatures, &self.topology)
+                            .replace_signatures(signatures.into_iter().collect(), &self.topology)
                             .unpack(|e| self.send_event(e))
                         {
                             Ok(prev_signatures) => {
@@ -1836,7 +1836,9 @@ mod tests {
                 .clone(),
         );
         let mut block: SignedBlock = valid_block.into();
-        let _prev_signatures = block.replace_signatures(vec![dummy_signature]).unwrap();
+        let _prev_signatures = block
+            .replace_signatures([dummy_signature].into_iter().collect())
+            .unwrap();
         let dummy_block = ValidBlock::new_dummy(&leader_private_key);
         let dummy_state_block = state.block(dummy_block.as_ref().header());
         let mut voting_block = Some(VotingBlock::new(dummy_block, dummy_state_block));

@@ -5026,7 +5026,7 @@
     "Struct": [
       {
         "name": "signatures",
-        "type": "Vec<BlockSignature>"
+        "type": "SortedVec<BlockSignature>"
       },
       {
         "name": "payload",
@@ -5265,6 +5265,9 @@
   },
   "SortedVec<AccountId>": {
     "Vec": "AccountId"
+  },
+  "SortedVec<BlockSignature>": {
+    "Vec": "BlockSignature"
   },
   "SortedVec<Permission>": {
     "Vec": "Permission"
@@ -6120,9 +6123,6 @@
   },
   "Vec<BlockHeaderProjection<SelectorMarker>>": {
     "Vec": "BlockHeaderProjection<SelectorMarker>"
-  },
-  "Vec<BlockSignature>": {
-    "Vec": "BlockSignature"
   },
   "Vec<CommittedTransaction>": {
     "Vec": "CommittedTransaction"
