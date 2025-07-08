@@ -312,10 +312,10 @@ impl<T> MerkleProof<T> {
             return false;
         }
         let mut index = MerkleTree::<T>::index_in_tree_unchecked(self.leaf_index as usize, height);
-        let Some(computed_root) = self.audit_path.into_iter().fold(Some(*leaf), |acc, e| {
+        let Some(computed_root) = self.audit_path.into_iter().try_fold(*leaf, |acc, e| {
             let (l_node, r_node) = match index % 2 {
-                0 => (e, acc),
-                1 => (acc, e),
+                0 => (e, Some(acc)),
+                1 => (Some(acc), e),
                 _ => unreachable!(),
             };
             index = index.saturating_sub(1) >> 1;

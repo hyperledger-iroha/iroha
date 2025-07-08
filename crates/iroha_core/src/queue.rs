@@ -594,8 +594,10 @@ pub mod tests {
         };
         let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
+        let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
         let mut tx =
-            TransactionBuilder::new_with_time_source(chain_id.clone(), alice_id, &time_source);
+            TransactionBuilder::new_with_time_source(chain_id.clone(), alice_id, &time_source)
+                .with_instructions([ok_instruction]);
         tx.set_ttl(Duration::from_millis(100));
         let tx = tx.sign(alice_keypair.private_key());
         let tx = AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_limits)
