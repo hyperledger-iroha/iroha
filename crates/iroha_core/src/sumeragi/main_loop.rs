@@ -647,7 +647,7 @@ impl Sumeragi {
                     "Received block signatures"
                 );
 
-                if let Ok(signatory_idx) = usize::try_from(signature.0) {
+                if let Ok(signatory_idx) = usize::try_from(signature.index) {
                     let signatory = if let Some(s) = self.topology.as_ref().get(signatory_idx) {
                         s
                     } else {
@@ -1825,9 +1825,15 @@ mod tests {
         state_block.commit();
 
         // Malform block signatures so that block going to be rejected
-        let dummy_signature = BlockSignature(
+        let dummy_signature = BlockSignature::new(
             42,
-            valid_block.as_ref().signatures().next().unwrap().1.clone(),
+            valid_block
+                .as_ref()
+                .signatures()
+                .next()
+                .unwrap()
+                .signature
+                .clone(),
         );
         let mut block: SignedBlock = valid_block.into();
         let _prev_signatures = block.replace_signatures(vec![dummy_signature]).unwrap();

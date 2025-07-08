@@ -272,7 +272,7 @@ mod chained {
     impl BlockBuilder<Chained> {
         /// Sign this block and get [`NewBlock`].
         pub fn sign(self, private_key: &PrivateKey) -> WithEvents<NewBlock> {
-            let signature = BlockSignature(0, SignatureOf::new(private_key, &self.0.header));
+            let signature = BlockSignature::new(0, SignatureOf::new(private_key, &self.0.header));
 
             WithEvents::new(NewBlock {
                 signature,
@@ -323,7 +323,8 @@ mod new {
 
         #[cfg(test)]
         pub(crate) fn update_header(self, header: BlockHeader, private_key: &PrivateKey) -> Self {
-            let signature = BlockSignature(0, iroha_crypto::SignatureOf::new(private_key, &header));
+            let signature =
+                BlockSignature::new(0, iroha_crypto::SignatureOf::new(private_key, &header));
 
             Self {
                 signature,
@@ -376,12 +377,12 @@ mod valid {
             let leader_idx = topology.leader_index();
 
             let signature = block.signatures().next().ok_or(LeaderMissing)?;
-            if leader_idx != usize::try_from(signature.0).map_err(|_err| LeaderMissing)? {
+            if leader_idx != usize::try_from(signature.index).map_err(|_err| LeaderMissing)? {
                 return Err(LeaderMissing);
             }
 
             signature
-                .1
+                .signature
                 .verify(topology.leader().public_key(), &block.payload().header)
                 .map_err(|_err| LeaderMissing)?;
 
@@ -404,12 +405,12 @@ mod valid {
                     use SignatureVerificationError::{UnknownSignatory, UnknownSignature};
 
                     let signatory =
-                        usize::try_from(signature.0).map_err(|_err| UnknownSignatory)?;
+                        usize::try_from(signature.index).map_err(|_err| UnknownSignatory)?;
                     let signatory: &PeerId =
                         topology.as_ref().get(signatory).ok_or(UnknownSignatory)?;
 
                     signature
-                        .1
+                        .signature
                         .verify(signatory.public_key(), &block.payload().header)
                         .map_err(|_err| UnknownSignature)?;
 
@@ -442,12 +443,14 @@ mod valid {
             let proxy_tail_idx = topology.proxy_tail_index();
 
             let signature = block.signatures().next_back().ok_or(ProxyTailMissing)?;
-            if proxy_tail_idx != usize::try_from(signature.0).map_err(|_err| ProxyTailMissing)? {
+            if proxy_tail_idx
+                != usize::try_from(signature.index).map_err(|_err| ProxyTailMissing)?
+            {
                 return Err(ProxyTailMissing);
             }
 
             signature
-                .1
+                .signature
                 .verify(topology.proxy_tail().public_key(), &block.payload().header)
                 .map_err(|_err| ProxyTailMissing)?;
 
@@ -681,7 +684,7 @@ mod valid {
         ) -> Result<(), SignatureVerificationError> {
             use SignatureVerificationError::{Other, UnknownSignatory, UnknownSignature};
 
-            let signatory = usize::try_from(signature.0).map_err(|_err| UnknownSignatory)?;
+            let signatory = usize::try_from(signature.index).map_err(|_err| UnknownSignatory)?;
             let signatory = topology.as_ref().get(signatory).ok_or(UnknownSignatory)?;
 
             assert_ne!(Role::Leader, topology.role(signatory));
@@ -693,7 +696,7 @@ mod valid {
             }
 
             signature
-                .1
+                .signature
                 .verify(signatory.public_key(), &self.as_ref().payload().header)
                 .map_err(|_err| UnknownSignature)?;
 
@@ -885,7 +888,7 @@ mod valid {
             return Err(InvalidGenesisError::InvalidSignature);
         };
         signature
-            .1
+            .signature
             .verify(&genesis_account.signatory, &block.payload().header)
             .map_err(|_| InvalidGenesisError::InvalidSignature)?;
 
@@ -923,7 +926,7 @@ mod valid {
                 .skip(1)
                 .filter(|(i, _)| *i != 4) // Skip proxy tail
                 .map(|(i, key_pair)| {
-                    BlockSignature(
+                    BlockSignature::new(
                         i as u64,
                         SignatureOf::new(key_pair.private_key(), &payload.header),
                     )
@@ -988,7 +991,7 @@ mod valid {
                 .skip(1)
                 .filter(|(i, _)| *i != 4) // Skip proxy tail
                 .map(|(i, key_pair)| {
-                    BlockSignature(
+                    BlockSignature::new(
                         i as u64,
                         SignatureOf::new(key_pair.private_key(), &payload.header),
                     )

@@ -1,6 +1,6 @@
 //! This module contains `Block` and related implementations.
 //!
-//! `Block`s are organised into a linear sequence over time (also known as the block chain).
+//! `Block`s are organized into a linear sequence over time (also known as the block chain).
 
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
@@ -8,7 +8,7 @@ use core::{fmt::Display, time::Duration};
 #[cfg(feature = "std")]
 use std::collections::BTreeMap;
 
-use derive_more::Display;
+use derive_more::{Constructor, Display};
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
@@ -80,7 +80,7 @@ mod model {
         pub transactions: Vec<SignedTransaction>,
     }
 
-    /// Signature of a block
+    /// The validator index and its corresponding signature on the block header.
     #[derive(
         Debug,
         Clone,
@@ -92,14 +92,15 @@ mod model {
         Encode,
         Deserialize,
         Serialize,
+        Constructor,
         IntoSchema,
     )]
-    pub struct BlockSignature(
-        /// Index of the peer in the topology
-        pub u64,
-        /// Payload
-        pub SignatureOf<BlockHeader>,
-    );
+    pub struct BlockSignature {
+        /// Validator index in the network topology.
+        pub index: u64,
+        /// Validator signature on the block header.
+        pub signature: SignatureOf<BlockHeader>,
+    }
 
     /// Signed block
     #[version_with_scale(version = 1, versioned_alias = "SignedBlock")]
@@ -255,7 +256,7 @@ impl SignedBlock {
     pub fn sign(&mut self, private_key: &iroha_crypto::PrivateKey, signatory: usize) {
         let SignedBlock::V1(block) = self;
 
-        block.signatures.push(BlockSignature(
+        block.signatures.push(BlockSignature::new(
             signatory as u64,
             SignatureOf::new(private_key, &block.payload.header),
         ));
@@ -268,7 +269,7 @@ impl SignedBlock {
     /// if signature is invalid
     #[cfg(feature = "transparent_api")]
     pub fn add_signature(&mut self, signature: BlockSignature) -> Result<(), iroha_crypto::Error> {
-        if self.signatures().any(|s| signature.0 == s.0) {
+        if self.signatures().any(|s| signature.index == s.index) {
             return Err(iroha_crypto::Error::Signing(
                 "Duplicate signature".to_owned(),
             ));
@@ -299,9 +300,10 @@ impl SignedBlock {
             return Err(iroha_crypto::Error::Signing("Signatures empty".to_owned()));
         }
 
-        signatures.iter().map(|signature| signature.0).try_fold(
-            BTreeSet::new(),
-            |mut acc, elem| {
+        signatures
+            .iter()
+            .map(|signature| signature.index)
+            .try_fold(BTreeSet::new(), |mut acc, elem| {
                 if !acc.insert(elem) {
                     return Err(iroha_crypto::Error::Signing(format!(
                         "{elem}: Duplicate signature"
@@ -309,8 +311,7 @@ impl SignedBlock {
                 }
 
                 Ok(acc)
-            },
-        )?;
+            })?;
 
         let SignedBlock::V1(block) = self;
         Ok(core::mem::replace(&mut block.signatures, signatures))
@@ -339,7 +340,7 @@ impl SignedBlock {
             view_change_index: 0,
         };
 
-        let signature = BlockSignature(0, SignatureOf::new(private_key, &header));
+        let signature = BlockSignature::new(0, SignatureOf::new(private_key, &header));
         let payload = BlockPayload {
             header,
             transactions,
@@ -372,18 +373,6 @@ impl SignedBlock {
             .as_millis()
             .try_into()
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX")
-    }
-}
-
-impl BlockSignature {
-    /// Peer topology index
-    pub fn index(&self) -> u64 {
-        self.0
-    }
-
-    /// Signature itself
-    pub fn payload(&self) -> &SignatureOf<BlockHeader> {
-        &self.1
     }
 }
 
@@ -476,7 +465,7 @@ mod candidate {
 
             self.signatures
                 .iter()
-                .map(|signature| signature.0)
+                .map(|signature| signature.index)
                 .try_fold(BTreeSet::new(), |mut acc, elem| {
                     if !acc.insert(elem) {
                         return Err("Duplicate signature in block");
