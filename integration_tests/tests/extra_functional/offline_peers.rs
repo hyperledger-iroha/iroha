@@ -25,7 +25,7 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
         // only 2 out of 4
         .take(2)
         .enumerate()
-        .map(|(i, peer)| peer.start(cfg.iter(), (i == 0).then_some(genesis)))
+        .map(|(i, peer)| peer.start(cfg.iter(), (i == 0).then_some(&genesis)))
         .collect::<FuturesUnordered<_>>()
         .collect::<Vec<_>>()
         .await;

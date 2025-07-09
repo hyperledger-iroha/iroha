@@ -193,7 +193,7 @@ pub struct Network {
     block_time: Duration,
     commit_time: Duration,
 
-    genesis_block: GenesisBlock,
+    genesis_isi: Vec<InstructionBox>,
     config_layers: Vec<Table>,
 }
 
@@ -295,8 +295,19 @@ impl Network {
     }
 
     /// Network genesis block.
-    pub fn genesis(&self) -> &GenesisBlock {
-        &self.genesis_block
+    ///
+    /// It uses the basic [`genesis_factory`] with [`Self::genesis_isi`] +
+    /// topology of the network peers.
+    pub fn genesis(&self) -> GenesisBlock {
+        genesis_factory(
+            self.genesis_isi.clone(),
+            self.peers.iter().map(NetworkPeer::id).collect(),
+        )
+    }
+
+    /// Genesis block instructions
+    pub fn genesis_isi(&self) -> &Vec<InstructionBox> {
+        &self.genesis_isi
     }
 
     /// Shutdown running peers
@@ -520,15 +531,12 @@ impl NetworkBuilder {
         .chain(self.genesis_isi)
         .collect();
 
-        let genesis_block =
-            genesis_factory(genesis_isi, peers.iter().map(NetworkPeer::id).collect());
-
         Network {
             env: self.env,
             peers,
             block_time,
             commit_time,
-            genesis_block,
+            genesis_isi,
             config_layers: Some(config::base_iroha_config().write(
                 ["network", "block_gossip_period_ms"],
                 block_sync_gossip_period.as_millis() as u64,
