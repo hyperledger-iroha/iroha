@@ -519,10 +519,10 @@ pub mod prelude {
 
     pub use super::{
         account::prelude::*, asset::prelude::*, block::prelude::*, domain::prelude::*,
-        events::prelude::*, executor::prelude::*, isi::prelude::*, metadata::prelude::*,
-        name::prelude::*, nft::prelude::*, parameter::prelude::*, peer::prelude::*,
-        permission::prelude::*, query::prelude::*, role::prelude::*, transaction::prelude::*,
-        trigger::prelude::*, ChainId, EnumTryAsError, HasMetadata, IdBox, Identifiable,
-        Registrable, ValidationFail,
+        events::prelude::*, executor::prelude::*, ipfs::IpfsPath, isi::prelude::*,
+        metadata::prelude::*, name::prelude::*, nft::prelude::*, parameter::prelude::*,
+        peer::prelude::*, permission::prelude::*, query::prelude::*, role::prelude::*,
+        transaction::prelude::*, trigger::prelude::*, ChainId, EnumTryAsError, HasMetadata, IdBox,
+        Identifiable, Level, Registrable, ValidationFail,
     };
 }
