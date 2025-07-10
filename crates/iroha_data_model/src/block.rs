@@ -254,6 +254,13 @@ impl SignedBlock {
         block.payload.transactions.iter()
     }
 
+    /// Block transactions, the underlying vector
+    #[inline]
+    pub fn transactions_vec(&self) -> &Vec<SignedTransaction> {
+        let SignedBlock::V1(block) = self;
+        &block.payload.transactions
+    }
+
     /// Check if block is empty (has no transactions)
     #[inline]
     pub fn is_empty(&self) -> bool {

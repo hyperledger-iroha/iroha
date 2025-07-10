@@ -47,11 +47,7 @@ impl BlockTransactionRef {
 
     fn value(&self) -> (SignedTransaction, Option<TransactionRejectionReason>) {
         (
-            self.0
-                .transactions()
-                .nth(self.1)
-                .expect("INTERNAL BUG: The transaction is not found")
-                .clone(),
+            self.0.transactions_vec()[self.1].clone(),
             self.0.error(self.1).cloned(),
         )
     }
