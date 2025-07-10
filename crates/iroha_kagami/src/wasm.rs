@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::{Args as ClapArgs, Subcommand};
-use color_eyre::eyre::{eyre, Context};
+use color_eyre::eyre::{eyre, Context, OptionExt};
 use iroha_wasm_builder::{Builder, Profile};
 use owo_colors::OwoColorize;
 
@@ -25,8 +25,8 @@ pub enum Args {
         #[command(flatten)]
         common: CommonArgs,
         /// Build profile
-        #[arg(long, default_value = "release")]
-        profile: Profile,
+        #[arg(long)]
+        profile: Option<Profile>,
         /// Where to store the output WASM. If the file exists, it will be overwritten.
         #[arg(long)]
         out_file: PathBuf,
@@ -70,6 +70,38 @@ impl<T: Write> RunArgs<T> for Args {
                 out_file,
                 profile,
             } => {
+                let (mut cargo_args, mut profile) = (cargo_args, profile);
+                // if "--profile" is present at both the places, the value from "--cargo-args" is applied.
+                if let Some(arg_idx) = cargo_args
+                    .0
+                    .iter()
+                    .position(|arg| arg.contains("--profile"))
+                {
+                    if profile.is_some() {
+                        eprintln!("warning: value from \"--profile\" is ignored in favor of profile in \"--cargo-args\"");
+                    }
+                    let arg_value = if cargo_args.0.get(arg_idx + 1).is_some() {
+                        let value = cargo_args.0.remove(arg_idx + 1);
+                        cargo_args.0.remove(arg_idx);
+                        value
+                    } else {
+                        // for argument of type "--profile=deploy"
+                        let value = cargo_args.0[arg_idx]
+                            .strip_prefix("--profile=")
+                            .ok_or_eyre("prefix `--profile=` not found")?
+                            .to_string();
+                        cargo_args.0.remove(arg_idx);
+                        value
+                    };
+                    if arg_value == "deploy" {
+                        profile = Some(Profile::Deploy);
+                    }
+                } else {
+                    eprintln!("warning: \"--profile\" arg is deprecated; please use \"--cargo-args='--profile ..'\" instead");
+                }
+
+                let profile = profile.unwrap_or_default();
+
                 let builder = Builder::new(&path, profile)
                     .cargo_args(cargo_args.0)
                     .show_output();

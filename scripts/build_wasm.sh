@@ -77,7 +77,7 @@ build() {
     mkdir -p "$TARGET_DIR/$1"
     for name in "${NAMES[@]}"; do
         out_file="$TARGET_DIR/$1/$name.wasm"
-        "${bin_kagami[@]}" wasm build "$CARGO_DIR/$1/$name" --profile="$PROFILE" --out-file "$out_file" --cargo-args="--locked"
+        "${bin_kagami[@]}" wasm build "$CARGO_DIR/$1/$name" --out-file "$out_file" --cargo-args="--locked --profile ${PROFILE}"
     done
 
     echo "profile = \"${PROFILE}\"" > "$TARGET_DIR/build_config.toml"
