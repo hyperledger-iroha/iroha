@@ -42,14 +42,14 @@ pub struct CommonArgs {
     pub(crate) cargo_args: CargoArgs,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct CargoArgs(pub Vec<String>);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CargoArgs(pub Vec<String>);
 
 impl FromStr for CargoArgs {
     type Err = shell_words::ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        shell_words::split(s).map(|args| Self(args))
+        shell_words::split(s).map(Self)
     }
 }
 
