@@ -508,17 +508,21 @@ mod ffi {
 #[allow(ambiguous_glob_reexports)]
 pub mod prelude {
     //! Prelude: re-export of most commonly used traits, structs and macros in this crate.
-    pub use iroha_crypto::{HashOf, PublicKey};
+    pub use iroha_crypto::{
+        Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, MerkleTree, PrivateKey, PublicKey,
+        Signature, SignatureOf,
+    };
     pub use iroha_primitives::{
         json::*,
         numeric::{numeric, Numeric, NumericSpec},
     };
 
     pub use super::{
-        account::prelude::*, asset::prelude::*, domain::prelude::*, events::prelude::*,
-        executor::prelude::*, isi::prelude::*, metadata::prelude::*, name::prelude::*,
-        nft::prelude::*, parameter::prelude::*, peer::prelude::*, permission::prelude::*,
-        query::prelude::*, role::prelude::*, transaction::prelude::*, trigger::prelude::*, ChainId,
-        EnumTryAsError, HasMetadata, IdBox, Identifiable, Registrable, ValidationFail,
+        account::prelude::*, asset::prelude::*, block::prelude::*, domain::prelude::*,
+        events::prelude::*, executor::prelude::*, ipfs::IpfsPath, isi::prelude::*,
+        metadata::prelude::*, name::prelude::*, nft::prelude::*, parameter::prelude::*,
+        peer::prelude::*, permission::prelude::*, query::prelude::*, role::prelude::*,
+        transaction::prelude::*, trigger::prelude::*, ChainId, EnumTryAsError, HasMetadata, IdBox,
+        Identifiable, Level, Registrable, ValidationFail,
     };
 }

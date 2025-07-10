@@ -1,7 +1,6 @@
 //! Iroha schema generation support library. Contains the
 //! `build_schemas` `fn`, which is the function which decides which
 //! types are included in the schema.
-use iroha_crypto::MerkleTree;
 use iroha_data_model::{
     block::stream::{BlockMessage, BlockSubscriptionRequest},
     query::{QueryResponse, SignedQuery},

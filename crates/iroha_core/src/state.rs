@@ -40,6 +40,7 @@ use serde::{
     de::{DeserializeSeed, MapAccess, Visitor},
     Deserializer, Serialize,
 };
+pub use storage_transactions::TransactionsReadOnly;
 
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
@@ -60,9 +61,7 @@ use crate::{
         },
         wasm,
     },
-    state::storage_transactions::{
-        TransactionsBlock, TransactionsReadOnly, TransactionsStorage, TransactionsView,
-    },
+    state::storage_transactions::{TransactionsBlock, TransactionsStorage, TransactionsView},
     Peers,
 };
 
