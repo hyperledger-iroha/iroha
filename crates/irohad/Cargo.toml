@@ -69,6 +69,7 @@ json5 = { workspace = true }
 futures = { workspace = true }
 path-absolutize = { workspace = true }
 assertables = { workspace = true }
+serde_json = { workspace = true }
 
 [build-dependencies]
 eyre = { workspace = true }

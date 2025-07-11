@@ -35,7 +35,7 @@ async fn register_new_peer() -> Result<()> {
                     [Peer::new(random_peer.p2p_address(), random_peer.id())],
                 ),
         ))),
-        None,
+        network.genesis(),
     )
     .await;
 

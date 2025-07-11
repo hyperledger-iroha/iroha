@@ -134,8 +134,6 @@ pub enum SignatureVerificationError {
 /// Errors occurred on genesis block validation
 #[derive(Debug, Copy, Clone, displaydoc::Display, PartialEq, Eq, Error)]
 pub enum InvalidGenesisError {
-    /// Genesis block must be signed with genesis private key and not signed by any peer
-    InvalidSignature,
     /// Genesis transaction must be authorized by genesis account
     UnexpectedAuthority,
     /// Genesis transactions must not contain errors
@@ -213,14 +211,10 @@ mod pending {
 
             // NOTE: Lower time bound must always be upheld for a valid block
             // If the clock has drifted too far this block will be rejected
-            let creation_time = [
-                now,
-                latest_txn_time + Self::TIME_PADDING,
-                prev_block_time + Self::TIME_PADDING,
-            ]
-            .into_iter()
-            .max()
-            .unwrap();
+            let creation_time = [now, latest_txn_time, prev_block_time + Self::TIME_PADDING]
+                .into_iter()
+                .max()
+                .unwrap();
 
             BlockHeader {
                 height: prev_block.map(|block| block.header().height).map_or_else(
@@ -365,8 +359,7 @@ mod valid {
 
     use commit::CommittedBlock;
     use iroha_data_model::{
-        account::AccountId, events::pipeline::PipelineEventBox, isi::InstructionBox,
-        prelude::Executable, ChainId,
+        events::pipeline::PipelineEventBox, isi::InstructionBox, prelude::Executable, ChainId,
     };
 
     use super::*;
@@ -487,17 +480,11 @@ mod valid {
             mut block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<Result<ValidBlock, Error>> {
-            if let Err(error) = Self::validate_static(
-                &block,
-                topology,
-                expected_chain_id,
-                genesis_account,
-                state_block,
-                false,
-            ) {
+            if let Err(error) =
+                Self::validate_static(&block, topology, expected_chain_id, state_block, false)
+            {
                 return WithEvents::new(Err((Box::new(block), error)));
             }
             Self::validate_and_record_transactions(&mut block, state_block);
@@ -512,7 +499,6 @@ mod valid {
             mut block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
@@ -521,7 +507,6 @@ mod valid {
                 &block,
                 topology,
                 expected_chain_id,
-                genesis_account,
                 &state.view(),
                 soft_fork,
             ) {
@@ -543,7 +528,6 @@ mod valid {
             block: &SignedBlock,
             topology: &Topology,
             chain_id: &ChainId,
-            genesis_account: &AccountId,
             state: &impl StateReadOnlyWithTransactions,
             soft_fork: bool,
         ) -> Result<(), BlockValidationError> {
@@ -594,7 +578,7 @@ mod valid {
             }
 
             if block.header().is_genesis() {
-                check_genesis_block(block, genesis_account)?;
+                check_genesis_block(block)?;
             } else {
                 let prev_block_time = if soft_fork {
                     state.prev_block()
@@ -629,17 +613,12 @@ mod valid {
                     return Err(BlockValidationError::HasCommittedTransactions);
                 }
 
-                if tx.creation_time() >= block_creation_time {
+                if tx.creation_time() > block_creation_time {
                     return Err(BlockValidationError::TransactionInTheFuture);
                 }
 
                 if block.header().is_genesis() {
-                    AcceptedTransaction::validate_genesis(
-                        tx,
-                        chain_id,
-                        max_clock_drift,
-                        genesis_account,
-                    )?;
+                    AcceptedTransaction::validate_genesis(tx, chain_id, max_clock_drift)?;
                 } else {
                     AcceptedTransaction::validate(tx, chain_id, max_clock_drift, tx_params)?;
                 }
@@ -826,7 +805,6 @@ mod valid {
             block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
-            genesis_account: &AccountId,
             state: &'state State,
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
@@ -841,7 +819,6 @@ mod valid {
                     block,
                     topology,
                     expected_chain_id,
-                    genesis_account,
                     state,
                     voting_block,
                     soft_fork,
@@ -936,29 +913,20 @@ mod valid {
         }
     }
 
-    fn check_genesis_block(
-        block: &SignedBlock,
-        genesis_account: &AccountId,
-    ) -> Result<(), InvalidGenesisError> {
+    fn check_genesis_block(block: &SignedBlock) -> Result<(), InvalidGenesisError> {
+        assert!(block.signatures().len() == 0);
+
+        // FIXME #5473: check this after dynamic validation
         if block.results().any(|result| result.0.is_err()) {
             return Err(InvalidGenesisError::ContainsErrors);
         }
-
-        let signatures = block.signatures().collect::<Vec<_>>();
-        let [signature] = signatures.as_slice() else {
-            return Err(InvalidGenesisError::InvalidSignature);
-        };
-        signature
-            .signature
-            .verify_hash(&genesis_account.signatory, block.payload().header.hash())
-            .map_err(|_| InvalidGenesisError::InvalidSignature)?;
 
         let transactions = block.payload().transactions.as_slice();
         if transactions.is_empty() || transactions.len() > 5 {
             return Err(InvalidGenesisError::BadTransactionsAmount);
         }
         for (i, transaction) in transactions.iter().enumerate() {
-            if transaction.authority() != genesis_account {
+            if *transaction.authority() != *iroha_genesis::GENESIS_ACCOUNT_ID {
                 return Err(InvalidGenesisError::UnexpectedAuthority);
             }
             let Executable::Instructions(isi) = transaction.instructions() else {
@@ -1459,6 +1427,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Should be restored in #5473"]
     async fn genesis_public_key_is_checked() {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
@@ -1514,15 +1483,9 @@ mod tests {
         // Use correct genesis key and check if transaction is rejected
         let block: SignedBlock = valid_block.into();
         let mut state_block = state.block(block.header());
-        let (_, error) = ValidBlock::validate(
-            block,
-            &topology,
-            &chain_id,
-            &genesis_correct_account_id,
-            &mut state_block,
-        )
-        .unpack(|_| {})
-        .unwrap_err();
+        let (_, error) = ValidBlock::validate(block, &topology, &chain_id, &mut state_block)
+            .unpack(|_| {})
+            .unwrap_err();
         state_block.commit();
 
         // The first transaction should be rejected

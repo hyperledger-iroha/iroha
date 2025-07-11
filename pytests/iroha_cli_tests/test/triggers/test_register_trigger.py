@@ -19,13 +19,11 @@ def test_register_trigger(GIVEN_currently_authorized_account):
         iroha_cli.register_trigger(GIVEN_currently_authorized_account)
     with allure.step(
         "THEN Iroha should have the asset with nft_number_1_for_genesis##\
-        ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4@genesis"
-        # TODO use the same source as GENESIS_PUBLIC_KEY of peer
+        ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E@genesis"
     ):
         iroha.should(
             have.asset(
                 "nft_number_1_for_genesis##\
-                ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4@genesis"
-                # TODO use the same source as GENESIS_PUBLIC_KEY of peer
+                ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E@genesis"
             )
         )
