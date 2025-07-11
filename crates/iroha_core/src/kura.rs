@@ -25,6 +25,12 @@ use parking_lot::Mutex;
 
 use crate::block::CommittedBlock;
 
+impl From<CommittedBlock> for Arc<SignedBlock> {
+    fn from(value: CommittedBlock) -> Self {
+        Arc::new(value.into())
+    }
+}
+
 const INDEX_FILE_NAME: &str = "blocks.index";
 const DATA_FILE_NAME: &str = "blocks.data";
 const HASHES_FILE_NAME: &str = "blocks.hashes";
@@ -50,8 +56,9 @@ pub struct Kura {
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
 
 impl Kura {
-    /// Initialize Kura and start a thread that receives
-    /// and stores new blocks.
+    /// Initialize Kura.
+    ///
+    /// This does _not_ start the thread which receives and stores new blocks, see [`Self::start`].
     ///
     /// # Errors
     /// Fails if there are filesystem errors when trying
@@ -93,13 +100,13 @@ impl Kura {
         })
     }
 
-    /// Start the Kura thread
+    /// Start a thread that receives and stores new blocks
     pub fn start(kura: Arc<Self>, shutdown_signal: ShutdownSignal) -> Child {
         Child::new(
             tokio::task::spawn(spawn_os_thread_as_future(
                 std::thread::Builder::new().name("kura".to_owned()),
                 move || {
-                    Self::kura_receive_blocks_loop(&kura, &shutdown_signal);
+                    kura.receive_blocks_loop(&shutdown_signal);
                 },
             )),
             OnShutdown::Wait(Duration::from_secs(5)),
@@ -194,7 +201,8 @@ impl Kura {
     }
 
     #[iroha_logger::log(skip_all)]
-    fn kura_receive_blocks_loop(kura: &Kura, shutdown_signal: &ShutdownSignal) {
+    fn receive_blocks_loop(&self, shutdown_signal: &ShutdownSignal) {
+        let kura = self;
         let mut written_block_count = kura.init_block_count;
         let mut latest_written_block_hash = {
             let block_data = kura.block_data.lock();
@@ -342,14 +350,14 @@ impl Kura {
     }
 
     /// Put a block in kura's in memory block store.
-    pub fn store_block(&self, block: CommittedBlock) {
-        let block = Arc::new(SignedBlock::from(block));
+    pub fn store_block(&self, block: impl Into<Arc<SignedBlock>>) {
+        let block = block.into();
         self.block_data.lock().push((block.hash(), Some(block)));
     }
 
     /// Replace the block in `Kura`'s in memory block store.
-    pub fn replace_top_block(&self, block: CommittedBlock) {
-        let block = Arc::new(SignedBlock::from(block));
+    pub fn replace_top_block(&self, block: impl Into<Arc<SignedBlock>>) {
+        let block = block.into();
         let mut data = self.block_data.lock();
         data.pop();
         data.push((block.hash(), Some(block)));
@@ -367,6 +375,11 @@ impl Kura {
         if written_block_count > blocks_in_memory {
             block_data[written_block_count - blocks_in_memory].1 = None;
         }
+    }
+
+    /// Returns count of blocks Kura currently holds
+    pub fn blocks_count(&self) -> usize {
+        self.block_data.lock().len()
     }
 }
 
