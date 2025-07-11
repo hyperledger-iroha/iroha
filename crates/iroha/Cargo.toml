@@ -54,7 +54,7 @@ iroha_crypto = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_logger = { workspace = true }
 iroha_telemetry = { workspace = true }
-iroha_torii_const = { workspace = true }
+iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
 
 iroha_data_model = { workspace = true, features = ["http"] }

@@ -10,7 +10,6 @@
 use std::time::{Duration, SystemTime};
 
 use eyre::Result;
-use iroha_crypto::SignatureOf;
 pub use iroha_data_model::prelude::*;
 use iroha_data_model::{
     isi::error::Mismatch,
@@ -125,8 +124,25 @@ impl AcceptedTransaction {
             return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
         }
 
+        if let Err(err) = tx.verify_signature() {
+            return Err(AcceptTransactionFail::SignatureVerification(
+                SignatureVerificationFail {
+                    signature: tx.signature().0.clone(),
+                    reason: err.to_string(),
+                },
+            ));
+        }
+
         match &tx.instructions() {
             Executable::Instructions(instructions) => {
+                if instructions.is_empty() {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "Transaction must contain at least one instruction".into(),
+                        },
+                    ));
+                }
+
                 let instruction_limit = limits
                     .max_instructions
                     .get()

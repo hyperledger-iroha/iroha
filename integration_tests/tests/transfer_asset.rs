@@ -88,3 +88,25 @@ fn generate_two_ids() -> (AccountId, AccountId) {
 fn create_mouse(mouse_id: AccountId) -> Register<Account> {
     Register::account(Account::new(mouse_id))
 }
+
+#[test]
+fn should_fail_if_asset_not_found() {
+    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let iroha = network.client();
+
+    let (alice_id, mouse_id) = generate_two_ids();
+    let asset_definition_id: AssetDefinitionId = "camomile#wonderland".parse().unwrap();
+    let create_asset_definition =
+        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+    let asset_id = AssetId::new(asset_definition_id.clone(), alice_id);
+    let transfer_asset = Transfer::asset_numeric(asset_id.clone(), numeric!(20), mouse_id.clone());
+
+    let instructions: [InstructionBox; 2] = [create_asset_definition.into(), transfer_asset.into()];
+    let result = iroha.submit_all_blocking(instructions);
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .chain()
+        .any(|e| e.to_string() == format!("Failed to find asset: `{asset_id}`")));
+}

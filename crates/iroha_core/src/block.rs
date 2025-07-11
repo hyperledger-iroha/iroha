@@ -48,7 +48,7 @@
 //!
 //! Flow: Having [`SignedBlock`], [`ValidBlock::validate_unchecked`] (infallible),
 //! [`ValidBlock::commit_unchecked`] (infallible)
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 use iroha_crypto::{HashOf, KeyPair, MerkleTree};
 use iroha_data_model::{
@@ -84,8 +84,8 @@ pub enum BlockValidationError {
         /// Actual value
         actual: usize,
     },
-    /// The transaction hash stored in the block header does not match the actual transaction hash
-    TransactionHashMismatch,
+    /// The merkle root does not match the computed one.
+    MerkleRootMismatch,
     /// Cannot accept a transaction
     TransactionAccept(#[from] AcceptTransactionFail),
     /// Mismatch between the actual and expected topology. Expected: {expected:?}, actual: {actual:?}
@@ -105,6 +105,8 @@ pub enum BlockValidationError {
     BlockInThePast,
     /// Block's creation time is later than the current node local time
     BlockInTheFuture,
+    /// Some transaction in the block is created after the block itself
+    TransactionInTheFuture,
 }
 
 /// Error during signature verification
@@ -136,6 +138,14 @@ pub enum InvalidGenesisError {
     InvalidSignature,
     /// Genesis transaction must be authorized by genesis account
     UnexpectedAuthority,
+    /// Genesis transactions must not contain errors
+    ContainsErrors,
+    /// Genesis transaction must contain instructions
+    NotInstructions,
+    /// Genesis block must have 1 to 5 transactions (executor upgrade, parameters, ordinary instructions, wasm trigger registrations, initial topology)
+    BadTransactionsAmount,
+    /// First transaction must contain single `Upgrade` instruction to set executor
+    MustUpgrade,
 }
 
 /// Builder for blocks
@@ -274,7 +284,7 @@ mod chained {
         /// Sign this block and get [`NewBlock`].
         pub fn sign(self, private_key: &PrivateKey) -> WithEvents<NewBlock> {
             let signature =
-                BlockSignature(0, SignatureOf::from_hash(private_key, self.0.header.hash()));
+                BlockSignature::new(0, SignatureOf::from_hash(private_key, self.0.header.hash()));
 
             WithEvents::new(NewBlock {
                 signature,
@@ -325,7 +335,7 @@ mod new {
 
         #[cfg(test)]
         pub(crate) fn update_header(self, header: BlockHeader, private_key: &PrivateKey) -> Self {
-            let signature = BlockSignature(
+            let signature = BlockSignature::new(
                 0,
                 iroha_crypto::SignatureOf::from_hash(private_key, header.hash()),
             );
@@ -354,7 +364,10 @@ mod valid {
     use std::time::SystemTime;
 
     use commit::CommittedBlock;
-    use iroha_data_model::{account::AccountId, events::pipeline::PipelineEventBox, ChainId};
+    use iroha_data_model::{
+        account::AccountId, events::pipeline::PipelineEventBox, isi::InstructionBox,
+        prelude::Executable, ChainId,
+    };
 
     use super::*;
     use crate::{
@@ -381,12 +394,12 @@ mod valid {
             let leader_idx = topology.leader_index();
 
             let signature = block.signatures().next().ok_or(LeaderMissing)?;
-            if leader_idx != usize::try_from(signature.0).map_err(|_err| LeaderMissing)? {
+            if leader_idx != usize::try_from(signature.index).map_err(|_err| LeaderMissing)? {
                 return Err(LeaderMissing);
             }
 
             signature
-                .1
+                .signature
                 .verify_hash(
                     topology.leader().public_key(),
                     block.payload().header.hash(),
@@ -412,12 +425,12 @@ mod valid {
                     use SignatureVerificationError::{UnknownSignatory, UnknownSignature};
 
                     let signatory =
-                        usize::try_from(signature.0).map_err(|_err| UnknownSignatory)?;
+                        usize::try_from(signature.index).map_err(|_err| UnknownSignatory)?;
                     let signatory: &PeerId =
                         topology.as_ref().get(signatory).ok_or(UnknownSignatory)?;
 
                     signature
-                        .1
+                        .signature
                         .verify_hash(signatory.public_key(), block.payload().header.hash())
                         .map_err(|_err| UnknownSignature)?;
 
@@ -449,13 +462,17 @@ mod valid {
             use SignatureVerificationError::ProxyTailMissing;
             let proxy_tail_idx = topology.proxy_tail_index();
 
-            let signature = block.signatures().next_back().ok_or(ProxyTailMissing)?;
-            if proxy_tail_idx != usize::try_from(signature.0).map_err(|_err| ProxyTailMissing)? {
-                return Err(ProxyTailMissing);
-            }
+            let signature = block
+                .signatures()
+                .find(|x| {
+                    let idx =
+                        usize::try_from(x.index).expect("there could not be so many signatures");
+                    idx == proxy_tail_idx
+                })
+                .ok_or(ProxyTailMissing)?;
 
             signature
-                .1
+                .signature
                 .verify_hash(
                     topology.proxy_tail().public_key(),
                     block.payload().header.hash(),
@@ -557,7 +574,8 @@ mod valid {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap();
             let max_clock_drift = state.world().parameters().sumeragi.max_clock_drift();
-            if block.header().creation_time().saturating_sub(now) > max_clock_drift {
+            let block_creation_time = block.header().creation_time();
+            if block_creation_time.saturating_sub(now) > max_clock_drift {
                 return Err(BlockValidationError::BlockInTheFuture);
             }
 
@@ -611,6 +629,10 @@ mod valid {
                     return Err(BlockValidationError::HasCommittedTransactions);
                 }
 
+                if tx.creation_time() >= block_creation_time {
+                    return Err(BlockValidationError::TransactionInTheFuture);
+                }
+
                 if block.header().is_genesis() {
                     AcceptedTransaction::validate_genesis(
                         tx,
@@ -621,6 +643,18 @@ mod valid {
                 } else {
                     AcceptedTransaction::validate(tx, chain_id, max_clock_drift, tx_params)?;
                 }
+            }
+
+            // TODO: can it be done in a single iteration over block transactions above?
+            let expected_merkle_root = block
+                .external_transactions()
+                .map(SignedTransaction::hash_as_entrypoint)
+                .collect::<MerkleTree<_>>()
+                .root();
+            let actual_merkle_root = block.header().merkle_root();
+
+            if expected_merkle_root != actual_merkle_root {
+                return Err(BlockValidationError::MerkleRootMismatch);
             }
 
             Ok(())
@@ -705,7 +739,7 @@ mod valid {
         ) -> Result<(), SignatureVerificationError> {
             use SignatureVerificationError::{Other, UnknownSignatory, UnknownSignature};
 
-            let signatory = usize::try_from(signature.0).map_err(|_err| UnknownSignatory)?;
+            let signatory = usize::try_from(signature.index).map_err(|_err| UnknownSignatory)?;
             let signatory = topology.as_ref().get(signatory).ok_or(UnknownSignatory)?;
 
             assert_ne!(Role::Leader, topology.role(signatory));
@@ -717,7 +751,7 @@ mod valid {
             }
 
             signature
-                .1
+                .signature
                 .verify_hash(
                     signatory.public_key(),
                     self.as_ref().payload().header.hash(),
@@ -737,9 +771,9 @@ mod valid {
         /// - Replacement signatures contain duplicate signatures
         pub fn replace_signatures(
             &mut self,
-            signatures: Vec<BlockSignature>,
+            signatures: BTreeSet<BlockSignature>,
             topology: &Topology,
-        ) -> WithEvents<Result<Vec<BlockSignature>, SignatureVerificationError>> {
+        ) -> WithEvents<Result<BTreeSet<BlockSignature>, SignatureVerificationError>> {
             let Ok(prev_signatures) = self.0.replace_signatures(signatures) else {
                 return WithEvents::new(Err(SignatureVerificationError::Other));
             };
@@ -902,24 +936,38 @@ mod valid {
         }
     }
 
-    // See also [SignedBlockCandidate::validate_genesis]
     fn check_genesis_block(
         block: &SignedBlock,
         genesis_account: &AccountId,
     ) -> Result<(), InvalidGenesisError> {
+        if block.results().any(|result| result.0.is_err()) {
+            return Err(InvalidGenesisError::ContainsErrors);
+        }
+
         let signatures = block.signatures().collect::<Vec<_>>();
         let [signature] = signatures.as_slice() else {
             return Err(InvalidGenesisError::InvalidSignature);
         };
         signature
-            .1
+            .signature
             .verify_hash(&genesis_account.signatory, block.payload().header.hash())
             .map_err(|_| InvalidGenesisError::InvalidSignature)?;
 
         let transactions = block.payload().transactions.as_slice();
-        for transaction in transactions {
+        if transactions.is_empty() || transactions.len() > 5 {
+            return Err(InvalidGenesisError::BadTransactionsAmount);
+        }
+        for (i, transaction) in transactions.iter().enumerate() {
             if transaction.authority() != genesis_account {
                 return Err(InvalidGenesisError::UnexpectedAuthority);
+            }
+            let Executable::Instructions(isi) = transaction.instructions() else {
+                return Err(InvalidGenesisError::NotInstructions);
+            };
+            if i == 0 {
+                let [InstructionBox::Upgrade(_)] = isi.as_ref() else {
+                    return Err(InvalidGenesisError::MustUpgrade);
+                };
             }
         }
         Ok(())
@@ -950,7 +998,7 @@ mod valid {
                 .skip(1)
                 .filter(|(i, _)| *i != 4) // Skip proxy tail
                 .map(|(i, key_pair)| {
-                    BlockSignature(
+                    BlockSignature::new(
                         i as u64,
                         SignatureOf::from_hash(key_pair.private_key(), payload.header.hash()),
                     )
@@ -1015,7 +1063,7 @@ mod valid {
                 .skip(1)
                 .filter(|(i, _)| *i != 4) // Skip proxy tail
                 .map(|(i, key_pair)| {
-                    BlockSignature(
+                    BlockSignature::new(
                         i as u64,
                         SignatureOf::from_hash(key_pair.private_key(), payload.header.hash()),
                     )
@@ -1066,6 +1114,8 @@ mod commit {
 }
 
 mod event {
+    use std::collections::BTreeSet;
+
     use new::NewBlock;
 
     use super::*;
@@ -1106,11 +1156,11 @@ mod event {
             }
         }
     }
-    impl WithEvents<Result<Vec<BlockSignature>, SignatureVerificationError>> {
+    impl WithEvents<Result<BTreeSet<BlockSignature>, SignatureVerificationError>> {
         pub fn unpack<F: Fn(PipelineEventBox)>(
             self,
             f: F,
-        ) -> Result<Vec<BlockSignature>, SignatureVerificationError> {
+        ) -> Result<BTreeSet<BlockSignature>, SignatureVerificationError> {
             match self.0 {
                 Ok(ok) => Ok(ok),
                 Err(err) => Err(WithEvents(err).unpack(f)),

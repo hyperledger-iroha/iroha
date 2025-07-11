@@ -927,9 +927,15 @@
     ]
   },
   "BlockSignature": {
-    "Tuple": [
-      "u64",
-      "SignatureOf<BlockHeader>"
+    "Struct": [
+      {
+        "name": "index",
+        "type": "u64"
+      },
+      {
+        "name": "signature",
+        "type": "SignatureOf<BlockHeader>"
+      }
     ]
   },
   "BlockStatus": {
@@ -5143,7 +5149,7 @@
     "Struct": [
       {
         "name": "signatures",
-        "type": "Vec<BlockSignature>"
+        "type": "SortedVec<BlockSignature>"
       },
       {
         "name": "payload",
@@ -5335,6 +5341,9 @@
   },
   "SortedVec<AccountId>": {
     "Vec": "AccountId"
+  },
+  "SortedVec<BlockSignature>": {
+    "Vec": "BlockSignature"
   },
   "SortedVec<Permission>": {
     "Vec": "Permission"
@@ -6289,9 +6298,6 @@
   },
   "Vec<BlockHeaderProjection<SelectorMarker>>": {
     "Vec": "BlockHeaderProjection<SelectorMarker>"
-  },
-  "Vec<BlockSignature>": {
-    "Vec": "BlockSignature"
   },
   "Vec<CommittedTransaction>": {
     "Vec": "CommittedTransaction"

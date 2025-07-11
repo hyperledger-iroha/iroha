@@ -3,6 +3,7 @@
 
 use std::collections::{btree_map::Entry, BTreeMap};
 
+use derive_more::Constructor;
 use eyre::Result;
 use indexmap::IndexSet;
 use iroha_crypto::{HashOf, PublicKey, SignatureOf};
@@ -12,7 +13,12 @@ use thiserror::Error;
 
 use super::network_topology::Topology;
 
-type ViewChangeProofSignature = (PublicKey, SignatureOf<ViewChangeProofPayload>);
+/// The node's public key and its corresponding signature on the view-change proof.
+#[derive(Debug, Clone, Decode, Encode, PartialEq, Eq, Hash, Constructor)]
+struct ViewChangeProofSignature {
+    public_key: PublicKey,
+    signature: SignatureOf<ViewChangeProofPayload>,
+}
 
 /// Error emerge during insertion of `Proof` into `ProofChain`
 #[derive(Error, displaydoc::Display, Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +70,10 @@ impl ProofBuilder {
     /// Sign this message with the peer's private key.
     pub fn sign(mut self, key_pair: &iroha_crypto::KeyPair) -> SignedViewChangeProof {
         let signature = SignatureOf::new(key_pair.private_key(), &self.0.payload);
-        self.0.signatures = vec![(key_pair.public_key().clone(), signature)];
+        self.0.signatures = vec![ViewChangeProofSignature::new(
+            key_pair.public_key().clone(),
+            signature,
+        )];
         self.0
     }
 }
@@ -85,9 +94,9 @@ impl SignedViewChangeProof {
 
         self.signatures = other
             .into_iter()
-            .fold(signatures, |mut acc, (public_key, signature)| {
-                if topology.position(&public_key).is_some() {
-                    acc.insert((public_key, signature));
+            .fold(signatures, |mut acc, signature| {
+                if topology.position(&signature.public_key).is_some() {
+                    acc.insert(signature);
                 }
 
                 acc
@@ -105,7 +114,7 @@ impl SignedViewChangeProof {
         let valid_count = self
             .signatures
             .iter()
-            .filter(|&(public_key, _)| topology.position(public_key).is_some())
+            .filter(|signature| topology.position(&signature.public_key).is_some())
             .count();
 
         // NOTE: See Whitepaper for the information on this limit.
@@ -219,7 +228,7 @@ mod candidate {
 
             self.signatures
                 .iter()
-                .map(|signature| &signature.0)
+                .map(|signature| &signature.public_key)
                 .try_fold(IndexSet::new(), |mut acc, elem| {
                     if !acc.insert(elem) {
                         return Err("Duplicate signature");
@@ -228,13 +237,12 @@ mod candidate {
                     Ok(acc)
                 })?;
 
-            self.signatures
-                .iter()
-                .try_for_each(|(public_key, payload)| {
-                    payload
-                        .verify(public_key, &self.payload)
-                        .map_err(|_| "Invalid signature")
-                })?;
+            self.signatures.iter().try_for_each(|signature| {
+                signature
+                    .signature
+                    .verify(&signature.public_key, &self.payload)
+                    .map_err(|_| "Invalid signature")
+            })?;
 
             Ok(())
         }
@@ -275,7 +283,7 @@ mod tests {
         let signatures = signatories
             .iter()
             .map(|key_pair| {
-                (
+                ViewChangeProofSignature::new(
                     key_pair.public_key().clone(),
                     SignatureOf::new(key_pair.private_key(), &payload),
                 )

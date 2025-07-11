@@ -165,8 +165,8 @@ pub fn try_read_snapshot(
         });
     }
     for height in 1..=snapshot_height {
-        let kura_block = NonZeroUsize::new(height)
-            .and_then(|height| kura.get_block(height))
+        let kura_block = kura
+            .get_block(NonZeroUsize::new(height).expect("iterating from 1"))
             .expect("Kura has height at least as large as state height");
         let snapshot_block_hash = state_view.block_hashes[height - 1];
         if kura_block.hash() != snapshot_block_hash {

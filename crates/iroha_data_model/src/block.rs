@@ -3,10 +3,12 @@
 //! `Block`s are organized into a linear sequence over time (also known as the block chain).
 
 #[cfg(not(feature = "std"))]
-use alloc::{boxed::Box, format, string::String, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeSet, format, string::String, vec::Vec};
 use core::{fmt::Display, num::NonZeroU64, time::Duration};
+#[cfg(feature = "std")]
+use std::collections::BTreeSet;
 
-use derive_more::Display;
+use derive_more::{Constructor, Display};
 use iroha_crypto::{HashOf, MerkleProof, MerkleTree, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
@@ -69,7 +71,18 @@ mod model {
 
     /// Core contents of a block.
     #[derive(
-        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Serialize, IntoSchema,
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Encode,
+        Serialize,
+        IntoSchema,
+        Deserialize,
+        Decode,
     )]
     #[display(fmt = "({header})")]
     #[allow(clippy::redundant_pub_crate)]
@@ -80,7 +93,7 @@ mod model {
         pub transactions: Vec<SignedTransaction>,
     }
 
-    /// Cryptographic approval from a validator for a block.
+    /// The validator index and its corresponding signature on the block header.
     #[derive(
         Debug,
         Clone,
@@ -92,25 +105,37 @@ mod model {
         Encode,
         Deserialize,
         Serialize,
+        Constructor,
         IntoSchema,
     )]
-    pub struct BlockSignature(
+    pub struct BlockSignature {
         /// Validator index in the network topology.
-        pub u64,
-        /// Validator signature of the block header.
-        pub SignatureOf<BlockHeader>,
-    );
+        pub index: u64,
+        /// Validator signature on the block header.
+        pub signature: SignatureOf<BlockHeader>,
+    }
 
     /// Block collecting signatures from validators.
     #[version_with_scale(version = 1, versioned_alias = "SignedBlock")]
     #[derive(
-        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Serialize, IntoSchema,
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Encode,
+        Serialize,
+        IntoSchema,
+        Decode,
+        Deserialize,
     )]
     #[display(fmt = "{}", "self.header()")]
     #[ffi_type]
     pub struct SignedBlockV1 {
         /// Signatures of validators who approved this block.
-        pub(super) signatures: Vec<BlockSignature>,
+        pub(super) signatures: BTreeSet<BlockSignature>,
         /// Block payload to be signed.
         pub(super) payload: BlockPayload,
         /// Secondary block state resulting from execution.
@@ -236,7 +261,7 @@ impl SignedBlock {
         transactions: Vec<SignedTransaction>,
     ) -> SignedBlock {
         SignedBlockV1 {
-            signatures: vec![signature],
+            signatures: [signature].into_iter().collect(),
             payload: BlockPayload {
                 header,
                 transactions,
@@ -310,6 +335,13 @@ impl SignedBlock {
     ) -> impl ExactSizeIterator<Item = &SignedTransaction> + DoubleEndedIterator {
         let SignedBlock::V1(block) = self;
         block.payload.transactions.iter()
+    }
+
+    /// Block transactions, the underlying vector
+    #[inline]
+    pub fn transactions_vec(&self) -> &Vec<SignedTransaction> {
+        let SignedBlock::V1(block) = self;
+        &block.payload.transactions
     }
 
     /// Check if block is empty (has no transactions)
@@ -442,7 +474,7 @@ impl SignedBlock {
     pub fn sign(&mut self, private_key: &iroha_crypto::PrivateKey, signatory: usize) {
         let SignedBlock::V1(block) = self;
 
-        block.signatures.push(BlockSignature(
+        block.signatures.insert(BlockSignature::new(
             signatory as u64,
             SignatureOf::from_hash(private_key, block.payload.header.hash()),
         ));
@@ -455,14 +487,14 @@ impl SignedBlock {
     /// if signature is invalid
     #[cfg(feature = "transparent_api")]
     pub fn add_signature(&mut self, signature: BlockSignature) -> Result<(), iroha_crypto::Error> {
-        if self.signatures().any(|s| signature.0 == s.0) {
+        if self.signatures().any(|s| signature.index == s.index) {
             return Err(iroha_crypto::Error::Signing(
                 "Duplicate signature".to_owned(),
             ));
         }
 
         let SignedBlock::V1(block) = self;
-        block.signatures.push(signature);
+        block.signatures.insert(signature);
 
         Ok(())
     }
@@ -475,20 +507,16 @@ impl SignedBlock {
     #[cfg(feature = "transparent_api")]
     pub fn replace_signatures(
         &mut self,
-        signatures: Vec<BlockSignature>,
-    ) -> Result<Vec<BlockSignature>, iroha_crypto::Error> {
-        #[cfg(not(feature = "std"))]
-        use alloc::collections::BTreeSet;
-        #[cfg(feature = "std")]
-        use std::collections::BTreeSet;
-
+        signatures: BTreeSet<BlockSignature>,
+    ) -> Result<BTreeSet<BlockSignature>, iroha_crypto::Error> {
         if signatures.is_empty() {
             return Err(iroha_crypto::Error::Signing("Signatures empty".to_owned()));
         }
 
-        signatures.iter().map(|signature| signature.0).try_fold(
-            BTreeSet::new(),
-            |mut acc, elem| {
+        signatures
+            .iter()
+            .map(|signature| signature.index)
+            .try_fold(BTreeSet::new(), |mut acc, elem| {
                 if !acc.insert(elem) {
                     return Err(iroha_crypto::Error::Signing(format!(
                         "{elem}: Duplicate signature"
@@ -496,8 +524,7 @@ impl SignedBlock {
                 }
 
                 Ok(acc)
-            },
-        )?;
+            })?;
 
         let SignedBlock::V1(block) = self;
         Ok(core::mem::replace(&mut block.signatures, signatures))
@@ -527,14 +554,14 @@ impl SignedBlock {
             view_change_index: 0,
         };
 
-        let signature = BlockSignature(0, SignatureOf::from_hash(private_key, header.hash()));
+        let signature = BlockSignature::new(0, SignatureOf::from_hash(private_key, header.hash()));
         let payload = BlockPayload {
             header,
             transactions,
         };
 
         SignedBlockV1 {
-            signatures: vec![signature],
+            signatures: [signature].into_iter().collect(),
             payload,
             result: BlockResult::default(),
         }
@@ -560,18 +587,6 @@ impl SignedBlock {
             .as_millis()
             .try_into()
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX")
-    }
-}
-
-impl BlockSignature {
-    /// Peer topology index
-    pub fn index(&self) -> u64 {
-        self.0
-    }
-
-    /// Signature itself
-    pub fn payload(&self) -> &SignatureOf<BlockHeader> {
-        &self.1
     }
 }
 
@@ -645,185 +660,6 @@ impl<'a> EntrypointIterator<'a> {
             index: 0,
             index_back: n_entrypoints,
             n_external_transactions,
-        }
-    }
-}
-
-mod candidate {
-    use parity_scale_codec::Input;
-
-    use super::*;
-
-    #[derive(Decode, Deserialize)]
-    struct SignedBlockCandidate {
-        signatures: Vec<BlockSignature>,
-        payload: BlockPayload,
-        result: BlockResult,
-    }
-
-    #[derive(Decode, Deserialize)]
-    struct BlockPayloadCandidate {
-        header: BlockHeader,
-        transactions: Vec<SignedTransaction>,
-    }
-
-    impl BlockPayloadCandidate {
-        fn validate(self) -> Result<BlockPayload, &'static str> {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                self.validate_header()?;
-            }
-
-            Ok(BlockPayload {
-                header: self.header,
-                transactions: self.transactions,
-            })
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        fn validate_header(&self) -> Result<(), &'static str> {
-            let actual_txs_hash = self.header.merkle_root;
-
-            let expected_txs_hash = self
-                .transactions
-                .iter()
-                .map(SignedTransaction::hash_as_entrypoint)
-                .collect::<MerkleTree<_>>()
-                .root();
-
-            if expected_txs_hash != actual_txs_hash {
-                return Err("Transactions' hash incorrect");
-            }
-
-            self.transactions.iter().try_for_each(|tx| {
-                if tx.creation_time() >= self.header.creation_time() {
-                    return Err("Transaction creation time is ahead of block creation time");
-                }
-
-                Ok(())
-            })?;
-
-            Ok(())
-        }
-    }
-
-    impl SignedBlockCandidate {
-        fn validate(self) -> Result<SignedBlockV1, &'static str> {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                self.validate_signatures()?;
-
-                if self.payload.header.height.get() == 1 {
-                    self.validate_genesis()?;
-                }
-            }
-
-            Ok(SignedBlockV1 {
-                signatures: self.signatures,
-                payload: self.payload,
-                // TODO: clear secondary state; ignore any execution results from other validators
-                result: self.result,
-            })
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        fn validate_signatures(&self) -> Result<(), &'static str> {
-            #[cfg(not(feature = "std"))]
-            use alloc::collections::BTreeSet;
-            #[cfg(feature = "std")]
-            use std::collections::BTreeSet;
-
-            if self.signatures.is_empty() && self.payload.header.height.get() != 1 {
-                return Err("Block missing signatures");
-            }
-
-            self.signatures
-                .iter()
-                .map(|signature| signature.0)
-                .try_fold(BTreeSet::new(), |mut acc, elem| {
-                    if !acc.insert(elem) {
-                        return Err("Duplicate signature in block");
-                    }
-
-                    Ok(acc)
-                })?;
-
-            Ok(())
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        fn validate_genesis(&self) -> Result<(), &'static str> {
-            let transactions = self.payload.transactions.as_slice();
-
-            for transaction in transactions {
-                let Executable::Instructions(_) = transaction.instructions() else {
-                    return Err("Genesis transaction must contain instructions");
-                };
-            }
-
-            let Some(transaction_executor) = transactions.first() else {
-                return Err("Genesis block must contain at least one transaction");
-            };
-            let Executable::Instructions(instructions_executor) =
-                transaction_executor.instructions()
-            else {
-                return Err("Genesis transaction must contain instructions");
-            };
-            let [crate::isi::InstructionBox::Upgrade(_)] = instructions_executor.as_ref() else {
-                return Err(
-                    "First transaction must contain single `Upgrade` instruction to set executor",
-                );
-            };
-
-            if transactions.len() > 5 {
-                return Err(
-                    "Genesis block must have 1 to 5 transactions (executor upgrade, parameters, ordinary instructions, wasm trigger registrations, initial topology)",
-                );
-            }
-
-            Ok(())
-        }
-    }
-
-    impl Decode for super::BlockPayload {
-        fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
-            BlockPayloadCandidate::decode(input)?
-                .validate()
-                .map_err(Into::into)
-        }
-    }
-
-    impl<'de> Deserialize<'de> for super::BlockPayload {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            use serde::de::Error as _;
-
-            BlockPayloadCandidate::deserialize(deserializer)?
-                .validate()
-                .map_err(D::Error::custom)
-        }
-    }
-
-    impl Decode for SignedBlockV1 {
-        fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
-            SignedBlockCandidate::decode(input)?
-                .validate()
-                .map_err(Into::into)
-        }
-    }
-
-    impl<'de> Deserialize<'de> for SignedBlockV1 {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            use serde::de::Error as _;
-
-            SignedBlockCandidate::deserialize(deserializer)?
-                .validate()
-                .map_err(D::Error::custom)
         }
     }
 }
@@ -916,6 +752,11 @@ pub mod error {
 
     #[cfg(feature = "std")]
     impl std::error::Error for BlockRejectionReason {}
+}
+
+pub mod prelude {
+    //! For glob-import
+    pub use super::{error::BlockRejectionReason, BlockHeader, BlockSignature, SignedBlock};
 }
 
 #[cfg(test)]

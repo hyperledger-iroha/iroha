@@ -143,7 +143,18 @@ mod model {
     /// The peer verifies the signature and checks the limits.
     #[version(version = 1, versioned_alias = "SignedTransaction")]
     #[derive(
-        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Serialize, IntoSchema,
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
     )]
     #[display(fmt = "{}", "self.hash()")]
     #[ffi_type]
@@ -426,6 +437,20 @@ impl SignedTransaction {
         modified.extend(extra_instructions.into_iter().map(Into::into));
         *instructions = modified.into();
     }
+
+    /// Verify transaction signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if signature verification fails.
+    #[inline]
+    pub fn verify_signature(&self) -> Result<(), iroha_crypto::Error> {
+        let SignedTransaction::V1(tx) = self;
+
+        let TransactionSignature(signature) = &tx.signature;
+
+        signature.verify(&tx.payload.authority.signatory, &tx.payload)
+    }
 }
 
 #[cfg(feature = "transparent_api")]
@@ -611,74 +636,6 @@ impl TransactionResult {
     #[inline]
     pub fn hash_from_inner(inner: &TransactionResultInner) -> HashOf<Self> {
         HashOf::from_untyped_unchecked(HashOf::new(inner).into())
-    }
-}
-
-mod candidate {
-    use parity_scale_codec::Input;
-
-    use super::*;
-
-    #[derive(Decode, Deserialize)]
-    struct SignedTransactionCandidate {
-        signature: TransactionSignature,
-        payload: TransactionPayload,
-    }
-
-    impl SignedTransactionCandidate {
-        fn validate(self) -> Result<SignedTransactionV1, &'static str> {
-            #[cfg(not(target_family = "wasm"))]
-            self.validate_instructions()?;
-            #[cfg(not(target_family = "wasm"))]
-            self.validate_signature()?;
-
-            Ok(SignedTransactionV1 {
-                signature: self.signature,
-                payload: self.payload,
-            })
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        fn validate_instructions(&self) -> Result<(), &'static str> {
-            if let Executable::Instructions(instructions) = &self.payload.instructions {
-                if instructions.is_empty() {
-                    return Err("Transaction is empty");
-                }
-            }
-
-            Ok(())
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        fn validate_signature(&self) -> Result<(), &'static str> {
-            let TransactionSignature(signature) = &self.signature;
-
-            signature
-                .verify(&self.payload.authority.signatory, &self.payload)
-                .map_err(|_| "Transaction signature is invalid")?;
-
-            Ok(())
-        }
-    }
-
-    impl Decode for SignedTransactionV1 {
-        fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
-            SignedTransactionCandidate::decode(input)?
-                .validate()
-                .map_err(Into::into)
-        }
-    }
-    impl<'de> Deserialize<'de> for SignedTransactionV1 {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            use serde::de::Error as _;
-
-            SignedTransactionCandidate::deserialize(deserializer)?
-                .validate()
-                .map_err(D::Error::custom)
-        }
     }
 }
 

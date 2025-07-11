@@ -199,6 +199,11 @@ pub struct LiveQueryStoreHandle {
 }
 
 impl LiveQueryStoreHandle {
+    /// Create a new handle for the store
+    pub fn new(store: Arc<LiveQueryStore>) -> Self {
+        Self { store }
+    }
+
     /// Construct a batched response from a post-processed query output.
     ///
     /// # Errors
