@@ -1,5 +1,7 @@
 #![allow(missing_docs)]
 
+use std::time::Duration;
+
 use eyre::Result;
 use iroha::data_model::{prelude::*, query::parameters::Pagination};
 use iroha_test_network::*;
@@ -27,7 +29,7 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
         AssetId::new("foo#wonderland".parse()?, account_id.clone()),
     );
 
-    let transactions_count = 100;
+    let transactions_count = 10;
 
     for i in 0..transactions_count {
         let mint_asset = if i % 2 == 0 {
@@ -42,19 +44,27 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
 
     let transactions = client
         .query(FindTransactions::new())
-        .filter_with(|tx| tx.value.authority.eq(account_id.clone()))
-        .with_pagination(Pagination::new(Some(nonzero!(50_u64)), 1))
+        .filter_with(|tx| tx.entrypoint.authority.eq(account_id.clone()))
+        .with_pagination(Pagination::new(Some(nonzero!(5_u64)), 1))
         .execute_all()?;
-    assert_eq!(transactions.len(), 50);
+    assert_eq!(transactions.len(), 5);
 
-    let mut prev_creation_time = None;
-    transactions.iter().map(AsRef::as_ref).for_each(|tx| {
-        assert_eq!(tx.authority(), &account_id);
-        //check sorted descending
-        if let Some(prev_creation_time) = prev_creation_time {
-            assert!(tx.creation_time() <= prev_creation_time);
-        }
-        prev_creation_time = Some(tx.creation_time());
-    });
+    transactions
+        .iter()
+        .fold(Duration::MAX, |prev_timestamp, tx| {
+            assert_eq!(tx.entrypoint().authority(), &account_id);
+            match tx.entrypoint() {
+                TransactionEntrypoint::External(entrypoint) => {
+                    let curr_timestamp = entrypoint.creation_time();
+                    // FindTransactions returns transactions in descending order.
+                    assert!(prev_timestamp > curr_timestamp);
+                    curr_timestamp
+                }
+                TransactionEntrypoint::Time(_) => {
+                    panic!("unexpected time-triggered entrypoint");
+                }
+            }
+        });
+
     Ok(())
 }

@@ -170,12 +170,15 @@ fn validate_transaction(criterion: &mut Criterion) {
     let mut wasm_cache = WasmCache::new();
     let mut state_block = state.block(unverified_block.header());
     let _ = criterion.bench_function("validate", |b| {
-        b.iter(
-            || match state_block.validate_transaction(transaction.clone(), &mut wasm_cache) {
+        b.iter(|| {
+            match state_block
+                .validate_transaction(transaction.clone(), &mut wasm_cache)
+                .1
+            {
                 Ok(_) => success_count += 1,
                 Err(_) => failure_count += 1,
-            },
-        );
+            }
+        });
     });
     state_block.commit();
     println!("Success count: {success_count}, Failure count: {failure_count}");

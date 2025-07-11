@@ -12,7 +12,7 @@ iroha_config = { workspace = true }
 iroha_config_base = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_telemetry = { workspace = true }
-iroha_data_model = { workspace = true, features = ["http"] }
+iroha_data_model = { workspace = true, features = ["http", "fault_injection"] }
 iroha_executor_data_model = { workspace = true }
 
 eyre = { workspace = true }

@@ -26,7 +26,7 @@ use iroha_data_model::{
     IntoKeyValue,
 };
 use iroha_logger::prelude::*;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::{const_vec::ConstVec, numeric::Numeric};
 use mv::{
     cell::{Block as CellBlock, Cell, Transaction as CellTransaction, View as CellView},
     storage::{
@@ -97,7 +97,8 @@ pub struct World {
     pub(crate) executor: Cell<Executor>,
     /// Executor-defined data model
     pub(crate) executor_data_model: Cell<ExecutorDataModel>,
-    /// Required here for formal correctness, even though it is only used below block level.
+    /// Placeholder buffer of events pending publication to external subscribers.
+    /// Included for formal correctness, although used only below the block level.
     external_event_buf: Cell<Vec<EventBox>>,
 }
 
@@ -1411,7 +1412,7 @@ impl<'state> StateBlock<'state> {
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
         let transactions = block
             .as_ref()
-            .transactions()
+            .external_transactions()
             .map(SignedTransaction::hash)
             .collect();
         self.transactions.insert_block(transactions, block_height);
@@ -1431,48 +1432,103 @@ impl<'state> StateBlock<'state> {
         core::mem::take(&mut self.world.external_event_buf)
     }
 
-    /// Execute all time triggers matching the given block.
-    pub(crate) fn execute_time_triggers(&mut self, block_header: &BlockHeader) {
+    /// Execute time-triggered transactions for the given block, applying their state changes on success.
+    ///
+    /// Returns a triplet of vectors: the first contains the time-triggered entrypoints,
+    /// the second contains their corresponding hashes,
+    /// and the third contains their corresponding results.
+    pub(crate) fn execute_time_triggers(
+        &mut self,
+        block_header: &BlockHeader,
+    ) -> (
+        Vec<TimeTriggerEntrypoint>,
+        Vec<HashOf<TransactionEntrypoint>>,
+        Vec<TransactionResultInner>,
+    ) {
         let time_event = self.create_time_event(block_header);
         self.world.external_event_buf.push(time_event.into());
         let matched: Vec<_> = self.world.triggers.match_time_event(time_event).collect();
 
-        for (trg_id, action) in &matched {
-            if let Err(error) = self.execute_time_trigger(trg_id, action, &time_event) {
-                // TODO(#4968): Record errors in the block alongside transaction errors.
-                iroha_logger::warn!(
-                    trigger=%trg_id,
-                    block=%block_header.hash(),
-                    reason=?error,
-                    "Time trigger and its chained data triggers failed to execute"
-                );
-            }
-        }
+        matched.iter().fold(
+            (Vec::new(), Vec::new(), Vec::new()),
+            |mut acc, (trg_id, action)| {
+                let (entrypoint, result) = self.execute_time_trigger(trg_id, action, &time_event);
+
+                match &result {
+                    Err(reason) => {
+                        iroha_logger::debug!(
+                            trigger=%trg_id,
+                            block=%block_header.hash(),
+                            reason=?reason,
+                            "Time trigger and its chained data triggers failed to execute"
+                        );
+                    }
+                    Ok(trigger_sequence) => {
+                        iroha_logger::debug!(
+                            trigger=%trg_id,
+                            block=%block_header.hash(),
+                            trigger_sequence=?trigger_sequence,
+                            "Time trigger and its chained data triggers successfully executed"
+                        );
+                    }
+                }
+
+                let entrypoint_hash = entrypoint.hash_as_entrypoint();
+                acc.0.push(entrypoint);
+                acc.1.push(entrypoint_hash);
+                acc.2.push(result);
+                acc
+            },
+        )
     }
 
+    /// Execute a scheduled trigger, applying its state changes on success, or leaving the state unchanged on failure.
+    ///
+    /// Returns the hash and the result of this "transaction" --
+    /// the trigger sequence including this entrypoint on success, or the rejection reason on failure.
     fn execute_time_trigger(
         &mut self,
         trg_id: &TriggerId,
         action: &LoadedAction<TimeEventFilter>,
         time_event: &TimeEvent,
-    ) -> Result<(), TransactionRejectionReason> {
+    ) -> (TimeTriggerEntrypoint, TransactionResultInner) {
         let mut transaction = self.transaction();
 
-        transaction
-            .execute_trigger(
-                trg_id,
-                action.authority(),
-                action.executable(),
-                (*time_event).into(),
-            )
-            .and_then(|()| transaction.execute_data_triggers_dfs(action.authority()))?;
+        let mut entrypoint = TimeTriggerEntrypoint {
+            id: trg_id.clone(),
+            instructions: ConstVec::new_empty().into(),
+            authority: action.authority().clone(),
+        };
+        match transaction.execute_trigger(
+            trg_id,
+            action.authority(),
+            action.executable(),
+            (*time_event).into(),
+        ) {
+            Ok(step) => {
+                entrypoint.instructions = step;
+            }
+            Err(reason) => {
+                return (
+                    // FIXME: fetch the actual time trigger instructions.
+                    entrypoint,
+                    Err(reason),
+                );
+            }
+        }
+        let trigger_sequence = match transaction.execute_data_triggers_dfs(action.authority()) {
+            Ok(sequence) => sequence,
+            err => return (entrypoint, err),
+        };
+
         transaction
             .world
             .triggers
             .decrease_repeats([trg_id].into_iter());
+
         transaction.apply();
 
-        Ok(())
+        (entrypoint, Ok(trigger_sequence))
     }
 
     /// Create time event using previous and current blocks.
@@ -1514,7 +1570,7 @@ impl<'state> StateBlock<'state> {
     fn apply_transactions(&mut self, block: &CommittedBlock) {
         let block = block.as_ref();
 
-        for (idx, tx) in block.transactions().enumerate() {
+        for (idx, tx) in block.external_transactions().enumerate() {
             if block.error(idx).is_none() {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
@@ -1545,12 +1601,16 @@ impl StateTransaction<'_, '_> {
         world.apply();
     }
 
-    /// Execute a call-trigger. This function will be deprecated in #5147.
+    /// Execute a called trigger, staging its state changes.
+    ///
+    /// Returns the execution step on success, or the rejection reason on failure.
+    ///
+    /// This function will be removed in #5147.
     pub(crate) fn execute_called_trigger(
         &mut self,
         id: &TriggerId,
         event: ExecuteTriggerEvent,
-    ) -> Result<(), TransactionRejectionReason> {
+    ) -> Result<ExecutionStep, TransactionRejectionReason> {
         let executable = {
             let action = self
                 .world
@@ -1569,17 +1629,20 @@ impl StateTransaction<'_, '_> {
             action.executable().clone()
         };
         self.world.external_event_buf.push(event.clone().into());
-        self.execute_trigger(id, event.clone().authority(), &executable, event.into())?;
+        let step =
+            self.execute_trigger(id, event.clone().authority(), &executable, event.into())?;
         self.world.triggers.decrease_repeats([id].into_iter());
 
-        Ok(())
+        Ok(step)
     }
 
-    /// Perform a depth-first traversal of the trigger execution path.
+    /// Perform a depth-first traversal of the trigger execution path, staging state changes.
+    ///
+    /// Returns the trigger sequence on success, or the rejection reason on failure.
     pub(crate) fn execute_data_triggers_dfs(
         &mut self,
         authority: &AccountId,
-    ) -> Result<(), TransactionRejectionReason> {
+    ) -> TransactionResultInner {
         let mut stack: Vec<(DataEvent, TriggerId, u8)> = self
             .capture_data_events()
             .into_iter()
@@ -1588,6 +1651,7 @@ impl StateTransaction<'_, '_> {
             .map(|(e, t)| (e, t, 1))
             .collect();
 
+        let mut steps = Vec::new();
         while let Some((event, trg_id, depth)) = stack.pop() {
             let max_depth = self.world.parameters.smart_contract.execution_depth;
             if max_depth < depth {
@@ -1609,9 +1673,17 @@ impl StateTransaction<'_, '_> {
                 action.executable().clone()
             };
 
-            self.execute_trigger(&trg_id, authority, &executable, event.clone().into())?;
+            let step =
+                self.execute_trigger(&trg_id, authority, &executable, event.clone().into())?;
+
             let depleted = self.world.triggers.decrease_repeats([&trg_id].into_iter());
             stack.retain(|(_, trg_id, _)| !depleted.contains(trg_id));
+
+            let step = DataTriggerStep {
+                id: trg_id,
+                instructions: step,
+            };
+            steps.push(step);
 
             let next_items = self
                 .capture_data_events()
@@ -1621,7 +1693,7 @@ impl StateTransaction<'_, '_> {
             stack.extend(next_items);
         }
 
-        Ok(())
+        Ok(steps)
     }
 
     /// Flush the internal event buffer and return pairs of __representative__ matched events and trigger IDs.
@@ -1643,16 +1715,19 @@ impl StateTransaction<'_, '_> {
             .collect()
     }
 
+    /// Execute any condition of trigger, staging its state changes.
+    ///
+    /// Returns the execution step on success, or the rejection reason on failure.
     fn execute_trigger(
         &mut self,
         id: &TriggerId,
         authority: &AccountId,
         executable: &ExecutableRef,
         event: EventBox,
-    ) -> Result<(), TransactionRejectionReason> {
+    ) -> Result<ExecutionStep, TransactionRejectionReason> {
         let res = match executable {
             ExecutableRef::Instructions(instructions) => {
-                self.execute_instructions(instructions.iter().cloned(), authority)
+                self.execute_instructions(instructions.clone(), authority)
             }
             ExecutableRef::Wasm(blob_hash) => {
                 let module = self
@@ -1679,7 +1754,8 @@ impl StateTransaction<'_, '_> {
         };
 
         let outcome = match &res {
-            Ok(()) => TriggerCompletedOutcome::Success,
+            // TODO: Integrate step information into pipeline events (entrypoint hash, index in trigger sequence, etc.)
+            Ok(_execution_step) => TriggerCompletedOutcome::Success,
             Err(error) => TriggerCompletedOutcome::Failure(error.to_string()),
         };
         let event = TriggerCompletedEvent::new(id.clone(), outcome);
@@ -1688,16 +1764,23 @@ impl StateTransaction<'_, '_> {
         res.map_err(Into::into)
     }
 
+    /// Execute a batch of instructions, staging their state changes.
+    ///
+    /// Returns the instructions as a single execution step on success, or the error on failure.
     fn execute_instructions(
         &mut self,
-        instructions: impl IntoIterator<Item = InstructionBox>,
+        instructions: ConstVec<InstructionBox>,
         authority: &AccountId,
-    ) -> Result<(), ValidationFail> {
+    ) -> Result<ExecutionStep, ValidationFail> {
         let executor = self.world.executor.clone();
-        instructions.into_iter().try_for_each(|instruction| {
-            executor.execute_instruction(self, authority, instruction)?;
-            Ok(())
-        })
+        instructions
+            .clone()
+            .into_iter()
+            .try_for_each(|instruction| {
+                executor.execute_instruction(self, authority, instruction)?;
+                Ok::<_, ValidationFail>(())
+            })?;
+        Ok(ExecutionStep(instructions))
     }
 
     /// Apply a non-erroneous executable in the given committed block.
@@ -1705,7 +1788,7 @@ impl StateTransaction<'_, '_> {
     fn apply_executable(&mut self, executable: &Executable, authority: AccountId) {
         match executable {
             Executable::Instructions(instructions) => {
-                self.execute_instructions(instructions.iter().cloned(), &authority)
+                self.execute_instructions(instructions.clone(), &authority)
                     .expect("should be no errors");
             }
             Executable::Wasm(bytes) => {

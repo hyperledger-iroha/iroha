@@ -19,6 +19,7 @@ use iroha_data_model::{
 use iroha_logger::debug;
 // NOTE: Using error_span so that span info is logged on every event
 use iroha_logger::{error_span as wasm_log_span, prelude::tracing::Span};
+use iroha_primitives::const_vec::ConstVec;
 use iroha_wasm_codec::{self as codec, WasmUsize};
 use parity_scale_codec::Encode;
 use wasmtime::{
@@ -1086,7 +1087,7 @@ impl<'wrld, 'block: 'wrld, 'state: 'block> Runtime<state::Trigger<'wrld, 'block,
         authority: AccountId,
         module: &wasmtime::Module,
         event: EventBox,
-    ) -> Result<()> {
+    ) -> Result<ExecutionStep> {
         let span = wasm_log_span!("Trigger execution", %id, %authority);
         let state = state::Trigger::new(
             authority,
@@ -1112,7 +1113,8 @@ impl<'wrld, 'block: 'wrld, 'state: 'block> Runtime<state::Trigger<'wrld, 'block,
         let executed_queries = state.take_executed_queries();
         forget_all_executed_queries(state.state.0.query_handle, executed_queries);
 
-        Ok(())
+        // FIXME: include actual instructions -- requires #5358 refactoring.
+        Ok(ExecutionStep(ConstVec::new_empty()))
     }
 
     fn get_trigger_context(

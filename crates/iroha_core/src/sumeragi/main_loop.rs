@@ -323,7 +323,7 @@ impl Sumeragi {
             let errors = genesis
                 .as_ref()
                 .errors()
-                .map(|(&transaction_index, rejection_reason)| {
+                .map(|(transaction_index, rejection_reason)| {
                     format!(
                         "===\nTx {transaction_index}:\n{:?}",
                         eyre::Error::new(rejection_reason.clone())

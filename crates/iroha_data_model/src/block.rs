@@ -3,19 +3,13 @@
 //! `Block`s are organized into a linear sequence over time (also known as the block chain).
 
 #[cfg(not(feature = "std"))]
-use alloc::{
-    boxed::Box,
-    collections::{BTreeMap, BTreeSet},
-    format,
-    string::String,
-    vec::Vec,
-};
-use core::{fmt::Display, time::Duration};
+use alloc::{boxed::Box, collections::BTreeSet, format, string::String, vec::Vec};
+use core::{fmt::Display, num::NonZeroU64, time::Duration};
 #[cfg(feature = "std")]
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use derive_more::{Constructor, Display};
-use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
+use iroha_crypto::{HashOf, MerkleProof, MerkleTree, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
@@ -28,12 +22,11 @@ use crate::transaction::{error::TransactionRejectionReason, prelude::*};
 
 #[model]
 mod model {
-    use core::num::NonZeroU64;
-
     use getset::{CopyGetters, Getters};
 
     use super::*;
 
+    /// Essential metadata for a block in the chain.
     #[derive(
         Debug,
         Display,
@@ -52,7 +45,6 @@ mod model {
         IntoSchema,
     )]
     #[display(fmt = "{} (№{height})", "self.hash()")]
-    #[allow(missing_docs)]
     #[ffi_type]
     pub struct BlockHeader {
         /// Number of blocks in the chain including this block.
@@ -61,11 +53,15 @@ mod model {
         /// Hash of the previous block in the chain.
         #[getset(get_copy = "pub")]
         pub prev_block_hash: Option<HashOf<BlockHeader>>,
-        /// Hash of merkle tree root of transactions' hashes.
-        /// None if no transactions (empty block).
+        /// Merkle root of this block's transactions.
+        /// None if there are no transactions (empty block).
         #[getset(get_copy = "pub")]
-        pub transactions_hash: Option<HashOf<MerkleTree<SignedTransaction>>>,
-        /// Creation timestamp (unix time in milliseconds).
+        pub merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
+        /// Merkle root of this block's transaction results.
+        /// None if there are no transactions (empty block).
+        #[getset(get_copy = "pub")]
+        pub result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
+        /// Creation timestamp as Unix time in milliseconds.
         #[getset(skip)]
         pub creation_time_ms: u64,
         /// Value of view change index. Used to resolve soft forks.
@@ -73,6 +69,7 @@ mod model {
         pub view_change_index: u32,
     }
 
+    /// Core contents of a block.
     #[derive(
         Debug,
         Display,
@@ -88,12 +85,11 @@ mod model {
         Decode,
     )]
     #[display(fmt = "({header})")]
-    #[allow(missing_docs)]
     #[allow(clippy::redundant_pub_crate)]
     pub(crate) struct BlockPayload {
-        /// Block header
+        /// Essential metadata for a block in the chain.
         pub header: BlockHeader,
-        /// array of transactions, which successfully passed validation and consensus step.
+        /// External transactions as source of the state, forming the first half of the transaction entrypoints.
         pub transactions: Vec<SignedTransaction>,
     }
 
@@ -119,7 +115,7 @@ mod model {
         pub signature: SignatureOf<BlockHeader>,
     }
 
-    /// Signed block
+    /// Block collecting signatures from validators.
     #[version_with_scale(version = 1, versioned_alias = "SignedBlock")]
     #[derive(
         Debug,
@@ -138,16 +134,41 @@ mod model {
     #[display(fmt = "{}", "self.header()")]
     #[ffi_type]
     pub struct SignedBlockV1 {
-        /// Signatures of peers which approved this block.
+        /// Signatures of validators who approved this block.
         pub(super) signatures: BTreeSet<BlockSignature>,
-        /// Block payload
+        /// Block payload to be signed.
         pub(super) payload: BlockPayload,
-        /// Collection of rejection reasons for every transaction if exists
-        ///
-        /// # Warning
-        ///
-        /// Transaction errors are not part of the block hash or protected by the block signature.
-        pub(super) errors: BTreeMap<u64, TransactionRejectionReason>,
+        /// Secondary block state resulting from execution.
+        // TODO: refactor state transitions so that only validated blocks store results.
+        pub(super) result: BlockResult,
+    }
+
+    /// Secondary block state resulting from execution.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    #[display(fmt = "BlockResult")]
+    pub struct BlockResult {
+        /// Time-triggered entrypoints, forming the second half of the transaction entrypoints.
+        pub time_triggers: Vec<TimeTriggerEntrypoint>,
+        /// Merkle tree over the transaction entrypoints (external transactions followed by time triggers).
+        pub merkle: MerkleTree<TransactionEntrypoint>,
+        /// Merkle tree over the transaction results, with indices aligned to the entrypoint Merkle tree.
+        pub result_merkle: MerkleTree<TransactionResult>,
+        /// Transaction execution results, with indices aligned to the entrypoint Merkle tree.
+        pub transaction_results: Vec<TransactionResult>,
     }
 }
 
@@ -168,10 +189,52 @@ impl BlockHeader {
         Duration::from_millis(self.creation_time_ms)
     }
 
-    /// Calculate block hash
+    /// Returns the consensus-level hash of the block header,
+    /// excluding the `result_merkle_root` field.
+    ///
+    /// TODO: prevent divergent hashes caused by direct calls to `HashOf::new`,
+    /// leveraging specialization once it's stabilized (<https://github.com/rust-lang/rust/issues/31844>).
     #[inline]
     pub fn hash(&self) -> HashOf<BlockHeader> {
-        iroha_crypto::HashOf::new(self)
+        self.hash_without_results()
+    }
+
+    /// Computes the header hash without including `result_merkle_root`.
+    #[inline]
+    fn hash_without_results(&self) -> HashOf<BlockHeader> {
+        /// A view of `BlockHeader` used for consensus hashing, omitting the execution results.
+        #[derive(Encode)]
+        struct BlockHeaderForConsensus {
+            height: NonZeroU64,
+            prev_block_hash: Option<HashOf<BlockHeader>>,
+            // FIXME #5473: address inconsistency introduced by time-triggered entrypoints
+            merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
+            creation_time_ms: u64,
+            view_change_index: u32,
+        }
+
+        impl From<&BlockHeader> for BlockHeaderForConsensus {
+            fn from(value: &BlockHeader) -> Self {
+                let BlockHeader {
+                    height,
+                    prev_block_hash,
+                    merkle_root,
+                    result_merkle_root: _,
+                    creation_time_ms,
+                    view_change_index,
+                } = *value;
+
+                Self {
+                    height,
+                    prev_block_hash,
+                    merkle_root,
+                    creation_time_ms,
+                    view_change_index,
+                }
+            }
+        }
+
+        HashOf::from_untyped_unchecked(HashOf::new(&BlockHeaderForConsensus::from(self)).into())
     }
 }
 
@@ -203,26 +266,42 @@ impl SignedBlock {
                 header,
                 transactions,
             },
-            errors: BTreeMap::new(),
+            result: BlockResult::default(),
         }
         .into()
     }
 
-    /// Setter for transaction errors
+    /// Set this block's transaction results.
+    ///
+    /// Given a pair of vectors -- transaction hashes and their corresponding results,
+    /// - Record Merkle trees and the transaction results outside the block payload.
+    /// - Record the Merkle root of the transaction results inside the block header, enabling client verification.
     #[cfg(feature = "transparent_api")]
-    pub fn set_transaction_errors(
+    pub fn set_transaction_results(
         &mut self,
-        errors: BTreeMap<u64, TransactionRejectionReason>,
-    ) -> &mut Self {
+        time_triggers: Vec<TimeTriggerEntrypoint>,
+        hashes: Vec<HashOf<TransactionEntrypoint>>,
+        results: Vec<TransactionResultInner>,
+    ) {
         let SignedBlock::V1(block) = self;
-        block.errors = errors;
-        self
+
+        let result_hashes = results.iter().map(TransactionResult::hash_from_inner);
+        block.result.time_triggers = time_triggers;
+        block.result.merkle = MerkleTree::from_iter(hashes);
+        block.result.result_merkle = result_hashes.collect();
+        block.result.transaction_results =
+            results.into_iter().map(TransactionResult::from).collect();
+        block.payload.header.result_merkle_root = block.result.result_merkle.root();
     }
 
     /// Return error for the transaction index
     pub fn error(&self, tx: usize) -> Option<&TransactionRejectionReason> {
         let SignedBlock::V1(block) = self;
-        block.errors.get(&(tx as u64))
+        block
+            .result
+            .transaction_results
+            .get(tx)
+            .and_then(|result| result.as_ref().err())
     }
 
     /// Block payload. Used for tests
@@ -248,9 +327,12 @@ impl SignedBlock {
         block.signatures.iter()
     }
 
-    /// Block transactions
+    /// Signed transactions originating from external sources.
+    /// Indices align with those of the entrypoints.
     #[inline]
-    pub fn transactions(&self) -> impl ExactSizeIterator<Item = &SignedTransaction> {
+    pub fn external_transactions(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &SignedTransaction> + DoubleEndedIterator {
         let SignedBlock::V1(block) = self;
         block.payload.transactions.iter()
     }
@@ -269,14 +351,115 @@ impl SignedBlock {
         block.payload.transactions.is_empty()
     }
 
-    /// Collection of rejection reasons for every transaction if exists
-    ///
-    /// # Warning
-    ///
-    /// Transaction errors are not part of the block hash or protected by the block signature.
-    pub fn errors(&self) -> impl ExactSizeIterator<Item = (&u64, &TransactionRejectionReason)> {
+    /// Time-triggered entrypoints in execution order, following external transactions.
+    /// Indices offset by the number of the external transactions align with those of the entrypoints.
+    #[inline]
+    pub fn time_triggers(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &TimeTriggerEntrypoint> + DoubleEndedIterator {
         let SignedBlock::V1(block) = self;
-        block.errors.iter()
+        block.result.time_triggers.iter()
+    }
+
+    /// Hashes of each transaction entrypoint (external and time-triggered) in execution order.
+    /// Indices align with those of the entrypoints.
+    #[inline]
+    pub fn entrypoint_hashes(
+        &self,
+    ) -> impl ExactSizeIterator<Item = HashOf<TransactionEntrypoint>> + DoubleEndedIterator + '_
+    {
+        let SignedBlock::V1(block) = self;
+        block.result.merkle.leaves()
+    }
+
+    /// Merkle inclusion proofs of each transaction entrypoint (external and time-triggered) in execution order.
+    /// Indices align with those of the entrypoints.
+    #[inline]
+    pub fn entrypoint_proofs(
+        &self,
+    ) -> impl ExactSizeIterator<Item = MerkleProof<TransactionEntrypoint>> + DoubleEndedIterator + '_
+    {
+        let SignedBlock::V1(block) = self;
+        let n_leaves: u32 = block
+            .result
+            .merkle
+            .leaves()
+            .len()
+            .try_into()
+            .expect("bug: leaf count exceeded u32::MAX");
+        (0..n_leaves).map(|i| {
+            block
+                .result
+                .merkle
+                .get_proof(i)
+                .expect("bug: missing Merkle proof at valid index")
+        })
+    }
+
+    /// Transaction entrypoints (external and time-triggered) in execution order.
+    #[inline]
+    pub fn entrypoints_cloned(
+        &self,
+    ) -> impl ExactSizeIterator<Item = TransactionEntrypoint> + DoubleEndedIterator + '_ {
+        EntrypointIterator::new(self)
+    }
+
+    /// Hashes of each transaction result (trigger sequence or rejection reason) in execution order.
+    /// Indices align with those of the entrypoints.
+    #[inline]
+    pub fn result_hashes(
+        &self,
+    ) -> impl ExactSizeIterator<Item = HashOf<TransactionResult>> + DoubleEndedIterator + '_ {
+        let SignedBlock::V1(block) = self;
+        block.result.result_merkle.leaves()
+    }
+
+    /// Merkle inclusion proofs of each transaction result (trigger sequence or rejection reason) in execution order.
+    /// Indices align with those of the entrypoints.
+    #[inline]
+    pub fn result_proofs(
+        &self,
+    ) -> impl ExactSizeIterator<Item = MerkleProof<TransactionResult>> + DoubleEndedIterator + '_
+    {
+        let SignedBlock::V1(block) = self;
+        let n_leaves: u32 = block
+            .result
+            .result_merkle
+            .leaves()
+            .len()
+            .try_into()
+            .expect("bug: leaf count exceeded u32::MAX");
+        (0..n_leaves).map(|i| {
+            block
+                .result
+                .result_merkle
+                .get_proof(i)
+                .expect("bug: missing Merkle proof at valid index")
+        })
+    }
+
+    /// Actual transaction results (trigger sequence or rejection reason) in execution order.
+    /// Indices align with those of the entrypoints.
+    #[inline]
+    pub fn results(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &TransactionResult> + DoubleEndedIterator {
+        let SignedBlock::V1(block) = self;
+        block.result.transaction_results.iter()
+    }
+
+    /// Successful transaction indices and data trigger sequences.
+    pub fn successes(&self) -> impl Iterator<Item = (u64, &DataTriggerSequence)> {
+        self.results()
+            .enumerate()
+            .filter_map(|(i, result)| result.as_ref().ok().map(|ok| (i as u64, ok)))
+    }
+
+    /// Failed transaction indices and rejection reasons.
+    pub fn errors(&self) -> impl Iterator<Item = (u64, &TransactionRejectionReason)> {
+        self.results()
+            .enumerate()
+            .filter_map(|(i, result)| result.as_ref().err().map(|err| (i as u64, err)))
     }
 
     /// Calculate block hash
@@ -293,7 +476,7 @@ impl SignedBlock {
 
         block.signatures.insert(BlockSignature::new(
             signatory as u64,
-            SignatureOf::new(private_key, &block.payload.header),
+            SignatureOf::from_hash(private_key, block.payload.header.hash()),
         ));
     }
 
@@ -355,9 +538,9 @@ impl SignedBlock {
     ) -> SignedBlock {
         use nonzero_ext::nonzero;
 
-        let transactions_hash = transactions
+        let merkle_root = transactions
             .iter()
-            .map(SignedTransaction::hash)
+            .map(SignedTransaction::hash_as_entrypoint)
             .collect::<MerkleTree<_>>()
             .root()
             .expect("Genesis block must have transactions");
@@ -365,12 +548,13 @@ impl SignedBlock {
         let header = BlockHeader {
             height: nonzero!(1_u64),
             prev_block_hash: None,
-            transactions_hash: Some(transactions_hash),
+            merkle_root: Some(merkle_root),
+            result_merkle_root: None,
             creation_time_ms,
             view_change_index: 0,
         };
 
-        let signature = BlockSignature::new(0, SignatureOf::new(private_key, &header));
+        let signature = BlockSignature::new(0, SignatureOf::from_hash(private_key, header.hash()));
         let payload = BlockPayload {
             header,
             transactions,
@@ -379,7 +563,7 @@ impl SignedBlock {
         SignedBlockV1 {
             signatures: [signature].into_iter().collect(),
             payload,
-            errors: BTreeMap::new(),
+            result: BlockResult::default(),
         }
         .into()
     }
@@ -403,6 +587,80 @@ impl SignedBlock {
             .as_millis()
             .try_into()
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX")
+    }
+}
+
+struct EntrypointIterator<'a> {
+    block: &'a SignedBlock,
+    index: usize,
+    index_back: usize,
+    n_external_transactions: usize,
+}
+
+impl Iterator for EntrypointIterator<'_> {
+    type Item = TransactionEntrypoint;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index_back <= self.index {
+            return None;
+        }
+
+        let SignedBlock::V1(block_inner) = self.block;
+        let item = if self.index < self.n_external_transactions {
+            block_inner.payload.transactions[self.index].clone().into()
+        } else {
+            block_inner.result.time_triggers[self.index - self.n_external_transactions]
+                .clone()
+                .into()
+        };
+
+        // Increment the front index eagerly.
+        self.index += 1;
+        Some(item)
+    }
+}
+
+impl DoubleEndedIterator for EntrypointIterator<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.index_back <= self.index {
+            return None;
+        }
+        // Decrement the back index lazily.
+        self.index_back -= 1;
+
+        let SignedBlock::V1(block_inner) = self.block;
+        let item = if self.index_back < self.n_external_transactions {
+            block_inner.payload.transactions[self.index_back]
+                .clone()
+                .into()
+        } else {
+            block_inner.result.time_triggers[self.index_back - self.n_external_transactions]
+                .clone()
+                .into()
+        };
+
+        Some(item)
+    }
+}
+
+impl ExactSizeIterator for EntrypointIterator<'_> {
+    fn len(&self) -> usize {
+        self.index_back - self.index
+    }
+}
+
+impl<'a> EntrypointIterator<'a> {
+    fn new(block: &'a SignedBlock) -> Self {
+        let SignedBlock::V1(block_inner) = block;
+        let n_external_transactions = block_inner.payload.transactions.len();
+        let n_entrypoints = n_external_transactions + block_inner.result.time_triggers.len();
+
+        Self {
+            block,
+            index: 0,
+            index_back: n_entrypoints,
+            n_external_transactions,
+        }
     }
 }
 
@@ -499,4 +757,33 @@ pub mod error {
 pub mod prelude {
     //! For glob-import
     pub use super::{error::BlockRejectionReason, BlockHeader, BlockSignature, SignedBlock};
+}
+
+#[cfg(test)]
+mod tests {
+    use core::num::NonZeroU64;
+
+    use super::*;
+
+    #[test]
+    fn result_merkle_root_does_not_affect_block_hash() {
+        let mut header = BlockHeader {
+            height: NonZeroU64::new(123_456).unwrap(),
+            prev_block_hash: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"prev_block_hash",
+            ))),
+            merkle_root: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"merkle_root",
+            ))),
+            result_merkle_root: None,
+            creation_time_ms: 123_456_789_000,
+            view_change_index: 123,
+        };
+        let hash0 = header.hash();
+        header.result_merkle_root = Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"result_merkle_root",
+        )));
+        let hash1 = header.hash();
+        assert_eq!(hash0, hash1);
+    }
 }
