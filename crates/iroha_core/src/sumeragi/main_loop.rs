@@ -225,7 +225,7 @@ impl Sumeragi {
             let errors = genesis
                 .as_ref()
                 .errors()
-                .map(|(&transaction_index, rejection_reason)| {
+                .map(|(transaction_index, rejection_reason)| {
                     format!(
                         "===\nTx {transaction_index}:\n{:?}",
                         eyre::Error::new(rejection_reason.clone())
@@ -544,7 +544,7 @@ impl Sumeragi {
                     "Received block signatures"
                 );
 
-                if let Ok(signatory_idx) = usize::try_from(signature.0) {
+                if let Ok(signatory_idx) = usize::try_from(signature.index) {
                     let signatory = if let Some(s) = self.topology.as_ref().get(signatory_idx) {
                         s
                     } else {
@@ -647,7 +647,7 @@ impl Sumeragi {
                             .block
                             // NOTE: The manipulation of the topology relies upon all peers seeing the same signature set.
                             // Therefore we must clear the signatures and accept what the proxy tail has giveth.
-                            .replace_signatures(signatures, &self.topology)
+                            .replace_signatures(signatures.into_iter().collect(), &self.topology)
                             .unpack(|e| self.send_event(e))
                         {
                             Ok(prev_signatures) => {
@@ -1649,12 +1649,20 @@ mod tests {
         state_block.commit();
 
         // Malform block signatures so that block going to be rejected
-        let dummy_signature = BlockSignature(
+        let dummy_signature = BlockSignature::new(
             42,
-            valid_block.as_ref().signatures().next().unwrap().1.clone(),
+            valid_block
+                .as_ref()
+                .signatures()
+                .next()
+                .unwrap()
+                .signature
+                .clone(),
         );
         let mut block: SignedBlock = valid_block.into();
-        let _prev_signatures = block.replace_signatures(vec![dummy_signature]).unwrap();
+        let _prev_signatures = block
+            .replace_signatures([dummy_signature].into_iter().collect())
+            .unwrap();
         let dummy_block = ValidBlock::new_dummy(&leader_private_key);
         let dummy_state_block = state.block(dummy_block.as_ref().header());
         let mut voting_block = Some(VotingBlock::new(dummy_block, dummy_state_block));

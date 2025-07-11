@@ -8,6 +8,7 @@ use iroha::{
 
 mod by_call_trigger;
 mod data_trigger;
+mod execution_log;
 mod orphans;
 // FIXME: rewrite all in async and with shorter timings
 mod time_trigger;

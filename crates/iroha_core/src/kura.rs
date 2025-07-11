@@ -25,6 +25,12 @@ use parking_lot::Mutex;
 
 use crate::block::CommittedBlock;
 
+impl From<CommittedBlock> for Arc<SignedBlock> {
+    fn from(value: CommittedBlock) -> Self {
+        Arc::new(value.into())
+    }
+}
+
 const INDEX_FILE_NAME: &str = "blocks.index";
 const DATA_FILE_NAME: &str = "blocks.data";
 const HASHES_FILE_NAME: &str = "blocks.hashes";
@@ -50,8 +56,9 @@ pub struct Kura {
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
 
 impl Kura {
-    /// Initialize Kura and start a thread that receives
-    /// and stores new blocks.
+    /// Initialize Kura.
+    ///
+    /// This does _not_ start the thread which receives and stores new blocks, see [`Self::start`].
     ///
     /// # Errors
     /// Fails if there are filesystem errors when trying
@@ -93,13 +100,13 @@ impl Kura {
         })
     }
 
-    /// Start the Kura thread
+    /// Start a thread that receives and stores new blocks
     pub fn start(kura: Arc<Self>, shutdown_signal: ShutdownSignal) -> Child {
         Child::new(
             tokio::task::spawn(spawn_os_thread_as_future(
                 std::thread::Builder::new().name("kura".to_owned()),
                 move || {
-                    Self::kura_receive_blocks_loop(&kura, &shutdown_signal);
+                    kura.receive_blocks_loop(&shutdown_signal);
                 },
             )),
             OnShutdown::Wait(Duration::from_secs(5)),
@@ -194,7 +201,8 @@ impl Kura {
     }
 
     #[iroha_logger::log(skip_all)]
-    fn kura_receive_blocks_loop(kura: &Kura, shutdown_signal: &ShutdownSignal) {
+    fn receive_blocks_loop(&self, shutdown_signal: &ShutdownSignal) {
+        let kura = self;
         let mut written_block_count = kura.init_block_count;
         let mut latest_written_block_hash = {
             let block_data = kura.block_data.lock();
@@ -342,14 +350,14 @@ impl Kura {
     }
 
     /// Put a block in kura's in memory block store.
-    pub fn store_block(&self, block: CommittedBlock) {
-        let block = Arc::new(SignedBlock::from(block));
+    pub fn store_block(&self, block: impl Into<Arc<SignedBlock>>) {
+        let block = block.into();
         self.block_data.lock().push((block.hash(), Some(block)));
     }
 
     /// Replace the block in `Kura`'s in memory block store.
-    pub fn replace_top_block(&self, block: CommittedBlock) {
-        let block = Arc::new(SignedBlock::from(block));
+    pub fn replace_top_block(&self, block: impl Into<Arc<SignedBlock>>) {
+        let block = block.into();
         let mut data = self.block_data.lock();
         data.pop();
         data.push((block.hash(), Some(block)));
@@ -367,6 +375,11 @@ impl Kura {
         if written_block_count > blocks_in_memory {
             block_data[written_block_count - blocks_in_memory].1 = None;
         }
+    }
+
+    /// Returns count of blocks Kura currently holds
+    pub fn blocks_count(&self) -> usize {
+        self.block_data.lock().len()
     }
 }
 
@@ -388,6 +401,27 @@ pub struct BlockIndex {
     pub start: u64,
     /// Length of block section in bytes
     pub length: u64,
+}
+
+impl BlockIndex {
+    const SIZE: u64 = core::mem::size_of::<Self>() as u64;
+
+    fn read(
+        file: &mut std::fs::File,
+        buff: &mut [u8; core::mem::size_of::<u64>()],
+    ) -> std::io::Result<Self> {
+        fn read_u64(
+            file: &mut std::fs::File,
+            buff: &mut [u8; core::mem::size_of::<u64>()],
+        ) -> std::io::Result<u64> {
+            file.read_exact(buff).map(|()| u64::from_le_bytes(*buff))
+        }
+
+        Ok(Self {
+            start: read_u64(file, buff)?,
+            length: read_u64(file, buff)?,
+        })
+    }
 }
 
 impl BlockStore {
@@ -413,10 +447,10 @@ impl BlockStore {
             .read(true)
             .open(path.clone())
             .add_err_context(&path)?;
-        let start_location = start_block_height * (2 * std::mem::size_of::<u64>() as u64);
+        let start_location = start_block_height * BlockIndex::SIZE;
         let block_count = dest_buffer.len();
 
-        if start_location + (2 * std::mem::size_of::<u64>() as u64) * block_count as u64
+        if start_location + BlockIndex::SIZE * block_count as u64
             > index_file.metadata().add_err_context(&path)?.len()
         {
             return Err(Error::OutOfBoundsBlockRead {
@@ -428,19 +462,10 @@ impl BlockStore {
             .seek(SeekFrom::Start(start_location))
             .add_err_context(&path)?;
         // (start, length), (start,length) ...
+        let mut buffer = [0; 8];
         for current_buffer in dest_buffer.iter_mut() {
-            let mut buffer = [0; core::mem::size_of::<u64>()];
-
-            *current_buffer = BlockIndex {
-                start: {
-                    index_file.read_exact(&mut buffer).add_err_context(&path)?;
-                    u64::from_le_bytes(buffer)
-                },
-                length: {
-                    index_file.read_exact(&mut buffer).add_err_context(&path)?;
-                    u64::from_le_bytes(buffer)
-                },
-            };
+            *current_buffer =
+                BlockIndex::read(&mut index_file, &mut buffer).add_err_context(&path)?;
         }
 
         Ok(())
@@ -478,9 +503,7 @@ impl BlockStore {
             .read(true)
             .open(path.clone())
             .add_err_context(&path)?;
-        Ok(index_file.metadata().add_err_context(&path)?.len()
-            / (2 * std::mem::size_of::<u64>() as u64))
-        // Each entry is 16 bytes.
+        Ok(index_file.metadata().add_err_context(&path)?.len() / BlockIndex::SIZE)
     }
 
     /// Read a series of block hashes from the block hashes file
@@ -580,12 +603,10 @@ impl BlockStore {
             .create(true)
             .open(path.clone())
             .add_err_context(&path)?;
-        let start_location = block_height * (2 * std::mem::size_of::<u64>() as u64);
-        if start_location + (2 * std::mem::size_of::<u64>() as u64)
-            > index_file.metadata().add_err_context(&path)?.len()
-        {
+        let start_location = block_height * BlockIndex::SIZE;
+        if start_location + BlockIndex::SIZE > index_file.metadata().add_err_context(&path)?.len() {
             index_file
-                .set_len(start_location + (2 * std::mem::size_of::<u64>() as u64))
+                .set_len(start_location + BlockIndex::SIZE)
                 .add_err_context(&path)?;
         }
         index_file
@@ -619,7 +640,7 @@ impl BlockStore {
             .write(true)
             .open(path.clone())
             .add_err_context(&path)?;
-        let new_byte_size = new_count * (2 * std::mem::size_of::<u64>() as u64);
+        let new_byte_size = new_count * BlockIndex::SIZE;
         index_file.set_len(new_byte_size).add_err_context(&path)?;
         Ok(())
     }
@@ -766,6 +787,86 @@ impl BlockStore {
 
         Ok(())
     }
+
+    /// Prune the block storage to the given height
+    ///
+    /// Removes block entries higher than the given height from
+    /// the data file, index file, and hashes file.
+    ///
+    /// This function **does not** fail if the data in files is behind
+    /// the given height.
+    ///
+    /// Note: this function is not used in Iroha (as of writing this), but is
+    /// needed for Explorer.
+    ///
+    /// # Errors
+    ///
+    /// - If files do not exist (call [`Self::create_files_if_they_do_not_exist`])
+    /// - Other IO errors
+    pub fn prune(&self, height: u64) -> Result<()> {
+        let last_block_index: Option<BlockIndex>;
+
+        {
+            let mut file =
+                FileWrap::open_read_write(self.path_to_blockchain.join(INDEX_FILE_NAME))?;
+            let len = file.try_io(|f| f.metadata().map(|x| x.len()))?;
+            let new_len = (BlockIndex::SIZE * height).min(len);
+            file.try_io(|f| f.set_len(new_len))?;
+
+            last_block_index = if new_len > 0 {
+                let actual_height = new_len / BlockIndex::SIZE;
+                file.try_io(|f| f.seek(SeekFrom::Start((actual_height - 1) * BlockIndex::SIZE)))?;
+                let mut buff = [0; 8];
+                Some(file.try_io(|f| BlockIndex::read(f, &mut buff))?)
+            } else {
+                None
+            };
+        }
+
+        {
+            let mut file =
+                FileWrap::open_read_write(self.path_to_blockchain.join(HASHES_FILE_NAME))?;
+            let len = file.try_io(|f| f.metadata().map(|x| x.len()))?;
+            let new_len = (SIZE_OF_BLOCK_HASH * height).min(len);
+            file.try_io(|f| f.set_len(new_len))?;
+        }
+
+        {
+            let mut file = FileWrap::open_read_write(self.path_to_blockchain.join(DATA_FILE_NAME))?;
+            let len = file.try_io(|f| f.metadata().map(|x| x.len()))?;
+            let new_len = last_block_index.map_or(0, |x| x.start + x.length).min(len);
+            file.try_io(|f| f.set_len(new_len))?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Helper to reduce boilerplate of file ops
+// TODO: use in more places when refactor
+struct FileWrap {
+    path: PathBuf,
+    file: std::fs::File,
+}
+
+impl FileWrap {
+    fn open_read_write(path: PathBuf) -> Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(false)
+            .open(path.clone())
+            .add_err_context(&path)?;
+        Ok(Self { path, file })
+    }
+
+    fn try_io<F, T>(&mut self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut std::fs::File) -> std::io::Result<T>,
+    {
+        let value = f(&mut self.file).add_err_context(&self.path)?;
+        Ok(value)
+    }
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -818,13 +919,14 @@ mod tests {
     use iroha_data_model::{
         account::Account,
         domain::{Domain, DomainId},
-        isi::Log,
+        isi::{Log, Upgrade},
         peer::PeerId,
+        prelude::{Executor, WasmSmartContract},
         transaction::TransactionBuilder,
         ChainId, Level,
     };
     use iroha_genesis::{GenesisBuilder, GENESIS_ACCOUNT_ID};
-    use iroha_test_samples::gen_account_in;
+    use iroha_test_samples::{gen_account_in, ALICE_ID, ALICE_KEYPAIR, PEER_KEYPAIR};
     use nonzero_ext::nonzero;
     use tempfile::TempDir;
 
@@ -835,6 +937,7 @@ mod tests {
         smartcontracts::Registrable,
         state::State,
         sumeragi::network_topology::Topology,
+        tx::AcceptedTransaction,
         StateReadOnly, World,
     };
 
@@ -1049,16 +1152,16 @@ mod tests {
             assert_eq!(block_count.0, 3);
 
             assert_eq!(
-                kura.get_block(nonzero!(1_usize)),
-                Some(Arc::new(block_genesis.into()))
+                kura.get_block(nonzero!(1_usize)).unwrap().hash(),
+                block_genesis.as_ref().hash()
             );
             assert_eq!(
-                kura.get_block(nonzero!(2_usize)),
-                Some(Arc::new(block_soft_fork.into()))
+                kura.get_block(nonzero!(2_usize)).unwrap().hash(),
+                block_soft_fork.as_ref().hash()
             );
             assert_eq!(
-                kura.get_block(nonzero!(3_usize)),
-                Some(Arc::new(block_next.into()))
+                kura.get_block(nonzero!(3_usize)).unwrap().hash(),
+                block_next.as_ref().hash()
             );
         }
     }
@@ -1212,5 +1315,105 @@ mod tests {
         thread::sleep(BLOCK_FLUSH_TIMEOUT);
 
         blocks
+    }
+
+    struct DummyBlocks {
+        blocks: Vec<Arc<SignedBlock>>,
+    }
+
+    impl DummyBlocks {
+        fn new() -> Self {
+            Self {
+                blocks: <_>::default(),
+            }
+        }
+
+        fn next(&mut self) -> Arc<SignedBlock> {
+            let tx = {
+                let builder = TransactionBuilder::new(ChainId::from("test"), ALICE_ID.to_owned());
+
+                let tx = if self.blocks.is_empty() {
+                    builder.with_instructions([Upgrade::new(Executor::new(
+                        WasmSmartContract::from_compiled(vec![]),
+                    ))])
+                } else {
+                    builder.with_instructions([Log::new(Level::INFO, "test".to_owned())])
+                }
+                .sign(ALICE_KEYPAIR.private_key());
+
+                AcceptedTransaction::new_unchecked(tx)
+            };
+
+            let prev = self.blocks.last().cloned();
+            let block: SignedBlock = BlockBuilder::new(vec![tx])
+                .chain(0, prev.as_ref().map(AsRef::as_ref))
+                .sign(PEER_KEYPAIR.private_key())
+                .unpack(|_| {})
+                .into();
+
+            let block = Arc::new(block);
+            self.blocks.push(block.clone());
+            block
+        }
+
+        fn get(&self, i: usize) -> Option<Arc<SignedBlock>> {
+            self.blocks.get(i).cloned()
+        }
+    }
+
+    fn read_block(store: &BlockStore, index: usize) -> eyre::Result<SignedBlock> {
+        let BlockIndex { start, length } = store.read_block_index(index as u64)?;
+        let mut buff = vec![0_u8; length.try_into().unwrap()];
+        store.read_block_data(start, &mut buff)?;
+        let block = SignedBlock::decode_all_versioned(&buff)?;
+        Ok(block)
+    }
+
+    #[test]
+    fn prune_blocks() -> eyre::Result<()> {
+        let temp = TempDir::new()?;
+        let mut store = BlockStore::new(temp.path());
+        store.create_files_if_they_do_not_exist()?;
+
+        // prune on empty store - should be fine
+        store.prune(0)?;
+
+        // prune with height greater than there is - should be fine
+        store.prune(10)?;
+
+        // add some blocks
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..10 {
+            store.append_block_to_chain(&blocks.next())?;
+        }
+
+        assert_eq!(store.read_index_count()?, 10);
+        assert_eq!(store.read_block_hashes(0, 10)?.len(), 10);
+
+        store.prune(5)?;
+
+        assert_eq!(store.read_index_count()?, 5);
+        assert_eq!(store.read_block_hashes(0, 5)?.len(), 5);
+        assert!(store.read_block_hashes(0, 7).is_err());
+
+        for i in 0..5 {
+            let block = read_block(&store, i)?;
+            assert_eq!(block, *blocks.get(i).unwrap());
+        }
+        assert!(read_block(&store, 5).is_err());
+
+        // prune on non-empty state with height greater than there are blocks - should be fine
+        store.prune(7)?;
+
+        // can add blocks again
+        for i in 5..10 {
+            store.append_block_to_chain(&blocks.get(i).unwrap())?;
+        }
+        for i in 0..10 {
+            let block = read_block(&store, i)?;
+            assert_eq!(block, *blocks.get(i).unwrap());
+        }
+
+        Ok(())
     }
 }

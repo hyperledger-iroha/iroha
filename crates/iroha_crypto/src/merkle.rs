@@ -31,15 +31,17 @@ use crate::{Hash, HashOf};
 #[repr(transparent)]
 pub struct MerkleTree<T>(Vec<Option<HashOf<T>>>);
 
-/// A Merkle proof: index of a leaf among all leaves, and the shortest list of additional nodes to recompute the root.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, Deserialize, Serialize, IntoSchema,
-)]
-pub struct MerkleProof<T> {
-    /// Zero-based index of the leaf among all leaves.
-    leaf_index: u32,
-    /// List of missing nodes required to recompute the nodes leading from a leaf to the root.
-    audit_path: Vec<Option<HashOf<T>>>,
+crate::ffi::ffi_item! {
+    /// A Merkle proof: index of a leaf among all leaves, and the shortest list of additional nodes to recompute the root.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, Deserialize, Serialize, IntoSchema,
+    )]
+    pub struct MerkleProof<T> {
+        /// Zero-based index of the leaf among all leaves.
+        leaf_index: u32,
+        /// List of missing nodes required to recompute the nodes leading from a leaf to the root.
+        audit_path: Vec<Option<HashOf<T>>>,
+    }
 }
 
 /// Iterator over the leaf hashes of a [`MerkleTree`], yielding each leaf in left-to-right order.

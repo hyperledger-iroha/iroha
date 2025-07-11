@@ -29,7 +29,7 @@
   },
   {
     "TriggerCompleted": {
-      "trigger_id": "time-alice-bob",
+      "trigger_id": "time-alice-bob-0",
       "outcome": "Success"
     }
   },

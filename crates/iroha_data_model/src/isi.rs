@@ -1485,9 +1485,9 @@ pub mod error {
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{
-        Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox, InstructionBox, Log,
-        Mint, MintBox, Register, RegisterBox, RemoveKeyValue, RemoveKeyValueBox, Revoke, RevokeBox,
-        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferBox, Unregister,
-        UnregisterBox, Upgrade,
+        Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox, Instruction,
+        InstructionBox, Log, Mint, MintBox, Register, RegisterBox, RemoveKeyValue,
+        RemoveKeyValueBox, Revoke, RevokeBox, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
+        TransferBox, Unregister, UnregisterBox, Upgrade,
     };
 }

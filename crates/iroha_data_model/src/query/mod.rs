@@ -13,7 +13,7 @@ use alloc::{
 use std::vec;
 
 use derive_more::Constructor;
-use iroha_crypto::{PublicKey, SignatureOf};
+use iroha_crypto::{MerkleProof, PublicKey, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_primitives::{json::Json, numeric::Numeric};
@@ -41,8 +41,15 @@ use crate::{
     permission::Permission,
     role::{Role, RoleId},
     seal::Sealed,
-    transaction::{error::TransactionRejectionReason, SignedTransaction},
+    transaction::SignedTransaction,
     trigger::{Trigger, TriggerId},
+};
+#[cfg(feature = "fault_injection")]
+use crate::{
+    prelude::{
+        InstructionBox, TransactionEntrypoint, TransactionRejectionReason, TransactionResult,
+    },
+    ValidationFail,
 };
 
 pub mod builder;
@@ -74,7 +81,10 @@ mod model {
     use iroha_macro::serde_where;
 
     use super::*;
-    use crate::trigger::action;
+    use crate::{
+        prelude::{TransactionEntrypoint, TransactionResult},
+        trigger::action,
+    };
 
     /// An iterable query bundled with a filter
     #[serde_where(Q, CompoundPredicate<Q::Item>, SelectorTuple<Q::Item>)]
@@ -152,9 +162,10 @@ mod model {
         Parameter(Vec<Parameter>),
         Permission(Vec<Permission>),
         CommittedTransaction(Vec<CommittedTransaction>),
-        SignedTransaction(Vec<SignedTransaction>),
-        TransactionHash(Vec<HashOf<SignedTransaction>>),
-        TransactionRejectionReason(Vec<Option<TransactionRejectionReason>>),
+        TransactionResult(Vec<TransactionResult>),
+        TransactionResultHash(Vec<HashOf<TransactionResult>>),
+        TransactionEntrypoint(Vec<TransactionEntrypoint>),
+        TransactionEntrypointHash(Vec<HashOf<TransactionEntrypoint>>),
         Peer(Vec<PeerId>),
         RoleId(Vec<RoleId>),
         TriggerId(Vec<TriggerId>),
@@ -256,7 +267,7 @@ mod model {
         pub payload: QueryRequestWithAuthority,
     }
 
-    /// Output of [`FindTransactions`] query
+    /// Response returned by [`FindTransactions`] query.
     #[derive(
         Debug,
         Clone,
@@ -274,13 +285,58 @@ mod model {
     #[getset(get = "pub")]
     #[ffi_type]
     pub struct CommittedTransaction {
-        /// The hash of the block to which `tx` belongs to
+        /// Hash of the block containing this transaction.
         pub block_hash: HashOf<BlockHeader>,
-        /// Transaction
-        #[getset(skip)]
-        pub value: SignedTransaction,
-        /// Reason of rejection, if any
-        pub error: Option<TransactionRejectionReason>,
+        /// Hash of the transaction entrypoint.
+        pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+        /// Merkle inclusion proof for the transaction entrypoint.
+        pub entrypoint_proof: MerkleProof<TransactionEntrypoint>,
+        /// The initial execution step of the transaction.
+        pub entrypoint: TransactionEntrypoint,
+        /// Hash of the transaction result.
+        pub result_hash: HashOf<TransactionResult>,
+        /// Merkle inclusion proof for the transaction result.
+        pub result_proof: MerkleProof<TransactionResult>,
+        /// The result of executing the transaction (trigger sequence or rejection).
+        pub result: TransactionResult,
+    }
+}
+
+#[cfg(feature = "fault_injection")]
+impl CommittedTransaction {
+    /// Injects a set of fictitious instructions into the transaction payload to simulate tampering.
+    ///
+    /// Only available when the `fault_injection` feature is enabled.
+    pub fn inject_instructions(
+        &mut self,
+        extra_instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
+    ) {
+        match &mut self.entrypoint {
+            TransactionEntrypoint::External(entrypoint) => {
+                entrypoint.inject_instructions(extra_instructions);
+            }
+            TransactionEntrypoint::Time(_) => {
+                unimplemented!("time-triggered entrypoints are not subject to fault injection")
+            }
+        }
+        // Update the leaf hash to match the tampered entrypoint.
+        self.entrypoint_hash = self.entrypoint.hash();
+    }
+
+    /// Swaps the transaction result between `Ok` and `Err` to simulate tampering.
+    ///
+    /// Only available when the `fault_injection` feature is enabled.
+    pub fn swap_result(&mut self) {
+        let TransactionResult(result) = &mut self.result;
+        *result = if result.is_ok() {
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::InternalError("result swapped".into()),
+            ))
+        } else {
+            Ok(Vec::new())
+        };
+        // Update the leaf hash to match the tampered result.
+        self.result_hash = self.result.hash();
     }
 }
 
@@ -312,9 +368,10 @@ impl QueryOutputBatchBox {
             (Self::Parameter(v1), Self::Parameter(v2)) => v1.extend(v2),
             (Self::Permission(v1), Self::Permission(v2)) => v1.extend(v2),
             (Self::CommittedTransaction(v1), Self::CommittedTransaction(v2)) => v1.extend(v2),
-            (Self::SignedTransaction(v1), Self::SignedTransaction(v2)) => v1.extend(v2),
-            (Self::TransactionHash(v1), Self::TransactionHash(v2)) => v1.extend(v2),
-            (Self::TransactionRejectionReason(v1), Self::TransactionRejectionReason(v2)) => {
+            (Self::TransactionResult(v1), Self::TransactionResult(v2)) => v1.extend(v2),
+            (Self::TransactionResultHash(v1), Self::TransactionResultHash(v2)) => v1.extend(v2),
+            (Self::TransactionEntrypoint(v1), Self::TransactionEntrypoint(v2)) => v1.extend(v2),
+            (Self::TransactionEntrypointHash(v1), Self::TransactionEntrypointHash(v2)) => {
                 v1.extend(v2)
             }
             (Self::Peer(v1), Self::Peer(v2)) => v1.extend(v2),
@@ -353,9 +410,10 @@ impl QueryOutputBatchBox {
             Self::Parameter(v) => v.len(),
             Self::Permission(v) => v.len(),
             Self::CommittedTransaction(v) => v.len(),
-            Self::SignedTransaction(v) => v.len(),
-            Self::TransactionHash(v) => v.len(),
-            Self::TransactionRejectionReason(v) => v.len(),
+            Self::TransactionResult(v) => v.len(),
+            Self::TransactionResultHash(v) => v.len(),
+            Self::TransactionEntrypoint(v) => v.len(),
+            Self::TransactionEntrypointHash(v) => v.len(),
             Self::Peer(v) => v.len(),
             Self::RoleId(v) => v.len(),
             Self::TriggerId(v) => v.len(),
@@ -695,12 +753,6 @@ impl_iter_queries! {
 impl_singular_queries! {
     FindParameters => crate::parameter::Parameters,
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
-}
-
-impl AsRef<SignedTransaction> for CommittedTransaction {
-    fn as_ref(&self) -> &SignedTransaction {
-        &self.value
-    }
 }
 
 /// A macro reducing boilerplate when defining query types.
