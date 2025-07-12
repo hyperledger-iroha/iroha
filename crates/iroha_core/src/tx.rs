@@ -259,12 +259,12 @@ impl StateBlock<'_> {
     /// Returns the hash and the result of the transaction -- the trigger sequence on success, or the rejection reason on failure.
     pub fn validate_transaction(
         &mut self,
-        tx: AcceptedTransaction,
+        tx: &AcceptedTransaction,
         wasm_cache: &mut WasmCache<'_, '_, '_>,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         let mut state_transaction = self.transaction();
         let hash = tx.as_ref().hash_as_entrypoint();
-        let result = Self::validate_transaction_internal(&tx, &mut state_transaction, wasm_cache);
+        let result = Self::validate_transaction_internal(tx, &mut state_transaction, wasm_cache);
         if result.is_ok() {
             state_transaction.apply();
         }

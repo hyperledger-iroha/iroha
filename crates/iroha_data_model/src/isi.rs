@@ -1042,13 +1042,6 @@ mod transparent {
         }
     }
 
-    // impl_into_box! {
-    //     WasmExecutable<WasmSmartContract>
-    //     WasmExecutable<TriggerModule>
-    // => ExecuteWasmBox => InstructionBox[ExecuteWasm],
-    // => ExecuteWasmBoxRef<'a> => InstructionBoxRef<'a>[ExecuteWasm]
-    // }
-
     isi! {
         /// Generic instruction for upgrading runtime objects.
         #[derive(Constructor, Display)]
@@ -1127,21 +1120,6 @@ macro_rules! isi_box {
         $item
     };
 }
-
-// isi_box! {
-//     #[strum_discriminants(
-//         vis(pub(crate)),
-//         name(WasmType),
-//         derive(Encode),
-//     )]
-//     /// Enum with all supported [`WasmExecutable`] instructions.
-//     pub enum ExecuteWasmBox {
-//         /// Execute [`WasmSmartContract`].
-//         Smartcontract(WasmExecutable<WasmSmartContract>),
-//         // /// Execute [`TriggerModule`] .
-//         // Trigger(WasmExecutable<TriggerModule>),
-//     }
-// }
 
 isi_box! {
     #[strum_discriminants(

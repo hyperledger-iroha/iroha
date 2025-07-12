@@ -1757,15 +1757,12 @@ impl StateTransaction<'_, '_> {
                         self.execute_instructions(vec![original_isi].into(), authority)
                     }
                 }
-                .map_err(ValidationFail::from)
             })
             .try_fold(
                 ExecutionStep(ConstVec::new_empty()),
                 |acc, item| -> Result<ExecutionStep, ValidationFail> {
                     let step = item?;
-                    Ok(ExecutionStep(ConstVec::from_iter(
-                        acc.0.into_iter().chain(step.0.into_iter()),
-                    )))
+                    Ok(ExecutionStep(acc.0.into_iter().chain(step.0).collect()))
                 },
             );
 

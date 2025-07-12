@@ -754,8 +754,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                                         );
                                     }
                                     Ok(isi.into())
-                                    // Ok(WasmExecutable::module(TriggerModule::from_hash(hash))
-                                    // .into())
                                 }
                                 _ => Ok(isi.into()),
                             }

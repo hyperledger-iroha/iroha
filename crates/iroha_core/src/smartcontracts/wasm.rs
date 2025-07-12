@@ -997,7 +997,7 @@ impl<'wrld, 'block: 'wrld, 'state: 'block> Runtime<state::SmartContract<'wrld, '
         bytes: impl AsRef<[u8]>,
         state: state::SmartContract<'wrld, 'block, 'state>,
     ) -> Result<()> {
-        // TODO: Re-use state/fuel from the transation
+        // TODO: Re-use state/fuel from the transation #5494
         let mut store = self.create_store(state);
         let smart_contract = self.create_smart_contract(&mut store, bytes)?;
 
@@ -1078,7 +1078,7 @@ impl<'wrld, 'block: 'wrld, 'state: 'block> Runtime<state::Trigger<'wrld, 'block,
             state::specific::Trigger::new(id.clone(), event),
         );
 
-        // TODO: Re-use state/fuel from the transation
+        // TODO: Re-use state/fuel from the transation #5494
         let mut store = self.create_store(state);
         let instance = self.instantiate_module(module, &mut store)?;
 
@@ -1433,7 +1433,7 @@ impl<'wrld, 'block, 'state> Runtime<state::executor::Migrate<'wrld, 'block, 'sta
             state::specific::executor::Migrate,
         );
 
-        // TODO: Re-use state/fuel from the transation?
+        // TODO: Re-use state/fuel from the transation #5494
         let mut store = self.create_store(state);
         let instance = self.instantiate_module(module, &mut store)?;
 

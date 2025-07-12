@@ -841,10 +841,7 @@ pub mod error {
         //! The prelude re-exports most commonly used traits, structs and macros from this module.
 
         pub use super::{
-            InstructionExecutionFail,
-            TransactionRejectionReason,
-            TriggerExecutionFail,
-            // WasmExecutionFail,
+            InstructionExecutionFail, TransactionRejectionReason, TriggerExecutionFail,
         };
     }
 }
