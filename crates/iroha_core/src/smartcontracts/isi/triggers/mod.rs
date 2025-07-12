@@ -300,10 +300,23 @@ pub mod isi {
                 .ok_or_else(|| Error::Find(FindError::Trigger(id.clone())))
                 .and_then(core::convert::identity)?;
 
-            state_transaction
+            // FIXME: remove ExecuteTrigger entirely in #5147.
+            // This step information could be buffered in state_transaction, but just drop it for now.
+            let _step = state_transaction
                 .execute_called_trigger(id, event)
                 // Workaround until #5147: avoid circular error dependencies.
-                .map_err(|err| Error::InvariantViolation(err.to_string()))?;
+                .map_err(|err| {
+                    Error::InvariantViolation({
+                        use std::error::Error as _;
+                        let mut trace = vec![format!("{err}")];
+                        let mut source = err.source();
+                        while let Some(err) = source {
+                            trace.push(format!("caused by: {err}"));
+                            source = err.source();
+                        }
+                        trace.join("; ")
+                    })
+                })?;
 
             Ok(())
         }
@@ -363,6 +376,7 @@ pub mod isi {
                         reason: format!("{:?}", eyre::Report::from(error)),
                     })
                 })
+                .map(|_| ())
         }
     }
 }

@@ -153,7 +153,7 @@ impl Topology {
 
         signatures.into_iter().filter(move |signature| {
             filtered.contains(
-                &(usize::try_from(signature.0).expect("Peer index should fit into usize")),
+                &(usize::try_from(signature.index).expect("Peer index should fit into usize")),
             )
         })
     }
@@ -337,34 +337,34 @@ mod tests {
         let topology = test_topology_with_keys(&key_pairs);
 
         let dummy_block = ValidBlock::new_dummy(key_pairs[0].private_key());
-        let dummy_signature = &dummy_block.as_ref().signatures().next().unwrap().1;
+        let dummy_signature = &dummy_block.as_ref().signatures().next().unwrap().signature;
         let dummy_signatures = (0..key_pairs.len())
-            .map(|i| BlockSignature(i as u64, dummy_signature.clone()))
+            .map(|i| BlockSignature::new(i as u64, dummy_signature.clone()))
             .collect::<Vec<_>>();
 
         let leader_signatures = topology
             .filter_signatures_by_roles(&[Role::Leader], dummy_signatures.iter())
             .collect::<Vec<_>>();
         assert_eq!(leader_signatures.len(), 1);
-        assert_eq!(leader_signatures[0].0, 0);
+        assert_eq!(leader_signatures[0].index, 0);
 
         let proxy_tail_signatures = topology
             .filter_signatures_by_roles(&[Role::ProxyTail], dummy_signatures.iter())
             .collect::<Vec<_>>();
         assert_eq!(proxy_tail_signatures.len(), 1);
-        assert_eq!(proxy_tail_signatures[0].0, 4);
+        assert_eq!(proxy_tail_signatures[0].index, 4);
 
         let validating_peers_signatures = topology
             .filter_signatures_by_roles(&[Role::ValidatingPeer], dummy_signatures.iter())
             .collect::<Vec<_>>();
         assert_eq!(validating_peers_signatures.len(), 3);
-        assert!(validating_peers_signatures.iter().map(|s| s.0).eq(1..4));
+        assert!(validating_peers_signatures.iter().map(|s| s.index).eq(1..4));
 
         let observing_peers_signatures = topology
             .filter_signatures_by_roles(&[Role::ObservingPeer], dummy_signatures.iter())
             .collect::<Vec<_>>();
         assert_eq!(observing_peers_signatures.len(), 2);
-        assert!(observing_peers_signatures.iter().map(|s| s.0).eq(5..7));
+        assert!(observing_peers_signatures.iter().map(|s| s.index).eq(5..7));
     }
 
     #[test]
@@ -376,16 +376,16 @@ mod tests {
         let topology = test_topology_with_keys(key_pairs_iter);
 
         let dummy_block = ValidBlock::new_dummy(key_pairs[0].private_key());
-        let dummy_signature = &dummy_block.as_ref().signatures().next().unwrap().1;
+        let dummy_signature = &dummy_block.as_ref().signatures().next().unwrap().signature;
         let dummy_signatures = (0..key_pairs.len())
-            .map(|i| BlockSignature(i as u64, dummy_signature.clone()))
+            .map(|i| BlockSignature::new(i as u64, dummy_signature.clone()))
             .collect::<Vec<_>>();
 
         let leader_signatures = topology
             .filter_signatures_by_roles(&[Role::Leader], dummy_signatures.iter())
             .collect::<Vec<_>>();
         assert_eq!(leader_signatures.len(), 1);
-        assert_eq!(leader_signatures[0].0, 0);
+        assert_eq!(leader_signatures[0].index, 0);
 
         let mut proxy_tail_signatures =
             topology.filter_signatures_by_roles(&[Role::ProxyTail], dummy_signatures.iter());
@@ -409,22 +409,22 @@ mod tests {
         let topology = test_topology_with_keys(key_pairs_iter);
 
         let dummy_block = ValidBlock::new_dummy(key_pairs[0].private_key());
-        let dummy_signature = &dummy_block.as_ref().signatures().next().unwrap().1;
+        let dummy_signature = &dummy_block.as_ref().signatures().next().unwrap().signature;
         let dummy_signatures = (0..key_pairs.len())
-            .map(|i| BlockSignature(i as u64, dummy_signature.clone()))
+            .map(|i| BlockSignature::new(i as u64, dummy_signature.clone()))
             .collect::<Vec<_>>();
 
         let leader_signatures = topology
             .filter_signatures_by_roles(&[Role::Leader], dummy_signatures.iter())
             .collect::<Vec<_>>();
         assert_eq!(leader_signatures.len(), 1);
-        assert_eq!(leader_signatures[0].0, 0);
+        assert_eq!(leader_signatures[0].index, 0);
 
         let proxy_tail_signatures = topology
             .filter_signatures_by_roles(&[Role::ProxyTail], dummy_signatures.iter())
             .collect::<Vec<_>>();
         assert_eq!(proxy_tail_signatures.len(), 1);
-        assert_eq!(proxy_tail_signatures[0].0, 1);
+        assert_eq!(proxy_tail_signatures[0].index, 1);
 
         let mut validating_peers_signatures =
             topology.filter_signatures_by_roles(&[Role::ValidatingPeer], dummy_signatures.iter());
@@ -444,28 +444,28 @@ mod tests {
         let topology = test_topology_with_keys(key_pairs_iter);
 
         let dummy_block = ValidBlock::new_dummy(key_pairs[0].private_key());
-        let dummy_signature = &dummy_block.as_ref().signatures().next().unwrap().1;
+        let dummy_signature = &dummy_block.as_ref().signatures().next().unwrap().signature;
         let dummy_signatures = (0..key_pairs.len())
-            .map(|i| BlockSignature(i as u64, dummy_signature.clone()))
+            .map(|i| BlockSignature::new(i as u64, dummy_signature.clone()))
             .collect::<Vec<_>>();
 
         let leader_signatures = topology
             .filter_signatures_by_roles(&[Role::Leader], dummy_signatures.iter())
             .collect::<Vec<_>>();
         assert_eq!(leader_signatures.len(), 1);
-        assert_eq!(leader_signatures[0].0, 0);
+        assert_eq!(leader_signatures[0].index, 0);
 
         let proxy_tail_signatures = topology
             .filter_signatures_by_roles(&[Role::ProxyTail], dummy_signatures.iter())
             .collect::<Vec<_>>();
         assert_eq!(proxy_tail_signatures.len(), 1);
-        assert_eq!(proxy_tail_signatures[0].0, 2);
+        assert_eq!(proxy_tail_signatures[0].index, 2);
 
         let validating_peers_signatures = topology
             .filter_signatures_by_roles(&[Role::ValidatingPeer], dummy_signatures.iter())
             .collect::<Vec<_>>();
         assert_eq!(validating_peers_signatures.len(), 1);
-        assert_eq!(validating_peers_signatures[0].0, 1);
+        assert_eq!(validating_peers_signatures[0].index, 1);
 
         let mut observing_peers_signatures =
             topology.filter_signatures_by_roles(&[Role::ObservingPeer], dummy_signatures.iter());

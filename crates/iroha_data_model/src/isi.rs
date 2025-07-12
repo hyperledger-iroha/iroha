@@ -1044,7 +1044,7 @@ mod transparent {
 
     // impl_into_box! {
     //     WasmExecutable<WasmSmartContract>
-    //     // WasmExecutable<TriggerModule>
+    //     WasmExecutable<TriggerModule>
     // => ExecuteWasmBox => InstructionBox[ExecuteWasm],
     // => ExecuteWasmBoxRef<'a> => InstructionBoxRef<'a>[ExecuteWasm]
     // }
@@ -1597,7 +1597,7 @@ pub mod error {
             TimeTriggerInThePast,
         }
 
-        /// Repetition of of `{instruction}` for id `{id}`
+        /// Repetition of `{instruction}` for id `{id}`
         #[derive(
             Debug,
             displaydoc::Display,
@@ -1648,9 +1648,9 @@ pub mod error {
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{
-        Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox, InstructionBox, Log,
-        Mint, MintBox, Register, RegisterBox, RemoveKeyValue, RemoveKeyValueBox, Revoke, RevokeBox,
-        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferBox, TriggerModule,
-        Unregister, UnregisterBox, Upgrade, WasmExecutable,
+        Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox, Instruction,
+        InstructionBox, Log, Mint, MintBox, Register, RegisterBox, RemoveKeyValue,
+        RemoveKeyValueBox, Revoke, RevokeBox, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
+        TransferBox, TriggerModule, Unregister, UnregisterBox, Upgrade, WasmExecutable,
     };
 }

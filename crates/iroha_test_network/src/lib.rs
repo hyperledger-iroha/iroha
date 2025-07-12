@@ -700,8 +700,7 @@ impl NetworkPeer {
                 .unwrap();
             tasks.spawn(async move {
                 let mut lines = BufReader::new(output).lines();
-                while let Ok(Some(mut line)) = lines.next_line().await {
-                    line.push('\n');
+                while let Ok(Some(line)) = lines.next_line().await {
                     file.write_all(line.as_bytes())
                         .await
                         .expect("writing logs to file shouldn't fail");
@@ -812,7 +811,7 @@ impl NetworkPeer {
 
                         while let Some(Ok(block)) = blocks.next().await {
                             let height = block.header().height().get();
-                            let is_empty = block.header().transactions_hash().is_none();
+                            let is_empty = block.header().merkle_root().is_none();
                             assert_eq!(height, block_height.total + 1);
                             block_height.total += 1;
                             if !is_empty {

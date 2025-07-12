@@ -8,8 +8,8 @@ use core::{
     time::Duration,
 };
 
-use derive_more::{DebugCustom, Display};
-use iroha_crypto::{Signature, SignatureOf};
+use derive_more::{DebugCustom, Deref, Display, From, TryInto};
+use iroha_crypto::{HashOf, Signature, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 #[cfg(feature = "std")]
@@ -24,6 +24,7 @@ use crate::{
     account::AccountId,
     isi::{Instruction, InstructionBox, WasmExecutable},
     metadata::Metadata,
+    trigger::TriggerId,
     ChainId,
 };
 
@@ -140,7 +141,18 @@ mod model {
     /// The peer verifies the signature and checks the limits.
     #[version(version = 1, versioned_alias = "SignedTransaction")]
     #[derive(
-        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Serialize, IntoSchema,
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
     )]
     #[display(fmt = "{}", "self.hash()")]
     #[ffi_type]
@@ -159,6 +171,132 @@ mod model {
         /// [`Transaction`] payload.
         pub(super) payload: TransactionPayload,
     }
+
+    /// Initial execution step of a transaction, which may invoke data triggers.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        From,
+        TryInto,
+        IntoSchema,
+    )]
+    #[ffi_type]
+    pub enum TransactionEntrypoint {
+        /// User request that initiates a transaction.
+        External(SignedTransaction),
+        /// Scheduled time trigger that initiates a transaction.
+        Time(TimeTriggerEntrypoint),
+    }
+
+    /// A time-triggered entrypoint, forming the second half of the transaction entrypoints.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    #[display(fmt = "TimeTriggerEntrypoint")]
+    #[ffi_type]
+    pub struct TimeTriggerEntrypoint {
+        /// Identifier for this trigger.
+        pub id: TriggerId,
+        /// Instructions executed in this step.
+        pub instructions: ExecutionStep,
+        /// Account authorized to initiate this time-triggered transaction.
+        pub authority: AccountId,
+    }
+
+    /// The outcome of processing a transaction:
+    /// either a sequence of data triggers, or a rejection reason.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        From,
+        Deref,
+        IntoSchema,
+    )]
+    #[display(fmt = "TransactionResult")]
+    #[ffi_type]
+    pub struct TransactionResult(pub TransactionResultInner);
+
+    /// The outcome of processing a transaction:
+    /// either a sequence of data triggers, or a rejection reason.
+    pub type TransactionResultInner =
+        Result<DataTriggerSequence, error::TransactionRejectionReason>;
+
+    /// Sequence of data trigger execution steps.
+    pub type DataTriggerSequence = Vec<DataTriggerStep>;
+
+    /// Single execution step of the data trigger.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    #[display(fmt = "DataTriggerStep")]
+    #[ffi_type]
+    pub struct DataTriggerStep {
+        /// Identifier for this trigger.
+        pub id: TriggerId,
+        /// Instructions executed in this step.
+        pub instructions: ExecutionStep,
+    }
+
+    /// Single execution step in a transaction, comprising ordered instructions.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        From,
+        Deref,
+        IntoSchema,
+    )]
+    #[display(fmt = "ExecutionStep")]
+    #[ffi_type]
+    pub struct ExecutionStep(pub ConstVec<InstructionBox>);
 }
 
 impl<A: Instruction> FromIterator<A> for Executable {
@@ -274,10 +412,47 @@ impl SignedTransaction {
         &tx.signature
     }
 
-    /// Calculate transaction [`Hash`](`iroha_crypto::HashOf`).
+    /// Hash for this external transaction.
     #[inline]
-    pub fn hash(&self) -> iroha_crypto::HashOf<Self> {
-        iroha_crypto::HashOf::new(self)
+    pub fn hash(&self) -> HashOf<Self> {
+        HashOf::new(self)
+    }
+
+    /// Hash for this external transaction as `TransactionEntrypoint`.
+    #[inline]
+    pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
+        HashOf::from_untyped_unchecked(self.hash().into())
+    }
+
+    /// Injects a set of fictitious instructions into the transaction payload for testing.
+    ///
+    /// Only available when the `fault_injection` feature is enabled.
+    #[cfg(feature = "fault_injection")]
+    pub fn inject_instructions(
+        &mut self,
+        extra_instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
+    ) {
+        let SignedTransaction::V1(tx) = self;
+        let Executable::Instructions(instructions) = &mut tx.payload.instructions else {
+            unimplemented!("Wasm executables are not subject to fault injection")
+        };
+        let mut modified = instructions.clone().into_vec();
+        modified.extend(extra_instructions.into_iter().map(Into::into));
+        *instructions = modified.into();
+    }
+
+    /// Verify transaction signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if signature verification fails.
+    #[inline]
+    pub fn verify_signature(&self) -> Result<(), iroha_crypto::Error> {
+        let SignedTransaction::V1(tx) = self;
+
+        let TransactionSignature(signature) = &tx.signature;
+
+        signature.verify(&tx.payload.authority.signatory, &tx.payload)
     }
 }
 
@@ -290,8 +465,8 @@ impl From<SignedTransaction> for (AccountId, Executable) {
 }
 
 impl SignedTransactionV1 {
-    fn hash(&self) -> iroha_crypto::HashOf<SignedTransaction> {
-        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::HashOf::new(self).into())
+    fn hash(&self) -> HashOf<SignedTransaction> {
+        HashOf::from_untyped_unchecked(HashOf::new(self).into())
     }
 }
 
@@ -413,70 +588,51 @@ impl TransactionBuilder {
     }
 }
 
-mod candidate {
-    use parity_scale_codec::Input;
-
-    use super::*;
-
-    #[derive(Decode, Deserialize)]
-    struct SignedTransactionCandidate {
-        signature: TransactionSignature,
-        payload: TransactionPayload,
-    }
-
-    impl SignedTransactionCandidate {
-        fn validate(self) -> Result<SignedTransactionV1, &'static str> {
-            #[cfg(not(target_family = "wasm"))]
-            self.validate_instructions()?;
-            #[cfg(not(target_family = "wasm"))]
-            self.validate_signature()?;
-
-            Ok(SignedTransactionV1 {
-                signature: self.signature,
-                payload: self.payload,
-            })
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        fn validate_instructions(&self) -> Result<(), &'static str> {
-            let Executable::Instructions(instructions) = &self.payload.instructions;
-            if instructions.is_empty() {
-                return Err("Transaction is empty");
-            }
-
-            Ok(())
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        fn validate_signature(&self) -> Result<(), &'static str> {
-            let TransactionSignature(signature) = &self.signature;
-
-            signature
-                .verify(&self.payload.authority.signatory, &self.payload)
-                .map_err(|_| "Transaction signature is invalid")?;
-
-            Ok(())
+impl TransactionEntrypoint {
+    /// Account authorized to initiate this transaction.
+    #[inline]
+    pub fn authority(&self) -> &AccountId {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => entrypoint.authority(),
+            TransactionEntrypoint::Time(entrypoint) => &entrypoint.authority,
         }
     }
 
-    impl Decode for SignedTransactionV1 {
-        fn decode<I: Input>(input: &mut I) -> Result<Self, parity_scale_codec::Error> {
-            SignedTransactionCandidate::decode(input)?
-                .validate()
-                .map_err(Into::into)
+    /// Hash for this transaction entrypoint.
+    ///
+    /// TODO: prevent divergent hashes caused by direct calls to `HashOf::new`,
+    /// leveraging specialization once it's stabilized (<https://github.com/rust-lang/rust/issues/31844>).
+    #[inline]
+    pub fn hash(&self) -> HashOf<Self> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => entrypoint.hash_as_entrypoint(),
+            TransactionEntrypoint::Time(entrypoint) => entrypoint.hash_as_entrypoint(),
         }
     }
-    impl<'de> Deserialize<'de> for SignedTransactionV1 {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            use serde::de::Error as _;
+}
 
-            SignedTransactionCandidate::deserialize(deserializer)?
-                .validate()
-                .map_err(D::Error::custom)
-        }
+impl TimeTriggerEntrypoint {
+    /// Hash for this time-triggered entrypoint as `TransactionEntrypoint`.
+    #[inline]
+    pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
+        HashOf::from_untyped_unchecked(HashOf::new(self).into())
+    }
+}
+
+impl TransactionResult {
+    /// Hash for this transaction result.
+    ///
+    /// TODO: prevent divergent hashes caused by direct calls to `HashOf::new`,
+    /// leveraging specialization once it's stabilized (<https://github.com/rust-lang/rust/issues/31844>).
+    #[inline]
+    pub fn hash(&self) -> HashOf<Self> {
+        Self::hash_from_inner(&self.0)
+    }
+
+    /// Hash for this transaction result computed from its inner representation.
+    #[inline]
+    pub fn hash_from_inner(inner: &TransactionResultInner) -> HashOf<Self> {
+        HashOf::from_untyped_unchecked(HashOf::new(inner).into())
     }
 }
 
@@ -696,7 +852,9 @@ pub mod error {
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{
-        error::prelude::*, Executable, SignedTransaction, TransactionBuilder, WasmSmartContract,
+        error::prelude::*, DataTriggerSequence, DataTriggerStep, Executable, ExecutionStep,
+        SignedTransaction, TimeTriggerEntrypoint, TransactionBuilder, TransactionEntrypoint,
+        TransactionResult, TransactionResultInner, WasmSmartContract,
     };
 }
 

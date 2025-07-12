@@ -47,5 +47,5 @@ tokio = { workspace = true, features = ["rt"] }
 futures = { workspace = true }
 
 [build-dependencies]
-vergen = { version = "8.3.1", default-features = false }
+vergen = { workspace = true }
 color-eyre = "0.6.3"

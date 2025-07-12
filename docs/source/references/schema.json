@@ -793,8 +793,12 @@
         "type": "Option<HashOf<BlockHeader>>"
       },
       {
-        "name": "transactions_hash",
-        "type": "Option<HashOf<MerkleTree<SignedTransaction>>>"
+        "name": "merkle_root",
+        "type": "Option<HashOf<MerkleTree<TransactionEntrypoint>>>"
+      },
+      {
+        "name": "result_merkle_root",
+        "type": "Option<HashOf<MerkleTree<TransactionResult>>>"
       },
       {
         "name": "creation_time_ms",
@@ -902,10 +906,36 @@
       }
     ]
   },
+  "BlockResult": {
+    "Struct": [
+      {
+        "name": "time_triggers",
+        "type": "Vec<TimeTriggerEntrypoint>"
+      },
+      {
+        "name": "merkle",
+        "type": "MerkleTree<TransactionEntrypoint>"
+      },
+      {
+        "name": "result_merkle",
+        "type": "MerkleTree<TransactionResult>"
+      },
+      {
+        "name": "transaction_results",
+        "type": "Vec<TransactionResult>"
+      }
+    ]
+  },
   "BlockSignature": {
-    "Tuple": [
-      "u64",
-      "SignatureOf<BlockHeader>"
+    "Struct": [
+      {
+        "name": "index",
+        "type": "u64"
+      },
+      {
+        "name": "signature",
+        "type": "SignatureOf<BlockHeader>"
+      }
     ]
   },
   "BlockStatus": {
@@ -1169,12 +1199,28 @@
         "type": "HashOf<BlockHeader>"
       },
       {
-        "name": "value",
-        "type": "SignedTransaction"
+        "name": "entrypoint_hash",
+        "type": "HashOf<TransactionEntrypoint>"
       },
       {
-        "name": "error",
-        "type": "Option<TransactionRejectionReason>"
+        "name": "entrypoint_proof",
+        "type": "MerkleProof<TransactionEntrypoint>"
+      },
+      {
+        "name": "entrypoint",
+        "type": "TransactionEntrypoint"
+      },
+      {
+        "name": "result_hash",
+        "type": "HashOf<TransactionResult>"
+      },
+      {
+        "name": "result_proof",
+        "type": "MerkleProof<TransactionResult>"
+      },
+      {
+        "name": "result",
+        "type": "TransactionResult"
       }
     ]
   },
@@ -1194,14 +1240,24 @@
         "type": "BlockHeaderHashProjection<PredicateMarker>"
       },
       {
-        "tag": "Value",
+        "tag": "TransactionEntrypointHash",
         "discriminant": 2,
-        "type": "SignedTransactionProjection<PredicateMarker>"
+        "type": "TransactionEntrypointHashProjection<PredicateMarker>"
       },
       {
-        "tag": "Error",
+        "tag": "TransactionEntrypoint",
         "discriminant": 3,
-        "type": "TransactionErrorProjection<PredicateMarker>"
+        "type": "TransactionEntrypointProjection<PredicateMarker>"
+      },
+      {
+        "tag": "TransactionResultHash",
+        "discriminant": 4,
+        "type": "TransactionResultHashProjection<PredicateMarker>"
+      },
+      {
+        "tag": "TransactionResult",
+        "discriminant": 5,
+        "type": "TransactionResultProjection<PredicateMarker>"
       }
     ]
   },
@@ -1218,14 +1274,24 @@
         "type": "BlockHeaderHashProjection<SelectorMarker>"
       },
       {
-        "tag": "Value",
+        "tag": "TransactionEntrypointHash",
         "discriminant": 2,
-        "type": "SignedTransactionProjection<SelectorMarker>"
+        "type": "TransactionEntrypointHashProjection<SelectorMarker>"
       },
       {
-        "tag": "Error",
+        "tag": "TransactionEntrypoint",
         "discriminant": 3,
-        "type": "TransactionErrorProjection<SelectorMarker>"
+        "type": "TransactionEntrypointProjection<SelectorMarker>"
+      },
+      {
+        "tag": "TransactionResultHash",
+        "discriminant": 4,
+        "type": "TransactionResultHashProjection<SelectorMarker>"
+      },
+      {
+        "tag": "TransactionResult",
+        "discriminant": 5,
+        "type": "TransactionResultProjection<SelectorMarker>"
       }
     ]
   },
@@ -1715,6 +1781,18 @@
       }
     ]
   },
+  "DataTriggerStep": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "TriggerId"
+      },
+      {
+        "name": "instructions",
+        "type": "ExecutionStep"
+      }
+    ]
+  },
   "Domain": {
     "Struct": [
       {
@@ -2037,6 +2115,7 @@
       }
     ]
   },
+  "ExecutionStep": "Vec<InstructionBox>",
   "ExecutionTime": {
     "Enum": [
       {
@@ -2331,8 +2410,11 @@
   },
   "Hash": "Array<u8, 32>",
   "HashOf<BlockHeader>": "Hash",
-  "HashOf<MerkleTree<SignedTransaction>>": "Hash",
+  "HashOf<MerkleTree<TransactionEntrypoint>>": "Hash",
+  "HashOf<MerkleTree<TransactionResult>>": "Hash",
   "HashOf<SignedTransaction>": "Hash",
+  "HashOf<TransactionEntrypoint>": "Hash",
+  "HashOf<TransactionResult>": "Hash",
   "HashOf<Vec<InstructionBox>>": "Hash",
   "IdBox": {
     "Enum": [
@@ -2729,8 +2811,38 @@
       }
     ]
   },
+  "MerkleProof<TransactionEntrypoint>": {
+    "Struct": [
+      {
+        "name": "leaf_index",
+        "type": "u32"
+      },
+      {
+        "name": "audit_path",
+        "type": "Vec<Option<HashOf<TransactionEntrypoint>>>"
+      }
+    ]
+  },
+  "MerkleProof<TransactionResult>": {
+    "Struct": [
+      {
+        "name": "leaf_index",
+        "type": "u32"
+      },
+      {
+        "name": "audit_path",
+        "type": "Vec<Option<HashOf<TransactionResult>>>"
+      }
+    ]
+  },
   "MerkleTree<SignedTransaction>": {
     "Vec": "HashOf<SignedTransaction>"
+  },
+  "MerkleTree<TransactionEntrypoint>": {
+    "Vec": "HashOf<TransactionEntrypoint>"
+  },
+  "MerkleTree<TransactionResult>": {
+    "Vec": "HashOf<TransactionResult>"
   },
   "Metadata": "SortedMap<Name, Json>",
   "MetadataChanged<AccountId>": {
@@ -3411,11 +3523,20 @@
   "Option<HashOf<BlockHeader>>": {
     "Option": "HashOf<BlockHeader>"
   },
-  "Option<HashOf<MerkleTree<SignedTransaction>>>": {
-    "Option": "HashOf<MerkleTree<SignedTransaction>>"
+  "Option<HashOf<MerkleTree<TransactionEntrypoint>>>": {
+    "Option": "HashOf<MerkleTree<TransactionEntrypoint>>"
+  },
+  "Option<HashOf<MerkleTree<TransactionResult>>>": {
+    "Option": "HashOf<MerkleTree<TransactionResult>>"
   },
   "Option<HashOf<SignedTransaction>>": {
     "Option": "HashOf<SignedTransaction>"
+  },
+  "Option<HashOf<TransactionEntrypoint>>": {
+    "Option": "HashOf<TransactionEntrypoint>"
+  },
+  "Option<HashOf<TransactionResult>>": {
+    "Option": "HashOf<TransactionResult>"
   },
   "Option<IpfsPath>": {
     "Option": "IpfsPath"
@@ -3443,9 +3564,6 @@
   },
   "Option<RoleId>": {
     "Option": "RoleId"
-  },
-  "Option<TransactionRejectionReason>": {
-    "Option": "TransactionRejectionReason"
   },
   "Option<TransactionStatus>": {
     "Option": "TransactionStatus"
@@ -3984,58 +4102,63 @@
         "type": "Vec<CommittedTransaction>"
       },
       {
-        "tag": "SignedTransaction",
+        "tag": "TransactionResult",
         "discriminant": 20,
-        "type": "Vec<SignedTransaction>"
+        "type": "Vec<TransactionResult>"
       },
       {
-        "tag": "TransactionHash",
+        "tag": "TransactionResultHash",
         "discriminant": 21,
-        "type": "Vec<HashOf<SignedTransaction>>"
+        "type": "Vec<HashOf<TransactionResult>>"
       },
       {
-        "tag": "TransactionRejectionReason",
+        "tag": "TransactionEntrypoint",
         "discriminant": 22,
-        "type": "Vec<Option<TransactionRejectionReason>>"
+        "type": "Vec<TransactionEntrypoint>"
+      },
+      {
+        "tag": "TransactionEntrypointHash",
+        "discriminant": 23,
+        "type": "Vec<HashOf<TransactionEntrypoint>>"
       },
       {
         "tag": "Peer",
-        "discriminant": 23,
+        "discriminant": 24,
         "type": "Vec<PeerId>"
       },
       {
         "tag": "RoleId",
-        "discriminant": 24,
+        "discriminant": 25,
         "type": "Vec<RoleId>"
       },
       {
         "tag": "TriggerId",
-        "discriminant": 25,
+        "discriminant": 26,
         "type": "Vec<TriggerId>"
       },
       {
         "tag": "Trigger",
-        "discriminant": 26,
+        "discriminant": 27,
         "type": "Vec<Trigger>"
       },
       {
         "tag": "Action",
-        "discriminant": 27,
+        "discriminant": 28,
         "type": "Vec<Action>"
       },
       {
         "tag": "Block",
-        "discriminant": 28,
+        "discriminant": 29,
         "type": "Vec<SignedBlock>"
       },
       {
         "tag": "BlockHeader",
-        "discriminant": 29,
+        "discriminant": 30,
         "type": "Vec<BlockHeader>"
       },
       {
         "tag": "BlockHeaderHash",
-        "discriminant": 30,
+        "discriminant": 31,
         "type": "Vec<HashOf<BlockHeader>>"
       }
     ]
@@ -4619,6 +4742,12 @@
       }
     ]
   },
+  "Result<Vec<DataTriggerStep>, TransactionRejectionReason>": {
+    "Result": {
+      "ok": "Vec<DataTriggerStep>",
+      "err": "TransactionRejectionReason"
+    }
+  },
   "Revoke<Permission, Account>": {
     "Struct": [
       {
@@ -5029,15 +5158,15 @@
     "Struct": [
       {
         "name": "signatures",
-        "type": "Vec<BlockSignature>"
+        "type": "SortedVec<BlockSignature>"
       },
       {
         "name": "payload",
         "type": "BlockPayload"
       },
       {
-        "name": "errors",
-        "type": "SortedMap<u64, TransactionRejectionReason>"
+        "name": "result",
+        "type": "BlockResult"
       }
     ]
   },
@@ -5068,47 +5197,6 @@
         "tag": "V1",
         "discriminant": 1,
         "type": "SignedTransactionV1"
-      }
-    ]
-  },
-  "SignedTransactionPredicateAtom": {
-    "Enum": []
-  },
-  "SignedTransactionProjection<PredicateMarker>": {
-    "Enum": [
-      {
-        "tag": "Atom",
-        "discriminant": 0,
-        "type": "SignedTransactionPredicateAtom"
-      },
-      {
-        "tag": "Hash",
-        "discriminant": 1,
-        "type": "TransactionHashProjection<PredicateMarker>"
-      },
-      {
-        "tag": "Authority",
-        "discriminant": 2,
-        "type": "AccountIdProjection<PredicateMarker>"
-      }
-    ]
-  },
-  "SignedTransactionProjection<SelectorMarker>": {
-    "Enum": [
-      {
-        "tag": "Atom",
-        "discriminant": 0,
-        "type": "()"
-      },
-      {
-        "tag": "Hash",
-        "discriminant": 1,
-        "type": "TransactionHashProjection<SelectorMarker>"
-      },
-      {
-        "tag": "Authority",
-        "discriminant": 2,
-        "type": "AccountIdProjection<SelectorMarker>"
       }
     ]
   },
@@ -5260,14 +5348,11 @@
       "value": "Json"
     }
   },
-  "SortedMap<u64, TransactionRejectionReason>": {
-    "Map": {
-      "key": "u64",
-      "value": "TransactionRejectionReason"
-    }
-  },
   "SortedVec<AccountId>": {
     "Vec": "AccountId"
+  },
+  "SortedVec<BlockSignature>": {
+    "Vec": "BlockSignature"
   },
   "SortedVec<Permission>": {
     "Vec": "Permission"
@@ -5404,29 +5489,96 @@
       }
     ]
   },
-  "TransactionErrorPredicateAtom": {
-    "Enum": [
+  "TimeTriggerEntrypoint": {
+    "Struct": [
       {
-        "tag": "IsSome",
-        "discriminant": 0
+        "name": "id",
+        "type": "TriggerId"
+      },
+      {
+        "name": "instructions",
+        "type": "ExecutionStep"
+      },
+      {
+        "name": "authority",
+        "type": "AccountId"
       }
     ]
   },
-  "TransactionErrorProjection<PredicateMarker>": {
+  "TransactionEntrypoint": {
+    "Enum": [
+      {
+        "tag": "External",
+        "discriminant": 0,
+        "type": "SignedTransaction"
+      },
+      {
+        "tag": "Time",
+        "discriminant": 1,
+        "type": "TimeTriggerEntrypoint"
+      }
+    ]
+  },
+  "TransactionEntrypointHashPredicateAtom": {
+    "Enum": [
+      {
+        "tag": "Equals",
+        "discriminant": 0,
+        "type": "HashOf<TransactionEntrypoint>"
+      }
+    ]
+  },
+  "TransactionEntrypointHashProjection<PredicateMarker>": {
     "Enum": [
       {
         "tag": "Atom",
         "discriminant": 0,
-        "type": "TransactionErrorPredicateAtom"
+        "type": "TransactionEntrypointHashPredicateAtom"
       }
     ]
   },
-  "TransactionErrorProjection<SelectorMarker>": {
+  "TransactionEntrypointHashProjection<SelectorMarker>": {
     "Enum": [
       {
         "tag": "Atom",
         "discriminant": 0,
         "type": "()"
+      }
+    ]
+  },
+  "TransactionEntrypointPredicateAtom": {
+    "Enum": [
+      {
+        "tag": "IsExternal",
+        "discriminant": 0
+      }
+    ]
+  },
+  "TransactionEntrypointProjection<PredicateMarker>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "TransactionEntrypointPredicateAtom"
+      },
+      {
+        "tag": "Authority",
+        "discriminant": 1,
+        "type": "AccountIdProjection<PredicateMarker>"
+      }
+    ]
+  },
+  "TransactionEntrypointProjection<SelectorMarker>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "()"
+      },
+      {
+        "tag": "Authority",
+        "discriminant": 1,
+        "type": "AccountIdProjection<SelectorMarker>"
       }
     ]
   },
@@ -5459,33 +5611,6 @@
       {
         "name": "status",
         "type": "Option<TransactionStatus>"
-      }
-    ]
-  },
-  "TransactionHashPredicateAtom": {
-    "Enum": [
-      {
-        "tag": "Equals",
-        "discriminant": 0,
-        "type": "HashOf<SignedTransaction>"
-      }
-    ]
-  },
-  "TransactionHashProjection<PredicateMarker>": {
-    "Enum": [
-      {
-        "tag": "Atom",
-        "discriminant": 0,
-        "type": "TransactionHashPredicateAtom"
-      }
-    ]
-  },
-  "TransactionHashProjection<SelectorMarker>": {
-    "Enum": [
-      {
-        "tag": "Atom",
-        "discriminant": 0,
-        "type": "()"
       }
     ]
   },
@@ -5581,6 +5706,65 @@
         "tag": "TriggerExecution",
         "discriminant": 4,
         "type": "TriggerExecutionFail"
+      }
+    ]
+  },
+  "TransactionResult": "Result<Vec<DataTriggerStep>, TransactionRejectionReason>",
+  "TransactionResultHashPredicateAtom": {
+    "Enum": [
+      {
+        "tag": "Equals",
+        "discriminant": 0,
+        "type": "HashOf<TransactionResult>"
+      }
+    ]
+  },
+  "TransactionResultHashProjection<PredicateMarker>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "TransactionResultHashPredicateAtom"
+      }
+    ]
+  },
+  "TransactionResultHashProjection<SelectorMarker>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "()"
+      }
+    ]
+  },
+  "TransactionResultPredicateAtom": {
+    "Enum": [
+      {
+        "tag": "IsOk",
+        "discriminant": 0
+      },
+      {
+        "tag": "ContainsDataTrigger",
+        "discriminant": 1,
+        "type": "TriggerId"
+      }
+    ]
+  },
+  "TransactionResultProjection<PredicateMarker>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "TransactionResultPredicateAtom"
+      }
+    ]
+  },
+  "TransactionResultProjection<SelectorMarker>": {
+    "Enum": [
+      {
+        "tag": "Atom",
+        "discriminant": 0,
+        "type": "()"
       }
     ]
   },
@@ -6119,9 +6303,6 @@
   "Vec<BlockHeaderProjection<SelectorMarker>>": {
     "Vec": "BlockHeaderProjection<SelectorMarker>"
   },
-  "Vec<BlockSignature>": {
-    "Vec": "BlockSignature"
-  },
   "Vec<CommittedTransaction>": {
     "Vec": "CommittedTransaction"
   },
@@ -6170,6 +6351,9 @@
   "Vec<CompoundPredicate<TriggerId>>": {
     "Vec": "CompoundPredicate<TriggerId>"
   },
+  "Vec<DataTriggerStep>": {
+    "Vec": "DataTriggerStep"
+  },
   "Vec<Domain>": {
     "Vec": "Domain"
   },
@@ -6188,8 +6372,11 @@
   "Vec<HashOf<BlockHeader>>": {
     "Vec": "HashOf<BlockHeader>"
   },
-  "Vec<HashOf<SignedTransaction>>": {
-    "Vec": "HashOf<SignedTransaction>"
+  "Vec<HashOf<TransactionEntrypoint>>": {
+    "Vec": "HashOf<TransactionEntrypoint>"
+  },
+  "Vec<HashOf<TransactionResult>>": {
+    "Vec": "HashOf<TransactionResult>"
   },
   "Vec<InstructionBox>": {
     "Vec": "InstructionBox"
@@ -6215,8 +6402,11 @@
   "Vec<Numeric>": {
     "Vec": "Numeric"
   },
-  "Vec<Option<TransactionRejectionReason>>": {
-    "Vec": "Option<TransactionRejectionReason>"
+  "Vec<Option<HashOf<TransactionEntrypoint>>>": {
+    "Vec": "Option<HashOf<TransactionEntrypoint>>"
+  },
+  "Vec<Option<HashOf<TransactionResult>>>": {
+    "Vec": "Option<HashOf<TransactionResult>>"
   },
   "Vec<Parameter>": {
     "Vec": "Parameter"
@@ -6262,6 +6452,15 @@
   },
   "Vec<String>": {
     "Vec": "String"
+  },
+  "Vec<TimeTriggerEntrypoint>": {
+    "Vec": "TimeTriggerEntrypoint"
+  },
+  "Vec<TransactionEntrypoint>": {
+    "Vec": "TransactionEntrypoint"
+  },
+  "Vec<TransactionResult>": {
+    "Vec": "TransactionResult"
   },
   "Vec<Trigger>": {
     "Vec": "Trigger"

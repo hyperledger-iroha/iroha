@@ -390,8 +390,9 @@ mod tests {
             };
 
             let valid_tx = {
+                let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
                 let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-                    .with_instructions::<InstructionBox>([])
+                    .with_instructions([ok_instruction])
                     .sign(ALICE_KEYPAIR.private_key());
                 AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_limits)?
             };
@@ -528,11 +529,11 @@ mod tests {
 
         assert_eq!(txs.len() as u64, num_blocks * 2);
         assert_eq!(
-            txs.iter().filter(|txn| txn.error.is_some()).count() as u64,
+            txs.iter().filter(|txn| txn.result.is_err()).count() as u64,
             num_blocks
         );
         assert_eq!(
-            txs.iter().filter(|txn| txn.error.is_none()).count() as u64,
+            txs.iter().filter(|txn| txn.result.is_err()).count() as u64,
             num_blocks
         );
 
@@ -552,8 +553,9 @@ mod tests {
             (params.sumeragi().max_clock_drift(), params.transaction)
         };
 
+        let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
         let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-            .with_instructions::<InstructionBox>([])
+            .with_instructions([ok_instruction])
             .sign(ALICE_KEYPAIR.private_key());
 
         let va_tx = AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_limits)?;
@@ -582,11 +584,13 @@ mod tests {
         let unapplied_tx = TransactionBuilder::new(chain_id, ALICE_ID.clone())
             .with_instructions([Unregister::account(gen_account_in("domain").0)])
             .sign(ALICE_KEYPAIR.private_key());
-        let wrong_hash = unapplied_tx.hash();
+        let wrong_hash = TransactionEntrypoint::from(unapplied_tx).hash();
 
         let not_found = FindTransactions::new()
             .execute(
-                CompoundPredicate::<CommittedTransaction>::build(|tx| tx.value.hash.eq(wrong_hash)),
+                CompoundPredicate::<CommittedTransaction>::build(|tx| {
+                    tx.entrypoint_hash.eq(wrong_hash)
+                }),
                 &state_view,
             )
             .expect("Query execution should not fail")
@@ -596,7 +600,7 @@ mod tests {
         let found_accepted = FindTransactions::new()
             .execute(
                 CompoundPredicate::<CommittedTransaction>::build(|tx| {
-                    tx.value.hash.eq(va_tx.as_ref().hash())
+                    tx.entrypoint_hash.eq(va_tx.as_ref().hash_as_entrypoint())
                 }),
                 &state_view,
             )
@@ -604,8 +608,11 @@ mod tests {
             .next()
             .expect("Query should return a transaction");
 
-        if found_accepted.error.is_none() {
-            assert_eq!(va_tx.as_ref().hash(), found_accepted.as_ref().hash())
+        if found_accepted.result.is_err() {
+            assert_eq!(
+                va_tx.as_ref().hash_as_entrypoint(),
+                found_accepted.entrypoint.hash()
+            )
         }
         Ok(())
     }

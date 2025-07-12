@@ -1,6 +1,5 @@
 //! `Transaction`-related functionality of Iroha.
 //!
-//!
 //! Types represent various stages of a `Transaction`'s lifecycle. For
 //! example, `Transaction` is the start, when a transaction had been
 //! received by Torii.
@@ -11,7 +10,6 @@
 use std::time::{Duration, SystemTime};
 
 use eyre::Result;
-use iroha_crypto::SignatureOf;
 pub use iroha_data_model::prelude::*;
 use iroha_data_model::{
     isi::error::Mismatch,
@@ -30,7 +28,7 @@ use crate::{
 /// `AcceptedTransaction` — a transaction accepted by Iroha peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct AcceptedTransaction(pub(super) SignedTransaction);
+pub struct AcceptedTransaction(SignedTransaction);
 
 /// Verification failed of some signature due to following reason
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,7 +63,7 @@ pub enum AcceptTransactionFail {
 }
 
 impl AcceptedTransaction {
-    fn validate(
+    fn validate_common(
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
@@ -88,41 +86,51 @@ impl AcceptedTransaction {
 
         Ok(())
     }
-    /// Accept genesis transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
+
+    /// Like [`Self::accept_genesis`], but without wrapping.
     ///
     /// # Errors
     ///
-    /// - if transaction chain id doesn't match
-    pub fn accept_genesis(
-        tx: SignedTransaction,
+    /// See [`AcceptTransactionFail`]
+    pub fn validate_genesis(
+        tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         genesis_account: &AccountId,
-    ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate(&tx, expected_chain_id, max_clock_drift)?;
+    ) -> Result<(), AcceptTransactionFail> {
+        Self::validate_common(tx, expected_chain_id, max_clock_drift)?;
 
         if genesis_account != tx.authority() {
             return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
         }
 
-        Ok(Self(tx))
+        Ok(())
     }
 
-    /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
+    /// Like [`Self::accept`], but without wrapping.
     ///
     /// # Errors
     ///
-    /// - if it does not adhere to limits
-    pub fn accept(
-        tx: SignedTransaction,
+    /// See [`AcceptTransactionFail`]
+    pub fn validate(
+        tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
-    ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate(&tx, expected_chain_id, max_clock_drift)?;
+    ) -> Result<(), AcceptTransactionFail> {
+        Self::validate_common(tx, expected_chain_id, max_clock_drift)?;
 
         if *iroha_genesis::GENESIS_DOMAIN_ID == *tx.authority().domain() {
             return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
+        }
+
+        if let Err(err) = tx.verify_signature() {
+            return Err(AcceptTransactionFail::SignatureVerification(
+                SignatureVerificationFail {
+                    signature: tx.signature().0.clone(),
+                    reason: err.to_string(),
+                },
+            ));
         }
 
         match &tx.instructions() {
@@ -161,6 +169,14 @@ impl AcceptedTransaction {
                         }
                     })?;
 
+                if instructions.is_empty() {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "Transaction must contain at least one instruction".into(),
+                        },
+                    ));
+                }
+
                 let instruction_limit = limits
                     .max_instructions
                     .get()
@@ -181,7 +197,41 @@ impl AcceptedTransaction {
             }
         }
 
-        Ok(Self(tx))
+        Ok(())
+    }
+
+    /// Accept genesis transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`]
+    pub fn accept_genesis(
+        tx: SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        genesis_account: &AccountId,
+    ) -> Result<Self, AcceptTransactionFail> {
+        Self::validate_genesis(&tx, expected_chain_id, max_clock_drift, genesis_account)
+            .map(|()| Self(tx))
+    }
+
+    /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`]
+    pub fn accept(
+        tx: SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+    ) -> Result<Self, AcceptTransactionFail> {
+        Self::validate(&tx, expected_chain_id, max_clock_drift, limits).map(|()| Self(tx))
+    }
+
+    /// Assume the transaction is acceptable.
+    pub fn new_unchecked(tx: SignedTransaction) -> Self {
+        Self(tx)
     }
 }
 
@@ -204,37 +254,35 @@ impl AsRef<SignedTransaction> for AcceptedTransaction {
 }
 
 impl StateBlock<'_> {
-    /// Move transaction lifecycle forward by checking if the
-    /// instructions can be applied to the [`StateBlock`].
+    /// Validate and apply the transaction to the state if validation succeeds; leave the state unchanged on failure.
     ///
-    /// Validation is skipped for genesis.
-    ///
-    /// # Errors
-    /// Fails if validation of instruction fails (e.g. permissions mismatch).
+    /// Returns the hash and the result of the transaction -- the trigger sequence on success, or the rejection reason on failure.
     pub fn validate_transaction(
         &mut self,
         tx: AcceptedTransaction,
         wasm_cache: &mut WasmCache<'_, '_, '_>,
-    ) -> Result<SignedTransaction, (Box<SignedTransaction>, TransactionRejectionReason)> {
+    ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         let mut state_transaction = self.transaction();
-        if let Err(rejection_reason) =
-            Self::validate_transaction_internal(&tx, &mut state_transaction, wasm_cache)
-        {
-            return Err((tx.0.into(), rejection_reason));
+        let hash = tx.as_ref().hash_as_entrypoint();
+        let result = Self::validate_transaction_internal(&tx, &mut state_transaction, wasm_cache);
+        if result.is_ok() {
+            state_transaction.apply();
         }
-        state_transaction.apply();
 
-        Ok(tx.0)
+        (hash, result)
     }
 
+    /// Validate the transaction, staging its state changes.
+    ///
+    /// Returns the trigger sequence on success, or the rejection reason on failure.
     fn validate_transaction_internal(
         tx: &AcceptedTransaction,
         state_transaction: &mut StateTransaction<'_, '_>,
         wasm_cache: &mut WasmCache<'_, '_, '_>,
-    ) -> Result<(), TransactionRejectionReason> {
-        let authority = tx.as_ref().authority();
+    ) -> TransactionResultInner {
+        let authority = tx.as_ref().authority().clone();
 
-        if state_transaction.world.accounts.get(authority).is_none() {
+        if state_transaction.world.accounts.get(&authority).is_none() {
             return Err(TransactionRejectionReason::AccountDoesNotExist(
                 FindError::Account(authority.clone()),
             ));
@@ -248,10 +296,10 @@ impl StateBlock<'_> {
         )?;
 
         debug!("Transaction validated successfully; processing data triggers");
-        state_transaction.execute_data_triggers_dfs()?;
+        let trigger_sequence = state_transaction.execute_data_triggers_dfs(&authority)?;
         debug!("Data triggers executed successfully");
 
-        Ok(())
+        Ok(trigger_sequence)
     }
 
     /// Validate transaction with runtime executors.
@@ -284,7 +332,8 @@ impl StateBlock<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+#[allow(missing_docs)]
+pub mod tests {
     use core::panic;
     use std::sync::LazyLock;
 
@@ -294,10 +343,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        block::{BlockBuilder, ValidBlock},
+        block::{BlockBuilder, CommittedBlock, ValidBlock},
         smartcontracts::isi::Registrable,
         state::{State, StateBlock, StateReadOnly, World},
-        sumeragi::network_topology::Topology,
     };
 
     mod time_trigger {
@@ -311,7 +359,7 @@ mod tests {
         /// 4. Data trigger: Dave forwards the donation to Eve.
         #[tokio::test]
         async fn fires_after_external_transactions() {
-            let mut sandbox = Sandbox::new()
+            let mut sandbox = Sandbox::default()
                 .with_data_trigger_transfer("bob", 50, "carol")
                 .with_time_trigger_transfer("carol", 50, "dave")
                 .with_data_trigger_transfer("dave", 50, "eve");
@@ -324,7 +372,7 @@ mod tests {
                 ("dave", 10),
                 ("eve", 10),
             ]);
-            let events = block.apply();
+            let (events, _committed_block) = block.apply();
             assert_events(&events, "time_trigger/fires_after_external_transactions");
             block.assert_balances([
                 ("alice", 10),
@@ -346,12 +394,12 @@ mod tests {
         /// 3. Transaction: Carol attempts to send the donation to Dave; this should fail if step 2 did not occur.
         #[tokio::test]
         async fn fires_for_each_transaction() {
-            let mut sandbox = Sandbox::new().with_data_trigger_transfer("bob", 50, "carol");
+            let mut sandbox = Sandbox::default().with_data_trigger_transfer("bob", 50, "carol");
             sandbox.request_transfer("alice", 50, "bob");
             sandbox.request_transfer("carol", 50, "dave");
             let mut block = sandbox.block();
             block.assert_balances([("alice", 60), ("bob", 10), ("carol", 10), ("dave", 10)]);
-            let events = block.apply();
+            let (events, _committed_block) = block.apply();
             assert_events(&events, "data_trigger/fires_for_each_transaction");
             block.assert_balances([("alice", 10), ("bob", 10), ("carol", 10), ("dave", 60)]);
         }
@@ -362,11 +410,11 @@ mod tests {
         /// 2. Data trigger: Bob forwards exactly one package to Carol; this trigger fires only once.
         #[tokio::test]
         async fn fires_at_most_once_per_step() {
-            let mut sandbox = Sandbox::new().with_data_trigger_transfer("bob", 10, "carol");
+            let mut sandbox = Sandbox::default().with_data_trigger_transfer("bob", 10, "carol");
             sandbox.request_transfers_batched::<2>("alice", 10, "bob");
             let mut block = sandbox.block();
             block.assert_balances([("alice", 60), ("bob", 10), ("carol", 10)]);
-            let events = block.apply();
+            let (events, _committed_block) = block.apply();
             assert_events(&events, "data_trigger/fires_at_most_once_per_step");
             block.assert_balances([("alice", 40), ("bob", 20), ("carol", 20)]);
         }
@@ -378,7 +426,7 @@ mod tests {
         /// 3. Data trigger: Bob forwards the donation to Eve; this should fail if step 2 has not completed.
         #[tokio::test]
         async fn chains_in_depth_first_order() {
-            let mut sandbox = Sandbox::new()
+            let mut sandbox = Sandbox::default()
                 // Carol receives it before Eve because triggers matching the same event are processed in lexicographical order of their IDs.
                 .with_data_trigger_transfer_once("bob", 50, "carol")
                 // Sibling trigger waits for depth-first resolution.
@@ -394,7 +442,7 @@ mod tests {
                 ("dave", 10),
                 ("eve", 10),
             ]);
-            let events = block.apply();
+            let (events, _committed_block) = block.apply();
             assert_events(&events, "data_trigger/chains_in_depth_first_order");
             block.assert_balances([
                 ("alice", 10),
@@ -411,16 +459,16 @@ mod tests {
         /// 2. Data triggers: each branch (Bob -> Carol -> Dave -> Eve) runs independently to a max depth of 3, forwarding 1 unit per step.
         #[tokio::test]
         async fn each_branch_is_assigned_depth() {
-            let mut sandbox = Sandbox::new()
+            let mut sandbox = Sandbox::default()
                 .with_max_execution_depth(3)
                 // Branches: Bob -> Carol
-                .with_data_trigger_transfer_labelled("bob", 1, "carol", 0)
-                .with_data_trigger_transfer_labelled("bob", 1, "carol", 1)
-                .with_data_trigger_transfer_labelled("bob", 1, "carol", 2)
-                .with_data_trigger_transfer_labelled("bob", 1, "carol", 3)
-                .with_data_trigger_transfer_labelled("bob", 1, "carol", 4)
-                .with_data_trigger_transfer_labelled("bob", 1, "carol", 5)
-                .with_data_trigger_transfer_labelled("bob", 1, "carol", 6)
+                .with_data_trigger_transfer_labeled("bob", 1, "carol", 0)
+                .with_data_trigger_transfer_labeled("bob", 1, "carol", 1)
+                .with_data_trigger_transfer_labeled("bob", 1, "carol", 2)
+                .with_data_trigger_transfer_labeled("bob", 1, "carol", 3)
+                .with_data_trigger_transfer_labeled("bob", 1, "carol", 4)
+                .with_data_trigger_transfer_labeled("bob", 1, "carol", 5)
+                .with_data_trigger_transfer_labeled("bob", 1, "carol", 6)
                 // Common path: Carol -> Dave -> Eve
                 .with_data_trigger_transfer("carol", 1, "dave")
                 .with_data_trigger_transfer("dave", 1, "eve");
@@ -433,7 +481,7 @@ mod tests {
                 ("dave", 10),
                 ("eve", 10),
             ]);
-            let events = block.apply();
+            let (events, _committed_block) = block.apply();
             assert_events(&events, "data_trigger/each_branch_is_assigned_depth");
             block.assert_balances([
                 ("alice", 10),
@@ -448,7 +496,7 @@ mod tests {
         #[tokio::test]
         async fn atomically_chains_from_transaction() {
             let sandbox = || {
-                let mut res = Sandbox::new();
+                let mut res = Sandbox::default();
                 res.request_transfer("alice", 50, "bob");
                 res
             };
@@ -462,7 +510,7 @@ mod tests {
         /// All or none of the initial time trigger and subsequent data triggers should take effect.
         #[tokio::test]
         async fn atomically_chains_from_time_trigger() {
-            let sandbox = || Sandbox::new().with_time_trigger_transfer("alice", 50, "bob");
+            let sandbox = || Sandbox::default().with_time_trigger_transfer("alice", 50, "bob");
 
             aborts_on_execution_error(sandbox(), "time");
             aborts_on_exceeding_depth(sandbox(), "time");
@@ -484,7 +532,7 @@ mod tests {
                 ("dave", 10),
                 ("eve", 10),
             ]);
-            let events = block.apply();
+            let (events, _committed_block) = block.apply();
             assert_events(
                 &events,
                 format!("data_trigger/aborts_on_execution_error-{snapshot_suffix}"),
@@ -514,7 +562,7 @@ mod tests {
                 ("dave", 10),
                 ("eve", 10),
             ]);
-            let events = block.apply();
+            let (events, _committed_block) = block.apply();
             assert_events(
                 &events,
                 format!("data_trigger/aborts_on_exceeding_depth-{snapshot_suffix}"),
@@ -536,7 +584,7 @@ mod tests {
                 .with_data_trigger_transfer_once("carol", 50, "bob");
             let mut block = sandbox.block();
             block.assert_balances([("alice", 60), ("bob", 10), ("carol", 10)]);
-            let events = block.apply();
+            let (events, _committed_block) = block.apply();
             assert_events(
                 &events,
                 format!("data_trigger/commits_on_depleting_lives-{snapshot_suffix}"),
@@ -559,7 +607,7 @@ mod tests {
                 ("dave", 10),
                 ("eve", 10),
             ]);
-            let events = block.apply();
+            let (events, _committed_block) = block.apply();
             assert_events(
                 &events,
                 format!("data_trigger/commits_on_regular_success-{snapshot_suffix}"),
@@ -575,32 +623,32 @@ mod tests {
         }
     }
 
-    struct Sandbox {
-        state: State,
+    pub struct Sandbox {
+        pub state: State,
         // Buffered transactions
-        transactions: Vec<SignedTransaction>,
+        pub transactions: Vec<SignedTransaction>,
     }
 
-    struct SandboxBlock<'state> {
-        state: StateBlock<'state>,
+    pub struct SandboxBlock<'state> {
+        pub state: StateBlock<'state>,
         // Candidate to be validated and committed
-        block: Option<SignedBlock>,
+        pub block: Option<SignedBlock>,
     }
 
-    const ACCOUNTS_STR: [&str; 5] = ["alice", "bob", "carol", "dave", "eve"];
-    static INIT_BALANCE: LazyLock<AccountBalance> =
+    pub const ACCOUNTS_STR: [&str; 5] = ["alice", "bob", "carol", "dave", "eve"];
+    pub static INIT_BALANCE: LazyLock<AccountBalance> =
         LazyLock::new(|| ACCOUNTS_STR.into_iter().zip([60, 10, 10, 10, 10]).collect());
-    const INIT_EXECUTION_DEPTH: u8 = u8::MAX;
+    pub const INIT_EXECUTION_DEPTH: u8 = u8::MAX;
 
-    type AccountBalance = std::collections::BTreeMap<&'static str, u32>;
-    type AccountMap = std::collections::BTreeMap<&'static str, Credential>;
+    pub type AccountBalance = std::collections::BTreeMap<&'static str, u32>;
+    pub type AccountMap = std::collections::BTreeMap<&'static str, Credential>;
 
-    const DOMAIN_STR: &str = "wonderland";
-    const ASSET_STR: &str = "rose";
-    static DOMAIN: LazyLock<DomainId> = LazyLock::new(|| DOMAIN_STR.parse().unwrap());
-    static ASSET: LazyLock<AssetDefinitionId> =
+    pub const DOMAIN_STR: &str = "wonderland";
+    pub const ASSET_STR: &str = "rose";
+    pub static DOMAIN: LazyLock<DomainId> = LazyLock::new(|| DOMAIN_STR.parse().unwrap());
+    pub static ASSET: LazyLock<AssetDefinitionId> =
         LazyLock::new(|| format!("{ASSET_STR}#{DOMAIN_STR}").parse().unwrap());
-    static ACCOUNT: LazyLock<AccountMap> = LazyLock::new(|| {
+    pub static ACCOUNT: LazyLock<AccountMap> = LazyLock::new(|| {
         ACCOUNTS_STR
             .iter()
             .map(|name| {
@@ -619,30 +667,26 @@ mod tests {
     });
 
     #[derive(Debug, Clone)]
-    struct Credential {
-        id: AccountId,
-        key: iroha_crypto::PrivateKey,
+    pub struct Credential {
+        pub id: AccountId,
+        pub key: iroha_crypto::PrivateKey,
     }
 
-    static TOPOLOGY: LazyLock<Topology> = LazyLock::new(|| {
-        let leader: PeerId = iroha_crypto::KeyPair::random().into_parts().0.into();
-        Topology::new([leader])
-    });
-    static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
+    pub static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
         let (id, key_pair) = gen_account_in(GENESIS_DOMAIN_ID.clone());
         Credential {
             id,
             key: key_pair.into_parts().1,
         }
     });
-    static CHAIN_ID: LazyLock<ChainId> =
+    pub static CHAIN_ID: LazyLock<ChainId> =
         LazyLock::new(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
 
-    fn asset(account_name: &str) -> AssetId {
+    pub fn asset(account_name: &str) -> AssetId {
         AssetId::new(ASSET.clone(), ACCOUNT[account_name].id.clone())
     }
 
-    fn transfer<'a>(
+    pub fn transfer<'a>(
         src: &'a str,
         quantity: u32,
         dest: &'a str,
@@ -650,7 +694,7 @@ mod tests {
         transfers_batched::<1>(src, quantity, dest)
     }
 
-    fn transfers_batched<'a, const N_INSTRUCTIONS: usize>(
+    pub fn transfers_batched<'a, const N_INSTRUCTIONS: usize>(
         src: &'a str,
         quantity_per_instruction: u32,
         dest: &'a str,
@@ -664,7 +708,7 @@ mod tests {
         })
     }
 
-    fn assert_events(actual: &[EventBox], snapshot_path: impl AsRef<std::path::Path>) {
+    pub fn assert_events(actual: &[EventBox], snapshot_path: impl AsRef<std::path::Path>) {
         let expected = {
             let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures")
@@ -679,8 +723,8 @@ mod tests {
         expected.assert_eq(&serde_json::to_string_pretty(&actual).unwrap());
     }
 
-    impl Sandbox {
-        fn new() -> Self {
+    impl Default for Sandbox {
+        fn default() -> Self {
             let world = {
                 let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT.id);
                 let asset_def = AssetDefinition::new(ASSET.clone(), NumericSpec::default())
@@ -706,9 +750,29 @@ mod tests {
             }
             .with_max_execution_depth(INIT_EXECUTION_DEPTH)
         }
+    }
 
-        fn with_time_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_time_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely)
+    impl Sandbox {
+        #[must_use]
+        pub fn with_time_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
+            self.with_time_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely, 0)
+        }
+
+        #[must_use]
+        pub fn with_time_trigger_transfer_labeled(
+            self,
+            src: &str,
+            quantity: u32,
+            dest: &str,
+            label: u32,
+        ) -> Self {
+            self.with_time_trigger_transfer_internal(
+                src,
+                quantity,
+                dest,
+                Repeats::Indefinitely,
+                label,
+            )
         }
 
         fn with_time_trigger_transfer_internal(
@@ -717,11 +781,12 @@ mod tests {
             quantity: u32,
             dest: &str,
             repeats: Repeats,
+            label: u32,
         ) -> Self {
             let mut block = self.state.world.triggers.block();
             let mut transaction = block.transaction();
             let trigger = Trigger::new(
-                format!("time-{src}-{dest}").parse().unwrap(),
+                format!("time-{src}-{dest}-{label}").parse().unwrap(),
                 Action::new(
                     transfer(src, quantity, dest),
                     repeats,
@@ -740,15 +805,18 @@ mod tests {
             self
         }
 
-        fn with_data_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
+        #[must_use]
+        pub fn with_data_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
             self.with_data_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely, 0)
         }
 
-        fn with_data_trigger_transfer_once(self, src: &str, quantity: u32, dest: &str) -> Self {
+        #[must_use]
+        pub fn with_data_trigger_transfer_once(self, src: &str, quantity: u32, dest: &str) -> Self {
             self.with_data_trigger_transfer_internal(src, quantity, dest, Repeats::Exactly(1), 0)
         }
 
-        fn with_data_trigger_transfer_labelled(
+        #[must_use]
+        pub fn with_data_trigger_transfer_labeled(
             self,
             src: &str,
             quantity: u32,
@@ -796,18 +864,19 @@ mod tests {
             self
         }
 
-        fn with_max_execution_depth(self, depth: u8) -> Self {
+        #[must_use]
+        pub fn with_max_execution_depth(self, depth: u8) -> Self {
             let mut world = self.state.world.block();
             world.parameters.smart_contract.execution_depth = depth;
             world.commit();
             self
         }
 
-        fn request_transfer(&mut self, src: &str, quantity: u32, dest: &str) {
+        pub fn request_transfer(&mut self, src: &str, quantity: u32, dest: &str) {
             self.request_transfers_batched::<1>(src, quantity, dest);
         }
 
-        fn request_transfers_batched<const N_INSTRUCTIONS: usize>(
+        pub fn request_transfers_batched<const N_INSTRUCTIONS: usize>(
             &mut self,
             src: &str,
             quantity_per_instruction: u32,
@@ -823,7 +892,7 @@ mod tests {
             self.transactions.push(transaction);
         }
 
-        fn block(&mut self) -> SandboxBlock<'_> {
+        pub fn block(&mut self) -> SandboxBlock<'_> {
             let block: SignedBlock = {
                 let transactions = {
                     let signed = core::mem::take(&mut self.transactions);
@@ -845,23 +914,23 @@ mod tests {
     }
 
     impl SandboxBlock<'_> {
-        fn apply(&mut self) -> Vec<EventBox> {
-            let valid = ValidBlock::validate(
+        pub fn apply(&mut self) -> (Vec<EventBox>, CommittedBlock) {
+            let valid = ValidBlock::validate_unchecked(
                 core::mem::take(&mut self.block).unwrap(),
-                &TOPOLOGY,
-                &CHAIN_ID,
-                &GENESIS_ACCOUNT.id,
                 &mut self.state,
             )
-            .unpack(|_| {})
-            .unwrap();
+            .unpack(|_| {});
+            let committed = valid.commit_unchecked().unpack(|_| {});
+            let events = self.state.apply_without_execution(
+                &committed,
+                // topology in state is only used by sumeragi
+                vec![],
+            );
 
-            let committed = valid.commit(&TOPOLOGY).unpack(|_| {}).unwrap();
-            self.state
-                .apply_without_execution(&committed, TOPOLOGY.iter().cloned().collect())
+            (events, committed)
         }
 
-        fn assert_balances(&self, expected: impl Into<AccountBalance>) {
+        pub fn assert_balances(&self, expected: impl Into<AccountBalance>) {
             let expected = expected.into();
             let actual: AccountBalance = ACCOUNTS_STR
                 .iter()

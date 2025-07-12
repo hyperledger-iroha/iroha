@@ -5,7 +5,7 @@ use std::{collections::HashMap, fmt::Debug};
 use eyre::{eyre, Context, Result};
 use http::StatusCode;
 use iroha_data_model::query::QueryOutputBatchBoxTuple;
-use iroha_torii_const::uri as torii_uri;
+use iroha_torii_shared::uri as torii_uri;
 use parity_scale_codec::{DecodeAll, Encode};
 use url::Url;
 

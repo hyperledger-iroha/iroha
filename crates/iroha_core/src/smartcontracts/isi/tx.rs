@@ -1,61 +1,15 @@
 //! Implementations for transaction queries.
 
-use std::sync::Arc;
-
 use eyre::Result;
-use iroha_crypto::HashOf;
 use iroha_data_model::{
-    block::{BlockHeader, SignedBlock},
     prelude::*,
     query::{dsl::CompoundPredicate, error::QueryExecutionFail, CommittedTransaction},
-    transaction::error::TransactionRejectionReason,
 };
 use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
 
 use super::*;
 use crate::smartcontracts::ValidQuery;
-
-/// Iterates transactions of a block in reverse order
-pub(crate) struct BlockTransactionIter(Arc<SignedBlock>, usize);
-pub(crate) struct BlockTransactionRef(Arc<SignedBlock>, usize);
-
-impl BlockTransactionIter {
-    fn new(block: Arc<SignedBlock>) -> Self {
-        let n_transactions = block.transactions().len();
-        Self(block, n_transactions)
-    }
-}
-
-impl Iterator for BlockTransactionIter {
-    type Item = BlockTransactionRef;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.1 != 0 {
-            self.1 -= 1;
-            return Some(BlockTransactionRef(Arc::clone(&self.0), self.1));
-        }
-
-        None
-    }
-}
-
-impl BlockTransactionRef {
-    fn block_hash(&self) -> HashOf<BlockHeader> {
-        self.0.hash()
-    }
-
-    fn value(&self) -> (SignedTransaction, Option<TransactionRejectionReason>) {
-        (
-            self.0
-                .transactions()
-                .nth(self.1)
-                .expect("INTERNAL BUG: The transaction is not found")
-                .clone(),
-            self.0.error(self.1).cloned(),
-        )
-    }
-}
 
 impl ValidQuery for FindTransactions {
     #[metrics(+"find_transactions")]
@@ -66,17 +20,157 @@ impl ValidQuery for FindTransactions {
     ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail> {
         Ok(state_ro
             .all_blocks(nonzero!(1_usize))
+            // Iterate over blocks in descending order (most recent first).
             .rev()
-            .flat_map(BlockTransactionIter::new)
-            .map(|tx| {
-                let (value, error) = tx.value();
+            .flat_map(|block| {
+                let block_hash = block.hash();
 
-                CommittedTransaction {
-                    block_hash: tx.block_hash(),
-                    value,
-                    error,
-                }
+                // Iterate over transactions in descending order (most recent first).
+                let entrypoint_hashes = block.entrypoint_hashes().rev();
+                let entrypoint_proofs = block.entrypoint_proofs().rev();
+                let entrypoints = block.entrypoints_cloned().rev();
+                let result_hashes = block.result_hashes().rev();
+                let result_proofs = block.result_proofs().rev();
+                let results = block.results().cloned().rev();
+
+                entrypoint_hashes
+                    .zip(entrypoint_proofs)
+                    .zip(entrypoints)
+                    .zip(result_hashes)
+                    .zip(result_proofs)
+                    .zip(results)
+                    .map(
+                        |(
+                            (
+                                (((entrypoint_hash, entrypoint_proof), entrypoint), result_hash),
+                                result_proof,
+                            ),
+                            result,
+                        )| {
+                            CommittedTransaction {
+                                block_hash,
+                                entrypoint_hash,
+                                entrypoint_proof,
+                                entrypoint,
+                                result_hash,
+                                result_proof,
+                                result,
+                            }
+                        },
+                    )
+                    .collect::<Vec<_>>()
             })
             .filter(move |tx| filter.applies(tx)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_data_model::prelude::{TransactionEntrypoint, TransactionResult};
+
+    use crate::tx::tests::*;
+
+    /// Verifies that all per-field iterators over a committed block are consistent.
+    #[tokio::test]
+    async fn block_iterators_are_consistent() {
+        let mut sandbox = Sandbox::default()
+            .with_data_trigger_transfer("bob", 40, "carol")
+            .with_time_trigger_transfer_labeled("alice", 1, "alice", 0)
+            .with_time_trigger_transfer_labeled("alice", 1, "alice", 1)
+            .with_time_trigger_transfer_labeled("alice", 1, "alice", 2)
+            .with_time_trigger_transfer("carol", 30, "dave")
+            .with_data_trigger_transfer("dave", 20, "eve");
+        sandbox.request_transfer("alice", 50, "bob");
+        sandbox.request_transfer("eve", 1, "eve");
+        sandbox.request_transfer("eve", 1, "eve");
+        sandbox.request_transfer("eve", 1, "eve");
+        sandbox.request_transfer("eve", 1, "eve");
+        sandbox.request_transfer("eve", 1, "eve");
+        let mut block = sandbox.block();
+        block.assert_balances([
+            ("alice", 60),
+            ("bob", 10),
+            ("carol", 10),
+            ("dave", 10),
+            ("eve", 10),
+        ]);
+        let (_events, committed_block) = block.apply();
+        block.assert_balances([
+            ("alice", 10),
+            ("bob", 20),
+            ("carol", 20),
+            ("dave", 20),
+            ("eve", 30),
+        ]);
+        let block = committed_block.as_ref();
+
+        // All entrypoint-related iterators yield the same number of elements.
+        assert_eq!(10, block.entrypoint_hashes().len());
+        assert_eq!(10, block.entrypoint_proofs().len());
+        assert_eq!(10, block.entrypoints_cloned().len());
+        assert_eq!(10, block.result_hashes().len());
+        assert_eq!(10, block.result_proofs().len());
+        assert_eq!(10, block.results().len());
+        assert_eq!(6, block.external_transactions().len());
+        assert_eq!(4, block.time_triggers().len());
+
+        // Hashes of entrypoints and results match their respective contents.
+        assert_eq!(
+            block.entrypoint_hashes().collect::<Vec<_>>(),
+            block
+                .entrypoints_cloned()
+                .map(|e| e.hash())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            block.result_hashes().collect::<Vec<_>>(),
+            block
+                .results()
+                .map(TransactionResult::hash)
+                .collect::<Vec<_>>()
+        );
+
+        // External and time-triggered entrypoints are merged correctly into a unified view.
+        assert_eq!(
+            block.entrypoints_cloned().collect::<Vec<_>>(),
+            block
+                .external_transactions()
+                .cloned()
+                .map(TransactionEntrypoint::from)
+                .chain(
+                    block
+                        .time_triggers()
+                        .cloned()
+                        .map(TransactionEntrypoint::from)
+                )
+                .collect::<Vec<_>>()
+        );
+
+        // The order and content of the first and last transactions are as expected.
+        assert!(block
+            .entrypoints_cloned()
+            .next()
+            .map(|e| format!("{e:?}"))
+            .unwrap()
+            .contains("Numeric { inner: 50 }"));
+        assert!(block
+            .results()
+            .next()
+            .map(|e| format!("{e:?}"))
+            .unwrap()
+            .contains("data-bob-carol-0"));
+
+        assert!(block
+            .entrypoints_cloned()
+            .nth(9)
+            .map(|e| format!("{e:?}"))
+            .unwrap()
+            .contains("time-carol-dave-0"));
+        assert!(block
+            .results()
+            .nth(9)
+            .map(|e| format!("{e:?}"))
+            .unwrap()
+            .contains("data-dave-eve-0"));
     }
 }

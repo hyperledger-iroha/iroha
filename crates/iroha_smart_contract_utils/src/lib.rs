@@ -105,7 +105,7 @@ pub unsafe fn decode_with_length_prefix_from_raw<T: DecodeAll>(ptr: *const u8) -
 ///
 /// # Warning
 ///
-/// Ownership of the returned allocation is transfered to the caller
+/// Ownership of the returned allocation is transferred to the caller
 ///
 /// # Safety
 ///

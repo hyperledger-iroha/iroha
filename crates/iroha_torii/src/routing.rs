@@ -16,6 +16,7 @@ use iroha_data_model::{
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::Status;
+use iroha_torii_shared::Version;
 use tokio::task;
 
 use super::*;
@@ -416,4 +417,12 @@ pub mod profiling {
             }
         }
     }
+}
+
+pub fn handle_server_version() -> axum::http::Response<axum::body::Body> {
+    let version = Version {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        git_sha: env!("VERGEN_GIT_SHA").to_string(),
+    };
+    axum::Json(version).into_response()
 }

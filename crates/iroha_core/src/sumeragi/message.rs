@@ -149,7 +149,7 @@ mod candidate {
 
             self.signatures
                 .iter()
-                .map(|signature| &signature.0)
+                .map(|signature| &signature.index)
                 .try_fold(IndexSet::new(), |mut acc, elem| {
                     if !acc.insert(elem) {
                         return Err("Duplicate signature");

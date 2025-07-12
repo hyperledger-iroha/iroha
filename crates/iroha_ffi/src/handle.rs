@@ -45,7 +45,7 @@ macro_rules! handles {
 
 /// Generate FFI equivalent implementation of the requested trait method (e.g. Clone, Eq, Ord).
 ///
-/// One `[prefix]__<fn_name>` is generated per invokation of this macro. User should ensure that
+/// One `[prefix]__<fn_name>` is generated per invocation of this macro. User should ensure that
 /// function names don't collide by using a globally (per dynamic library) unique prefix.
 ///
 /// If globally unique handle id is guaranteed across crates, user can leverage this to export

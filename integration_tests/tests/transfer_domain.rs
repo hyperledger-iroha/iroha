@@ -328,7 +328,7 @@ fn domain_owner_trigger_permissions() -> Result<()> {
 
     // check that "alice@wonderland" as owner of domain can call triggers in her domain
     let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
-    let _result = test_client.submit_blocking(execute_trigger)?;
+    test_client.submit_blocking(execute_trigger)?;
 
     // check that "alice@wonderland" as owner of domain can grant and revoke trigger related permissions in her domain
     let permission = CanUnregisterTrigger {

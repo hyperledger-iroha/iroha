@@ -102,6 +102,8 @@ enum Command {
     Executor(executor::Command),
     /// Output CLI documentation in Markdown format
     MarkdownHelp(MarkdownHelp),
+    /// Show versions and git SHA of client and server
+    Version(Version),
 }
 
 /// Context inside which commands run
@@ -241,7 +243,7 @@ macro_rules! match_all {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use Command::*;
-        match_all!((self, context), { Domain, Account, Asset, Nft, Peer, Events, Blocks, Multisig, Query, Transaction, Role, Parameter, Trigger, Executor, MarkdownHelp })
+        match_all!((self, context), { Domain, Account, Asset, Nft, Peer, Events, Blocks, Multisig, Query, Transaction, Role, Parameter, Trigger, Executor, MarkdownHelp, Version })
     }
 }
 
@@ -262,6 +264,21 @@ struct MarkdownHelp;
 
 impl Run for MarkdownHelp {
     fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+struct Version;
+
+impl Run for Version {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        println!("Client git SHA: {}", env!("VERGEN_GIT_SHA"));
+        println!("Client version: {}", env!("CARGO_PKG_VERSION"));
+        let client = context.client_from_config();
+        let response = client.get_server_version()?;
+        println!("Server git SHA: {}", response.git_sha);
+        println!("Server version: {}", response.version);
         Ok(())
     }
 }
@@ -1598,7 +1615,7 @@ mod transaction {
     pub struct Get {
         /// Hash of the transaction to retrieve
         #[arg(short('H'), long)]
-        pub hash: HashOf<SignedTransaction>,
+        pub hash: HashOf<TransactionEntrypoint>,
     }
 
     impl Run for Get {
@@ -1606,7 +1623,7 @@ mod transaction {
             let client = context.client_from_config();
             let transaction = client
                 .query(FindTransactions)
-                .filter_with(|txn| txn.value.hash.eq(self.hash))
+                .filter_with(|txn| txn.entrypoint_hash.eq(self.hash))
                 .execute_single()?;
             context.print_data(&transaction)
         }
