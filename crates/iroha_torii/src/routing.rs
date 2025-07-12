@@ -27,7 +27,7 @@ pub async fn handle_transaction(
     queue: Arc<Queue>,
     state: Arc<State>,
     tx: SignedTransaction,
-) -> Result<()> {
+) -> Result<impl IntoResponse> {
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -47,7 +47,9 @@ pub async fn handle_transaction(
 
             Box::new(err)
         })
-        .map_err(Error::PushIntoQueue)
+        .map_err(Error::PushIntoQueue)?;
+
+    Ok((StatusCode::ACCEPTED, ()))
 }
 
 #[iroha_futures::telemetry_future]
