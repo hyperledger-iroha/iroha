@@ -7,17 +7,7 @@
 extern crate panic_halt;
 
 use dlmalloc::GlobalDlmalloc;
-use iroha_smart_contract::{
-    data_model::query::{
-        builder::QueryExecutor,
-        dsl::{CompoundPredicate, SelectorTuple},
-        parameters::{ForwardCursor, QueryParams},
-        QueryWithFilter, QueryWithParams,
-    },
-    prelude::*,
-};
-use nonzero_ext::nonzero;
-use parity_scale_codec::{Decode, DecodeAll, Encode};
+use iroha_smart_contract::prelude::*;
 
 #[global_allocator]
 static ALLOC: GlobalDlmalloc = GlobalDlmalloc;

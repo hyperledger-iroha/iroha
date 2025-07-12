@@ -172,7 +172,7 @@ fn validate_transaction(criterion: &mut Criterion) {
     let _ = criterion.bench_function("validate", |b| {
         b.iter(|| {
             match state_block
-                .validate_transaction(transaction.clone(), &mut wasm_cache)
+                .validate_transaction(&transaction, &mut wasm_cache)
                 .1
             {
                 Ok(_) => success_count += 1,

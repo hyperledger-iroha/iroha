@@ -433,9 +433,7 @@ impl SignedTransaction {
         extra_instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
     ) {
         let SignedTransaction::V1(tx) = self;
-        let Executable::Instructions(instructions) = &mut tx.payload.instructions else {
-            unimplemented!("Wasm executables are not subject to fault injection")
-        };
+        let Executable::Instructions(instructions) = &mut tx.payload.instructions;
         let mut modified = instructions.clone().into_vec();
         modified.extend(extra_instructions.into_iter().map(Into::into));
         *instructions = modified.into();

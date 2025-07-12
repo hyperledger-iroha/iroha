@@ -2,7 +2,7 @@
 
 use eyre::Result;
 use iroha::data_model::prelude::*;
-use iroha_data_model::isi::error::{InstructionExecutionError, WasmExecutionError};
+use iroha_data_model::isi::error::InstructionExecutionError;
 use iroha_test_network::*;
 use iroha_test_samples::{load_sample_wasm, ALICE_ID};
 use mint_rose_trigger_data_model::MintRoseArgs;
