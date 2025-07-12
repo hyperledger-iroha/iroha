@@ -74,9 +74,7 @@ fn find_transactions_reversed() -> eyre::Result<()> {
     let TransactionEntrypoint::External(entrypoint) = txs[0].entrypoint() else {
         eyre::bail!("entrypoint should be external transaction");
     };
-    let Executable::Instructions(instructions) = entrypoint.instructions() else {
-        eyre::bail!("entrypoint should be builtin instructions");
-    };
+    let Executable::Instructions(instructions) = entrypoint.instructions();
     assert_eq!(instructions.len(), 1);
     assert_eq!(
         instructions[0],

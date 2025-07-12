@@ -120,6 +120,68 @@ mod model {
 
         #[debug(fmt = "{_0:?}")]
         Custom(CustomInstruction),
+
+        #[debug(fmt = "{_0:?}")]
+        #[enum_ref(transparent)]
+        ExecuteWasm(WasmExecutable<WasmSmartContract>),
+    }
+
+    #[derive(
+        DebugCustom,
+        Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        EnumDiscriminants,
+        FromVariant,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    pub enum InstructionBoxHashed {
+        Register(RegisterBox),
+        Unregister(UnregisterBox),
+        Mint(MintBox),
+        Burn(BurnBox),
+        Transfer(TransferBox),
+        SetKeyValue(SetKeyValueBox),
+        RemoveKeyValue(RemoveKeyValueBox),
+        Grant(GrantBox),
+        Revoke(RevokeBox),
+        ExecuteTrigger(ExecuteTrigger),
+        SetParameter(SetParameter),
+        Upgrade(Upgrade),
+        Log(Log),
+        Custom(CustomInstruction),
+        ExecuteWasm(HashOf<WasmSmartContract>),
+    }
+
+    impl From<InstructionBox> for InstructionBoxHashed {
+        fn from(isi: InstructionBox) -> Self {
+            match isi {
+                InstructionBox::Register(o) => InstructionBoxHashed::Register(o),
+                InstructionBox::Unregister(o) => InstructionBoxHashed::Unregister(o),
+                InstructionBox::Mint(o) => InstructionBoxHashed::Mint(o),
+                InstructionBox::Burn(o) => InstructionBoxHashed::Burn(o),
+                InstructionBox::Transfer(o) => InstructionBoxHashed::Transfer(o),
+                InstructionBox::SetKeyValue(o) => InstructionBoxHashed::SetKeyValue(o),
+                InstructionBox::RemoveKeyValue(o) => InstructionBoxHashed::RemoveKeyValue(o),
+                InstructionBox::Grant(o) => InstructionBoxHashed::Grant(o),
+                InstructionBox::Revoke(o) => InstructionBoxHashed::Revoke(o),
+                InstructionBox::ExecuteTrigger(o) => InstructionBoxHashed::ExecuteTrigger(o),
+                InstructionBox::SetParameter(o) => InstructionBoxHashed::SetParameter(o),
+                InstructionBox::Upgrade(o) => InstructionBoxHashed::Upgrade(o),
+                InstructionBox::Log(o) => InstructionBoxHashed::Log(o),
+                InstructionBox::Custom(o) => InstructionBoxHashed::Custom(o),
+                InstructionBox::ExecuteWasm(o) => {
+                    InstructionBoxHashed::ExecuteWasm(HashOf::new(o.object()))
+                }
+            }
+        }
     }
 }
 
@@ -177,6 +239,7 @@ impl_instruction! {
     SetParameter,
     Upgrade,
     ExecuteTrigger,
+    WasmExecutable<WasmSmartContract>,
     Log,
 }
 
@@ -935,6 +998,51 @@ mod transparent {
     }
 
     isi! {
+        #[derive(Display)]
+        #[display(fmt = "EXECUTE wasm")]
+        /// Generic instruction for executing wasm smartcontracts and triggers.
+        pub struct WasmExecutable<T> {
+            /// Executable object `T`.
+            pub object: T,
+        }
+    }
+
+    isi! {
+        #[derive(Display)]
+        #[display(fmt = "EXECUTE wasm tigger module {hash} trigger for {id}")]
+        /// Internal instruction to handle wasm trigger executions.
+        pub struct TriggerModule {
+            /// Precompiled trigger module hash.
+            pub hash: HashOf<WasmSmartContract>,
+            /// Execution context: `TriggerId`
+            pub id: TriggerId,
+            /// Execution context: `EventBox`
+            pub event: EventBox,
+        }
+    }
+
+    impl TriggerModule {
+        /// Build ready-to-execute `TriggerModule`.
+        pub fn new(hash: HashOf<WasmSmartContract>, id: TriggerId, event: EventBox) -> Self {
+            Self { hash, id, event }
+        }
+    }
+
+    impl WasmExecutable<WasmSmartContract> {
+        /// Wasm executable from binary source.
+        pub fn binary(wasm: WasmSmartContract) -> Self {
+            Self { object: wasm }
+        }
+    }
+
+    impl WasmExecutable<TriggerModule> {
+        /// Wasm executable from trigger module [should be restricted].
+        pub fn module(module: TriggerModule) -> Self {
+            Self { object: module }
+        }
+    }
+
+    isi! {
         /// Generic instruction for upgrading runtime objects.
         #[derive(Constructor, Display)]
         #[display(fmt = "UPGRADE")]
@@ -1265,7 +1373,40 @@ pub mod error {
                 #[skip_try_from]
                 String,
             ),
+
+            /// Failure in WebAssembly execution
+            WasmExecution(#[cfg_attr(feature = "std", source)] WasmExecutionError),
         }
+
+        /// Instruction execution failed because execution of `WebAssembly` binary failed
+        #[derive(
+            Debug,
+            Display,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Decode,
+            Encode,
+            Deserialize,
+            Serialize,
+            IntoSchema,
+            Getters,
+        )]
+        #[display(fmt = "Error in executing wasm binary: {reason}")]
+        #[serde(transparent)]
+        #[repr(transparent)]
+        // SAFETY: `WasmExecutionError` has no trap representation in `String`
+        #[ffi_type(unsafe {robust})]
+        pub struct WasmExecutionError {
+            /// Error which happened during execution
+            #[getset(get = "pub")]
+            pub reason: String,
+        }
+
+        #[cfg(feature = "std")]
+        impl std::error::Error for WasmExecutionError {}
 
         /// Evaluation error. This error indicates instruction is not a valid Iroha DSL
         #[derive(
@@ -1488,6 +1629,6 @@ pub mod prelude {
         Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox, Instruction,
         InstructionBox, Log, Mint, MintBox, Register, RegisterBox, RemoveKeyValue,
         RemoveKeyValueBox, Revoke, RevokeBox, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
-        TransferBox, Unregister, UnregisterBox, Upgrade,
+        TransferBox, TriggerModule, Unregister, UnregisterBox, Upgrade, WasmExecutable,
     };
 }

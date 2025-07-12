@@ -128,12 +128,7 @@ impl Executor {
 
         match self {
             Self::Initial => {
-                let (_authority, Executable::Instructions(instructions)) = transaction.into()
-                else {
-                    return Err(ValidationFail::NotPermitted(
-                        "Genesis transaction must not be a smart contract".to_owned(),
-                    ));
-                };
+                let (_authority, Executable::Instructions(instructions)) = transaction.into();
 
                 for isi in instructions {
                     isi.execute(authority, state_transaction)?

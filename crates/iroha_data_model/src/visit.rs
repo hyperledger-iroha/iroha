@@ -29,7 +29,6 @@ pub trait Visit {
         // Visit SignedTransaction
         visit_transaction(&SignedTransaction),
         visit_instruction(&InstructionBox),
-        visit_wasm(&WasmSmartContract),
         visit_query(&AnyQueryBox),
         visit_singular_query(&SingularQueryBox),
         visit_iter_query(&QueryWithParams),
@@ -47,6 +46,7 @@ pub trait Visit {
         visit_upgrade(&Upgrade),
 
         visit_execute_trigger(&ExecuteTrigger),
+        visit_execute_wasm_smartcontract(&WasmExecutable<WasmSmartContract>),
         visit_set_parameter(&SetParameter),
         visit_log(&Log),
         visit_custom_instruction(&CustomInstruction),
@@ -134,7 +134,6 @@ pub trait Visit {
 
 pub fn visit_transaction<V: Visit + ?Sized>(visitor: &mut V, transaction: &SignedTransaction) {
     match transaction.instructions() {
-        Executable::Wasm(wasm) => visitor.visit_wasm(wasm),
         Executable::Instructions(instructions) => {
             for isi in instructions {
                 visitor.visit_instruction(isi);
@@ -194,8 +193,6 @@ pub fn visit_query<V: Visit + ?Sized>(visitor: &mut V, query: &AnyQueryBox) {
     }
 }
 
-pub fn visit_wasm<V: Visit + ?Sized>(_visitor: &mut V, _wasm: &WasmSmartContract) {}
-
 /// Default validation for [`InstructionBox`].
 ///
 /// # Warning
@@ -221,6 +218,9 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         InstructionBox::Unregister(variant_value) => visitor.visit_unregister(variant_value),
         InstructionBox::Upgrade(variant_value) => visitor.visit_upgrade(variant_value),
         InstructionBox::Custom(custom) => visitor.visit_custom_instruction(custom),
+        InstructionBox::ExecuteWasm(variant_value) => {
+            visitor.visit_execute_wasm_smartcontract(variant_value)
+        }
     }
 }
 
@@ -360,6 +360,7 @@ leaf_visitors! {
     visit_upgrade(&Upgrade),
     visit_set_parameter(&SetParameter),
     visit_execute_trigger(&ExecuteTrigger),
+    visit_execute_wasm_smartcontract(&WasmExecutable<WasmSmartContract>),
     visit_log(&Log),
     visit_custom_instruction(&CustomInstruction),
 
