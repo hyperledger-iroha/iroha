@@ -93,11 +93,11 @@ impl<T: Write> RunArgs<T> for Args {
                         cargo_args.0.remove(arg_idx);
                         value
                     };
-                    if arg_value == "deploy" {
-                        profile = Some(Profile::Deploy);
-                    }
-                } else {
+                    profile = arg_value.parse::<Profile>().ok();
+                } else if profile.is_some() {
                     eprintln!("warning: \"--profile\" arg is deprecated; please use \"--cargo-args='--profile ..'\" instead");
+                } else {
+                    eprintln!("warning: \"--cargo-args\" missing \"--profile\"; using `release` by default. Use \"--cargo-args='--profile ..'\" to specify one.");
                 }
 
                 let profile = profile.unwrap_or_default();
