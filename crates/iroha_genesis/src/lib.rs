@@ -20,9 +20,9 @@ use serde_with::{serde_as, DisplayFromStr};
 /// Genesis domain hardcoded for the pre-genesis state.
 pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> = LazyLock::new(|| "genesis".parse().unwrap());
 
-/// Genesis account hardcoded for the pre-genesis state, used to authorize genesis transactions.
-/// TODO #5022: replace this seeded key with a secure, non-personal key.
+/// Genesis account hardcoded for the pre-genesis state, used as the placeholder authority for processing genesis transactions.
 pub static GENESIS_ACCOUNT_ID: LazyLock<AccountId> = LazyLock::new(|| {
+    // TODO #5022: replace this seeded key with a secure, non-personal key.
     let public_key = KeyPair::from_seed(b"genesis".to_vec(), Algorithm::Ed25519)
         .into_parts()
         .0;
