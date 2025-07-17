@@ -54,8 +54,8 @@ pub enum AcceptTransactionFail {
     TransactionLimit(#[source] TransactionLimitError),
     /// Failure during signature verification
     SignatureVerification(#[source] SignatureVerificationFail),
-    /// The genesis account can only sign transactions in the genesis block
-    UnexpectedGenesisAccountSignature,
+    /// The genesis account can serve as the transaction authority only for genesis transactions
+    UnexpectedGenesisAuthority,
     /// Chain id doesn't correspond to the id of current blockchain: {0}
     ChainIdMismatch(Mismatch<ChainId>),
     /// Transaction creation time is in the future
@@ -100,7 +100,7 @@ impl AcceptedTransaction {
         Self::validate_common(tx, expected_chain_id, max_clock_drift)?;
 
         if *iroha_genesis::GENESIS_ACCOUNT_ID != *tx.authority() {
-            return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
+            return Err(AcceptTransactionFail::UnexpectedGenesisAuthority);
         }
 
         Ok(())
@@ -120,7 +120,7 @@ impl AcceptedTransaction {
         Self::validate_common(tx, expected_chain_id, max_clock_drift)?;
 
         if *iroha_genesis::GENESIS_DOMAIN_ID == *tx.authority().domain() {
-            return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
+            return Err(AcceptTransactionFail::UnexpectedGenesisAuthority);
         }
 
         if let Err(err) = tx.verify_signature() {
@@ -356,8 +356,8 @@ pub mod tests {
     use std::sync::LazyLock;
 
     use iroha_data_model::{block::SignedBlock, isi::Instruction, prelude::EventBox};
-    use iroha_genesis::GENESIS_DOMAIN_ID;
-    use iroha_test_samples::gen_account_in;
+    use iroha_genesis::GENESIS_ACCOUNT_ID;
+    use iroha_test_samples::PEER_KEYPAIR;
 
     use super::*;
     use crate::{
@@ -690,13 +690,6 @@ pub mod tests {
         pub key: iroha_crypto::PrivateKey,
     }
 
-    pub static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
-        let (id, key_pair) = gen_account_in(GENESIS_DOMAIN_ID.clone());
-        Credential {
-            id,
-            key: key_pair.into_parts().1,
-        }
-    });
     pub static CHAIN_ID: LazyLock<ChainId> =
         LazyLock::new(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
 
@@ -744,14 +737,14 @@ pub mod tests {
     impl Default for Sandbox {
         fn default() -> Self {
             let world = {
-                let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT.id);
+                let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT_ID);
                 let asset_def = AssetDefinition::new(ASSET.clone(), NumericSpec::default())
-                    .build(&GENESIS_ACCOUNT.id);
+                    .build(&GENESIS_ACCOUNT_ID);
                 let accounts = ACCOUNT
-                    .clone()
-                    .into_iter()
-                    .chain([("genesis", GENESIS_ACCOUNT.clone())])
-                    .map(|(_name, cred)| Account::new(cred.id.clone()).build(&GENESIS_ACCOUNT.id));
+                    .values()
+                    .map(|cred| cred.id.clone())
+                    .chain([GENESIS_ACCOUNT_ID.clone()])
+                    .map(|id| Account::new(id).build(&GENESIS_ACCOUNT_ID));
                 let assets = INIT_BALANCE
                     .iter()
                     .map(|(name, num)| Asset::new(asset(name), *num));
@@ -808,7 +801,7 @@ pub mod tests {
                 Action::new(
                     transfer(src, quantity, dest),
                     repeats,
-                    GENESIS_ACCOUNT.id.clone(),
+                    GENESIS_ACCOUNT_ID.clone(),
                     TimeEventFilter::new(ExecutionTime::PreCommit),
                 ),
             )
@@ -865,7 +858,7 @@ pub mod tests {
                 Action::new(
                     transfer(src, quantity, dest),
                     repeats,
-                    GENESIS_ACCOUNT.id.clone(),
+                    GENESIS_ACCOUNT_ID.clone(),
                     AssetEventFilter::new()
                         .for_events(AssetEventSet::Added)
                         .for_asset(asset(src)),
@@ -903,9 +896,9 @@ pub mod tests {
             let transaction = {
                 let instructions =
                     transfers_batched::<N_INSTRUCTIONS>(src, quantity_per_instruction, dest);
-                TransactionBuilder::new(CHAIN_ID.clone(), GENESIS_ACCOUNT.id.clone())
+                TransactionBuilder::new(CHAIN_ID.clone(), GENESIS_ACCOUNT_ID.clone())
                     .with_instructions(instructions)
-                    .sign(&GENESIS_ACCOUNT.key)
+                    .no_sign()
             };
             self.transactions.push(transaction);
         }
@@ -919,7 +912,7 @@ pub mod tests {
                 };
                 BlockBuilder::new(transactions)
                     .chain(0, self.state.view().latest_block().as_deref())
-                    .sign(&GENESIS_ACCOUNT.key)
+                    .sign(PEER_KEYPAIR.private_key())
                     .unpack(|_| {})
                     .into()
             };
