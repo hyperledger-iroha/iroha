@@ -4,8 +4,8 @@ use std::{
     str::FromStr,
 };
 
-use clap::{Args as ClapArgs, Subcommand};
-use color_eyre::eyre::{eyre, Context, OptionExt};
+use clap::{command, Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand};
+use color_eyre::eyre::{eyre, Context};
 use iroha_wasm_builder::{Builder, Profile};
 use owo_colors::OwoColorize;
 
@@ -31,6 +31,13 @@ pub enum Args {
         #[arg(long)]
         out_file: PathBuf,
     },
+}
+
+#[derive(Parser, Debug, Default)]
+#[command(no_binary_name = true, disable_help_flag = true)]
+struct ProfileArg {
+    #[arg(long, value_enum)]
+    profile: Profile,
 }
 
 #[derive(ClapArgs, Debug, Clone)]
@@ -70,41 +77,34 @@ impl<T: Write> RunArgs<T> for Args {
                 out_file,
                 profile,
             } => {
-                let (mut cargo_args, mut profile) = (cargo_args, profile);
-                // if "--profile" is present at both the places, the value from "--cargo-args" is applied.
-                if let Some(arg_idx) = cargo_args
-                    .0
-                    .iter()
-                    .position(|arg| arg.contains("--profile"))
-                {
+                let mut args = cargo_args.0.clone();
+                let mut profile_arg = Vec::<String>::with_capacity(2);
+
+                if let Some(arg_idx) = args.iter().position(|arg| arg.contains("--profile")) {
                     if profile.is_some() {
                         eprintln!("warning: value from \"--profile\" is ignored in favor of profile in \"--cargo-args\"");
                     }
-                    let arg_value = if cargo_args.0.get(arg_idx + 1).is_some() {
-                        let value = cargo_args.0.remove(arg_idx + 1);
-                        cargo_args.0.remove(arg_idx);
-                        value
-                    } else {
-                        // for argument of type "--profile=deploy"
-                        let value = cargo_args.0[arg_idx]
-                            .strip_prefix("--profile=")
-                            .ok_or_eyre("prefix `--profile=` not found")?
-                            .to_string();
-                        cargo_args.0.remove(arg_idx);
-                        value
-                    };
-                    profile = arg_value.parse::<Profile>().ok();
+                    args.get(arg_idx + 1)
+                        .expect("expected format --cargo-args='--profile <PROFILE>..'")
+                        .parse::<Profile>()
+                        .expect(&format!("Unknown Profile ({})", args[arg_idx + 1]));
+                    profile_arg.extend(args.drain(arg_idx..arg_idx + 2));
                 } else if profile.is_some() {
                     eprintln!("warning: \"--profile\" arg is deprecated; please use \"--cargo-args='--profile ..'\" instead");
                 } else {
                     eprintln!("warning: \"--cargo-args\" missing \"--profile\"; using `release` by default. Use \"--cargo-args='--profile ..'\" to specify one.");
                 }
 
-                let profile = profile.unwrap_or_default();
+                let matches = ProfileArg::command()
+                    .no_binary_name(true)
+                    .ignore_errors(true)
+                    .try_get_matches_from(&profile_arg)
+                    .unwrap_or_default();
+                let profile_arg = ProfileArg::from_arg_matches(&matches).unwrap_or_default();
 
-                let builder = Builder::new(&path, profile)
-                    .cargo_args(cargo_args.0)
-                    .show_output();
+                let profile = profile_arg.profile;
+
+                let builder = Builder::new(&path, profile).cargo_args(args).show_output();
 
                 let output = {
                     // not showing the spinner here, cargo does a progress bar for us
