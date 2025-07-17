@@ -475,8 +475,9 @@ impl TransactionSignature {
 }
 
 impl TransactionBuilder {
+    /// Construct `TransactionBuilder`, using the provided time in milliseconds.
     #[cfg(feature = "std")]
-    fn new_with_time(chain: ChainId, authority: AccountId, creation_time_ms: u64) -> Self {
+    pub fn new_with_time(chain: ChainId, authority: AccountId, creation_time_ms: u64) -> Self {
         Self {
             payload: TransactionPayload {
                 chain,
@@ -582,6 +583,18 @@ impl TransactionBuilder {
     #[must_use]
     pub fn sign(self, private_key: &iroha_crypto::PrivateKey) -> SignedTransaction {
         let signature = TransactionSignature(SignatureOf::new(private_key, &self.payload));
+
+        SignedTransactionV1 {
+            signature,
+            payload: self.payload,
+        }
+        .into()
+    }
+
+    /// Create a transaction without a signature.
+    #[must_use]
+    pub fn no_sign(self) -> SignedTransaction {
+        let signature = TransactionSignature(SignatureOf::empty());
 
         SignedTransactionV1 {
             signature,

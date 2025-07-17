@@ -106,10 +106,6 @@ pub fn build_schemas() -> MetaMap {
         multisig::MultisigSpec,
         multisig::MultisigProposalValue,
 
-        // Genesis file - used by SDKs to generate the genesis block
-        // TODO: IMO it could/should be removed from the schema
-        iroha_genesis::RawGenesisTransaction,
-
         // It is exposed via Torii
         Status
     }
@@ -264,7 +260,6 @@ types!(
     ExecutorEvent,
     ExecutorEventFilter,
     ExecutorEventSet,
-    WasmPath,
     ExecutorUpgrade,
     FetchSize,
     FindAccounts,
@@ -287,8 +282,6 @@ types!(
     FindTransactions,
     FindTriggers,
     ForwardCursor,
-    GenesisWasmAction,
-    GenesisWasmTrigger,
     Grant<Permission, Account>,
     Grant<Permission, Role>,
     Grant<RoleId, Account>,
@@ -386,7 +379,6 @@ types!(
     Option<NonZeroU32>,
     Option<NonZeroU64>,
     Option<Option<NonZeroU64>>,
-    Option<Parameters>,
     Option<PeerId>,
     Option<RoleId>,
     Option<TransactionStatus>,
@@ -614,7 +606,6 @@ types!(
     Vec<Domain>,
     Vec<DomainId>,
     Vec<EventFilterBox>,
-    Vec<GenesisWasmTrigger>,
     Vec<InstructionBox>,
     Vec<Json>,
     Vec<Nft>,
@@ -669,8 +660,6 @@ types!(
     u32,
     u64,
     u8,
-
-    iroha_genesis::RawGenesisTransaction,
 );
 
 pub mod complete_data_model {

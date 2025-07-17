@@ -4,7 +4,6 @@ mod path;
 mod peer;
 mod schema;
 
-const GENESIS_SEED: &[u8; 7] = b"genesis";
 const CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const BASE_PORT_P2P: u16 = 1337;
 const BASE_PORT_API: u16 = 8080;
@@ -39,7 +38,6 @@ struct PeerSettings {
     /// Path to a directory with peer configuration relative to the target path.
     config_dir: path::RelativePath,
     chain: iroha_data_model::ChainId,
-    genesis_key_pair: peer::ExposedKeyPair,
     network: std::collections::BTreeMap<u16, peer::PeerInfo>,
     topology: std::collections::BTreeSet<iroha_data_model::peer::Peer>,
 }
@@ -58,7 +56,6 @@ impl PeerSettings {
             healthcheck,
             config_dir: path::AbsolutePath::new(config_dir)?.relative_to(target_dir)?,
             chain: peer::chain(),
-            genesis_key_pair: peer::generate_key_pair(seed, GENESIS_SEED),
             network,
             topology,
         })
@@ -189,9 +186,7 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad0:1337
                   P2P_ADDRESS: 0.0.0.0:1337
                   API_ADDRESS: 0.0.0.0:8080
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
-                  GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
-                  GENESIS: /tmp/genesis.signed.scale
+                  GENESIS: /tmp/genesis.json
                   TOPOLOGY: '["ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA"]'
                 ports:
                 - 1337:1337
@@ -211,12 +206,7 @@ mod tests {
                           --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
                           --argjson topology \"$$TOPOLOGY\" \\
                           '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
-                          >/tmp/genesis.json && \\
-                      kagami genesis sign /tmp/genesis.json \\
-                          --public-key $$GENESIS_PUBLIC_KEY \\
-                          --private-key $$GENESIS_PRIVATE_KEY \\
-                          --out-file $$GENESIS \\
-                      && \\
+                          >$$GENESIS && \\
                       exec irohad
                   "
         "##]).assert_eq(&build_as_string(
@@ -246,9 +236,7 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad0:1337
                   P2P_ADDRESS: 0.0.0.0:1337
                   API_ADDRESS: 0.0.0.0:8080
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
-                  GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
-                  GENESIS: /tmp/genesis.signed.scale
+                  GENESIS: /tmp/genesis.json
                   TOPOLOGY: '["ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA"]'
                 ports:
                 - 1337:1337
@@ -268,12 +256,7 @@ mod tests {
                           --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
                           --argjson topology \"$$TOPOLOGY\" \\
                           '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
-                          >/tmp/genesis.json && \\
-                      kagami genesis sign /tmp/genesis.json \\
-                          --public-key $$GENESIS_PUBLIC_KEY \\
-                          --private-key $$GENESIS_PRIVATE_KEY \\
-                          --out-file $$GENESIS \\
-                      && \\
+                          >$$GENESIS && \\
                       exec irohad
                   "
         "##]).assert_eq(&build_as_string(
@@ -302,11 +285,9 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad0:1337
                   P2P_ADDRESS: 0.0.0.0:1337
                   API_ADDRESS: 0.0.0.0:8080
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
-                  TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26@irohad3:1340","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2@irohad1:1338","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300@irohad2:1339"]'
-                  GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
-                  GENESIS: /tmp/genesis.signed.scale
+                  GENESIS: /tmp/genesis.json
                   TOPOLOGY: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
+                  TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26@irohad3:1340","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2@irohad1:1338","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300@irohad2:1339"]'
                 ports:
                 - 1337:1337
                 - 8080:8080
@@ -325,12 +306,7 @@ mod tests {
                           --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
                           --argjson topology \"$$TOPOLOGY\" \\
                           '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
-                          >/tmp/genesis.json && \\
-                      kagami genesis sign /tmp/genesis.json \\
-                          --public-key $$GENESIS_PUBLIC_KEY \\
-                          --private-key $$GENESIS_PRIVATE_KEY \\
-                          --out-file $$GENESIS \\
-                      && \\
+                          >$$GENESIS && \\
                       exec irohad
                   "
               irohad1:
@@ -345,7 +321,8 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad1:1338
                   P2P_ADDRESS: 0.0.0.0:1338
                   API_ADDRESS: 0.0.0.0:8081
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
+                  GENESIS: /tmp/genesis.json
+                  TOPOLOGY: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
                   TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26@irohad3:1340","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA@irohad0:1337","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300@irohad2:1339"]'
                 ports:
                 - 1338:1338
@@ -354,6 +331,20 @@ mod tests {
                 - ./genesis.json:/config/genesis.json:ro
                 - ./client.toml:/config/client.toml:ro
                 init: true
+                command: |-
+                  /bin/sh -c "
+                      EXECUTOR_RELATIVE_PATH=$(jq -r '.executor' /config/genesis.json) && \\
+                      EXECUTOR_ABSOLUTE_PATH=$(realpath \"/config/$$EXECUTOR_RELATIVE_PATH\") && \\
+                      WASM_DIR_RELATIVE_PATH=$(jq -r '.wasm_dir' /config/genesis.json) && \\
+                      WASM_DIR_ABSOLUTE_PATH=$(realpath \"/config/$$WASM_DIR_RELATIVE_PATH\") && \\
+                      jq \\
+                          --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
+                          --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
+                          --argjson topology \"$$TOPOLOGY\" \\
+                          '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
+                          >$$GENESIS && \\
+                      exec irohad
+                  "
               irohad2:
                 depends_on:
                 - irohad0
@@ -366,7 +357,8 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad2:1339
                   P2P_ADDRESS: 0.0.0.0:1339
                   API_ADDRESS: 0.0.0.0:8082
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
+                  GENESIS: /tmp/genesis.json
+                  TOPOLOGY: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
                   TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26@irohad3:1340","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2@irohad1:1338","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA@irohad0:1337"]'
                 ports:
                 - 1339:1339
@@ -375,6 +367,20 @@ mod tests {
                 - ./genesis.json:/config/genesis.json:ro
                 - ./client.toml:/config/client.toml:ro
                 init: true
+                command: |-
+                  /bin/sh -c "
+                      EXECUTOR_RELATIVE_PATH=$(jq -r '.executor' /config/genesis.json) && \\
+                      EXECUTOR_ABSOLUTE_PATH=$(realpath \"/config/$$EXECUTOR_RELATIVE_PATH\") && \\
+                      WASM_DIR_RELATIVE_PATH=$(jq -r '.wasm_dir' /config/genesis.json) && \\
+                      WASM_DIR_ABSOLUTE_PATH=$(realpath \"/config/$$WASM_DIR_RELATIVE_PATH\") && \\
+                      jq \\
+                          --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
+                          --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
+                          --argjson topology \"$$TOPOLOGY\" \\
+                          '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
+                          >$$GENESIS && \\
+                      exec irohad
+                  "
               irohad3:
                 depends_on:
                 - irohad0
@@ -387,7 +393,8 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad3:1340
                   P2P_ADDRESS: 0.0.0.0:1340
                   API_ADDRESS: 0.0.0.0:8083
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
+                  GENESIS: /tmp/genesis.json
+                  TOPOLOGY: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
                   TRUSTED_PEERS: '["ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2@irohad1:1338","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA@irohad0:1337","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300@irohad2:1339"]'
                 ports:
                 - 1340:1340
@@ -396,6 +403,20 @@ mod tests {
                 - ./genesis.json:/config/genesis.json:ro
                 - ./client.toml:/config/client.toml:ro
                 init: true
+                command: |-
+                  /bin/sh -c "
+                      EXECUTOR_RELATIVE_PATH=$(jq -r '.executor' /config/genesis.json) && \\
+                      EXECUTOR_ABSOLUTE_PATH=$(realpath \"/config/$$EXECUTOR_RELATIVE_PATH\") && \\
+                      WASM_DIR_RELATIVE_PATH=$(jq -r '.wasm_dir' /config/genesis.json) && \\
+                      WASM_DIR_ABSOLUTE_PATH=$(realpath \"/config/$$WASM_DIR_RELATIVE_PATH\") && \\
+                      jq \\
+                          --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
+                          --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
+                          --argjson topology \"$$TOPOLOGY\" \\
+                          '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
+                          >$$GENESIS && \\
+                      exec irohad
+                  "
         "##]).assert_eq(&build_as_string(
             nonzero_ext::nonzero!(4u16),
             false,
@@ -418,9 +439,7 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad0:1337
                   P2P_ADDRESS: 0.0.0.0:1337
                   API_ADDRESS: 0.0.0.0:8080
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
-                  GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
-                  GENESIS: /tmp/genesis.signed.scale
+                  GENESIS: /tmp/genesis.json
                   TOPOLOGY: '["ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA"]'
                 ports:
                 - 1337:1337
@@ -446,12 +465,7 @@ mod tests {
                           --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
                           --argjson topology \"$$TOPOLOGY\" \\
                           '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
-                          >/tmp/genesis.json && \\
-                      kagami genesis sign /tmp/genesis.json \\
-                          --public-key $$GENESIS_PUBLIC_KEY \\
-                          --private-key $$GENESIS_PRIVATE_KEY \\
-                          --out-file $$GENESIS \\
-                      && \\
+                          >$$GENESIS && \\
                       exec irohad
                   "
         "#]).assert_eq(&build_as_string(
@@ -477,11 +491,9 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad0:1337
                   P2P_ADDRESS: 0.0.0.0:1337
                   API_ADDRESS: 0.0.0.0:8080
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
-                  TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26@irohad3:1340","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2@irohad1:1338","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300@irohad2:1339"]'
-                  GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
-                  GENESIS: /tmp/genesis.signed.scale
+                  GENESIS: /tmp/genesis.json
                   TOPOLOGY: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
+                  TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26@irohad3:1340","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2@irohad1:1338","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300@irohad2:1339"]'
                 ports:
                 - 1337:1337
                 - 8080:8080
@@ -506,12 +518,7 @@ mod tests {
                           --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
                           --argjson topology \"$$TOPOLOGY\" \\
                           '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
-                          >/tmp/genesis.json && \\
-                      kagami genesis sign /tmp/genesis.json \\
-                          --public-key $$GENESIS_PUBLIC_KEY \\
-                          --private-key $$GENESIS_PRIVATE_KEY \\
-                          --out-file $$GENESIS \\
-                      && \\
+                          >$$GENESIS && \\
                       exec irohad
                   "
               irohad1:
@@ -524,7 +531,8 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad1:1338
                   P2P_ADDRESS: 0.0.0.0:1338
                   API_ADDRESS: 0.0.0.0:8081
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
+                  GENESIS: /tmp/genesis.json
+                  TOPOLOGY: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
                   TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26@irohad3:1340","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA@irohad0:1337","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300@irohad2:1339"]'
                 ports:
                 - 1338:1338
@@ -539,6 +547,20 @@ mod tests {
                   timeout: 1s
                   retries: 30
                   start_period: 4s
+                command: |-
+                  /bin/sh -c "
+                      EXECUTOR_RELATIVE_PATH=$(jq -r '.executor' /config/genesis.json) && \\
+                      EXECUTOR_ABSOLUTE_PATH=$(realpath \"/config/$$EXECUTOR_RELATIVE_PATH\") && \\
+                      WASM_DIR_RELATIVE_PATH=$(jq -r '.wasm_dir' /config/genesis.json) && \\
+                      WASM_DIR_ABSOLUTE_PATH=$(realpath \"/config/$$WASM_DIR_RELATIVE_PATH\") && \\
+                      jq \\
+                          --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
+                          --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
+                          --argjson topology \"$$TOPOLOGY\" \\
+                          '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
+                          >$$GENESIS && \\
+                      exec irohad
+                  "
               irohad2:
                 image: hyperledger/iroha:dev
                 pull_policy: always
@@ -549,7 +571,8 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad2:1339
                   P2P_ADDRESS: 0.0.0.0:1339
                   API_ADDRESS: 0.0.0.0:8082
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
+                  GENESIS: /tmp/genesis.json
+                  TOPOLOGY: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
                   TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26@irohad3:1340","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2@irohad1:1338","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA@irohad0:1337"]'
                 ports:
                 - 1339:1339
@@ -564,6 +587,20 @@ mod tests {
                   timeout: 1s
                   retries: 30
                   start_period: 4s
+                command: |-
+                  /bin/sh -c "
+                      EXECUTOR_RELATIVE_PATH=$(jq -r '.executor' /config/genesis.json) && \\
+                      EXECUTOR_ABSOLUTE_PATH=$(realpath \"/config/$$EXECUTOR_RELATIVE_PATH\") && \\
+                      WASM_DIR_RELATIVE_PATH=$(jq -r '.wasm_dir' /config/genesis.json) && \\
+                      WASM_DIR_ABSOLUTE_PATH=$(realpath \"/config/$$WASM_DIR_RELATIVE_PATH\") && \\
+                      jq \\
+                          --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
+                          --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
+                          --argjson topology \"$$TOPOLOGY\" \\
+                          '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
+                          >$$GENESIS && \\
+                      exec irohad
+                  "
               irohad3:
                 image: hyperledger/iroha:dev
                 pull_policy: always
@@ -574,7 +611,8 @@ mod tests {
                   P2P_PUBLIC_ADDRESS: irohad3:1340
                   P2P_ADDRESS: 0.0.0.0:1340
                   API_ADDRESS: 0.0.0.0:8083
-                  GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
+                  GENESIS: /tmp/genesis.json
+                  TOPOLOGY: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
                   TRUSTED_PEERS: '["ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2@irohad1:1338","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA@irohad0:1337","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300@irohad2:1339"]'
                 ports:
                 - 1340:1340
@@ -589,6 +627,20 @@ mod tests {
                   timeout: 1s
                   retries: 30
                   start_period: 4s
+                command: |-
+                  /bin/sh -c "
+                      EXECUTOR_RELATIVE_PATH=$(jq -r '.executor' /config/genesis.json) && \\
+                      EXECUTOR_ABSOLUTE_PATH=$(realpath \"/config/$$EXECUTOR_RELATIVE_PATH\") && \\
+                      WASM_DIR_RELATIVE_PATH=$(jq -r '.wasm_dir' /config/genesis.json) && \\
+                      WASM_DIR_ABSOLUTE_PATH=$(realpath \"/config/$$WASM_DIR_RELATIVE_PATH\") && \\
+                      jq \\
+                          --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
+                          --arg wasm_dir \"$$WASM_DIR_ABSOLUTE_PATH\" \\
+                          --argjson topology \"$$TOPOLOGY\" \\
+                          '.executor = $$executor | .wasm_dir = $$wasm_dir | .topology = $$topology' /config/genesis.json \\
+                          >$$GENESIS && \\
+                      exec irohad
+                  "
         "#]).assert_eq(&build_as_string(
             nonzero_ext::nonzero!(4u16),
             true,

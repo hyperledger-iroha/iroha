@@ -1,4 +1,5 @@
 {
+  "creation_time": "1970-01-01T00:00:00Z",
   "chain": "00000000-0000-0000-0000-000000000000",
   "executor": "executor.wasm",
   "parameters": {
@@ -119,7 +120,7 @@
     {
       "Transfer": {
         "AssetDefinition": {
-          "source": "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4@genesis",
+          "source": "ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E@genesis",
           "object": "rose#wonderland",
           "destination": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
         }
@@ -128,7 +129,7 @@
     {
       "Transfer": {
         "Domain": {
-          "source": "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4@genesis",
+          "source": "ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E@genesis",
           "object": "wonderland",
           "destination": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
         }
