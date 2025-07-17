@@ -208,7 +208,7 @@ mod tests {
             "wasm",
             "build",
             "./path",
-            "--cargo-args=--locked --frozen --profile deploy",
+            "--cargo-args=--locked --frozen --profile release",
             "--out-file=test.wasm",
         ])
         .unwrap();
@@ -219,7 +219,7 @@ mod tests {
             "build",
             "./path",
             "--profile=release",
-            "--cargo-args=--locked --frozen --profile=deploy",
+            "--cargo-args=--locked --frozen --profile deploy",
             "--out-file=test.wasm",
         ])
         .unwrap();
