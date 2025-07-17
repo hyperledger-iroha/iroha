@@ -22,11 +22,11 @@ use tokio::{
 async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()> {
     let alice_rose: AssetId = format!("rose##{}", *ALICE_ID).parse().unwrap();
     let bob_rose: AssetId = format!("rose##{}", *BOB_ID).parse().unwrap();
-    let user_instruction = Transfer::asset_numeric(alice_rose.clone(), 5u32, BOB_ID.clone());
+    let entrypoint_instruction = Transfer::asset_numeric(alice_rose.clone(), 5u32, BOB_ID.clone());
     let data_trigger_instruction =
         Transfer::asset_numeric(bob_rose.clone(), 3u32, ALICE_ID.clone());
 
-    // Initialize a network with a registered data-trigger at genesis.
+    // Initialize a network with a registered triggers at genesis.
     let network = NetworkBuilder::new()
         .with_genesis_instruction(SetParameter::new(Parameter::SmartContract(
             iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(1),
@@ -44,6 +44,15 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
                 ),
             ),
         )))
+        .with_genesis_instruction(Register::trigger(Trigger::new(
+            "time-alice-bob-0".parse().unwrap(),
+            Action::new(
+                [entrypoint_instruction.clone()],
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::PreCommit),
+            ),
+        )))
         .start()
         .await?;
     let test_client = network.client();
@@ -58,7 +67,7 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
 
     // Submit the user transaction and derive its entrypoint hash.
     let tx_hash: HashOf<SignedTransaction> =
-        spawn_blocking(move || test_client.submit(user_instruction)).await??;
+        spawn_blocking(move || test_client.submit(entrypoint_instruction)).await??;
     let entrypoint_hash: HashOf<TransactionEntrypoint> =
         HashOf::from_untyped_unchecked(tx_hash.into());
 
