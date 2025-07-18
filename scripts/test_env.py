@@ -44,15 +44,12 @@ class Network:
         logging.info("Generating shared configuration...")
         trusted_peers = [peer.public_key + f"@{peer.host_ip}:{peer.p2p_port}" for peer in self.peers]
         topology = [peer.public_key for peer in self.peers]
-        genesis_path = pathlib.Path(args.out_dir) / "genesis.json"
-        genesis_key_pair = kagami_generate_key_pair(args.out_dir, seed="Irohagenesis")
-        genesis_public_key = genesis_key_pair["public_key"]
-        genesis_private_key = genesis_key_pair["private_key"]
+        genesis_path = peers_dir / "genesis.json"
         shared_config = {
             "chain": "00000000-0000-0000-0000-000000000000",
             "trusted_peers": trusted_peers,
             "genesis": {
-                "public_key": genesis_public_key
+                "file": str(genesis_path.resolve())
             },
             "logger": {
                 "level": "INFO",
@@ -64,7 +61,6 @@ class Network:
 
         copy_or_prompt_build_bin("irohad", args.root_dir, peers_dir)
         copy_genesis_json_and_change_topology(args, genesis_path, topology)
-        sign_genesis_with_kagami(args, genesis_path, genesis_public_key, genesis_private_key)
 
 
     def wait_for_genesis(self, n_tries: int):
@@ -137,9 +133,6 @@ class _Peer:
             # "logger": {
             #     "tokio_console_addr": f"{self.host_ip}:{self.tokio_console_port}",
             # }
-        }
-        config["genesis"] = {
-            "file": "../../genesis.signed.scale"
         }
         with open(self.config_path, "wb") as f:
             tomli_w.dump(config, f)
@@ -228,21 +221,6 @@ def copy_genesis_json_and_change_topology(args: argparse.Namespace, genesis_path
 
     with open(genesis_path, 'w') as f:
         json.dump(genesis, f, indent=4)
-
-def sign_genesis_with_kagami(args: argparse.Namespace, genesis_path, genesis_public_key, genesis_private_key):
-    command = [
-        args.out_dir / "kagami",
-        "genesis",
-        "sign",
-        genesis_path,
-        "--public-key", genesis_public_key,
-        "--private-key", genesis_private_key,
-        "--out-file", args.out_dir / "genesis.signed.scale"
-    ]
-    kagami = subprocess.run(command)
-    if kagami.returncode:
-        logging.error("Kagami failed to sign genesis.json")
-        sys.exit(5)
 
 def main(args: argparse.Namespace):
     # Bold ASCII escape sequence

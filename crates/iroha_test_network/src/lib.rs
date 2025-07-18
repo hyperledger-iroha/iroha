@@ -8,7 +8,6 @@ use std::{
     borrow::Cow,
     iter,
     num::NonZero,
-    ops::Deref,
     path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     sync::{
@@ -33,15 +32,14 @@ use iroha_data_model::{
     parameter::{SmartContractParameter, SumeragiParameter, SumeragiParameters},
     ChainId,
 };
-use iroha_genesis::GenesisBlock;
+use iroha_genesis::GenesisSpec;
 use iroha_primitives::{
     addr::{socket_addr, SocketAddr},
     unique_vec::UniqueVec,
 };
 use iroha_telemetry::metrics::Status;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, PEER_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use nonzero_ext::nonzero;
-use parity_scale_codec::Encode;
 use rand::{prelude::IteratorRandom, thread_rng};
 use tokio::{
     fs::File,
@@ -176,7 +174,7 @@ impl Program {
 impl Environment {
     /// Side effects:
     ///
-    /// - Initialises logger (once)
+    /// - Initializes logger (once)
     /// - Creates a temporary directory (keep: true)
     fn new() -> Self {
         init_logger_once();
@@ -193,7 +191,7 @@ pub struct Network {
     block_time: Duration,
     commit_time: Duration,
 
-    genesis_block: GenesisBlock,
+    genesis: GenesisSpec,
     config_layers: Vec<Table>,
 }
 
@@ -226,27 +224,21 @@ impl Network {
         &self.env
     }
 
-    /// Start all peers, waiting until they are up and have committed genesis (submitted by one of them).
+    /// Start all peers, waiting until they are up and have committed genesis.
     ///
     /// # Panics
     /// - If some peer was already started
     /// - If some peer exists early
     pub async fn start_all(&self) -> &Self {
-        let genesis = Arc::new(self.genesis());
-
         timeout(
             PEER_START_TIMEOUT,
             self.peers
                 .iter()
-                .enumerate()
-                .map(|(i, peer)| {
-                    let genesis = genesis.clone();
-                    async move {
-                        peer.start_checked(self.config_layers(), (i == 0).then_some(&genesis))
-                            .await
-                            .expect("peer failed to start");
-                        peer.once_block(1).await;
-                    }
+                .map(|peer| async move {
+                    peer.start_checked(self.config_layers(), self.genesis())
+                        .await
+                        .expect("peer failed to start");
+                    peer.once_block(1).await;
                 })
                 .collect::<FuturesUnordered<_>>()
                 .collect::<Vec<_>>(),
@@ -295,8 +287,8 @@ impl Network {
     }
 
     /// Network genesis block.
-    pub fn genesis(&self) -> &GenesisBlock {
-        &self.genesis_block
+    pub fn genesis(&self) -> &GenesisSpec {
+        &self.genesis
     }
 
     /// Shutdown running peers
@@ -520,15 +512,15 @@ impl NetworkBuilder {
         .chain(self.genesis_isi)
         .collect();
 
-        let genesis_block =
-            genesis_factory(genesis_isi, peers.iter().map(NetworkPeer::id).collect());
+        let genesis =
+            crate::config::genesis(genesis_isi, peers.iter().map(NetworkPeer::id).collect());
 
         Network {
             env: self.env,
             peers,
             block_time,
             commit_time,
-            genesis_block,
+            genesis,
             config_layers: Some(config::base_iroha_config().write(
                 ["network", "block_gossip_period_ms"],
                 block_sync_gossip_period.as_millis() as u64,
@@ -567,33 +559,6 @@ impl NetworkBuilder {
         let (network, rt) = self.build_blocking();
         rt.block_on(async { network.start_all().await });
         Ok((network, rt))
-    }
-}
-
-/// A common signatory in the test network.
-///
-/// # Example
-///
-/// ```
-/// use iroha_test_network::Signatory;
-///
-/// let _alice_kp = Signatory::Alice.key_pair();
-/// ```
-pub enum Signatory {
-    Peer,
-    Genesis,
-    Alice,
-}
-
-impl Signatory {
-    /// Get the associated key pair
-    pub fn key_pair(&self) -> &KeyPair {
-        match self {
-            Signatory::Peer => &PEER_KEYPAIR,
-            Signatory::Genesis => &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-            Signatory::Alice => &ALICE_KEYPAIR,
-        }
-        .deref()
     }
 }
 
@@ -656,7 +621,7 @@ impl NetworkPeer {
     ///
     /// This function waits for peer server to start working,
     /// in particular it waits for `/status` response and connects to event stream.
-    /// However it doesn't wait for genesis block to be commited.
+    /// However it doesn't wait for genesis block to be committed.
     /// See [`Self::events`]/[`Self::once`]/[`Self::once_block`] to monitor peer's lifecycle.
     ///
     /// # Panics
@@ -664,15 +629,14 @@ impl NetworkPeer {
     pub async fn start<T: AsRef<Table>>(
         &self,
         config_layers: impl Iterator<Item = T>,
-        genesis: Option<&GenesisBlock>,
+        genesis: &GenesisSpec,
     ) {
         let mut run_guard = self.run.lock().await;
         assert!(run_guard.is_none(), "already running");
 
         let run_num = self.runs_count.fetch_add(1, Ordering::Relaxed) + 1;
         let span = info_span!(parent: &self.span, "peer_run", run_num);
-        let has_genesis = genesis.is_some();
-        span.in_scope(|| info!(has_genesis, "Starting"));
+        span.in_scope(|| info!("Starting"));
 
         let config_path = self
             .write_run_config(config_layers, genesis, run_num)
@@ -863,13 +827,11 @@ impl NetworkPeer {
         }
     }
 
-    /// Like [`Self::start`], but also ensures that server starts.
-    ///
-    /// If genesis is given, also ensures that the genesis block is committed.
+    /// Like [`Self::start`], but also ensures that server starts and the genesis block is committed.
     pub async fn start_checked<T: AsRef<Table>>(
         &self,
         config_layers: impl Iterator<Item = T>,
-        genesis: Option<&GenesisBlock>,
+        genesis: &GenesisSpec,
     ) -> Result<()> {
         let failure = async move {
             self.once(|e| matches!(e, PeerLifecycleEvent::Terminated { .. }))
@@ -877,13 +839,10 @@ impl NetworkPeer {
             panic!("a peer exited unexpectedly");
         };
         let success = async move {
-            let has_genesis = genesis.is_some();
             self.start(config_layers, genesis).await;
             self.once(|e| matches!(e, PeerLifecycleEvent::ServerStarted))
                 .await;
-            if has_genesis {
-                self.once_block_with(|height| height.non_empty == 1).await
-            }
+            self.once_block_with(|height| height.non_empty == 1).await
         };
 
         tokio::select! {
@@ -1045,7 +1004,7 @@ impl NetworkPeer {
     async fn write_run_config<T: AsRef<Table>>(
         &self,
         cfg_extra_layers: impl Iterator<Item = T>,
-        genesis: Option<&GenesisBlock>,
+        genesis: &GenesisSpec,
         run: usize,
     ) -> Result<PathBuf> {
         let extra_layers: Vec<_> = cfg_extra_layers
@@ -1059,15 +1018,15 @@ impl NetworkPeer {
 
         let mut final_config = Table::new().write(
             "extends",
-            // should be written on peer's initialisation
+            // should be written on peer's initialization
             iter::once("config.base.toml".to_string())
                 .chain(extra_layers.into_iter().map(|(path, _)| path))
                 .collect::<Vec<String>>(),
         );
-        if let Some(block) = genesis {
-            let path = self.dir.join(format!("run-{run}-genesis.scale"));
+        {
+            let path = self.dir.join(format!("run-{run}-genesis.json"));
             final_config = final_config.write(["genesis", "file"], &path);
-            tokio::fs::write(path, block.0.encode()).await?;
+            tokio::fs::write(path, serde_json::to_string_pretty(genesis)?).await?;
         }
         let path = self.dir.join(format!("run-{run}-config.toml"));
         tokio::fs::write(&path, toml::to_string(&final_config)?).await?;

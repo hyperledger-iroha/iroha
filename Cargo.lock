@@ -3071,6 +3071,7 @@ dependencies = [
  "iroha_config_base",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_genesis",
  "iroha_primitives",
  "iroha_telemetry",
  "iroha_test_network",
@@ -3476,6 +3477,7 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "derive_more",
  "eyre",
+ "humantime",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
@@ -3484,6 +3486,7 @@ dependencies = [
  "parity-scale-codec",
  "serde",
  "serde_json",
+ "serde_with",
  "tempfile",
 ]
 
@@ -3971,6 +3974,7 @@ dependencies = [
  "json5",
  "owo-colors 4.1.0",
  "path-absolutize",
+ "serde_json",
  "serial_test",
  "supports-color 2.1.0",
  "tempfile",

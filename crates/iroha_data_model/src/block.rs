@@ -4,7 +4,7 @@
 
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, collections::BTreeSet, format, string::String, vec::Vec};
-use core::{fmt::Display, num::NonZeroU64, time::Duration};
+use core::{fmt::Display, time::Duration};
 #[cfg(feature = "std")]
 use std::collections::BTreeSet;
 
@@ -22,11 +22,52 @@ use crate::transaction::{error::TransactionRejectionReason, prelude::*};
 
 #[model]
 mod model {
+    use core::num::NonZeroU64;
+
     use getset::{CopyGetters, Getters};
 
     use super::*;
 
-    /// Essential metadata for a block in the chain.
+    /// Header for a newly proposed block, prior to full validation.
+    ///
+    /// Does not include any audit metadata. Hashing and signing should be deferred until validation completes.
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        CopyGetters,
+        Getters,
+        Decode,
+        Encode,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+    )]
+    #[display(fmt = "№{height}")]
+    #[ffi_type]
+    pub struct NewBlockHeader {
+        /// Number of blocks in the chain including this block.
+        #[getset(get_copy = "pub")]
+        pub height: NonZeroU64,
+        /// Hash of the previous block in the chain.
+        #[getset(get_copy = "pub")]
+        pub prev_block_hash: Option<HashOf<BlockHeader>>,
+        /// Creation timestamp as Unix time in milliseconds.
+        #[getset(skip)]
+        pub creation_time_ms: u64,
+        /// Value of view change index. Used to resolve soft forks.
+        #[getset(skip)]
+        pub view_change_index: u32,
+    }
+
+    /// Core metadata for a validated block, including audit information.
+    ///
+    /// The header's hash serves as the block identifier and is the target for block signatures.
     #[derive(
         Debug,
         Display,
@@ -177,64 +218,45 @@ declare_versioned!(SignedBlock 1..2, Debug, Clone, PartialEq, Eq, PartialOrd, Or
 #[cfg(all(not(feature = "ffi_export"), not(feature = "ffi_import")))]
 declare_versioned!(SignedBlock 1..2, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, IntoSchema);
 
-impl BlockHeader {
-    /// Checks if it's a header of a genesis block.
+impl NewBlockHeader {
+    /// Returns `true` if this header represents a genesis block.
     #[inline]
     pub const fn is_genesis(&self) -> bool {
         self.height.get() == 1
     }
 
-    /// Creation timestamp
+    /// The creation timestamp of the block as a `Duration`.
+    pub const fn creation_time(&self) -> Duration {
+        Duration::from_millis(self.creation_time_ms)
+    }
+}
+
+impl BlockHeader {
+    /// Returns `true` if this header represents a genesis block.
+    #[inline]
+    pub const fn is_genesis(&self) -> bool {
+        self.height.get() == 1
+    }
+
+    /// The creation timestamp of the block as a `Duration`.
     pub const fn creation_time(&self) -> Duration {
         Duration::from_millis(self.creation_time_ms)
     }
 
-    /// Returns the consensus-level hash of the block header,
-    /// excluding the `result_merkle_root` field.
-    ///
-    /// TODO: prevent divergent hashes caused by direct calls to `HashOf::new`,
-    /// leveraging specialization once it's stabilized (<https://github.com/rust-lang/rust/issues/31844>).
+    /// The hash of this block header. It should also serve as the hash of the block itself.
     #[inline]
     pub fn hash(&self) -> HashOf<BlockHeader> {
-        self.hash_without_results()
+        HashOf::new(self)
     }
 
-    /// Computes the header hash without including `result_merkle_root`.
-    #[inline]
-    fn hash_without_results(&self) -> HashOf<BlockHeader> {
-        /// A view of `BlockHeader` used for consensus hashing, omitting the execution results.
-        #[derive(Encode)]
-        struct BlockHeaderForConsensus {
-            height: NonZeroU64,
-            prev_block_hash: Option<HashOf<BlockHeader>>,
-            // FIXME #5473: address inconsistency introduced by time-triggered entrypoints
-            merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-            creation_time_ms: u64,
-            view_change_index: u32,
+    /// Converts back into a `NewBlockHeader`, removing all post-validation audit metadata while preserving the rest.
+    pub const fn regress(self) -> NewBlockHeader {
+        NewBlockHeader {
+            height: self.height,
+            prev_block_hash: self.prev_block_hash,
+            creation_time_ms: self.creation_time_ms,
+            view_change_index: self.view_change_index,
         }
-
-        impl From<&BlockHeader> for BlockHeaderForConsensus {
-            fn from(value: &BlockHeader) -> Self {
-                let BlockHeader {
-                    height,
-                    prev_block_hash,
-                    merkle_root,
-                    result_merkle_root: _,
-                    creation_time_ms,
-                    view_change_index,
-                } = *value;
-
-                Self {
-                    height,
-                    prev_block_hash,
-                    merkle_root,
-                    creation_time_ms,
-                    view_change_index,
-                }
-            }
-        }
-
-        HashOf::from_untyped_unchecked(HashOf::new(&BlockHeaderForConsensus::from(self)).into())
     }
 }
 
@@ -249,21 +271,30 @@ impl SignedBlockV1 {
 }
 
 impl SignedBlock {
-    /// Create new block with a given signature
-    ///
-    /// # Warning
-    ///
-    /// All transactions are categorized as valid
+    /// API to construct a `SignedBlock` from a `iroha_core::block::new::NewBlock` payload.
     #[cfg(feature = "transparent_api")]
-    pub fn presigned(
-        signature: BlockSignature,
-        header: BlockHeader,
+    pub fn new_unverified_unsigned(
+        header: NewBlockHeader,
         transactions: Vec<SignedTransaction>,
     ) -> SignedBlock {
+        let NewBlockHeader {
+            height,
+            prev_block_hash,
+            creation_time_ms,
+            view_change_index,
+        } = header;
+
         SignedBlockV1 {
-            signatures: [signature].into_iter().collect(),
+            signatures: BTreeSet::new(),
             payload: BlockPayload {
-                header,
+                header: BlockHeader {
+                    height,
+                    prev_block_hash,
+                    merkle_root: None,
+                    result_merkle_root: None,
+                    creation_time_ms,
+                    view_change_index,
+                },
                 transactions,
             },
             result: BlockResult::default(),
@@ -291,6 +322,7 @@ impl SignedBlock {
         block.result.result_merkle = result_hashes.collect();
         block.result.transaction_results =
             results.into_iter().map(TransactionResult::from).collect();
+        block.payload.header.merkle_root = block.result.merkle.root();
         block.payload.header.result_merkle_root = block.result.result_merkle.root();
     }
 
@@ -316,6 +348,12 @@ impl SignedBlock {
     pub fn header(&self) -> BlockHeader {
         let SignedBlock::V1(block) = self;
         block.header()
+    }
+
+    /// Mutable reference to the block header. Test-only API.
+    pub fn header_mut(&mut self) -> &mut BlockHeader {
+        let SignedBlock::V1(block) = self;
+        &mut block.payload.header
     }
 
     /// Signatures of peers which approved this block.
@@ -476,7 +514,7 @@ impl SignedBlock {
 
         block.signatures.insert(BlockSignature::new(
             signatory as u64,
-            SignatureOf::from_hash(private_key, block.payload.header.hash()),
+            SignatureOf::new(private_key, &block.payload.header),
         ));
     }
 
@@ -530,12 +568,9 @@ impl SignedBlock {
         Ok(core::mem::replace(&mut block.signatures, signatures))
     }
 
-    /// Creates genesis block signed with genesis private key (and not signed by any peer)
+    /// Creates genesis block not signed by any peer.
     #[cfg(feature = "std")]
-    pub fn genesis(
-        transactions: Vec<SignedTransaction>,
-        private_key: &iroha_crypto::PrivateKey,
-    ) -> SignedBlock {
+    pub fn genesis(transactions: Vec<SignedTransaction>, creation_time_ms: u64) -> SignedBlock {
         use nonzero_ext::nonzero;
 
         let merkle_root = transactions
@@ -544,7 +579,6 @@ impl SignedBlock {
             .collect::<MerkleTree<_>>()
             .root()
             .expect("Genesis block must have transactions");
-        let creation_time_ms = Self::get_genesis_block_creation_time(&transactions);
         let header = BlockHeader {
             height: nonzero!(1_u64),
             prev_block_hash: None,
@@ -554,39 +588,15 @@ impl SignedBlock {
             view_change_index: 0,
         };
 
-        let signature = BlockSignature::new(0, SignatureOf::from_hash(private_key, header.hash()));
-        let payload = BlockPayload {
-            header,
-            transactions,
-        };
-
         SignedBlockV1 {
-            signatures: [signature].into_iter().collect(),
-            payload,
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions,
+            },
             result: BlockResult::default(),
         }
         .into()
-    }
-
-    #[cfg(feature = "std")]
-    fn get_genesis_block_creation_time(transactions: &[SignedTransaction]) -> u64 {
-        use std::time::SystemTime;
-
-        let latest_txn_time = transactions
-            .iter()
-            .map(SignedTransaction::creation_time)
-            .max()
-            .expect("INTERNAL BUG: Genesis block is empty");
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap();
-        now
-            // We have invariant that "transaction creation time" < "block creation time"
-            // See `BlockPayloadCandidate::validate_header`
-            .max(latest_txn_time + Duration::from_millis(1))
-            .as_millis()
-            .try_into()
-            .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX")
     }
 }
 
@@ -757,33 +767,4 @@ pub mod error {
 pub mod prelude {
     //! For glob-import
     pub use super::{error::BlockRejectionReason, BlockHeader, BlockSignature, SignedBlock};
-}
-
-#[cfg(test)]
-mod tests {
-    use core::num::NonZeroU64;
-
-    use super::*;
-
-    #[test]
-    fn result_merkle_root_does_not_affect_block_hash() {
-        let mut header = BlockHeader {
-            height: NonZeroU64::new(123_456).unwrap(),
-            prev_block_hash: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-                b"prev_block_hash",
-            ))),
-            merkle_root: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-                b"merkle_root",
-            ))),
-            result_merkle_root: None,
-            creation_time_ms: 123_456_789_000,
-            view_change_index: 123,
-        };
-        let hash0 = header.hash();
-        header.result_merkle_root = Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-            b"result_merkle_root",
-        )));
-        let hash1 = header.hash();
-        assert_eq!(hash0, hash1);
-    }
 }

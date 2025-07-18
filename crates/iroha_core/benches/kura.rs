@@ -58,21 +58,24 @@ async fn measure_block_size_for_n_executors(n_executors: u32) {
     let peer_id = PeerId::new(peer_key_pair.public_key().clone());
     let topology = Topology::new(vec![peer_id]);
     let mut block = {
-        let unverified_block = BlockBuilder::new(vec![tx])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(peer_key_pair.private_key())
-            .unpack(|_| {});
+        let unverified_block =
+            BlockBuilder::new(vec![tx]).chain(0, state.view().latest_block().as_deref());
 
         let mut state_block = state.block(unverified_block.header());
         let block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
+            .validate_unchecked(&mut state_block)
+            .sign(&peer_key_pair, &topology)
             .unpack(|_| {});
         state_block.commit();
         block
     };
 
     for _ in 1..n_executors {
-        block.sign(&peer_key_pair, &topology);
+        let block_unverified: SignedBlock = block.clone().into();
+        let mut state_block = state.block(block_unverified.header().regress());
+        block = ValidBlock::validate_unchecked(block_unverified, &mut state_block)
+            .sign(&peer_key_pair, &topology)
+            .unpack(|_| {});
     }
     let mut block_store = BlockStore::new(dir.path());
     block_store.create_files_if_they_do_not_exist().unwrap();

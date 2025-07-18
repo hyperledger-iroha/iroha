@@ -54,8 +54,8 @@ pub enum AcceptTransactionFail {
     TransactionLimit(#[source] TransactionLimitError),
     /// Failure during signature verification
     SignatureVerification(#[source] SignatureVerificationFail),
-    /// The genesis account can only sign transactions in the genesis block
-    UnexpectedGenesisAccountSignature,
+    /// The genesis account can serve as the transaction authority only for genesis transactions
+    UnexpectedGenesisAuthority,
     /// Chain id doesn't correspond to the id of current blockchain: {0}
     ChainIdMismatch(Mismatch<ChainId>),
     /// Transaction creation time is in the future
@@ -96,12 +96,11 @@ impl AcceptedTransaction {
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
-        genesis_account: &AccountId,
     ) -> Result<(), AcceptTransactionFail> {
         Self::validate_common(tx, expected_chain_id, max_clock_drift)?;
 
-        if genesis_account != tx.authority() {
-            return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
+        if *iroha_genesis::GENESIS_ACCOUNT_ID != *tx.authority() {
+            return Err(AcceptTransactionFail::UnexpectedGenesisAuthority);
         }
 
         Ok(())
@@ -121,7 +120,7 @@ impl AcceptedTransaction {
         Self::validate_common(tx, expected_chain_id, max_clock_drift)?;
 
         if *iroha_genesis::GENESIS_DOMAIN_ID == *tx.authority().domain() {
-            return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
+            return Err(AcceptTransactionFail::UnexpectedGenesisAuthority);
         }
 
         if let Err(err) = tx.verify_signature() {
@@ -199,10 +198,8 @@ impl AcceptedTransaction {
         tx: SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
-        genesis_account: &AccountId,
     ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate_genesis(&tx, expected_chain_id, max_clock_drift, genesis_account)
-            .map(|()| Self(tx))
+        Self::validate_genesis(&tx, expected_chain_id, max_clock_drift).map(|()| Self(tx))
     }
 
     /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
@@ -358,15 +355,16 @@ pub mod tests {
     use core::panic;
     use std::sync::LazyLock;
 
-    use iroha_data_model::{block::SignedBlock, isi::Instruction, prelude::EventBox};
-    use iroha_genesis::GENESIS_DOMAIN_ID;
-    use iroha_test_samples::gen_account_in;
+    use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
+    use iroha_data_model::{isi::Instruction, prelude::EventBox};
+    use iroha_genesis::GENESIS_ACCOUNT_ID;
 
     use super::*;
     use crate::{
-        block::{BlockBuilder, CommittedBlock, ValidBlock},
+        block::{BlockBuilder, CommittedBlock, NewBlock},
         smartcontracts::isi::Registrable,
         state::{State, StateBlock, StateReadOnly, World},
+        sumeragi::network_topology::Topology,
     };
 
     mod time_trigger {
@@ -653,7 +651,7 @@ pub mod tests {
     pub struct SandboxBlock<'state> {
         pub state: StateBlock<'state>,
         // Candidate to be validated and committed
-        pub block: Option<SignedBlock>,
+        pub block: Option<NewBlock>,
     }
 
     pub const ACCOUNTS_STR: [&str; 5] = ["alice", "bob", "carol", "dave", "eve"];
@@ -673,11 +671,8 @@ pub mod tests {
         ACCOUNTS_STR
             .iter()
             .map(|name| {
-                let key_pair = iroha_crypto::KeyPair::from_seed(
-                    name.as_bytes().into(),
-                    iroha_crypto::Algorithm::Ed25519,
-                )
-                .into_parts();
+                let key_pair =
+                    KeyPair::from_seed(name.as_bytes().into(), Algorithm::Ed25519).into_parts();
                 let credential = Credential {
                     id: format!("{}@{DOMAIN_STR}", key_pair.0).parse().unwrap(),
                     key: key_pair.1,
@@ -690,15 +685,13 @@ pub mod tests {
     #[derive(Debug, Clone)]
     pub struct Credential {
         pub id: AccountId,
-        pub key: iroha_crypto::PrivateKey,
+        pub key: PrivateKey,
     }
 
-    pub static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
-        let (id, key_pair) = gen_account_in(GENESIS_DOMAIN_ID.clone());
-        Credential {
-            id,
-            key: key_pair.into_parts().1,
-        }
+    pub static LEADER_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(KeyPair::random);
+    pub static TOPOLOGY: LazyLock<Topology> = LazyLock::new(|| {
+        let leader: PeerId = LEADER_KEYPAIR.public_key().clone().into();
+        Topology::new([leader])
     });
     pub static CHAIN_ID: LazyLock<ChainId> =
         LazyLock::new(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
@@ -747,14 +740,14 @@ pub mod tests {
     impl Default for Sandbox {
         fn default() -> Self {
             let world = {
-                let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT.id);
+                let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT_ID);
                 let asset_def = AssetDefinition::new(ASSET.clone(), NumericSpec::default())
-                    .build(&GENESIS_ACCOUNT.id);
+                    .build(&GENESIS_ACCOUNT_ID);
                 let accounts = ACCOUNT
-                    .clone()
-                    .into_iter()
-                    .chain([("genesis", GENESIS_ACCOUNT.clone())])
-                    .map(|(_name, cred)| Account::new(cred.id.clone()).build(&GENESIS_ACCOUNT.id));
+                    .values()
+                    .map(|cred| cred.id.clone())
+                    .chain([GENESIS_ACCOUNT_ID.clone()])
+                    .map(|id| Account::new(id).build(&GENESIS_ACCOUNT_ID));
                 let assets = INIT_BALANCE
                     .iter()
                     .map(|(name, num)| Asset::new(asset(name), *num));
@@ -811,7 +804,7 @@ pub mod tests {
                 Action::new(
                     transfer(src, quantity, dest),
                     repeats,
-                    GENESIS_ACCOUNT.id.clone(),
+                    GENESIS_ACCOUNT_ID.clone(),
                     TimeEventFilter::new(ExecutionTime::PreCommit),
                 ),
             )
@@ -868,7 +861,7 @@ pub mod tests {
                 Action::new(
                     transfer(src, quantity, dest),
                     repeats,
-                    GENESIS_ACCOUNT.id.clone(),
+                    GENESIS_ACCOUNT_ID.clone(),
                     AssetEventFilter::new()
                         .for_events(AssetEventSet::Added)
                         .for_asset(asset(src)),
@@ -906,15 +899,15 @@ pub mod tests {
             let transaction = {
                 let instructions =
                     transfers_batched::<N_INSTRUCTIONS>(src, quantity_per_instruction, dest);
-                TransactionBuilder::new(CHAIN_ID.clone(), GENESIS_ACCOUNT.id.clone())
+                TransactionBuilder::new(CHAIN_ID.clone(), GENESIS_ACCOUNT_ID.clone())
                     .with_instructions(instructions)
-                    .sign(&GENESIS_ACCOUNT.key)
+                    .no_sign()
             };
             self.transactions.push(transaction);
         }
 
         pub fn block(&mut self) -> SandboxBlock<'_> {
-            let block: SignedBlock = {
+            let block: NewBlock = {
                 let transactions = {
                     let signed = core::mem::take(&mut self.transactions);
                     // Skip static analysis (AcceptedTransaction::accept)
@@ -922,9 +915,6 @@ pub mod tests {
                 };
                 BlockBuilder::new(transactions)
                     .chain(0, self.state.view().latest_block().as_deref())
-                    .sign(&GENESIS_ACCOUNT.key)
-                    .unpack(|_| {})
-                    .into()
             };
 
             SandboxBlock {
@@ -936,17 +926,15 @@ pub mod tests {
 
     impl SandboxBlock<'_> {
         pub fn apply(&mut self) -> (Vec<EventBox>, CommittedBlock) {
-            let valid = ValidBlock::validate_unchecked(
-                core::mem::take(&mut self.block).unwrap(),
-                &mut self.state,
-            )
-            .unpack(|_| {});
-            let committed = valid.commit_unchecked().unpack(|_| {});
-            let events = self.state.apply_without_execution(
-                &committed,
-                // topology in state is only used by sumeragi
-                vec![],
-            );
+            let valid = core::mem::take(&mut self.block)
+                .unwrap()
+                .validate_unchecked(&mut self.state)
+                .sign(&LEADER_KEYPAIR, &TOPOLOGY)
+                .unpack(|_| {});
+            let committed = valid.commit(&TOPOLOGY).unpack(|_| {}).unwrap();
+            let events = self
+                .state
+                .apply_without_execution(&committed, TOPOLOGY.iter().cloned().collect());
 
             (events, committed)
         }

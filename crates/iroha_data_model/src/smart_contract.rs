@@ -5,7 +5,7 @@ pub mod payloads {
 
     use parity_scale_codec::{Decode, Encode};
 
-    use crate::{block::BlockHeader, prelude::*};
+    use crate::{block::NewBlockHeader, prelude::*};
 
     /// Context for smart contract entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
@@ -13,7 +13,7 @@ pub mod payloads {
         /// Account that submitted the transaction containing the smart contract
         pub authority: AccountId,
         /// Block currently being processed
-        pub curr_block: BlockHeader,
+        pub curr_block: NewBlockHeader,
     }
 
     /// Context for trigger entrypoint
@@ -24,7 +24,7 @@ pub mod payloads {
         /// Account that registered the trigger
         pub authority: AccountId,
         /// Block currently being processed
-        pub curr_block: BlockHeader,
+        pub curr_block: NewBlockHeader,
         /// Event which triggered the execution
         pub event: EventBox,
     }
@@ -35,7 +35,7 @@ pub mod payloads {
         /// Account that is executing the operation
         pub authority: AccountId,
         /// Block currently being processed (or latest block hash for queries)
-        pub curr_block: BlockHeader,
+        pub curr_block: NewBlockHeader,
     }
 
     /// Generic payload for `validate_*()` entrypoints of executor.

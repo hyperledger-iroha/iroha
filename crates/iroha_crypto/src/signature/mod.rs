@@ -212,6 +212,12 @@ impl<T> SignatureOf<T> {
         Self(Signature::new(private_key, hash.as_ref()), PhantomData)
     }
 
+    /// Create an empty signature that is never verified.
+    #[inline]
+    pub fn empty() -> Self {
+        Self(Signature::from_bytes(&[]), PhantomData)
+    }
+
     /// Verify signature for this hash
     ///
     /// # Errors

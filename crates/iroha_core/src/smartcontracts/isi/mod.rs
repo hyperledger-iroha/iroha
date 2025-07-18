@@ -209,9 +209,8 @@ mod tests {
     use std::sync::Arc;
 
     use iroha_crypto::KeyPair;
-    use iroha_test_samples::{
-        gen_account_in, ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-    };
+    use iroha_genesis::GENESIS_ACCOUNT_ID;
+    use iroha_test_samples::{gen_account_in, ALICE_ID};
     use tokio::test;
 
     use super::*;
@@ -220,7 +219,6 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
-        tx::{AcceptTransactionFail, AcceptedTransaction},
     };
 
     fn state_with_test_domains(kura: &Arc<Kura>) -> Result<State> {
@@ -231,14 +229,14 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         Register::domain(Domain::new("wonderland".parse()?))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+            .execute(&GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+            .execute(&GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+            .execute(&GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         state_transaction.apply();
         state_block.commit();
         Ok(state)
@@ -251,7 +249,7 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         let nft_id: NftId = "rose$wonderland".parse()?;
@@ -276,7 +274,7 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         let key = "Bytes".parse::<Name>()?;
@@ -299,7 +297,7 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         let definition_id = "rose#wonderland".parse::<AssetDefinitionId>()?;
         let account_id = ALICE_ID.clone();
@@ -330,7 +328,7 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         let domain_id = "wonderland".parse::<DomainId>()?;
         let account_id = ALICE_ID.clone();
@@ -357,7 +355,7 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         let trigger_id = "test_trigger_id".parse()?;
@@ -382,7 +380,7 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         let (fake_account_id, _fake_account_keypair) = gen_account_in("wonderland");
@@ -431,7 +429,7 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         assert!(matches!(
@@ -440,7 +438,7 @@ mod tests {
                 .expect_err("Error expected"),
             Error::InvariantViolation(_)
         ));
-        let register_account = Register::account(Account::new(SAMPLE_GENESIS_ACCOUNT_ID.clone()));
+        let register_account = Register::account(Account::new(GENESIS_ACCOUNT_ID.clone()));
         assert!(matches!(
             register_account
                 .execute(&account_id, &mut state_transaction)
@@ -450,27 +448,6 @@ mod tests {
         state_transaction.apply();
         state_block.commit();
 
-        Ok(())
-    }
-
-    #[test]
-    async fn transaction_signed_by_genesis_account_should_be_rejected() -> Result<()> {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_test_domains(&kura)?;
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction)
-        };
-
-        let tx = TransactionBuilder::new(chain_id.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone())
-            .with_instructions::<InstructionBox>([])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        assert!(matches!(
-            AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_limits),
-            Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature)
-        ));
         Ok(())
     }
 }

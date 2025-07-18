@@ -175,7 +175,9 @@ pub fn try_read_snapshot(
                 iroha_logger::warn!(
                     "Snapshot has incorrect latest block hash, discarding changes made by this block"
                 );
-                state.block_and_revert(kura_block.header()).commit();
+                state
+                    .block_and_revert(kura_block.header().regress())
+                    .commit();
             } else {
                 return Err(TryReadError::MismatchedHash {
                     height,
@@ -366,7 +368,7 @@ mod tests {
             .unwrap();
 
         {
-            let mut state_block = state.block(committed_block.as_ref().header());
+            let mut state_block = state.block(committed_block.as_ref().header().regress());
             let _events =
                 state_block.apply_without_execution(&committed_block, topology.as_ref().to_owned());
             state_block.commit();
@@ -384,7 +386,7 @@ mod tests {
             .unwrap();
 
         {
-            let mut state_block = state.block(committed_block.as_ref().header());
+            let mut state_block = state.block(committed_block.as_ref().header().regress());
             let _events =
                 state_block.apply_without_execution(&committed_block, topology.as_ref().to_owned());
             state_block.commit();
@@ -427,7 +429,7 @@ mod tests {
             .unwrap();
 
         {
-            let mut state_block = state.block(committed_block.as_ref().header());
+            let mut state_block = state.block(committed_block.as_ref().header().regress());
             let _events =
                 state_block.apply_without_execution(&committed_block, topology.as_ref().to_owned());
             state_block.commit();
@@ -445,7 +447,7 @@ mod tests {
             .unwrap();
 
         {
-            let mut state_block = state.block(committed_block.as_ref().header());
+            let mut state_block = state.block(committed_block.as_ref().header().regress());
             let _events =
                 state_block.apply_without_execution(&committed_block, topology.as_ref().to_owned());
             state_block.commit();

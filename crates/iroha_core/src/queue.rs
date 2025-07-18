@@ -562,7 +562,7 @@ pub mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         state_block
             .transactions
             .insert_block_with_single_tx(tx.as_ref().hash(), nonzero!(1_usize));
@@ -606,7 +606,7 @@ pub mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         state_block
             .transactions
             .insert_block_with_single_tx(tx.as_ref().hash(), nonzero!(1_usize));
@@ -637,7 +637,7 @@ pub mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         state_block
             .transactions
             .insert_block_with_single_tx(tx.as_ref().hash(), nonzero!(1_usize));
@@ -813,7 +813,7 @@ pub mod tests {
             thread::spawn(move || {
                 let mut height = nonzero!(1usize);
                 while start_time.elapsed() < run_for {
-                    let mut state_block = state.block(block_header);
+                    let mut state_block = state.block(block_header.regress());
                     let transactions = queue
                         .collect_transactions_for_block(&state.view(), max_txs_in_block)
                         .into_iter()
@@ -907,7 +907,7 @@ pub mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         // Put transaction hashes into state as if they were in the blockchain
         let transaction_hashes = transactions
             .into_iter()

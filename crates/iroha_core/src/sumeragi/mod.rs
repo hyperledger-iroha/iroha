@@ -10,7 +10,7 @@ use std::{
 
 use eyre::Result;
 use iroha_config::parameters::actual::{Common as CommonConfig, Sumeragi as SumeragiConfig};
-use iroha_data_model::{account::AccountId, block::SignedBlock, prelude::*};
+use iroha_data_model::{block::SignedBlock, prelude::*};
 use iroha_futures::supervisor::{spawn_os_thread_as_future, Child, OnShutdown, ShutdownSignal};
 use iroha_genesis::GenesisBlock;
 use iroha_logger::prelude::*;
@@ -91,7 +91,6 @@ impl SumeragiHandle {
 
     fn replay_block(
         chain_id: &ChainId,
-        genesis_account: &AccountId,
         block: &SignedBlock,
         state_block: &mut StateBlock<'_>,
         events_sender: &EventsSender,
@@ -100,22 +99,18 @@ impl SumeragiHandle {
         // NOTE: topology need to be updated up to block's view_change_index
         topology.nth_rotation(block.header().view_change_index as usize);
 
-        let block = ValidBlock::validate(
-            block.clone(),
-            topology,
-            chain_id,
-            genesis_account,
-            state_block,
-        )
-        .unpack(|e| {
-            let _ = events_sender.send(e.into());
-        })
-        .expect("INTERNAL BUG: Invalid block stored in Kura")
-        .commit(topology)
-        .unpack(|e| {
-            let _ = events_sender.send(e.into());
-        })
-        .expect("INTERNAL BUG: Invalid block stored in Kura");
+        let block = ValidBlock::validate(block.clone(), topology, chain_id, state_block)
+            .map(|validation| {
+                validation.finish_without_signing().unpack(|e| {
+                    let _ = events_sender.send(e.into());
+                })
+            })
+            .expect("INTERNAL BUG: Invalid block stored in Kura")
+            .commit(topology)
+            .unpack(|e| {
+                let _ = events_sender.send(e.into());
+            })
+            .expect("INTERNAL BUG: Invalid block stored in Kura");
 
         if block.as_ref().header().is_genesis() {
             *topology = Topology::new(state_block.world.peers.clone());
@@ -150,7 +145,7 @@ impl SumeragiStartArgs {
             kura,
             network,
             peers_gossiper,
-            genesis_network,
+            genesis_block,
             block_count: BlockCount(block_count),
             #[cfg(feature = "telemetry")]
                 telemetry: metrics,
@@ -184,16 +179,10 @@ impl SumeragiStartArgs {
             };
         }
 
-        let genesis_account = AccountId::new(
-            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-            genesis_network.public_key.clone(),
-        );
-
         for block in blocks_iter {
-            let mut state_block = state.block(block.header());
+            let mut state_block = state.block(block.header().regress());
             SumeragiHandle::replay_block(
                 &common_config.chain,
-                &genesis_account,
                 &block,
                 &mut state_block,
                 &events_sender,
@@ -230,7 +219,7 @@ impl SumeragiStartArgs {
             tokio::task::spawn(spawn_os_thread_as_future(
                 std::thread::Builder::new().name("sumeragi".to_owned()),
                 move || {
-                    main_loop::run(genesis_network, sumeragi, &shutdown_signal, state);
+                    main_loop::run(genesis_block, sumeragi, &shutdown_signal, state);
                 },
             )),
             OnShutdown::Wait(Duration::from_secs(5)),
@@ -261,7 +250,7 @@ pub const TELEMETRY_INTERVAL: Duration = Duration::from_secs(5);
 /// Structure represents a block that is currently in discussion.
 pub struct VotingBlock<'state> {
     /// Valid Block
-    block: ValidBlock,
+    pub block: ValidBlock,
     /// At what time has this peer voted for this block
     pub voted_at: Instant,
     /// State after applying transactions to it but before it was committed
@@ -296,15 +285,8 @@ pub struct SumeragiStartArgs {
     pub kura: Arc<Kura>,
     pub network: IrohaNetwork,
     pub peers_gossiper: PeersGossiperHandle,
-    pub genesis_network: GenesisWithPubKey,
+    pub genesis_block: GenesisBlock,
     pub block_count: BlockCount,
     #[cfg(feature = "telemetry")]
     pub telemetry: Telemetry,
-}
-
-/// Optional genesis paired with genesis public key for verification
-#[allow(missing_docs)]
-pub struct GenesisWithPubKey {
-    pub genesis: Option<GenesisBlock>,
-    pub public_key: PublicKey,
 }

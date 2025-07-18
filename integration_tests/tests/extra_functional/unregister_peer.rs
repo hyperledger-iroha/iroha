@@ -49,7 +49,9 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     let new_peer_id = new_peer.id();
     let new_peer_client = new_peer.client();
     network.add_peer(&new_peer);
-    new_peer.start(network.config_layers(), None).await;
+    new_peer
+        .start(network.config_layers(), network.genesis())
+        .await;
     {
         let client = client.clone();
         let id = new_peer_id.clone();

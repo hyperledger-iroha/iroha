@@ -462,7 +462,7 @@ pub mod state {
         pub mod executor {
             //! States related to *Executor* execution.
 
-            use iroha_data_model::block::BlockHeader;
+            use iroha_data_model::block::NewBlockHeader;
 
             use super::*;
 
@@ -470,7 +470,7 @@ pub mod state {
             #[derive(Constructor)]
             pub struct Validate<T> {
                 pub(in super::super::super::super) to_validate: T,
-                pub(in super::super::super::super) curr_block: BlockHeader,
+                pub(in super::super::super::super) curr_block: NewBlockHeader,
             }
 
             /// State kind for executing `execute_transaction()` entrypoint of executor
@@ -1392,7 +1392,10 @@ impl<'wrld, S: StateReadOnly> Runtime<state::executor::ValidateQuery<'wrld, S>> 
             self.config,
             span,
             state::chain_state::WithConst(state_ro),
-            state::specific::executor::ValidateQuery::new(query, latest_block.as_ref().header()),
+            state::specific::executor::ValidateQuery::new(
+                query,
+                latest_block.as_ref().header().regress(),
+            ),
         );
 
         self.execute_executor_execute_internal(module, state, import::EXECUTOR_VALIDATE_QUERY)
@@ -1838,7 +1841,7 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         runtime
             .execute(&mut state_transaction, authority, wat)
@@ -1885,7 +1888,7 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         runtime
             .execute(&mut state_transaction, authority, wat)
@@ -1943,7 +1946,7 @@ mod tests {
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
-        let mut state_block = state.block(block_header);
+        let mut state_block = state.block(block_header.regress());
         let mut state_transaction = state_block.transaction();
         let res = runtime.validate(&mut state_transaction, authority, wat, nonzero!(1_u64));
         state_transaction.apply();
