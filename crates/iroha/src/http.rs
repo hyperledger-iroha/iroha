@@ -79,7 +79,7 @@ pub mod ws {
     ///
     ///
     /// This module has a set of abstraction to extract pure data logic from transportation logic. Following sections
-    /// describe how to use this module from both **flow implemention** (data side) and
+    /// describe how to use this module from both **flow implementation** (data side) and
     /// **transport implementation** sides.
     ///
     /// ## Flow implementation

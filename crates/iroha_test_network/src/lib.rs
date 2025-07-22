@@ -656,7 +656,7 @@ impl NetworkPeer {
     ///
     /// This function waits for peer server to start working,
     /// in particular it waits for `/status` response and connects to event stream.
-    /// However it doesn't wait for genesis block to be commited.
+    /// However it doesn't wait for genesis block to be committed.
     /// See [`Self::events`]/[`Self::once`]/[`Self::once_block`] to monitor peer's lifecycle.
     ///
     /// # Panics
