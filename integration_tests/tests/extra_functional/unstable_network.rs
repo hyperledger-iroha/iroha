@@ -19,6 +19,23 @@ use tokio::{self, task::spawn_blocking, time::timeout};
 use toml::Table;
 
 mod relay {
+    //! Utilities to build a peer-to-peer network relay using TCP proxies with ability to targetly
+    //! suspend communication.
+    //!
+    //! For each peer-to-peer pair, [`P2pRelay`] reserves a port and starts a TCP listener on it. This
+    //! listener is sipmly forwarding packages, but also provides a toggle to suspend the
+    //! forwarding. Peers' `trusted_peers` configuration must be set up to use the relay's proxies
+    //! and not directly the other peers.
+    //!
+    //! First, create [`P2pRelay`] with the given _real topology_ (a set of peers'
+    //! real network addresses and public keys), by [`P2pRelay::new`] or [`P2pRelay::for_network`].
+    //! Then, start each peer, setting `trusted_peers` config parameter with the _virtual topology_ provided by
+    //! the relay ([`P2pRelay::trusted_peers_for`]). Then, start the relay itself ([`P2pRelay::start`]).
+    //!
+    //! It is possible to "suspend" a particular peer in the network by suspending all incoming/outgoing packages from/to other peers.
+    //! Relay provides [`P2pRelay::suspend`] to acquire a [`Suspend`] control (per-peer), which provides
+    //! [`Suspend::activate`] and [`Suspend::deactivate`] in turn.
+
     use std::{
         collections::HashMap,
         iter::once,
@@ -60,6 +77,7 @@ mod relay {
     }
 
     impl P2pRelay {
+        /// Construct a relay with the given topology.
         pub fn new(real_topology: &UniqueVec<Peer>) -> Self {
             let peers: HashMap<_, _> = real_topology
                 .iter()
@@ -119,6 +137,7 @@ mod relay {
             }
         }
 
+        /// Construct a relay using the given network's peers as topology.
         pub fn for_network(network: &Network) -> Self {
             Self::new(
                 &network
@@ -129,6 +148,10 @@ mod relay {
             )
         }
 
+        /// Get trusted peers for a particular peer in the given topology.
+        ///
+        /// The relay constructs "virtual" set of addresses of other peers for each peer. This must
+        /// be passed to the peer's configuration.
         pub fn trusted_peers_for(&self, peer: &PeerId) -> UniqueVec<Peer> {
             let peer_info = self
                 .peers
@@ -142,6 +165,7 @@ mod relay {
                 .collect()
         }
 
+        /// Start the relay, i.e. the set of TCP proxies between the peers.
         pub fn start(&mut self) {
             for (_peer_id, peer) in &self.peers {
                 for (other, (other_mock_addr, _)) in &peer.mock_outgoing {
@@ -180,6 +204,7 @@ mod relay {
             );
         }
 
+        /// Acquire a [`Suspend`] control for a peer
         pub fn suspend(&self, peer: &PeerId) -> Suspend {
             self.peers
                 .get(peer)
