@@ -4,7 +4,7 @@ use std::{
     str::FromStr,
 };
 
-use clap::{Args as ClapArgs, Subcommand};
+use clap::{command, Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand};
 use color_eyre::eyre::{eyre, Context};
 use iroha_wasm_builder::{Builder, Profile};
 use owo_colors::OwoColorize;
@@ -25,12 +25,19 @@ pub enum Args {
         #[command(flatten)]
         common: CommonArgs,
         /// Build profile
-        #[arg(long, default_value = "release")]
-        profile: Profile,
+        #[arg(long)]
+        profile: Option<Profile>,
         /// Where to store the output WASM. If the file exists, it will be overwritten.
         #[arg(long)]
         out_file: PathBuf,
     },
+}
+
+#[derive(Parser, Debug, Default)]
+#[command(no_binary_name = true, disable_help_flag = true)]
+struct ProfileArg {
+    #[arg(long, value_enum)]
+    profile: Profile,
 }
 
 #[derive(ClapArgs, Debug, Clone)]
@@ -70,9 +77,34 @@ impl<T: Write> RunArgs<T> for Args {
                 out_file,
                 profile,
             } => {
-                let builder = Builder::new(&path, profile)
-                    .cargo_args(cargo_args.0)
-                    .show_output();
+                let mut args = cargo_args.0.clone();
+                let mut profile_arg = Vec::<String>::with_capacity(2);
+
+                if let Some(arg_idx) = args.iter().position(|arg| arg.contains("--profile")) {
+                    if profile.is_some() {
+                        eprintln!("warning: value from \"--profile\" is ignored in favor of profile in \"--cargo-args\"");
+                    }
+                    args.get(arg_idx + 1)
+                        .expect("expected format --cargo-args='--profile <PROFILE>..'")
+                        .parse::<Profile>()
+                        .expect(&format!("Unknown Profile ({})", args[arg_idx + 1]));
+                    profile_arg.extend(args.drain(arg_idx..arg_idx + 2));
+                } else if profile.is_some() {
+                    eprintln!("warning: \"--profile\" arg is deprecated; please use \"--cargo-args='--profile ..'\" instead");
+                } else {
+                    eprintln!("warning: \"--cargo-args\" missing \"--profile\"; using `release` by default. Use \"--cargo-args='--profile ..'\" to specify one.");
+                }
+
+                let matches = ProfileArg::command()
+                    .no_binary_name(true)
+                    .ignore_errors(true)
+                    .try_get_matches_from(&profile_arg)
+                    .unwrap_or_default();
+                let profile_arg = ProfileArg::from_arg_matches(&matches).unwrap_or_default();
+
+                let profile = profile_arg.profile;
+
+                let builder = Builder::new(&path, profile).cargo_args(args).show_output();
 
                 let output = {
                     // not showing the spinner here, cargo does a progress bar for us
