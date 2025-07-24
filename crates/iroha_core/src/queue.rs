@@ -349,7 +349,7 @@ impl Queue {
     ///    Note that transaction is removed from [`Queue::tx_hashes`], but kept in [`Queue::accepted_tx`],
     ///    this is needed to return `Error::IsInQueue` when adding same transaction twice.
     /// 3. When transaction is removed from [`Sumeragi::transaction_cache`]
-    ///    (either because it was expired, or because transaction is commited to blockchain),
+    ///    (either because it was expired, or because transaction is committed to blockchain),
     ///    we should remove transaction from [`Queue::accepted_tx`].
     fn remove_transaction(&self, tx: &AcceptedTransaction) {
         let removed = self.txs.remove(&tx.as_ref().hash());

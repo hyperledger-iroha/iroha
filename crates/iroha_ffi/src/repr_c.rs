@@ -143,7 +143,7 @@ impl<R: Ir> Cloned for &R where R::Type: Cloned {}
 impl<R> Cloned for Box<R> {}
 impl<R> Cloned for &[R] {}
 impl<R> Cloned for Vec<R> {}
-// TODO: This means there is unnecesary clone?
+// TODO: This means there is unnecessary clone?
 impl<const N: usize> Cloned for [Opaque; N] {}
 impl<R: Ir, const N: usize> Cloned for [R; N] where R::Type: Cloned {}
 

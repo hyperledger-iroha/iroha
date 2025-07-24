@@ -37,7 +37,7 @@ fn type_contain_idents(ty: &Type, idents: &[Ident]) -> bool {
     visitor.result
 }
 
-/// Visits the ast and checks if the a type path starts with the given ident.
+/// Visits the ast and checks if a type path starts with the given ident.
 struct TypePathStartsWithIdent<'a> {
     result: bool,
     ident: &'a Ident,
