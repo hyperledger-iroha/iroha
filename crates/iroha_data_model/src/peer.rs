@@ -74,6 +74,7 @@ mod model {
         #[getset(get = "pub")]
         pub address: SocketAddr,
         /// Peer Identification.
+        #[getset(get = "pub")]
         pub id: PeerId,
     }
 }
