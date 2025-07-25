@@ -1,10 +1,7 @@
 //! Iroha schema generation support library. Contains the
 //! `build_schemas` `fn`, which is the function which decides which
 //! types are included in the schema.
-use iroha_data_model::{
-    block::stream::{BlockMessage, BlockSubscriptionRequest},
-    query::{QueryResponse, SignedQuery},
-};
+use iroha_data_model::query::{QueryResponse, SignedQuery};
 use iroha_schema::prelude::*;
 use iroha_telemetry::metrics::Status;
 
@@ -56,7 +53,7 @@ pub fn build_schemas() -> MetaMap {
         EventSubscriptionRequest,
 
         // Block stream
-        BlockMessage,
+        BlockStreamMessage,
         BlockSubscriptionRequest,
 
         // Never referenced, but present in type signature. Like `PhantomData<X>`
@@ -175,7 +172,7 @@ types!(
     BlockHeaderPredicateAtom,
     BlockHeaderProjection<PredicateMarker>,
     BlockHeaderProjection<SelectorMarker>,
-    BlockMessage,
+    BlockStreamMessage,
     BlockParameter,
     BlockParameters,
     BlockPayload,
@@ -685,7 +682,7 @@ pub mod complete_data_model {
         asset::NewAssetDefinition,
         block::{
             error::BlockRejectionReason,
-            stream::{BlockMessage, BlockSubscriptionRequest},
+            stream::{BlockStreamMessage, BlockSubscriptionRequest},
             BlockHeader, BlockPayload, BlockResult, BlockSignature, SignedBlock, SignedBlockV1,
         },
         domain::NewDomain,

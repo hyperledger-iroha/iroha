@@ -1,25 +1,18 @@
-use std::{num::NonZeroU64, sync::Arc};
+use std::{convert::Infallible, num::NonZero, sync::Arc};
 
 use iroha_core::kura::Kura;
-use iroha_data_model::block::{
-    stream::{BlockMessage, BlockSubscriptionRequest},
-    SignedBlock,
-};
+use iroha_data_model::block::{stream::BlockStreamMessage, SignedBlock};
+use tokio::sync::watch;
 
 use crate::stream::{self, WebSocketScale};
 
-/// Type of error for `Consumer`
-#[derive(thiserror::Error, Debug)]
+/// Type for any error during blocks streaming
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Error from provided stream/websocket
-    #[error("Stream error: {0}")]
-    Stream(Box<stream::Error>),
-}
-
-impl From<stream::Error> for Error {
-    fn from(error: stream::Error) -> Self {
-        Self::Stream(Box::new(error))
-    }
+    #[error("Stream error")]
+    Stream(#[from] stream::Error),
+    #[error("Protocol violation: {message}")]
+    Protocol { message: String },
 }
 
 /// Result type for `Consumer`
@@ -30,45 +23,75 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug)]
 pub struct Consumer<'ws> {
     pub stream: &'ws mut WebSocketScale,
-    height: NonZeroU64,
+    height: NonZero<usize>,
     kura: Arc<Kura>,
+    kura_blocks: watch::Receiver<usize>,
 }
 
 impl<'ws> Consumer<'ws> {
     /// Constructs [`Consumer`], which forwards blocks through the `stream`.
     ///
     /// # Errors
+    ///
     /// Can fail due to timeout or without message at websocket or during decoding request
     #[iroha_futures::telemetry_future]
     pub async fn new(stream: &'ws mut WebSocketScale, kura: Arc<Kura>) -> Result<Self> {
-        let BlockSubscriptionRequest(height) = stream.recv().await?;
+        let BlockStreamMessage::Subscribe(request) = stream.recv().await? else {
+            return Err(Error::Protocol {
+                message: "client must send BlockStreamMessage::Subscribe first".to_owned(),
+            });
+        };
+        let kura_blocks = kura.subscribe_blocks_count();
         Ok(Consumer {
             stream,
-            height,
+            height: NonZero::new(request.height().get().try_into().unwrap())
+                .expect("created from non-zero"),
             kura,
+            kura_blocks,
         })
     }
 
-    /// Forwards block if block for given height already exists
-    ///
-    /// # Errors
-    /// Can fail due to timeout. Also receiving might fail
-    #[iroha_futures::telemetry_future]
-    pub async fn consume(&mut self) -> Result<()> {
-        if let Some(block) = self.kura.get_block(
-            self.height
-                .try_into()
-                .expect("INTERNAL BUG: Number of blocks exceeds usize::MAX"),
-        ) {
-            // TODO: to avoid clone `BlockMessage` could be split into sending and receiving parts
-            self.stream
-                .send(BlockMessage(SignedBlock::clone(&block)))
-                .await?;
-            self.height = self
-                .height
-                .checked_add(1)
-                .expect("Maximum block height is achieved.");
+    pub async fn serve(mut self) -> Result<Infallible> {
+        loop {
+            let BlockStreamMessage::Next = self.stream.recv().await? else {
+                return Err(Error::Protocol {
+                    message: "client must send BlockStreamMessage::Next".to_owned(),
+                });
+            };
+            self.wait_and_send_one().await?;
         }
+    }
+
+    async fn wait_and_send_one(&mut self) -> Result<()> {
+        wait_height(&mut self.kura_blocks, self.height.get()).await;
+
+        let block = self
+            .kura
+            .get_block(self.height)
+            .expect("Kura must have at least the given height");
+
+        self.stream
+            .send(BlockStreamMessage::Block(SignedBlock::clone(&block)))
+            .await?;
+
+        self.height = self.height.checked_add(1).unwrap();
+
         Ok(())
+    }
+}
+
+async fn wait_height(recv: &mut watch::Receiver<usize>, at_least: usize) {
+    if *recv.borrow() >= at_least {
+        return;
+    }
+
+    loop {
+        recv.changed()
+            .await
+            .expect("Kura must not be dropped while stream exists");
+
+        if *recv.borrow_and_update() >= at_least {
+            return;
+        }
     }
 }

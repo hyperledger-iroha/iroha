@@ -1,5 +1,5 @@
 use eyre::{Ok, Result};
-use futures_util::StreamExt;
+use futures_util::{pin_mut, StreamExt};
 use iroha::{
     crypto::MerkleProof,
     data_model::{events::pipeline::BlockEventFilter, prelude::*},
@@ -49,11 +49,12 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
     let test_client = network.client();
 
     // Subscribe to committed block headers.
-    let mut events = test_client
-        .listen_for_events_async([BlockEventFilter::new()
+    let events = test_client
+        .listen_for_events([BlockEventFilter::new()
             .for_height(nonzero!(2u64))
             .for_status(BlockStatus::Committed)])
         .await?;
+    pin_mut!(events);
 
     // Submit the user transaction and derive its entrypoint hash.
     let tx_hash: HashOf<SignedTransaction> =

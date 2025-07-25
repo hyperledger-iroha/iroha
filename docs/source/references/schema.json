@@ -868,7 +868,6 @@
       }
     ]
   },
-  "BlockMessage": "SignedBlock",
   "BlockParameter": {
     "Enum": [
       {
@@ -963,7 +962,32 @@
       }
     ]
   },
-  "BlockSubscriptionRequest": "NonZero<u64>",
+  "BlockStreamMessage": {
+    "Enum": [
+      {
+        "tag": "Subscribe",
+        "discriminant": 0,
+        "type": "BlockSubscriptionRequest"
+      },
+      {
+        "tag": "Next",
+        "discriminant": 1
+      },
+      {
+        "tag": "Block",
+        "discriminant": 2,
+        "type": "SignedBlock"
+      }
+    ]
+  },
+  "BlockSubscriptionRequest": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "NonZero<u64>"
+      }
+    ]
+  },
   "Burn<Numeric, Asset>": {
     "Struct": [
       {
