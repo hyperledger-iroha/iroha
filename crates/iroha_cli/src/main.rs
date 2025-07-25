@@ -449,7 +449,10 @@ mod events {
                 .wrap_err("failed to subscribe to events")?;
             pin_mut!(stream);
 
-            while let Some(event) = tokio::time::timeout(timeout, stream.try_next()).await?? {
+            while let Some(event) = tokio::time::timeout(timeout, stream.try_next())
+                .await
+                .wrap_err("Timeout period has expired")??
+            {
                 context.print_data(&event)?;
             }
 
@@ -501,7 +504,10 @@ mod blocks {
                 .wrap_err("failed to subscribe to blocks")?;
             futures::pin_mut!(stream);
 
-            while let Some(block) = tokio::time::timeout(timeout, stream.try_next()).await?? {
+            while let Some(block) = tokio::time::timeout(timeout, stream.try_next())
+                .await
+                .wrap_err("Timeout period has expired")??
+            {
                 context.print_data(&block)?;
             }
 
