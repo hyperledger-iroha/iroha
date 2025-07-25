@@ -310,7 +310,7 @@ impl Client {
 
             let (submit_tx, submit_rx) = tokio::sync::oneshot::channel();
             let _handle = scope.spawn(|| {
-                let result = self.submit_transaction(&transaction);
+                let result = self.submit_transaction(transaction);
                 let _ = submit_tx.send(result);
             });
             let ((), _hash) = rt.block_on(async move {
@@ -458,20 +458,6 @@ impl Client {
         &self,
         event_filters: impl IntoIterator<Item = impl Into<EventFilterBox>>,
     ) -> Result<impl Stream<Item = Result<EventBox>>> {
-        let request = build_ws_request(
-            join_torii_url(&self.torii_url, torii_uri::SUBSCRIPTION),
-            &self.headers,
-        )?;
-
-        let (mut socket, _response) = tokio_tungstenite::connect_async(request).await?;
-
-        socket
-            .send(tungstenite::Message::Binary(
-                EventSubscriptionRequest::new(event_filters.into_iter().map(Into::into).collect())
-                    .encode(),
-            ))
-            .await?;
-
         async fn next<S>(ws: &mut S) -> Result<Option<EventBox>>
         where
             S: Stream<Item = Result<tungstenite::Message, tungstenite::Error>>
@@ -489,6 +475,20 @@ impl Client {
                 .transpose()?;
             Ok(msg)
         }
+
+        let request = build_ws_request(
+            join_torii_url(&self.torii_url, torii_uri::SUBSCRIPTION),
+            &self.headers,
+        )?;
+
+        let (mut socket, _response) = tokio_tungstenite::connect_async(request).await?;
+
+        socket
+            .send(tungstenite::Message::Binary(
+                EventSubscriptionRequest::new(event_filters.into_iter().map(Into::into).collect())
+                    .encode(),
+            ))
+            .await?;
 
         let stream = async_fn_stream::try_fn_stream(|emitter| async move {
             while let Some(item) = next(&mut socket).await? {
@@ -509,21 +509,6 @@ impl Client {
         &self,
         height: NonZeroU64,
     ) -> Result<impl Stream<Item = Result<SignedBlock>>> {
-        let request = build_ws_request(
-            join_torii_url(&self.torii_url, torii_uri::BLOCKS_STREAM),
-            &self.headers,
-        )?;
-
-        let (mut socket, _response) = tokio_tungstenite::connect_async(request)
-            .await
-            .wrap_err("Failed to establish WebSocket connection")?;
-
-        socket
-            .send(tungstenite::Message::Binary(
-                BlockStreamMessage::Subscribe(BlockSubscriptionRequest::new(height)).encode(),
-            ))
-            .await?;
-
         async fn next<S>(ws: &mut S) -> Result<Option<SignedBlock>>
         where
             S: Stream<Item = Result<tungstenite::Message, tungstenite::Error>>
@@ -552,6 +537,21 @@ impl Client {
                 .transpose()?;
             Ok::<_, eyre::Report>(msg)
         }
+
+        let request = build_ws_request(
+            join_torii_url(&self.torii_url, torii_uri::BLOCKS_STREAM),
+            &self.headers,
+        )?;
+
+        let (mut socket, _response) = tokio_tungstenite::connect_async(request)
+            .await
+            .wrap_err("Failed to establish WebSocket connection")?;
+
+        socket
+            .send(tungstenite::Message::Binary(
+                BlockStreamMessage::Subscribe(BlockSubscriptionRequest::new(height)).encode(),
+            ))
+            .await?;
 
         let stream = async_fn_stream::try_fn_stream(|emitter| async move {
             while let Some(item) = next(&mut socket).await? {
@@ -694,7 +694,7 @@ fn transform_ws_url(mut url: Url) -> Result<Url> {
 fn build_ws_request(url: Url, headers: &HashMap<String, String>) -> Result<http::Request<()>> {
     transform_ws_url(url)?
         .into_client_request()
-        .map_err(|err| eyre::Report::from(err))
+        .map_err(eyre::Report::from)
         .and_then(|mut req| {
             let req_headers = req.headers_mut();
             for (name, value) in headers {
