@@ -78,6 +78,7 @@ tokio = { workspace = true, features = ["rt"] }
 tokio-tungstenite = { workspace = true }
 tungstenite = { workspace = true }
 futures-util = "0.3.30"
+async-fn-stream = "0.2.2"
 toml = { workspace = true }
 
 [dev-dependencies]

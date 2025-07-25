@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use assert_matches::assert_matches;
 use eyre::Result;
-use futures_util::StreamExt;
+use futures_util::{pin_mut, StreamExt};
 use iroha::data_model::{prelude::*, transaction::WasmSmartContract};
 use iroha_executor_data_model::permission::{
     account::CanModifyAccountMetadata, domain::CanModifyDomainMetadata,
@@ -135,10 +135,11 @@ async fn transaction_execution_should_produce_events(
     executable: impl Into<Executable> + Send,
 ) -> Result<()> {
     let network = NetworkBuilder::new().start().await?;
-    let mut events_stream = network
+    let events_stream = network
         .client()
-        .listen_for_events_async([DataEventFilter::Any])
+        .listen_for_events([DataEventFilter::Any])
         .await?;
+    pin_mut!(events_stream);
 
     {
         let client = network.client();
@@ -166,10 +167,11 @@ async fn transaction_execution_should_produce_events(
 #[allow(clippy::too_many_lines)]
 async fn produce_multiple_events() -> Result<()> {
     let network = NetworkBuilder::new().start().await?;
-    let mut events_stream = network
+    let events_stream = network
         .client()
-        .listen_for_events_async([DataEventFilter::Any])
+        .listen_for_events([DataEventFilter::Any])
         .await?;
+    pin_mut!(events_stream);
 
     // Register role
     let role_id = "TEST_ROLE".parse::<RoleId>()?;

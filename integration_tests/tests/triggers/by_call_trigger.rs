@@ -1,6 +1,7 @@
-use std::{sync::mpsc, thread, time::Duration};
+use std::time::Duration;
 
-use eyre::{eyre, Result, WrapErr};
+use eyre::Result;
+use futures_util::{pin_mut, TryStreamExt as _};
 use iroha::{
     crypto::KeyPair,
     data_model::{
@@ -14,6 +15,7 @@ use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
 use iroha_test_network::*;
 use iroha_test_samples::{load_sample_wasm, ALICE_ID};
 use mint_rose_trigger_data_model::MintRoseArgs;
+use tokio::task::spawn_blocking;
 
 use crate::triggers::get_asset_value;
 
@@ -43,10 +45,9 @@ fn call_execute_trigger() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn execute_trigger_should_produce_event() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking()?;
-    let test_client = network.client();
+#[tokio::test]
+async fn execute_trigger_should_produce_event() -> Result<()> {
+    let network = NetworkBuilder::new().start().await?;
 
     let asset_definition_id = "rose#wonderland".parse()?;
     let account_id = ALICE_ID.clone();
@@ -54,29 +55,34 @@ fn execute_trigger_should_produce_event() -> Result<()> {
 
     let instruction = Mint::asset_numeric(1u32, asset_id.clone());
     let register_trigger = build_register_trigger_isi(asset_id.account(), vec![instruction.into()]);
-    test_client.submit_blocking(register_trigger)?;
+    spawn_blocking({
+        let client = network.client();
+        move || client.submit_blocking(register_trigger)
+    })
+    .await??;
 
     let trigger_id = TRIGGER_NAME.parse::<TriggerId>()?;
     let call_trigger = ExecuteTrigger::new(trigger_id.clone());
 
-    let thread_client = test_client.clone();
-    let (sender, receiver) = mpsc::channel();
-    let _handle = thread::spawn(move || -> Result<()> {
-        let mut event_it = thread_client.listen_for_events([ExecuteTriggerEventFilter::new()
-            .for_trigger(trigger_id)
-            .under_authority(account_id)])?;
-        if event_it.next().is_some() {
-            sender.send(())?;
-            return Ok(());
-        }
-        Err(eyre!("No events emitted"))
-    });
+    let events = network
+        .client()
+        .listen_for_events([ExecuteTriggerEventFilter::new()
+            .for_trigger(trigger_id.clone())
+            .under_authority(account_id)])
+        .await?;
+    pin_mut!(events);
 
-    test_client.submit(call_trigger)?;
+    spawn_blocking({
+        let client = network.client();
+        move || client.submit_blocking(call_trigger)
+    })
+    .await??;
 
-    receiver
-        .recv_timeout(Duration::from_secs(60))
-        .wrap_err("Failed to receive event message")
+    let _event = tokio::time::timeout(Duration::from_secs(10), events.try_next())
+        .await??
+        .expect("must be Some");
+
+    Ok(())
 }
 
 #[test]
