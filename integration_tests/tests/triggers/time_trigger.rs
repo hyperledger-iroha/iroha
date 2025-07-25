@@ -262,7 +262,7 @@ async fn submit_sample_isi_on_every_block_commit(
     times: usize,
 ) -> Result<()> {
     let mut stream = block_committed_event_listener.take(times);
-    while let Some(_) = stream.next().await {
+    while stream.next().await.is_some() {
         tokio::time::sleep(timeout).await;
         // ISI just to create a new block
         let sample_isi = SetKeyValue::account(
