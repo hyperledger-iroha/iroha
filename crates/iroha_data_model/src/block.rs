@@ -686,30 +686,44 @@ pub mod stream {
     mod model {
         use core::num::NonZeroU64;
 
+        use getset::Getters;
+
         use super::*;
 
-        /// Request sent to subscribe to blocks stream starting from the given height.
+        /// Request sent to subscribe to blocks stream
         #[derive(
-            Debug, Clone, Copy, Constructor, Decode, Encode, Deserialize, Serialize, IntoSchema,
+            Debug,
+            Clone,
+            Copy,
+            Constructor,
+            Decode,
+            Encode,
+            Deserialize,
+            Serialize,
+            IntoSchema,
+            Getters,
         )]
-        #[repr(transparent)]
-        pub struct BlockSubscriptionRequest(pub NonZeroU64);
+        pub struct BlockSubscriptionRequest {
+            /// Height to stream blocks from
+            #[getset(get = "pub")]
+            pub height: NonZeroU64,
+        }
 
-        /// Message sent by the stream producer containing block.
+        /// Block stream message
         #[derive(Debug, Clone, Decode, Encode, Deserialize, Serialize, IntoSchema)]
-        #[repr(transparent)]
-        pub struct BlockMessage(pub SignedBlock);
-    }
-
-    impl From<BlockMessage> for SignedBlock {
-        fn from(source: BlockMessage) -> Self {
-            source.0
+        pub enum BlockStreamMessage {
+            /// _Sent by client:_ must be sent once the connection is established
+            Subscribe(BlockSubscriptionRequest),
+            /// _Sent by client:_ request to send the next block once available
+            Next,
+            /// _Sent by server:_ message containing a block
+            Block(SignedBlock),
         }
     }
 
     /// Exports common structs and enums from this module.
     pub mod prelude {
-        pub use super::{BlockMessage, BlockSubscriptionRequest};
+        pub use super::{BlockStreamMessage, BlockSubscriptionRequest};
     }
 }
 
@@ -756,6 +770,8 @@ pub mod error {
 
 pub mod prelude {
     //! For glob-import
+    #[cfg(feature = "http")]
+    pub use super::stream::prelude::*;
     pub use super::{error::BlockRejectionReason, BlockHeader, BlockSignature, SignedBlock};
 }
 

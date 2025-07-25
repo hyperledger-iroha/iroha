@@ -22,6 +22,7 @@ use iroha_logger::prelude::*;
 use iroha_version::scale::{DecodeVersioned, EncodeVersioned};
 use parity_scale_codec::DecodeAll;
 use parking_lot::Mutex;
+use tokio::sync::watch;
 
 use crate::block::CommittedBlock;
 
@@ -44,6 +45,8 @@ pub struct Kura {
     block_store: Mutex<BlockStore>,
     /// The array of block hashes and a slot for an arc of the block. This is normally recovered from the index file.
     block_data: Mutex<BlockData>,
+    /// Block count watcher, to notify listeners when new blocks are stored
+    block_count_watch: watch::Sender<usize>,
     /// Path to file for plain text blocks.
     block_plain_text_path: Option<PathBuf>,
     /// At most N last blocks will be stored in memory.
@@ -80,6 +83,10 @@ impl Kura {
         let kura = Arc::new(Self {
             block_store: Mutex::new(block_store),
             block_data: Mutex::new(block_data),
+            block_count_watch: {
+                let (tx, _rx) = watch::channel(block_count);
+                tx
+            },
             block_plain_text_path,
             blocks_in_memory: config.blocks_in_memory,
             init_block_count: block_count,
@@ -94,6 +101,10 @@ impl Kura {
         Arc::new(Self {
             block_store: Mutex::new(BlockStore::new(PathBuf::new())),
             block_data: Mutex::new(Vec::new()),
+            block_count_watch: {
+                let (tx, _rx) = watch::channel(0);
+                tx
+            },
             block_plain_text_path: None,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             init_block_count: 0,
@@ -352,7 +363,10 @@ impl Kura {
     /// Put a block in kura's in memory block store.
     pub fn store_block(&self, block: impl Into<Arc<SignedBlock>>) {
         let block = block.into();
-        self.block_data.lock().push((block.hash(), Some(block)));
+        let mut guard = self.block_data.lock();
+        guard.push((block.hash(), Some(block)));
+        self.block_count_watch
+            .send_modify(|value| *value = guard.len());
     }
 
     /// Replace the block in `Kura`'s in memory block store.
@@ -380,6 +394,11 @@ impl Kura {
     /// Returns count of blocks Kura currently holds
     pub fn blocks_count(&self) -> usize {
         self.block_data.lock().len()
+    }
+
+    /// Subscribe to blocks count
+    pub fn subscribe_blocks_count(&self) -> watch::Receiver<usize> {
+        self.block_count_watch.subscribe()
     }
 }
 
@@ -914,7 +933,7 @@ impl<T> AddErrContextExt<T> for Result<T, std::io::Error> {
 mod tests {
     use std::{str::FromStr, thread, time::Duration};
 
-    use iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY;
+    use iroha_config::{base::WithOrigin, parameters::defaults::kura::BLOCKS_IN_MEMORY};
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::Account,
@@ -925,6 +944,7 @@ mod tests {
         transaction::TransactionBuilder,
         ChainId, Level,
     };
+    use iroha_futures::supervisor::Supervisor;
     use iroha_genesis::GenesisBuilder;
     use iroha_test_samples::{
         gen_account_in, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
@@ -1424,6 +1444,56 @@ mod tests {
             let block = read_block(&store, i)?;
             assert_eq!(block, *blocks.get(i).unwrap());
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn watch_blocks() -> eyre::Result<()> {
+        const TICK: Duration = Duration::from_millis(50);
+
+        let temp = TempDir::new()?;
+        let cfg = Config {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp.path().to_path_buf()),
+            blocks_in_memory: nonzero!(10usize),
+            debug_output_new_blocks: false,
+        };
+
+        let (kura, count) = Kura::new(&cfg)?;
+        let mut watch = kura.subscribe_blocks_count();
+
+        assert_eq!(*watch.borrow_and_update(), 0);
+        assert_eq!(count.0, 0);
+
+        // Start Kura to store blocks on disk -> to restore them later
+        let mut sup = Supervisor::new();
+        let signal = sup.shutdown_signal();
+        sup.monitor(Kura::start(kura.clone(), sup.shutdown_signal()));
+        let sup_join = tokio::spawn(sup.start());
+
+        let mut blocks = DummyBlocks::new();
+        kura.store_block(blocks.next());
+
+        tokio::time::timeout(TICK, watch.changed()).await??;
+        assert_eq!(*watch.borrow_and_update(), 1);
+
+        kura.store_block(blocks.next());
+        kura.store_block(blocks.next());
+
+        tokio::time::timeout(TICK, watch.changed()).await??;
+        assert_eq!(*watch.borrow_and_update(), 3);
+
+        // Now, restart Kura and ensure that the init block count in watcher is correct
+
+        signal.send();
+        tokio::time::timeout(Duration::from_secs(1), sup_join).await???;
+
+        let (kura, count) = Kura::new(&cfg)?;
+        let watch = kura.subscribe_blocks_count();
+
+        assert_eq!(count.0, 3);
+        assert_eq!(*watch.borrow(), 3);
 
         Ok(())
     }

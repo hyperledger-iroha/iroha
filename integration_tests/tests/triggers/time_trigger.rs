@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use eyre::Result;
+use futures_util::{pin_mut, Stream, StreamExt as _};
 use iroha::{
     client::Client,
     data_model::{
@@ -12,6 +13,7 @@ use iroha::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::{gen_account_in, load_sample_wasm, ALICE_ID};
+use tokio::task::spawn_blocking;
 
 use crate::triggers::get_asset_value;
 
@@ -91,12 +93,12 @@ fn mint_asset_after_3_sec() -> Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "should be addressed in #5432"]
-fn pre_commit_trigger_should_be_executed() -> Result<()> {
+async fn pre_commit_trigger_should_be_executed() -> Result<()> {
     const CHECKS_COUNT: usize = 5;
 
-    let (network, rt) = NetworkBuilder::new().start_blocking()?;
+    let network = NetworkBuilder::new().start().await?;
     let test_client = network.client();
 
     let asset_definition_id = "rose#wonderland".parse().expect("Valid");
@@ -104,7 +106,8 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
     let asset_id = AssetId::new(asset_definition_id, account_id.clone());
 
     // Start listening BEFORE submitting any transaction not to miss any block committed event
-    let event_listener = get_block_committed_event_listener(&test_client)?;
+    let event_listener = get_block_committed_event_listener(&test_client).await?;
+    pin_mut!(event_listener);
 
     let instruction = Mint::asset_numeric(1u32, asset_id.clone());
     let register_trigger = Register::trigger(Trigger::new(
@@ -116,27 +119,35 @@ fn pre_commit_trigger_should_be_executed() -> Result<()> {
             TimeEventFilter::new(ExecutionTime::PreCommit),
         ),
     ));
-    test_client.submit(register_trigger)?;
+    spawn_blocking({
+        let client = test_client.clone();
+        move || client.submit(register_trigger)
+    })
+    .await??;
 
     // Waiting for empty block to be committed
-    rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 4).await })?;
+    network.ensure_blocks_with(|x| x.total >= 4).await?;
 
     let mut prev_value = get_asset_value(&test_client, asset_id.clone());
-    for (i, _) in event_listener.take(CHECKS_COUNT).enumerate() {
+    let mut stream = event_listener.take(CHECKS_COUNT).enumerate();
+    while let Some((i, _)) = stream.next().await {
         // ISI just to create a new block
         let sample_isi = SetKeyValue::account(
             account_id.clone(),
             "key".parse::<Name>()?,
             "value".parse::<Json>()?,
         );
-        test_client.submit(sample_isi)?;
+
+        spawn_blocking({
+            let client = test_client.clone();
+            move || client.submit(sample_isi)
+        })
+        .await??;
 
         // Waiting for empty block to be committed
-        rt.block_on(async {
-            network
-                .ensure_blocks_with(|x| x.total >= 6 + (i as u64) * 2)
-                .await
-        })?;
+        network
+            .ensure_blocks_with(|x| x.total >= 6 + (i as u64) * 2)
+            .await?;
 
         let new_value = get_asset_value(&test_client, asset_id.clone());
         assert_eq!(new_value, prev_value.checked_add(numeric!(2)).unwrap());
@@ -151,7 +162,7 @@ fn mint_nft_for_every_user_every_1_sec() -> Result<()> {
     const TRIGGER_PERIOD: Duration = Duration::from_millis(1000);
     const EXPECTED_COUNT: u64 = 4;
 
-    let (network, _rt) = NetworkBuilder::new()
+    let (network, rt) = NetworkBuilder::new()
         .with_default_pipeline_time()
         .start_blocking()?;
     let test_client = network.client();
@@ -176,7 +187,8 @@ fn mint_nft_for_every_user_every_1_sec() -> Result<()> {
     test_client.submit_all_blocking(register_accounts)?;
 
     // Start listening BEFORE submitting any transaction not to miss any block committed event
-    let event_listener = get_block_committed_event_listener(&test_client)?;
+    let event_listener = rt.block_on(get_block_committed_event_listener(&test_client))?;
+    pin_mut!(event_listener);
 
     // Registering trigger
     // Offset into the future to be able to register trigger
@@ -198,13 +210,13 @@ fn mint_nft_for_every_user_every_1_sec() -> Result<()> {
     std::thread::sleep(offset);
 
     // Time trigger will be executed on block commits, so we have to produce some transactions
-    submit_sample_isi_on_every_block_commit(
+    rt.block_on(submit_sample_isi_on_every_block_commit(
         event_listener,
         &test_client,
         &alice_id,
         TRIGGER_PERIOD,
         usize::try_from(EXPECTED_COUNT)?,
-    )?;
+    ))?;
 
     // Checking results
     for account_id in accounts {
@@ -234,30 +246,32 @@ fn mint_nft_for_every_user_every_1_sec() -> Result<()> {
 }
 
 /// Get block committed event listener
-fn get_block_committed_event_listener(
+async fn get_block_committed_event_listener(
     client: &Client,
-) -> Result<impl Iterator<Item = Result<EventBox>>> {
+) -> Result<impl Stream<Item = Result<EventBox>>> {
     let block_filter = BlockEventFilter::default().for_status(BlockStatus::Applied);
-    client.listen_for_events([block_filter])
+    client.listen_for_events([block_filter]).await
 }
 
 /// Submit some sample ISIs to create new blocks
-fn submit_sample_isi_on_every_block_commit(
-    block_committed_event_listener: impl Iterator<Item = Result<EventBox>>,
+async fn submit_sample_isi_on_every_block_commit(
+    block_committed_event_listener: impl Stream<Item = Result<EventBox>> + Unpin,
     test_client: &Client,
     account_id: &AccountId,
     timeout: Duration,
     times: usize,
 ) -> Result<()> {
-    for _ in block_committed_event_listener.take(times) {
-        std::thread::sleep(timeout);
+    let mut stream = block_committed_event_listener.take(times);
+    while let Some(_) = stream.next().await {
+        tokio::time::sleep(timeout).await;
         // ISI just to create a new block
         let sample_isi = SetKeyValue::account(
             account_id.clone(),
             "key".parse::<Name>()?,
             Json::new("value"),
         );
-        test_client.submit(sample_isi)?;
+        let client = test_client.clone();
+        spawn_blocking(move || client.submit(sample_isi)).await??;
     }
 
     Ok(())
