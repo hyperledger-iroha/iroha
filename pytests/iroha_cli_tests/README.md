@@ -194,3 +194,7 @@ allure serve allure-results
 ```
 
 The `allure-results` argument specifies the directory where the report is stored. After running this command, you will be able to view the report in your web browser by navigating to `http://localhost:port`, where `port` is the port number displayed in the terminal output.
+
+## Nix tool
+
+See [../../scripts/pytests.nix]

@@ -28,3 +28,7 @@ To run the automated tests, use the following command:
 ```bash
 poetry run pytest
 ```
+
+## Nix tool
+
+See [../../scripts/pytests.nix]
