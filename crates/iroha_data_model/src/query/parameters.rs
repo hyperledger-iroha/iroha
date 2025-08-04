@@ -70,6 +70,7 @@ mod model {
     }
 
     /// Struct for sorting requests
+    // TODO: rename to `QuerySortingParams`?
     #[derive(
         Debug,
         Clone,
@@ -129,6 +130,28 @@ mod model {
         pub sorting: Sorting,
         pub fetch_size: FetchSize,
     }
+
+    /// Specifies sort ordering.
+    #[derive(
+        Debug,
+        Copy,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Deserialize,
+        Serialize,
+        IntoSchema,
+        Encode,
+        Decode,
+    )]
+    pub enum Order {
+        /// Ascending
+        Ascending,
+        /// Descending
+        Descending,
+    }
 }
 
 impl Sorting {
@@ -142,5 +165,5 @@ impl Sorting {
 
 pub mod prelude {
     //! Prelude: re-export most commonly used traits, structs and macros from this module.
-    pub use super::{FetchSize, Pagination, Sorting};
+    pub use super::{FetchSize, Order, Pagination, Sorting};
 }

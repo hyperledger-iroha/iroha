@@ -450,32 +450,77 @@ mod tests {
     }
 
     #[test]
-    async fn find_all_blocks() -> Result<()> {
+    async fn find_all_blocks_desc() -> Result<()> {
         let num_blocks = 100;
 
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
-        let blocks = ValidQuery::execute(FindBlocks, CompoundPredicate::PASS, &state.view())?
-            .collect::<Vec<_>>();
+        let blocks = ValidQuery::execute(
+            FindBlocks::new(Order::Descending),
+            CompoundPredicate::PASS,
+            &state.view(),
+        )?
+        .collect::<Vec<_>>();
 
         assert_eq!(blocks.len() as u64, num_blocks);
         assert!(blocks
             .windows(2)
-            .all(|wnd| wnd[0].header() >= wnd[1].header()));
+            .all(|wnd| wnd[0].header() > wnd[1].header()));
 
         Ok(())
     }
 
     #[test]
-    async fn find_all_block_headers() -> Result<()> {
+    async fn find_all_blocks_asc() -> Result<()> {
         let num_blocks = 100;
 
         let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
-        let block_headers =
-            ValidQuery::execute(FindBlockHeaders, CompoundPredicate::PASS, &state.view())?
-                .collect::<Vec<_>>();
+        let blocks = ValidQuery::execute(
+            FindBlocks::new(Order::Ascending),
+            CompoundPredicate::PASS,
+            &state.view(),
+        )?
+        .collect::<Vec<_>>();
+
+        assert_eq!(blocks.len() as u64, num_blocks);
+        assert!(blocks
+            .windows(2)
+            .all(|wnd| wnd[0].header() < wnd[1].header()));
+
+        Ok(())
+    }
+
+    #[test]
+    async fn find_all_block_headers_desc() -> Result<()> {
+        let num_blocks = 100;
+
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let block_headers = ValidQuery::execute(
+            FindBlockHeaders::new(Order::Descending),
+            CompoundPredicate::PASS,
+            &state.view(),
+        )?
+        .collect::<Vec<_>>();
 
         assert_eq!(block_headers.len() as u64, num_blocks);
-        assert!(block_headers.windows(2).all(|wnd| wnd[0] >= wnd[1]));
+        assert!(block_headers.windows(2).all(|wnd| wnd[0] > wnd[1]));
+
+        Ok(())
+    }
+
+    #[test]
+    async fn find_all_block_headers_asc() -> Result<()> {
+        let num_blocks = 100;
+
+        let state = state_with_test_blocks_and_transactions(num_blocks, 1, 1)?;
+        let block_headers = ValidQuery::execute(
+            FindBlockHeaders::new(Order::Ascending),
+            CompoundPredicate::PASS,
+            &state.view(),
+        )?
+        .collect::<Vec<_>>();
+
+        assert_eq!(block_headers.len() as u64, num_blocks);
+        assert!(block_headers.windows(2).all(|wnd| wnd[0] < wnd[1]));
 
         Ok(())
     }
@@ -490,7 +535,7 @@ mod tests {
             .expect("state is empty");
 
         assert_eq!(
-            FindBlockHeaders::new()
+            FindBlockHeaders::new(Order::Descending)
                 .execute(
                     CompoundPredicate::<BlockHeader>::build(|header| header.hash.eq(block.hash())),
                     &state_view,
@@ -501,7 +546,7 @@ mod tests {
             block.header()
         );
         assert!(
-            FindBlockHeaders::new()
+            FindBlockHeaders::new(Order::Descending)
                 .execute(
                     CompoundPredicate::<BlockHeader>::build(|header| {
                         header

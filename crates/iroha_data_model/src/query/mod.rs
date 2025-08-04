@@ -1071,20 +1071,26 @@ pub mod block {
 
     use derive_more::Display;
 
+    use crate::prelude::Order;
+
     queries! {
-        /// [`FindBlocks`] Iroha Query lists all blocks sorted by
-        /// height in descending order
+        /// [`FindBlocks`] Iroha Query lists all blocks
         #[derive(Copy, Display)]
         #[display(fmt = "Find all blocks")]
         #[ffi_type]
-        pub struct FindBlocks;
+        pub struct FindBlocks {
+            /// Sort blocks by height
+            pub order: Order
+        }
 
         /// [`FindBlockHeaders`] Iroha Query lists all block headers
-        /// sorted by height in descending order
         #[derive(Copy, Display)]
         #[display(fmt = "Find all block headers")]
         #[ffi_type]
-        pub struct FindBlockHeaders;
+        pub struct FindBlockHeaders {
+            /// Sort blocks by height
+            pub order: Order
+        }
     }
 
     /// The prelude re-exports most commonly used traits, structs and macros from this crate.

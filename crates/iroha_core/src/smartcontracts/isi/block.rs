@@ -1,4 +1,7 @@
 //! This module contains trait implementations related to block queries
+
+use std::sync::Arc;
+
 use eyre::Result;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
@@ -10,6 +13,20 @@ use nonzero_ext::nonzero;
 use super::*;
 use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 
+fn iter_blocks<'a>(
+    state: &'a impl StateReadOnly,
+    order: Order,
+) -> impl Iterator<Item = Arc<SignedBlock>> + 'a {
+    let iter = state.all_blocks(nonzero!(1usize));
+
+    let iter: Box<dyn Iterator<Item = Arc<SignedBlock>>> = match order {
+        Order::Ascending => Box::new(iter),
+        Order::Descending => Box::new(iter.rev()),
+    };
+
+    iter
+}
+
 impl ValidQuery for FindBlocks {
     #[metrics(+"find_blocks")]
     fn execute(
@@ -17,9 +34,7 @@ impl ValidQuery for FindBlocks {
         filter: CompoundPredicate<SignedBlock>,
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail> {
-        Ok(state_ro
-            .all_blocks(nonzero!(1_usize))
-            .rev()
+        Ok(iter_blocks(state_ro, self.order)
             .filter(move |block| filter.applies(block))
             .map(|block| (*block).clone()))
     }
@@ -32,9 +47,7 @@ impl ValidQuery for FindBlockHeaders {
         filter: CompoundPredicate<BlockHeader>,
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail> {
-        Ok(state_ro
-            .all_blocks(nonzero!(1_usize))
-            .rev()
+        Ok(iter_blocks(state_ro, self.order)
             .filter(move |block| filter.applies(&block.header()))
             .map(|block| block.header()))
     }
