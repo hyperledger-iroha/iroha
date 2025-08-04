@@ -308,30 +308,30 @@ impl Client {
                 .build()
                 .unwrap();
 
-            let (submit_tx, submit_rx) = tokio::sync::oneshot::channel();
-            let _handle = scope.spawn(|| {
-                let result = self.submit_transaction(transaction);
-                let _ = submit_tx.send(result);
-            });
-            let ((), _hash) = rt.block_on(async move {
-                let confirm = self.wait_tx_confirmation(hash);
-                let submit = async { submit_rx.await.expect("channel must not be closed") };
-                tokio::try_join!(confirm, submit)
-            })?;
+            rt.block_on(async move {
+                let filters = vec![
+                    TransactionEventFilter::default().for_hash(hash).into(),
+                    PipelineEventFilterBox::from(
+                        BlockEventFilter::default().for_status(BlockStatus::Applied),
+                    ),
+                ];
+                let events = self.listen_for_events(filters).await?;
 
-            Ok(hash)
-        })
+                let (submit_tx, submit_rx) = tokio::sync::oneshot::channel();
+                let _handle = scope.spawn(|| {
+                    let result = self.submit_transaction(transaction);
+                    let _ = submit_tx.send(result);
+                });
+                let _hash: HashOf<_> = submit_rx.await.expect("can only fail if submit panics")?;
+
+                self.wait_tx_applied(events).await
+            })
+        })?;
+
+        Ok(hash)
     }
 
-    async fn wait_tx_confirmation(&self, hash: HashOf<SignedTransaction>) -> Result<()> {
-        let filters = vec![
-            TransactionEventFilter::default().for_hash(hash).into(),
-            PipelineEventFilterBox::from(
-                BlockEventFilter::default().for_status(BlockStatus::Applied),
-            ),
-        ];
-
-        let events = self.listen_for_events(filters).await?;
+    async fn wait_tx_applied(&self, events: impl Stream<Item = Result<EventBox>>) -> Result<()> {
         pin_mut!(events);
 
         let confirmation_loop = async {
@@ -354,7 +354,7 @@ impl Client {
                         PipelineEventBox::Block(block_event) => {
                             if Some(block_event.header().height()) == block_height {
                                 if let BlockStatus::Applied = block_event.status() {
-                                    return Ok(hash);
+                                    return Ok(());
                                 }
                             }
                         }
