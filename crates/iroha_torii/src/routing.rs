@@ -106,63 +106,21 @@ pub mod block {
     use stream::WebSocketScale;
 
     use super::*;
-    use crate::block;
-
-    /// Type for any error during blocks streaming
-    #[derive(Debug, displaydoc::Display, thiserror::Error)]
-    enum Error {
-        /// Block consumption resulted in an error: {_0}
-        Consumer(#[from] Box<block::Error>),
-        /// Connection is closed
-        Close,
-    }
-
-    impl From<block::Error> for Error {
-        fn from(error: block::Error) -> Self {
-            match error {
-                block::Error::Stream(err) if matches!(*err, stream::Error::Closed) => Self::Close,
-                error => Self::Consumer(Box::new(error)),
-            }
-        }
-    }
-
-    type Result<T> = core::result::Result<T, Error>;
+    use crate::block::Consumer;
 
     #[iroha_futures::telemetry_future]
     pub async fn handle_blocks_stream(kura: Arc<Kura>, stream: WebSocket) -> eyre::Result<()> {
         let mut stream = WebSocketScale(stream);
-        let init_and_subscribe = async {
-            let mut consumer = block::Consumer::new(&mut stream, kura).await?;
-            subscribe_forever(&mut consumer).await
+        let init_and_serve = async {
+            let consumer = block::Consumer::new(&mut stream, kura).await?;
+            consumer.serve().await
         };
 
-        match init_and_subscribe.await {
-            Ok(()) => stream.close().await.map_err(Into::into),
-            Err(Error::Close) => Ok(()),
+        match init_and_serve.await {
             Err(err) => {
                 // NOTE: try close websocket and return initial error
                 let _ = stream.close().await;
                 Err(err.into())
-            }
-        }
-    }
-
-    /// Make endless `consumer` subscription for `blocks`
-    ///
-    /// Ideally should return `Result<!>` cause it either runs forever or returns error
-    async fn subscribe_forever(consumer: &mut block::Consumer<'_>) -> Result<()> {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
-        loop {
-            tokio::select! {
-                // Wait for stream to be closed by client
-                closed = consumer.stream.closed() => {
-                    match closed {
-                        Ok(()) => return Err(Error::Close),
-                        Err(err) => return Err(block::Error::from(err).into())
-                    }
-                }
-                // This branch sends blocks
-                _ = interval.tick() => consumer.consume().await?,
             }
         }
     }

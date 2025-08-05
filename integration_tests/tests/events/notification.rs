@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use eyre::Result;
-use futures_util::StreamExt;
+use futures_util::{pin_mut, StreamExt};
 use iroha::data_model::prelude::*;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
@@ -31,12 +31,13 @@ async fn trigger_completion_success_should_produce_event() -> Result<()> {
     let client = network.client();
     spawn_blocking(move || client.submit_blocking(register_trigger)).await??;
 
-    let mut events = network
+    let events = network
         .client()
-        .listen_for_events_async([TriggerCompletedEventFilter::new()
+        .listen_for_events([TriggerCompletedEventFilter::new()
             .for_trigger(trigger_id.clone())
             .for_outcome(TriggerCompletedOutcomeType::Success)])
         .await?;
+    pin_mut!(events);
 
     let call_trigger = ExecuteTrigger::new(trigger_id);
     let client = network.client();
@@ -70,12 +71,13 @@ async fn trigger_completion_failure_should_produce_event() -> Result<()> {
     let client = network.client();
     spawn_blocking(move || client.submit_blocking(register_trigger)).await??;
 
-    let mut events = network
+    let events = network
         .client()
-        .listen_for_events_async([TriggerCompletedEventFilter::new()
+        .listen_for_events([TriggerCompletedEventFilter::new()
             .for_trigger(trigger_id.clone())
             .for_outcome(TriggerCompletedOutcomeType::Failure)])
         .await?;
+    pin_mut!(events);
 
     let call_trigger = ExecuteTrigger::new(trigger_id);
     let client = network.client();

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use eyre::Result;
-use futures_util::StreamExt;
+use futures_util::{pin_mut, StreamExt};
 use iroha::data_model::{
     events::pipeline::{TransactionEventFilter, TransactionStatus},
     isi::error::InstructionExecutionError,
@@ -46,9 +46,10 @@ async fn test_with_instruction_and_status(
     // When
     let transaction = client.build_transaction(exec, Metadata::default());
     let hash = transaction.hash();
-    let mut events = client
-        .listen_for_events_async([TransactionEventFilter::default().for_hash(hash)])
+    let events = client
+        .listen_for_events([TransactionEventFilter::default().for_hash(hash)])
         .await?;
+    pin_mut!(events);
     spawn_blocking(move || client.submit_transaction(&transaction)).await??;
 
     // Then
