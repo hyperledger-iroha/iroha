@@ -2072,11 +2072,6 @@
         "tag": "Instructions",
         "discriminant": 0,
         "type": "Vec<InstructionBox>"
-      },
-      {
-        "tag": "Wasm",
-        "discriminant": 1,
-        "type": "WasmSmartContract"
       }
     ]
   },
@@ -2326,6 +2321,18 @@
       }
     ]
   },
+  "GenesisTriggerModule": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "TriggerId"
+      },
+      {
+        "name": "action",
+        "type": "GenesisWasmAction"
+      }
+    ]
+  },
   "GenesisWasmAction": {
     "Struct": [
       {
@@ -2343,18 +2350,6 @@
       {
         "name": "filter",
         "type": "EventFilterBox"
-      }
-    ]
-  },
-  "GenesisWasmTrigger": {
-    "Struct": [
-      {
-        "name": "id",
-        "type": "TriggerId"
-      },
-      {
-        "name": "action",
-        "type": "GenesisWasmAction"
       }
     ]
   },
@@ -2546,6 +2541,11 @@
         "tag": "Custom",
         "discriminant": 13,
         "type": "CustomInstruction"
+      },
+      {
+        "tag": "ExecuteWasm",
+        "discriminant": 14,
+        "type": "WasmExecutable<WasmSmartContract>"
       }
     ]
   },
@@ -2614,6 +2614,11 @@
         "tag": "InvariantViolation",
         "discriminant": 8,
         "type": "String"
+      },
+      {
+        "tag": "WasmExecution",
+        "discriminant": 9,
+        "type": "WasmExecutionError"
       }
     ]
   },
@@ -2686,6 +2691,10 @@
       {
         "tag": "Custom",
         "discriminant": 13
+      },
+      {
+        "tag": "ExecuteWasm",
+        "discriminant": 14
       }
     ]
   },
@@ -4516,7 +4525,7 @@
       },
       {
         "name": "wasm_triggers",
-        "type": "Vec<GenesisWasmTrigger>"
+        "type": "Vec<GenesisTriggerModule>"
       },
       {
         "name": "topology",
@@ -5694,13 +5703,8 @@
         "type": "InstructionExecutionFail"
       },
       {
-        "tag": "WasmExecution",
-        "discriminant": 4,
-        "type": "WasmExecutionFail"
-      },
-      {
         "tag": "TriggerExecution",
-        "discriminant": 5,
+        "discriminant": 4,
         "type": "TriggerExecutionFail"
       }
     ]
@@ -6362,8 +6366,8 @@
   "Vec<EventFilterBox>": {
     "Vec": "EventFilterBox"
   },
-  "Vec<GenesisWasmTrigger>": {
-    "Vec": "GenesisWasmTrigger"
+  "Vec<GenesisTriggerModule>": {
+    "Vec": "GenesisTriggerModule"
   },
   "Vec<HashOf<BlockHeader>>": {
     "Vec": "HashOf<BlockHeader>"
@@ -6473,7 +6477,15 @@
   "Vec<u8>": {
     "Vec": "u8"
   },
-  "WasmExecutionFail": {
+  "WasmExecutable<WasmSmartContract>": {
+    "Struct": [
+      {
+        "name": "object",
+        "type": "WasmSmartContract"
+      }
+    ]
+  },
+  "WasmExecutionError": {
     "Struct": [
       {
         "name": "reason",
