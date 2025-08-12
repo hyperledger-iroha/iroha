@@ -24,6 +24,7 @@ async fn multiple_genesis_4_peers_2_genesis() -> eyre::Result<()> {
 
 async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre::Result<()> {
     let network = NetworkBuilder::new().with_peers(n_peers).build();
+    let genesis = network.genesis();
     timeout(
         network.peer_startup_timeout(),
         network
@@ -32,9 +33,9 @@ async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre:
             .enumerate()
             .map(|(i, peer)| {
                 let cfg = network.config_layers();
-                let genesis = (i < n_genesis_peers).then_some(network.genesis());
+                let genesis = genesis.clone();
                 async move {
-                    peer.start(cfg, genesis.as_ref()).await;
+                    peer.start(cfg, (i < n_genesis_peers).then_some(&genesis)).await;
                     peer.once_block(1).await;
                 }
             })
