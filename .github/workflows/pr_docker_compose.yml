@@ -22,7 +22,7 @@ jobs:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # FIXME: it caches well for binaries build, but seems to ignore wasm32 target
       - uses: Swatinem/rust-cache@v2
         with:
@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Download WASMs
         uses: actions/download-artifact@v4
         with:
