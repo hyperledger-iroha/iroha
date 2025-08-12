@@ -68,4 +68,4 @@ By following this list of optimization steps you can reduce the size of your bin
   ```
 
 Following these steps is the bare minimum that can be done to all WASM smart contracts.
-We encourage you to profile the binaries [using twiggy](https://rustwasm.github.io/twiggy/) to further reduce their size.
+We encourage you to profile the binaries [using twiggy](https://github.com/AlexEne/twiggy) to further reduce their size.
