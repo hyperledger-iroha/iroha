@@ -9,10 +9,7 @@ use std::{
 use futures::{stream::FuturesUnordered, StreamExt};
 use iroha_config::parameters::actual::Network as Config;
 use iroha_crypto::KeyPair;
-use iroha_data_model::{
-    prelude::{Peer, PeerId},
-    Identifiable,
-};
+use iroha_data_model::prelude::{Peer, PeerId};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use iroha_primitives::addr::SocketAddr;
