@@ -12,7 +12,6 @@ use error_stack::ResultExt;
 use expect_test::expect;
 use iroha_config::parameters::{actual::Root as Config, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader};
-use iroha_data_model::Identifiable;
 use thiserror::Error;
 
 fn fixtures_dir() -> PathBuf {
