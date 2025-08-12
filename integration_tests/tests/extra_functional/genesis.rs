@@ -35,7 +35,8 @@ async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre:
                 let cfg = network.config_layers();
                 let genesis = genesis.clone();
                 async move {
-                    peer.start(cfg, (i < n_genesis_peers).then_some(&genesis)).await;
+                    peer.start(cfg, (i < n_genesis_peers).then_some(&genesis))
+                        .await;
                     peer.once_block(1).await;
                 }
             })
