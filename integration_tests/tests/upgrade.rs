@@ -2,7 +2,7 @@
 
 use executor_custom_data_model::{complex_isi::NumericQuery, permissions::CanControlDomainLives};
 use eyre::{Context, Result};
-use futures_util::TryStreamExt as _;
+use futures_util::{pin_mut, TryStreamExt as _};
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_executor_data_model::permission::{domain::CanUnregisterDomain, Permission as _};
 use iroha_test_network::*;
@@ -489,10 +489,11 @@ fn migration_should_cause_upgrade_event() {
 
     let events_client = client.clone();
     let task = rt.spawn(async move {
-        let mut stream = events_client
-            .listen_for_events_async([ExecutorEventFilter::new()])
+        let stream = events_client
+            .listen_for_events([ExecutorEventFilter::new()])
             .await
             .unwrap();
+        pin_mut!(stream);
         while let Some(event) = stream.try_next().await.unwrap() {
             if let EventBox::Data(DataEvent::Executor(ExecutorEvent::Upgraded(executor_upgrade))) =
                 event

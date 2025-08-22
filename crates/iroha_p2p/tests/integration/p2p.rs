@@ -11,7 +11,7 @@ use futures::{prelude::*, stream::FuturesUnordered, task::AtomicWaker};
 use iroha_config::parameters::actual::Network as Config;
 use iroha_config_base::WithOrigin;
 use iroha_crypto::KeyPair;
-use iroha_data_model::{prelude::Peer, Identifiable};
+use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{prelude::*, test_logger};
 use iroha_p2p::{network::message::*, peer::message::PeerMessage, NetworkHandle};

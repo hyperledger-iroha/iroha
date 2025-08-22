@@ -20,7 +20,6 @@ use iroha::{
     data_model::prelude::*,
 };
 use thiserror::Error;
-use tokio::runtime::Runtime;
 
 /// Iroha Client CLI provides a simple way to interact with the Iroha Web API.
 #[derive(clap::Parser, Debug)]
@@ -385,7 +384,7 @@ mod filter {
 }
 
 mod events {
-
+    use futures::pin_mut;
     use iroha::data_model::events::pipeline::{BlockEventFilter, TransactionEventFilter};
 
     use super::*;
@@ -436,29 +435,29 @@ mod events {
     ) -> Result<()> {
         let filter = filter.into();
         let client = context.client_from_config();
+        let timeout = timeout_or_infinity(timeout);
 
-        if let Some(timeout) = timeout {
-            eprintln!("Listening to events with filter: {filter:?} and timeout: {timeout:?}");
-            let rt = Runtime::new().wrap_err("Failed to create runtime")?;
-            rt.block_on(async {
-                let mut stream = client
-                    .listen_for_events_async([filter])
-                    .await
-                    .expect("Failed to listen for events");
-                while let Ok(event) = tokio::time::timeout(timeout, stream.try_next()).await {
-                    context.print_data(&event?)?;
-                }
-                eprintln!("Timeout period has expired.");
-                Result::<()>::Ok(())
-            })?;
-        } else {
-            eprintln!("Listening to events with filter: {filter:?}");
-            client
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async move {
+            let stream = client
                 .listen_for_events([filter])
-                .wrap_err("Failed to listen for events")?
-                .try_for_each(|event| context.print_data(&event?))?;
-        }
-        Ok(())
+                .await
+                .wrap_err("failed to subscribe to events")?;
+            pin_mut!(stream);
+
+            while let Some(event) = tokio::time::timeout(timeout, stream.try_next())
+                .await
+                .wrap_err("Timeout period has expired")??
+            {
+                context.print_data(&event)?;
+            }
+
+            Err(eyre!("Stream is closed by the server"))
+        })
     }
 }
 
@@ -491,29 +490,34 @@ mod blocks {
         timeout: Option<Duration>,
     ) -> Result<()> {
         let client = context.client_from_config();
-        if let Some(timeout) = timeout {
-            eprintln!("Listening to blocks from height: {height} and timeout: {timeout:?}");
-            let rt = Runtime::new().wrap_err("Failed to create runtime")?;
-            rt.block_on(async {
-                let mut stream = client
-                    .listen_for_blocks_async(height)
-                    .await
-                    .expect("Failed to listen for blocks");
-                while let Ok(event) = tokio::time::timeout(timeout, stream.try_next()).await {
-                    context.print_data(&event?)?;
-                }
-                eprintln!("Timeout period has expired.");
-                Result::<()>::Ok(())
-            })?;
-        } else {
-            eprintln!("Listening to blocks from height: {height}");
-            client
+        let timeout = timeout_or_infinity(timeout);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async move {
+            let stream = client
                 .listen_for_blocks(height)
-                .wrap_err("Failed to listen for blocks")?
-                .try_for_each(|event| context.print_data(&event?))?;
-        }
-        Ok(())
+                .await
+                .wrap_err("failed to subscribe to blocks")?;
+            futures::pin_mut!(stream);
+
+            while let Some(block) = tokio::time::timeout(timeout, stream.try_next())
+                .await
+                .wrap_err("Timeout period has expired")??
+            {
+                context.print_data(&block)?;
+            }
+
+            Err(eyre!("Stream is closed by the server"))
+        })
     }
+}
+
+fn timeout_or_infinity(value: Option<Duration>) -> Duration {
+    value.unwrap_or(Duration::from_secs(u64::MAX))
 }
 
 macro_rules! impl_list {

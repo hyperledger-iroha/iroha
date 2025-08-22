@@ -16,4 +16,4 @@ def test_stream_data_events_timeouts(GIVEN_currently_authorized_account):
     ):
         iroha_cli.execute("events state --timeout 1s")
 
-        iroha_cli.should(have.error("Timeout period has expired.\n"))
+        iroha_cli.should(have.error("Timeout period has expired"))

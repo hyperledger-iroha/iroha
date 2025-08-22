@@ -1,7 +1,7 @@
 use std::{num::NonZero, time::Duration};
 
 use eyre::Result;
-use futures_util::StreamExt;
+use futures_util::{pin_mut, StreamExt};
 use iroha::data_model::{
     events::pipeline::{BlockEventFilter, TransactionEventFilter},
     parameter::BlockParameter,
@@ -127,14 +127,15 @@ impl BlocksTracker {
         for (i, peer) in network.peers().iter().cloned().enumerate() {
             let tx = block_tx.clone();
             children.spawn(async move {
-                let mut events = peer
+                let events = peer
                     .client()
-                    .listen_for_events_async([
+                    .listen_for_events([
                         EventFilterBox::from(BlockEventFilter::default()),
                         TransactionEventFilter::default().into(),
                     ])
                     .await
                     .expect("peer should be up");
+                pin_mut!(events);
                 while let Some(Ok(event)) = events.next().await {
                     match event {
                         EventBox::Pipeline(PipelineEventBox::Block(x))
