@@ -196,7 +196,6 @@ mod tests {
             "kagami",
             "wasm",
             "build",
-            "--profile=release",
             "./path",
             "--cargo-args=--profile deploy",
             "--out-file=test.wasm",
@@ -213,15 +212,5 @@ mod tests {
         ])
         .unwrap();
 
-        Args::try_parse_from([
-            "kagami",
-            "wasm",
-            "build",
-            "./path",
-            "--profile=release",
-            "--cargo-args=--locked --frozen --profile deploy",
-            "--out-file=test.wasm",
-        ])
-        .unwrap();
     }
 }

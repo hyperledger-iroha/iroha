@@ -4,7 +4,7 @@ use std::{
     str::FromStr,
 };
 
-use clap::{command, Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{arg, command, Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{eyre, Context};
 use iroha_wasm_builder::{Builder, Profile};
 use owo_colors::OwoColorize;
@@ -24,20 +24,10 @@ pub enum Args {
     Build {
         #[command(flatten)]
         common: CommonArgs,
-        /// Build profile
-        #[arg(long)]
-        profile: Option<Profile>,
         /// Where to store the output WASM. If the file exists, it will be overwritten.
         #[arg(long)]
         out_file: PathBuf,
     },
-}
-
-#[derive(Parser, Debug, Default)]
-#[command(no_binary_name = true, disable_help_flag = true)]
-struct ProfileArg {
-    #[arg(long, value_enum)]
-    profile: Profile,
 }
 
 #[derive(ClapArgs, Debug, Clone)]
@@ -75,34 +65,25 @@ impl<T: Write> RunArgs<T> for Args {
             Args::Build {
                 common: CommonArgs { path, cargo_args },
                 out_file,
-                profile,
             } => {
-                let mut args = cargo_args.0.clone();
-                let mut profile_arg = Vec::<String>::with_capacity(2);
-
-                if let Some(arg_idx) = args.iter().position(|arg| arg.contains("--profile")) {
-                    if profile.is_some() {
-                        eprintln!("warning: value from \"--profile\" is ignored in favor of profile in \"--cargo-args\"");
+                let mut args = cargo_args.0;
+                let profile = match args.iter().position(|arg| arg.contains("--profile")) {
+                    Some(idx) => {
+                        let profile = args
+                            .get(idx + 1)
+                            .expect("--profile requires a value in the form: --cargo-args=\"--profile <PROFILE>..\"");
+                        let profile = profile.parse::<Profile>().expect(&format!(
+                            "unknown profile `{}`, valid options are: deploy, release",
+                            profile
+                        ));
+                        args.drain(idx..idx + 2);
+                        profile
                     }
-                    args.get(arg_idx + 1)
-                        .expect("expected format --cargo-args='--profile <PROFILE>..'")
-                        .parse::<Profile>()
-                        .expect(&format!("Unknown Profile ({})", args[arg_idx + 1]));
-                    profile_arg.extend(args.drain(arg_idx..arg_idx + 2));
-                } else if profile.is_some() {
-                    eprintln!("warning: \"--profile\" arg is deprecated; please use \"--cargo-args='--profile ..'\" instead");
-                } else {
-                    eprintln!("warning: \"--cargo-args\" missing \"--profile\"; using `release` by default. Use \"--cargo-args='--profile ..'\" to specify one.");
-                }
-
-                let matches = ProfileArg::command()
-                    .no_binary_name(true)
-                    .ignore_errors(true)
-                    .try_get_matches_from(&profile_arg)
-                    .unwrap_or_default();
-                let profile_arg = ProfileArg::from_arg_matches(&matches).unwrap_or_default();
-
-                let profile = profile_arg.profile;
+                    None => {
+                        eprintln!("warning: \"--cargo-args\" missing \"--profile\"; using `release` by default. Use --cargo-args=\"--profile <PROFILE>..\" to specify one.");
+                        Profile::Release
+                    }
+                };
 
                 let builder = Builder::new(&path, profile).cargo_args(args).show_output();
 
