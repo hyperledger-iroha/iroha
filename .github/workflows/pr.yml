@@ -27,7 +27,7 @@ jobs:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # FIXME: it caches well for binaries build, but seems to ignore wasm32 target
       - uses: Swatinem/rust-cache@v2
         with:
@@ -61,7 +61,7 @@ jobs:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     needs: pre_build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Download binaries
         uses: actions/download-artifact@v4
         with:
@@ -78,7 +78,7 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: "false"
@@ -96,7 +96,7 @@ jobs:
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
@@ -109,7 +109,7 @@ jobs:
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
@@ -126,7 +126,7 @@ jobs:
       TEST_NETWORK_BIN_IROHAD: bins/irohad
       TEST_NETWORK_BIN_IROHA: bins/iroha
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
@@ -189,7 +189,7 @@ jobs:
       BIN_IROHA: bins/iroha
       BIN_KAGAMI: bins/kagami
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
           python-version: 3.11.12
@@ -283,7 +283,7 @@ jobs:
   check_links:
     runs-on: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Restore lychee cache
         uses: actions/cache@v4
         with:
@@ -307,7 +307,7 @@ jobs:
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Download clippy and lcov artifact reports
         uses: actions/download-artifact@v4
         with:
@@ -331,7 +331,7 @@ jobs:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     needs: pre_build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Download wasm
         uses: actions/download-artifact@v4
         with:
