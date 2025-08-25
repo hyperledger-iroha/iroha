@@ -2242,8 +2242,22 @@
   "FindActiveTriggerIds": null,
   "FindAssets": null,
   "FindAssetsDefinitions": null,
-  "FindBlockHeaders": null,
-  "FindBlocks": null,
+  "FindBlockHeaders": {
+    "Struct": [
+      {
+        "name": "order",
+        "type": "Order"
+      }
+    ]
+  },
+  "FindBlocks": {
+    "Struct": [
+      {
+        "name": "order",
+        "type": "Order"
+      }
+    ]
+  },
   "FindDomains": null,
   "FindError": {
     "Enum": [
@@ -3597,6 +3611,18 @@
   },
   "Option<u64>": {
     "Option": "u64"
+  },
+  "Order": {
+    "Enum": [
+      {
+        "tag": "Ascending",
+        "discriminant": 0
+      },
+      {
+        "tag": "Descending",
+        "discriminant": 1
+      }
+    ]
   },
   "Pagination": {
     "Struct": [

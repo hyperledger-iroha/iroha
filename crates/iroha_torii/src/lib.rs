@@ -370,12 +370,12 @@ impl Error {
                 CapacityLimit => StatusCode::TOO_MANY_REQUESTS,
             },
             TooComplex => StatusCode::UNPROCESSABLE_ENTITY,
-            InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            InternalError(error) => {
+                iroha_logger::error!(?error, "Internal error occured while performing a query");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             InstructionFailed(error) => {
-                iroha_logger::error!(
-                ?error,
-                "Query validation failed with unexpected error. This means a bug inside Runtime Executor",
-            );
+                iroha_logger::error!(?error, "Query validation failed with unexpected error. This means a bug inside Runtime Executor");
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         }

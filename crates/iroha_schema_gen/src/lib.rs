@@ -392,6 +392,7 @@ types!(
     Option<bool>,
     Option<u32>,
     Option<u64>,
+    Order,
     Pagination,
     Parameter,
     ParameterChanged,
