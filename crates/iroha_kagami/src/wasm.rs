@@ -4,7 +4,7 @@ use std::{
     str::FromStr,
 };
 
-use clap::{Args as ClapArgs, Subcommand};
+use clap::{arg, command, Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{eyre, Context};
 use iroha_wasm_builder::{Builder, Profile};
 use owo_colors::OwoColorize;
@@ -24,9 +24,6 @@ pub enum Args {
     Build {
         #[command(flatten)]
         common: CommonArgs,
-        /// Build profile
-        #[arg(long, default_value = "release")]
-        profile: Profile,
         /// Where to store the output WASM. If the file exists, it will be overwritten.
         #[arg(long)]
         out_file: PathBuf,
@@ -68,11 +65,27 @@ impl<T: Write> RunArgs<T> for Args {
             Args::Build {
                 common: CommonArgs { path, cargo_args },
                 out_file,
-                profile,
             } => {
-                let builder = Builder::new(&path, profile)
-                    .cargo_args(cargo_args.0)
-                    .show_output();
+                let mut args = cargo_args.0;
+                let profile = match args.iter().position(|arg| arg.contains("--profile")) {
+                    Some(idx) => {
+                        let profile = args
+                            .get(idx + 1)
+                            .expect("--profile requires a value in the form: --cargo-args=\"--profile <PROFILE>..\"");
+                        let profile = profile.parse::<Profile>().expect(&format!(
+                            "unknown profile `{}`, valid options are: deploy, release",
+                            profile
+                        ));
+                        args.drain(idx..idx + 2);
+                        profile
+                    }
+                    None => {
+                        eprintln!("warning: \"--cargo-args\" missing \"--profile\"; using `release` by default. Use --cargo-args=\"--profile <PROFILE>..\" to specify one.");
+                        Profile::Release
+                    }
+                };
+
+                let builder = Builder::new(&path, profile).cargo_args(args).show_output();
 
                 let output = {
                     // not showing the spinner here, cargo does a progress bar for us
