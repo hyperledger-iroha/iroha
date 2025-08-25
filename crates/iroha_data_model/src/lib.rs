@@ -119,6 +119,8 @@ mod seal {
         SetParameter,
         Upgrade,
         ExecuteTrigger,
+        WasmExecutable<WasmSmartContract>,
+        WasmExecutable<TriggerModule>,
         Log,
 
         // Boxed queries

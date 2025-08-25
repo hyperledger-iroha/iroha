@@ -975,38 +975,18 @@ impl<'wrld, 'block: 'wrld, 'state: 'block> Runtime<state::SmartContract<'wrld, '
         bytes: impl AsRef<[u8]>,
     ) -> Result<()> {
         let span = wasm_log_span!("Smart contract execution", %authority);
+        let max_instrucions = state_transaction
+            .world()
+            .parameters()
+            .transaction()
+            .max_instructions();
+
         let state = state::SmartContract::new(
             authority,
             self.config,
             span,
             state::chain_state::WithMut(state_transaction),
-            state::specific::SmartContract::new(None),
-        );
-
-        self.execute_smart_contract_with_state(bytes, state)
-    }
-
-    /// Validates that the given smartcontract is eligible for execution
-    ///
-    /// # Errors
-    ///
-    /// - if instructions failed to validate, but queries are permitted
-    /// - if instruction limits are not obeyed
-    /// - if execution of the smartcontract fails (check [`Self::execute`])
-    pub fn validate(
-        &mut self,
-        state_transaction: &'wrld mut StateTransaction<'block, 'state>,
-        authority: AccountId,
-        bytes: impl AsRef<[u8]>,
-        max_instruction_count: NonZeroU64,
-    ) -> Result<()> {
-        let span = wasm_log_span!("Smart contract validation", %authority);
-        let state = state::SmartContract::new(
-            authority,
-            self.config,
-            span,
-            state::chain_state::WithMut(state_transaction),
-            state::specific::SmartContract::new(Some(LimitsExecutor::new(max_instruction_count))),
+            state::specific::SmartContract::new(Some(LimitsExecutor::new(max_instrucions))),
         );
 
         self.execute_smart_contract_with_state(bytes, state)
@@ -1017,6 +997,7 @@ impl<'wrld, 'block: 'wrld, 'state: 'block> Runtime<state::SmartContract<'wrld, '
         bytes: impl AsRef<[u8]>,
         state: state::SmartContract<'wrld, 'block, 'state>,
     ) -> Result<()> {
+        // TODO: Re-use state/fuel from the transation #5494
         let mut store = self.create_store(state);
         let smart_contract = self.create_smart_contract(&mut store, bytes)?;
 
@@ -1097,6 +1078,7 @@ impl<'wrld, 'block: 'wrld, 'state: 'block> Runtime<state::Trigger<'wrld, 'block,
             state::specific::Trigger::new(id.clone(), event),
         );
 
+        // TODO: Re-use state/fuel from the transation #5494
         let mut store = self.create_store(state);
         let instance = self.instantiate_module(module, &mut store)?;
 
@@ -1451,6 +1433,7 @@ impl<'wrld, 'block, 'state> Runtime<state::executor::Migrate<'wrld, 'block, 'sta
             state::specific::executor::Migrate,
         );
 
+        // TODO: Re-use state/fuel from the transation #5494
         let mut store = self.create_store(state);
         let instance = self.instantiate_module(module, &mut store)?;
 
@@ -1741,7 +1724,6 @@ impl<C: wasmtime::AsContextMut> GetExport for (&wasmtime::Instance, C) {
 mod tests {
     use iroha_crypto::KeyPair;
     use iroha_test_samples::gen_account_in;
-    use nonzero_ext::nonzero;
     use parity_scale_codec::Encode;
     use tokio::test;
 
@@ -1945,7 +1927,12 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let res = runtime.validate(&mut state_transaction, authority, wat, nonzero!(1_u64));
+        state_transaction
+            .world
+            .parameters
+            .transaction
+            .max_instructions = NonZeroU64::new(1_u64).unwrap();
+        let res = runtime.execute(&mut state_transaction, authority, wat);
         state_transaction.apply();
         state_block.commit();
 

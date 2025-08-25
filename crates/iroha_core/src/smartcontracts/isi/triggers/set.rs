@@ -14,7 +14,10 @@ use std::{fmt, marker::PhantomData, num::NonZeroU64};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     events::EventFilter,
-    isi::error::{InstructionExecutionError, MathError},
+    isi::{
+        error::{InstructionExecutionError, MathError},
+        InstructionBoxHashed,
+    },
     prelude::*,
     query::error::FindError,
     transaction::WasmSmartContract,
@@ -274,6 +277,32 @@ impl<'de> DeserializeSeed<'de> for WasmSeed<'_, WasmSmartContractEntry> {
         deserializer.deserialize_map(WasmSmartContractEntryVisitor { loader: self })
     }
 }
+
+/// Converts [`InstructionBoxHashed`] to [`InstructionBox`].
+/// `wasm_hash_resolver` is required to obtain wasm bytes from hash
+pub fn hashed_to_isi<F>(isi_hashed: InstructionBoxHashed, wasm_hash_resolver: F) -> InstructionBox
+where
+    F: FnOnce(HashOf<WasmSmartContract>) -> InstructionBox,
+{
+    match isi_hashed {
+        InstructionBoxHashed::Register(o) => InstructionBox::Register(o),
+        InstructionBoxHashed::Unregister(o) => InstructionBox::Unregister(o),
+        InstructionBoxHashed::Mint(o) => InstructionBox::Mint(o),
+        InstructionBoxHashed::Burn(o) => InstructionBox::Burn(o),
+        InstructionBoxHashed::Transfer(o) => InstructionBox::Transfer(o),
+        InstructionBoxHashed::SetKeyValue(o) => InstructionBox::SetKeyValue(o),
+        InstructionBoxHashed::RemoveKeyValue(o) => InstructionBox::RemoveKeyValue(o),
+        InstructionBoxHashed::Grant(o) => InstructionBox::Grant(o),
+        InstructionBoxHashed::Revoke(o) => InstructionBox::Revoke(o),
+        InstructionBoxHashed::ExecuteTrigger(o) => InstructionBox::ExecuteTrigger(o),
+        InstructionBoxHashed::SetParameter(o) => InstructionBox::SetParameter(o),
+        InstructionBoxHashed::Upgrade(o) => InstructionBox::Upgrade(o),
+        InstructionBoxHashed::Log(o) => InstructionBox::Log(o),
+        InstructionBoxHashed::Custom(o) => InstructionBox::Custom(o),
+        InstructionBoxHashed::ExecuteWasm(o) => wasm_hash_resolver(o),
+    }
+}
+
 /// Trait to perform read-only operations on [`SetBlock`], [`SetTransaction`] and [`SetView`]
 #[allow(missing_docs)]
 pub trait SetReadOnly {
@@ -289,9 +318,9 @@ pub trait SetReadOnly {
     fn contracts(&self)
         -> &impl StorageReadOnly<HashOf<WasmSmartContract>, WasmSmartContractEntry>;
 
-    /// Get original [`WasmSmartContract`] for [`TriggerId`].
-    /// Returns `None` if there's no [`Trigger`]
-    /// with specified `id` that has WASM executable
+    /// Get original [`WasmSmartContract`] for [`HashOf<WasmSmartContract>`].
+    /// Returns `None` if there's no [`WasmSmartContract`]
+    /// with specified `hash`
     #[inline]
     fn get_original_contract(
         &self,
@@ -324,14 +353,21 @@ pub trait SetReadOnly {
         } = action;
 
         let original_executable = match executable {
-            ExecutableRef::Wasm(ref blob_hash) => {
-                let original_wasm = self
-                    .get_original_contract(blob_hash)
-                    .cloned()
-                    .expect("No original smartcontract saved for trigger. This is a bug.");
-                Executable::Wasm(original_wasm)
-            }
-            ExecutableRef::Instructions(isi) => Executable::Instructions(isi),
+            ExecutableRef::Instructions(isi) => Executable::Instructions(
+                isi.into_iter()
+                    .map(|isi| -> InstructionBox {
+                        hashed_to_isi(isi, |hash| -> InstructionBox {
+                            WasmExecutable::binary(
+                                self.get_original_contract(&hash).cloned().expect(
+                                    "No original smartcontract saved for trigger. This is a bug.",
+                                ),
+                            )
+                            .into()
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
         };
 
         SpecializedAction {
@@ -688,30 +724,44 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         }
 
         let loaded_executable = match executable {
-            Executable::Wasm(bytes) => {
-                let hash = HashOf::new(&bytes);
-                // Store original executable representation to respond to queries with.
-                if let Some(WasmSmartContractEntry { count, .. }) = self.contracts.get_mut(&hash) {
-                    // Considering 1 trigger registration takes 1 second,
-                    // it would take 584 942 417 355 years to overflow.
-                    *count = count.checked_add(1).expect(
+            Executable::Instructions(instructions) => {
+                ExecutableRef::Instructions(
+                    instructions
+                        .into_iter()
+                        .map(|isi| -> Result<InstructionBoxHashed> {
+                            match isi {
+                                InstructionBox::ExecuteWasm(ref wasm) => {
+                                    let hash = HashOf::new(wasm.object());
+                                    // Store original executable representation to respond to queries with.
+                                    if let Some(WasmSmartContractEntry { count, .. }) =
+                                        self.contracts.get_mut(&hash)
+                                    {
+                                        // Considering 1 trigger registration takes 1 second,
+                                        // it would take 584 942 417 355 years to overflow.
+                                        *count = count.checked_add(1).expect(
                         "There is no way someone could register 2^64 amount of same triggers",
                     );
-                    // Cloning module is cheap, under Arc inside
-                } else {
-                    let module = wasm::load_module(engine, &bytes)?;
-                    self.contracts.insert(
-                        hash,
-                        WasmSmartContractEntry {
-                            original_contract: bytes,
-                            compiled_contract: module,
-                            count: NonZeroU64::MIN,
-                        },
-                    );
-                }
-                ExecutableRef::Wasm(hash)
+                                        // Cloning module is cheap, under Arc inside
+                                    } else {
+                                        let module = wasm::load_module(engine, wasm.object())?;
+                                        self.contracts.insert(
+                                            hash,
+                                            WasmSmartContractEntry {
+                                                original_contract: wasm.object().clone(),
+                                                compiled_contract: module,
+                                                count: NonZeroU64::MIN,
+                                            },
+                                        );
+                                    }
+                                    Ok(isi.into())
+                                }
+                                _ => Ok(isi.into()),
+                            }
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
             }
-            Executable::Instructions(instructions) => ExecutableRef::Instructions(instructions),
         };
         map(self).insert(
             trigger_id.clone(),
@@ -923,16 +973,13 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
 /// Which can be used to obtain compiled by `wasmtime` module
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ExecutableRef {
-    /// Loaded WASM
-    Wasm(HashOf<WasmSmartContract>),
     /// Vector of ISI
-    Instructions(ConstVec<InstructionBox>),
+    Instructions(ConstVec<InstructionBoxHashed>),
 }
 
 impl core::fmt::Debug for ExecutableRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Wasm(hash) => f.debug_tuple("Wasm").field(hash).finish(),
             Self::Instructions(instructions) => {
                 f.debug_tuple("Instructions").field(instructions).finish()
             }

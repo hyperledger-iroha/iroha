@@ -45,6 +45,7 @@ impl Execute for InstructionBox {
             Self::Grant(isi) => isi.execute(authority, state_transaction),
             Self::Revoke(isi) => isi.execute(authority, state_transaction),
             Self::ExecuteTrigger(isi) => isi.execute(authority, state_transaction),
+            Self::ExecuteWasm(isi) => isi.execute(authority, state_transaction),
             Self::SetParameter(isi) => isi.execute(authority, state_transaction),
             Self::Upgrade(isi) => isi.execute(authority, state_transaction),
             Self::Log(isi) => isi.execute(authority, state_transaction),

@@ -126,15 +126,17 @@ trait RunContext {
     /// Submit instructions or dump them to stdout depending on the flag
     fn finish(&mut self, instructions: impl Into<Executable>) -> Result<()> {
         let mut instructions = match instructions.into() {
-            Executable::Wasm(wasm) => {
-                if self.input_instructions() || self.output_instructions() {
+            Executable::Instructions(instructions) => {
+                let has_wasm = instructions
+                    .iter()
+                    .any(|i| matches!(i, InstructionBox::ExecuteWasm(_)));
+                if has_wasm && (self.input_instructions() || self.output_instructions()) {
                     eyre::bail!(
                         "Incompatible `--input` `--output` flags with `iroha transaction wasm`"
                     )
                 }
-                return self.submit(wasm);
+                instructions.into_vec()
             }
-            Executable::Instructions(instructions) => instructions.into_vec(),
         };
         if self.input_instructions() {
             let mut acc: Vec<InstructionBox> = parse_json5_stdin_unchecked()?;

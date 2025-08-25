@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 pub use self::model::*;
 use crate::{
     account::AccountId,
-    isi::{Instruction, InstructionBox},
+    isi::{Instruction, InstructionBox, WasmExecutable},
     metadata::Metadata,
     trigger::TriggerId,
     ChainId,
@@ -55,8 +55,6 @@ mod model {
         /// Ordered set of instructions.
         #[debug(fmt = "{_0:?}")]
         Instructions(ConstVec<InstructionBox>),
-        /// WebAssembly smartcontract
-        Wasm(WasmSmartContract),
     }
 
     /// Wrapper for byte representation of [`Executable::Wasm`].
@@ -315,7 +313,12 @@ impl<T: IntoIterator<Item = impl Instruction>> From<T> for Executable {
 
 impl From<WasmSmartContract> for Executable {
     fn from(source: WasmSmartContract) -> Self {
-        Self::Wasm(source)
+        Self::Instructions(
+            [WasmExecutable::binary(source).into()]
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into(),
+        )
     }
 }
 
@@ -430,9 +433,7 @@ impl SignedTransaction {
         extra_instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
     ) {
         let SignedTransaction::V1(tx) = self;
-        let Executable::Instructions(instructions) = &mut tx.payload.instructions else {
-            unimplemented!("Wasm executables are not subject to fault injection")
-        };
+        let Executable::Instructions(instructions) = &mut tx.payload.instructions;
         let mut modified = instructions.clone().into_vec();
         modified.extend(extra_instructions.into_iter().map(Into::into));
         *instructions = modified.into();
@@ -527,12 +528,6 @@ impl TransactionBuilder {
             .map(Into::into)
             .collect::<Vec<InstructionBox>>()
             .into();
-        self
-    }
-
-    /// Add wasm to this transaction
-    pub fn with_wasm(mut self, wasm: WasmSmartContract) -> Self {
-        self.payload.instructions = wasm.into();
         self
     }
 
@@ -735,31 +730,6 @@ pub mod error {
             pub reason: String,
         }
 
-        /// Transaction was rejected because execution of `WebAssembly` binary failed
-        #[derive(
-            Debug,
-            Display,
-            Clone,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Decode,
-            Encode,
-            Deserialize,
-            Serialize,
-            IntoSchema,
-        )]
-        #[display(fmt = "Failed to execute wasm binary: {reason}")]
-        #[serde(transparent)]
-        #[repr(transparent)]
-        // SAFETY: `WasmExecutionFail` has no trap representation in `String`
-        #[ffi_type(unsafe {robust})]
-        pub struct WasmExecutionFail {
-            /// Error which happened during execution
-            pub reason: String,
-        }
-
         /// Possible reasons for trigger-specific execution failure.
         #[derive(
             Debug,
@@ -823,8 +793,6 @@ pub mod error {
             InstructionExecution(
                 #[cfg_attr(feature = "std", source)] Box<InstructionExecutionFail>,
             ),
-            /// Failure in WebAssembly execution
-            WasmExecution(#[cfg_attr(feature = "std", source)] WasmExecutionFail),
             /// Execution of a time trigger or an invoked data trigger failed.
             TriggerExecution(#[cfg_attr(feature = "std", source)] TriggerExecutionFail),
         }
@@ -848,6 +816,7 @@ pub mod error {
                 Upgrade(_) => "upgrade",
                 Log(_) => "log",
                 Custom(_) => "custom",
+                ExecuteWasm(_) => "wasm",
             };
             write!(
                 f,
@@ -864,9 +833,6 @@ pub mod error {
     impl std::error::Error for InstructionExecutionFail {}
 
     #[cfg(feature = "std")]
-    impl std::error::Error for WasmExecutionFail {}
-
-    #[cfg(feature = "std")]
     impl std::error::Error for TriggerExecutionFail {}
 
     pub mod prelude {
@@ -874,7 +840,6 @@ pub mod error {
 
         pub use super::{
             InstructionExecutionFail, TransactionRejectionReason, TriggerExecutionFail,
-            WasmExecutionFail,
         };
     }
 }

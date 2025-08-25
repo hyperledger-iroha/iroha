@@ -13,6 +13,7 @@ mod orphans;
 // FIXME: rewrite all in async and with shorter timings
 mod time_trigger;
 mod trigger_rollback;
+mod wasm;
 
 fn get_asset_value(client: &Client, asset_id: AssetId) -> Numeric {
     let asset = client

@@ -367,9 +367,7 @@ fn unregister_trigger() -> Result<()> {
         .filter_with(|trigger| trigger.id.eq(trigger_id.clone()))
         .execute_single()?;
     let found_action = found_trigger.action();
-    let Executable::Instructions(found_instructions) = found_action.executable() else {
-        panic!("Expected instructions");
-    };
+    let Executable::Instructions(found_instructions) = found_action.executable();
     let found_trigger = Trigger::new(
         found_trigger.id().clone(),
         Action::new(

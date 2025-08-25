@@ -677,7 +677,7 @@ mod valid {
                     let accepted_tx = AcceptedTransaction::new_unchecked(tx.clone());
 
                     let (hash, result) =
-                        state_block.validate_transaction(accepted_tx, &mut wasm_cache);
+                        state_block.validate_transaction(&accepted_tx, &mut wasm_cache);
 
                     match &result {
                         Err(reason) => {
@@ -961,9 +961,8 @@ mod valid {
             if transaction.authority() != genesis_account {
                 return Err(InvalidGenesisError::UnexpectedAuthority);
             }
-            let Executable::Instructions(isi) = transaction.instructions() else {
-                return Err(InvalidGenesisError::NotInstructions);
-            };
+
+            let Executable::Instructions(isi) = transaction.instructions();
             if i == 0 {
                 let [InstructionBox::Upgrade(_)] = isi.as_ref() else {
                     return Err(InvalidGenesisError::MustUpgrade);
