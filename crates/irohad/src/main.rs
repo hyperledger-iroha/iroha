@@ -542,7 +542,6 @@ fn read_genesis(json_path: &Path) -> Result<GenesisBlock, ConfigError> {
             eprintln!(
                 "\
                 failed to build a genesis block from {}\n\
-                have you run `scripts/build_wasm.sh` to get wasm blobs?\n\
                 {err}",
                 json_path.display()
             );

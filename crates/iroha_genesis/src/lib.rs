@@ -171,7 +171,8 @@ impl GenesisSpec {
     ///
     /// # Errors
     ///
-    /// Fails if `self.executor` path fails to load [`Executor`].
+    /// Returns an error if the `self.executor` path cannot be loaded as an executor,
+    /// or if any of the `self.wasm_triggers` paths cannot be loaded as a Wasm executable.
     fn into_instruction_batches(self) -> Result<Vec<Vec<InstructionBox>>> {
         let mut instruction_batches = vec![];
 
