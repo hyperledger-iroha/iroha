@@ -10,7 +10,7 @@ cargo clippy --workspace --benches --tests --examples --all-features --manifest-
 # TODO: fails, re-enable
 # cargo clippy --workspace --benches --tests --examples --no-default-features
 # update the default genesis
-cargo run --bin kagami -- genesis --executor executor.wasm --wasm-dir libs > ./defaults/genesis.json
+cargo run --bin kagami -- genesis --creation-time 1970-01-01T00:00:00Z --executor executor.wasm --wasm-dir libs > ./defaults/genesis.json
 # update schema
 cargo run --bin kagami -- schema > ./docs/source/references/schema.json
 # update command-line help

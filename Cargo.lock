@@ -3498,6 +3498,7 @@ dependencies = [
  "clap-markdown",
  "color-eyre",
  "derive_more",
+ "humantime",
  "inquire",
  "iroha_core",
  "iroha_crypto",

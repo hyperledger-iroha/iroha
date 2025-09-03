@@ -77,7 +77,7 @@ Generate the schema used for code generation in Iroha SDKs
 
 Commands related to genesis
 
-**Usage:** `kagami genesis --executor <PATH> --wasm-dir <PATH> [COMMAND]`
+**Usage:** `kagami genesis --creation-time <CREATION_TIME> --executor <PATH> --wasm-dir <PATH> [COMMAND]`
 
 ###### **Subcommands:**
 
@@ -86,6 +86,7 @@ Commands related to genesis
 
 ###### **Options:**
 
+* `--creation-time <CREATION_TIME>` — Creation time of the genesis block in RFC 3339 format
 * `--executor <PATH>` — Relative path from the directory of output file to the executor.wasm file
 * `--wasm-dir <PATH>` — Relative path from the directory of output file to the directory that contains *.wasm libraries
 

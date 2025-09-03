@@ -5,6 +5,7 @@ use std::{
 
 use clap::Subcommand;
 use color_eyre::eyre::WrapErr as _;
+use humantime::Timestamp;
 use iroha_data_model::{isi::InstructionBox, parameter::Parameters, prelude::*};
 use iroha_executor_data_model::permission::{
     domain::CanRegisterDomain, parameter::CanSetParameters,
@@ -17,6 +18,9 @@ use crate::{Outcome, RunArgs};
 /// Generate a genesis configuration and standard-output in JSON format
 #[derive(clap::Args, Debug, Clone)]
 pub struct Args {
+    /// Creation time of the genesis block in RFC 3339 format
+    #[clap(long)]
+    creation_time: Timestamp,
     /// Relative path from the directory of output file to the executor.wasm file
     #[clap(long, value_name = "PATH")]
     executor: PathBuf,
@@ -55,13 +59,14 @@ pub enum Mode {
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let Self {
+            creation_time,
             executor,
             wasm_dir,
             mode,
         } = self;
 
         let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let builder = GenesisBuilder::new_unix_epoch(chain, executor, wasm_dir);
+        let builder = GenesisBuilder::new(chain, executor, wasm_dir, creation_time);
         let genesis = match mode.unwrap_or_default() {
             Mode::Default => generate_default(builder),
             Mode::Synthetic {
