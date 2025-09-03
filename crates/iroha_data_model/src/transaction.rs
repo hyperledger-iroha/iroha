@@ -591,10 +591,11 @@ impl TransactionBuilder {
         .into()
     }
 
-    /// Create a transaction without a signature.
+    /// Create a genesis transaction signed with a placeholder signature.
+    /// Its signature verification should be skipped by a dedicated processing flow.
     #[must_use]
-    pub fn no_sign(self) -> SignedTransaction {
-        let signature = TransactionSignature(SignatureOf::empty());
+    pub fn genesis_sign(self) -> SignedTransaction {
+        let signature = TransactionSignature(SignatureOf::genesis_transaction());
 
         SignedTransactionV1 {
             signature,

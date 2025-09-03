@@ -158,7 +158,7 @@ impl GenesisSpec {
                 creation_time_ms,
             )
             .with_instructions(instructions)
-            .no_sign();
+            .genesis_sign();
             transactions.push(transaction);
         }
 
