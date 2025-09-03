@@ -9,20 +9,10 @@ use tokio::{task::spawn_blocking, time::timeout};
 
 #[tokio::test]
 async fn all_peers_submit_genesis() -> eyre::Result<()> {
-    multiple_genesis_peers(4, 4).await
+    multiple_genesis_peers(4).await
 }
 
-#[tokio::test]
-async fn multiple_genesis_4_peers_3_genesis() -> eyre::Result<()> {
-    multiple_genesis_peers(4, 3).await
-}
-
-#[tokio::test]
-async fn multiple_genesis_4_peers_2_genesis() -> eyre::Result<()> {
-    multiple_genesis_peers(4, 2).await
-}
-
-async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre::Result<()> {
+async fn multiple_genesis_peers(n_peers: usize) -> eyre::Result<()> {
     let network = NetworkBuilder::new().with_peers(n_peers).build();
     let genesis = network.genesis();
     timeout(
@@ -30,13 +20,10 @@ async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre:
         network
             .peers()
             .iter()
-            .enumerate()
-            .map(|(i, peer)| {
+            .map(|peer| {
                 let cfg = network.config_layers();
-                let genesis = genesis.clone();
                 async move {
-                    peer.start(cfg, (i < n_genesis_peers).then_some(&genesis))
-                        .await;
+                    peer.start(cfg, genesis).await;
                     peer.once_block(1).await;
                 }
             })

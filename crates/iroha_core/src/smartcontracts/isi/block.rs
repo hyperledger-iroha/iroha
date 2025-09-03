@@ -13,10 +13,10 @@ use nonzero_ext::nonzero;
 use super::*;
 use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 
-fn iter_blocks<'a>(
-    state: &'a impl StateReadOnly,
+fn iter_blocks(
+    state: &impl StateReadOnly,
     order: Order,
-) -> impl Iterator<Item = Arc<SignedBlock>> + 'a {
+) -> impl Iterator<Item = Arc<SignedBlock>> + '_ {
     let iter = state.all_blocks(nonzero!(1usize));
 
     let iter: Box<dyn Iterator<Item = Arc<SignedBlock>>> = match order {

@@ -475,8 +475,9 @@ impl TransactionSignature {
 }
 
 impl TransactionBuilder {
+    /// Construct `TransactionBuilder`, using the provided time in milliseconds.
     #[cfg(feature = "std")]
-    fn new_with_time(chain: ChainId, authority: AccountId, creation_time_ms: u64) -> Self {
+    pub fn new_with_time(chain: ChainId, authority: AccountId, creation_time_ms: u64) -> Self {
         Self {
             payload: TransactionPayload {
                 chain,
@@ -582,6 +583,19 @@ impl TransactionBuilder {
     #[must_use]
     pub fn sign(self, private_key: &iroha_crypto::PrivateKey) -> SignedTransaction {
         let signature = TransactionSignature(SignatureOf::new(private_key, &self.payload));
+
+        SignedTransactionV1 {
+            signature,
+            payload: self.payload,
+        }
+        .into()
+    }
+
+    /// Create a genesis transaction signed with a placeholder signature.
+    /// Its signature verification should be skipped by a dedicated processing flow.
+    #[must_use]
+    pub fn genesis_sign(self) -> SignedTransaction {
+        let signature = TransactionSignature(SignatureOf::genesis_transaction());
 
         SignedTransactionV1 {
             signature,

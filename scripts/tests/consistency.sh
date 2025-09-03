@@ -42,7 +42,7 @@ do_check_swarm() {
     do_check "$cmd_base --out-file $target $extra" "$target"
 }
 
-cmd_genesis="${bin_kagami[@]} genesis generate --executor executor.wasm --wasm-dir libs --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
+cmd_genesis="${bin_kagami[@]} genesis --creation-time 1970-01-01T00:00:00Z --executor executor.wasm --wasm-dir libs"
 cmd_schema="${bin_kagami[@]} schema"
 cmd_iroha_help="${bin_iroha[@]} markdown-help"
 cmd_kagami_help="${bin_kagami[@]} markdown-help"
@@ -83,4 +83,3 @@ for task in "${tasks[@]}"; do
 done
 
 exit "$exit_code"
-

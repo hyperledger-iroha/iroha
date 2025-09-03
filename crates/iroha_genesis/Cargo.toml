@@ -19,8 +19,10 @@ iroha_executor_data_model = { workspace = true }
 derive_more = { workspace = true, features = ["deref"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
+serde_with = { workspace = true }
 eyre = { workspace = true }
 parity-scale-codec = { workspace = true }
+humantime = { workspace = true }
 
 [dev-dependencies]
 iroha_crypto = { workspace = true, features = ["rand"] }

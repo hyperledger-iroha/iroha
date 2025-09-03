@@ -283,8 +283,7 @@ async fn grant_unexisting_role_in_genesis_fail() {
     // TODO: refine error handling; check the actual STDERR printed with the expected error
     //       https://github.com/hyperledger-iroha/iroha/issues/5423
     let terminated_fut = peer.once(|e| matches!(e, PeerLifecycleEvent::Terminated { .. }));
-    peer.start(network.config_layers(), Some(&network.genesis()))
-        .await;
+    peer.start(network.config_layers(), network.genesis()).await;
     timeout(Duration::from_secs(5), terminated_fut)
         .await
         .expect("must terminate immediately");

@@ -124,12 +124,13 @@ fn minimal_config_snapshot() {
                 idle_timeout: 60s,
             },
             genesis: Genesis {
-                public_key: PublicKey(
-                    ed25519(
-                        "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB",
-                    ),
-                ),
-                file: None,
+                file: WithOrigin {
+                    value: "genesis.json",
+                    origin: File {
+                        id: ParameterId(genesis.file),
+                        path: "tests/fixtures/base.toml",
+                    },
+                },
             },
             torii: Torii {
                 address: WithOrigin {

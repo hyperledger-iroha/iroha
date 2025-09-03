@@ -212,6 +212,13 @@ impl<T> SignatureOf<T> {
         Self(Signature::new(private_key, hash.as_ref()), PhantomData)
     }
 
+    /// A placeholder signature for a genesis transaction solely to conform to the transaction format.
+    /// Its verification should be skipped by a dedicated processing flow.
+    #[inline]
+    pub fn genesis_transaction() -> Self {
+        Self(Signature::from_bytes(&[]), PhantomData)
+    }
+
     /// Verify signature for this hash
     ///
     /// # Errors

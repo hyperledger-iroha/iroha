@@ -8,10 +8,8 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami crypto`↴](#kagami-crypto)
 * [`kagami schema`↴](#kagami-schema)
 * [`kagami genesis`↴](#kagami-genesis)
-* [`kagami genesis sign`↴](#kagami-genesis-sign)
-* [`kagami genesis generate`↴](#kagami-genesis-generate)
-* [`kagami genesis generate default`↴](#kagami-genesis-generate-default)
-* [`kagami genesis generate synthetic`↴](#kagami-genesis-generate-synthetic)
+* [`kagami genesis default`↴](#kagami-genesis-default)
+* [`kagami genesis synthetic`↴](#kagami-genesis-synthetic)
 * [`kagami codec`↴](#kagami-codec)
 * [`kagami codec list-types`↴](#kagami-codec-list-types)
 * [`kagami codec scale-to-rust`↴](#kagami-codec-scale-to-rust)
@@ -79,40 +77,7 @@ Generate the schema used for code generation in Iroha SDKs
 
 Commands related to genesis
 
-**Usage:** `kagami genesis <COMMAND>`
-
-###### **Subcommands:**
-
-* `sign` — Sign the genesis block
-* `generate` — Generate a genesis configuration and standard-output in JSON format
-
-
-
-## `kagami genesis sign`
-
-Sign the genesis block
-
-**Usage:** `kagami genesis sign [OPTIONS] <--private-key <MULTIHASH>|--keypair-file <PATH>> <--public-key <MULTIHASH>|--keypair-file <PATH>> <GENESIS_FILE>`
-
-###### **Arguments:**
-
-* `<GENESIS_FILE>` — Path to genesis json file
-
-###### **Options:**
-
-* `--private-key <MULTIHASH>` — Genesis private key
-* `--public-key <MULTIHASH>` — Genesis public key
-* `--keypair-file <PATH>` — Path to json-serialized `KeyPair`
-* `-o`, `--out-file <PATH>` — Path to signed genesis output file in SCALE format (stdout by default)
-* `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`
-
-
-
-## `kagami genesis generate`
-
-Generate a genesis configuration and standard-output in JSON format
-
-**Usage:** `kagami genesis generate --executor <PATH> --wasm-dir <PATH> --genesis-public-key <MULTI_HASH> [COMMAND]`
+**Usage:** `kagami genesis --creation-time <CREATION_TIME> --executor <PATH> --wasm-dir <PATH> [COMMAND]`
 
 ###### **Subcommands:**
 
@@ -121,27 +86,27 @@ Generate a genesis configuration and standard-output in JSON format
 
 ###### **Options:**
 
+* `--creation-time <CREATION_TIME>` — Creation time of the genesis block in RFC 3339 format
 * `--executor <PATH>` — Relative path from the directory of output file to the executor.wasm file
 * `--wasm-dir <PATH>` — Relative path from the directory of output file to the directory that contains *.wasm libraries
-* `--genesis-public-key <MULTI_HASH>`
 
 
 
-## `kagami genesis generate default`
+## `kagami genesis default`
 
 Generate default genesis
 
-**Usage:** `kagami genesis generate default`
+**Usage:** `kagami genesis default`
 
 
 
-## `kagami genesis generate synthetic`
+## `kagami genesis synthetic`
 
 Generate synthetic genesis with the specified number of domains, accounts and assets.
 
 Synthetic mode is useful when we need a semi-realistic genesis for stress-testing Iroha's startup times as well as being able to just start an Iroha network and have instructions that represent a typical blockchain after migration.
 
-**Usage:** `kagami genesis generate synthetic [OPTIONS]`
+**Usage:** `kagami genesis synthetic [OPTIONS]`
 
 ###### **Options:**
 

@@ -7,7 +7,7 @@ use iroha_data_model::{
     asset::AssetDefinition, isi::Register, parameter::BlockParameter, prelude::*, Level,
 };
 use iroha_primitives::addr::socket_addr;
-use iroha_test_network::{genesis_factory, once_blocks_sync, BlockHeight, Network, NetworkBuilder};
+use iroha_test_network::{once_blocks_sync, BlockHeight, Network, NetworkBuilder};
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 use rand::{
@@ -332,34 +332,15 @@ mod relay {
     }
 }
 
-#[derive(Default)]
-enum GenesisPeer {
-    #[default]
-    Whichever,
-    Nth(usize),
-}
-
-async fn start_network_under_relay(
-    network: &Network,
-    relay: &P2pRelay,
-    genesis_peer: GenesisPeer,
-) -> Result<()> {
-    let genesis_block = genesis_factory(
-        network.genesis_isi().clone(),
-        network
-            .peers()
-            .iter()
-            .map(iroha_test_network::NetworkPeer::id)
-            .collect(),
-    );
+async fn start_network_under_relay(network: &Network, relay: &P2pRelay) -> Result<()> {
+    let genesis = network.genesis();
 
     timeout(
         network.peer_startup_timeout(),
         network
             .peers()
             .iter()
-            .enumerate()
-            .map(|(i, peer)| {
+            .map(|peer| {
                 let config = network.config_layers().chain(Some(Cow::Owned(
                     Table::new()
                         .write(["trusted_peers"], relay.trusted_peers_for(&peer.id()))
@@ -375,14 +356,8 @@ async fn start_network_under_relay(
                         ),
                 )));
 
-                let genesis = match genesis_peer {
-                    GenesisPeer::Whichever => i == 0,
-                    GenesisPeer::Nth(n) => i == n,
-                }
-                .then(|| genesis_block.clone());
-
                 async move {
-                    peer.start_checked(config, genesis.as_ref())
+                    peer.start_checked(config, genesis)
                         .await
                         .expect("must start");
                 }
@@ -401,18 +376,19 @@ async fn network_starts_with_relay() -> Result<()> {
     let mut relay = P2pRelay::for_network(&network);
 
     relay.start();
-    start_network_under_relay(&network, &relay, GenesisPeer::Whichever).await?;
+    start_network_under_relay(&network, &relay).await?;
     network.ensure_blocks(1).await?;
 
     Ok(())
 }
 
 #[tokio::test]
+#[ignore = "Since #5481, the genesis block has been committed without communication. This test should target blocks after the genesis block."]
 async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
     let network = NetworkBuilder::new().with_peers(4).build();
     let relay = P2pRelay::for_network(&network);
 
-    start_network_under_relay(&network, &relay, GenesisPeer::Whichever).await?;
+    start_network_under_relay(&network, &relay).await?;
 
     let Err(_) = timeout(
         Duration::from_secs(3),
@@ -427,6 +403,7 @@ async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "Since #5481, the genesis block has been committed without communication. This test should target blocks after the genesis block."]
 async fn suspending_works() -> Result<()> {
     const SYNC: Duration = Duration::from_secs(3);
     const N_PEERS: usize = 4;
@@ -434,7 +411,7 @@ async fn suspending_works() -> Result<()> {
 
     let network = NetworkBuilder::new().with_peers(N_PEERS).build();
     let mut relay = P2pRelay::for_network(&network);
-    start_network_under_relay(&network, &relay, GenesisPeer::Whichever).await?;
+    start_network_under_relay(&network, &relay).await?;
     // we will plug/unplug the last peer who doesn't have the genesis
     let last_peer = network
         .peers()
@@ -466,13 +443,14 @@ async fn suspending_works() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "Since #5481, the genesis block has been committed without communication. This test should target blocks after the genesis block."]
 async fn block_after_genesis_is_synced() -> Result<()> {
     // A consensus anomaly occurred deterministically depending on the peer set
     // (how public keys of different peers are sorted to each other, which determines consensus
     // roles) and which peer submits the genesis. The values below are an experimentally found
     // case.
+
     const SEED: &str = "we want a determined order of peers";
-    const GENESIS_PEER_INDEX: usize = 3;
 
     let network = NetworkBuilder::new()
         .with_base_seed(SEED)
@@ -482,7 +460,7 @@ async fn block_after_genesis_is_synced() -> Result<()> {
     let mut relay = P2pRelay::for_network(&network);
 
     relay.start();
-    start_network_under_relay(&network, &relay, GenesisPeer::Nth(GENESIS_PEER_INDEX)).await?;
+    start_network_under_relay(&network, &relay).await?;
     network.ensure_blocks(1).await?;
 
     for peer in network.peers() {
@@ -540,7 +518,7 @@ impl UnstableNetwork {
         let mut relay = P2pRelay::for_network(&network);
         relay.start();
 
-        start_network_under_relay(&network, &relay, GenesisPeer::Whichever).await?;
+        start_network_under_relay(&network, &relay).await?;
 
         {
             let client = network.client();

@@ -9,7 +9,7 @@ use std::{
 
 use error_stack::{Result, ResultExt};
 use iroha_config_base::{read::ConfigReader, toml::TomlSource, util::Bytes, WithOrigin};
-use iroha_crypto::{KeyPair, PublicKey};
+use iroha_crypto::KeyPair;
 use iroha_data_model::{
     peer::{Peer, PeerId},
     ChainId,
@@ -85,12 +85,9 @@ pub struct Network {
 /// Parsed genesis configuration
 #[derive(Debug, Clone)]
 pub struct Genesis {
-    /// Genesis account public key
-    pub public_key: PublicKey,
-    /// Path to `GenesisBlock`.
-    /// If it is none, the peer can only observe the genesis block.
-    /// If it is some, the peer is responsible for submitting the genesis block.
-    pub file: Option<WithOrigin<PathBuf>>,
+    /// Path to the genesis configuration file.
+    /// This is mandatory, as each peer is responsible for committing the genesis block.
+    pub file: WithOrigin<PathBuf>,
 }
 
 #[allow(missing_docs)]

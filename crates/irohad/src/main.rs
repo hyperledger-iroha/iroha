@@ -27,18 +27,17 @@ use iroha_core::{
     smartcontracts::isi::Registrable as _,
     snapshot::{try_read_snapshot, SnapshotMaker, TryReadError as TryReadSnapshotError},
     state::{State, StateReadOnly, World},
-    sumeragi::{GenesisWithPubKey, SumeragiHandle, SumeragiStartArgs},
+    sumeragi::{SumeragiHandle, SumeragiStartArgs},
     IrohaNetwork,
 };
-use iroha_data_model::{block::SignedBlock, prelude::*};
+use iroha_data_model::prelude::*;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, Supervisor};
-use iroha_genesis::GenesisBlock;
+use iroha_genesis::{GenesisBlock, GenesisSpec, GENESIS_ACCOUNT_ID, GENESIS_DOMAIN_ID};
 use iroha_logger::{actor::LoggerHandle, InitConfig as LoggerInitConfig};
 use iroha_primitives::addr::SocketAddr;
 #[cfg(feature = "telemetry")]
 use iroha_primitives::time::TimeSource;
 use iroha_torii::Torii;
-use iroha_version::scale::DecodeVersioned;
 use thiserror::Error;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -180,7 +179,7 @@ impl Iroha {
     #[iroha_logger::log(name = "start", skip_all)] // This is actually easier to understand as a linear sequence of init statements.
     pub async fn start(
         config: Config,
-        genesis: Option<GenesisBlock>,
+        genesis_block: GenesisBlock,
         logger: LoggerHandle,
         shutdown_signal: ShutdownSignal,
     ) -> Result<
@@ -232,8 +231,8 @@ impl Iroha {
             }
         }.unwrap_or_else(|| {
             let world = World::with(
-                [genesis_domain(config.genesis.public_key.clone())],
-                [genesis_account(config.genesis.public_key.clone())],
+                [genesis_domain()],
+                [genesis_account()],
                 [],
             );
 
@@ -295,10 +294,7 @@ impl Iroha {
             kura: kura.clone(),
             network: network.clone(),
             peers_gossiper: peers_gossiper.clone(),
-            genesis_network: GenesisWithPubKey {
-                genesis,
-                public_key: config.genesis.public_key.clone(),
-            },
+            genesis_block,
             block_count,
             #[cfg(feature = "telemetry")]
             telemetry: telemetry.clone(),
@@ -475,14 +471,12 @@ async fn config_updates_relay(kiso: KisoHandle, logger: LoggerHandle) {
     }
 }
 
-fn genesis_account(public_key: PublicKey) -> Account {
-    let genesis_account_id = AccountId::new(iroha_genesis::GENESIS_DOMAIN_ID.clone(), public_key);
-    Account::new(genesis_account_id.clone()).build(&genesis_account_id)
+fn genesis_account() -> Account {
+    Account::new(GENESIS_ACCOUNT_ID.clone()).build(&GENESIS_ACCOUNT_ID)
 }
 
-fn genesis_domain(public_key: PublicKey) -> Domain {
-    let genesis_account = genesis_account(public_key);
-    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account.id)
+fn genesis_domain() -> Domain {
+    Domain::new(GENESIS_DOMAIN_ID.clone()).build(&GENESIS_ACCOUNT_ID)
 }
 
 /// Error of [`read_config_and_genesis`]
@@ -495,8 +489,6 @@ pub enum ConfigError {
     ParseConfig,
     #[error("Error occurred while reading genesis block")]
     ReadGenesis,
-    #[error("The network consists from this one peer only")]
-    LonePeer,
     #[cfg(feature = "dev-telemetry")]
     #[error("Telemetry output file path is root or empty")]
     TelemetryOutFileIsRootOrEmpty,
@@ -518,7 +510,7 @@ pub enum ConfigError {
 /// - If failed to load the genesis block
 pub fn read_config_and_genesis(
     args: &Args,
-) -> Result<(Config, LoggerInitConfig, Option<GenesisBlock>), ConfigError> {
+) -> Result<(Config, LoggerInitConfig, GenesisBlock), ConfigError> {
     let mut config = ConfigReader::new();
 
     if let Some(path) = &args.config {
@@ -533,13 +525,8 @@ pub fn read_config_and_genesis(
         .parse()
         .change_context(ConfigError::ParseConfig)?;
 
-    let genesis = if let Some(signed_file) = &config.genesis.file {
-        let genesis = read_genesis(&signed_file.resolve_relative_path())
-            .attach_printable(signed_file.clone().into_attachment().display_path())?;
-        Some(genesis)
-    } else {
-        None
-    };
+    let genesis = read_genesis(&config.genesis.file.resolve_relative_path())
+        .attach_printable(config.genesis.file.clone().into_attachment().display_path())?;
 
     validate_config(&config)?;
 
@@ -548,11 +535,18 @@ pub fn read_config_and_genesis(
     Ok((config, logger_config, genesis))
 }
 
-fn read_genesis(path: &Path) -> Result<GenesisBlock, ConfigError> {
-    let bytes = std::fs::read(path).change_context(ConfigError::ReadGenesis)?;
-    let genesis =
-        SignedBlock::decode_all_versioned(&bytes).change_context(ConfigError::ReadGenesis)?;
-    Ok(GenesisBlock(genesis))
+fn read_genesis(json_path: &Path) -> Result<GenesisBlock, ConfigError> {
+    GenesisSpec::from_json(json_path)
+        .and_then(GenesisSpec::into_block)
+        .map_err(|err| {
+            eprintln!(
+                "\
+                failed to build a genesis block from {}\n\
+                {err}",
+                json_path.display()
+            );
+            ConfigError::ReadGenesis.into()
+        })
 }
 
 fn validate_config(config: &Config) -> Result<(), ConfigError> {
@@ -569,21 +563,6 @@ fn validate_config(config: &Config) -> Result<(), ConfigError> {
     validate_directory_path(&mut emitter, &config.kura.store_dir);
     // maybe validate only if snapshot mode is enabled
     validate_directory_path(&mut emitter, &config.snapshot.store_dir);
-
-    if config.genesis.file.is_none()
-        && !config
-            .common
-            .trusted_peers
-            .value()
-            .contains_other_trusted_peers()
-    {
-        emitter.emit(Report::new(ConfigError::LonePeer).attach_printable("\
-            Reason: the network consists from this one peer only (no `trusted_peers` provided).\n\
-            Since `genesis.file` is not set, there is no way to receive the genesis block.\n\
-            Either provide the genesis by setting `genesis.file` configuration parameter,\n\
-            or increase the number of trusted peers in the network using `trusted_peers` configuration parameter.\
-        ").attach_printable(config.common.trusted_peers.clone().into_attachment().display_as_debug()));
-    }
 
     if config.network.address.value() == config.torii.address.value() {
         emitter.emit(
@@ -712,10 +691,6 @@ async fn main() -> error_stack::Result<(), MainError> {
         "Hyperledgerいろは2にようこそ！(translation) Welcome to Hyperledger Iroha!"
     );
 
-    if genesis.is_some() {
-        iroha_logger::debug!("Submitting genesis.");
-    }
-
     let shutdown_on_panic = ShutdownSignal::new();
     let default_hook = std::panic::take_hook();
     let signal_clone = shutdown_on_panic.clone();
@@ -738,16 +713,14 @@ mod tests {
     use super::*;
 
     mod config_integration {
-        use assertables::{assert_contains, assert_contains_as_result};
         use iroha_crypto::{ExposedPrivateKey, KeyPair};
         use iroha_primitives::addr::socket_addr;
-        use iroha_version::Encode;
         use path_absolutize::Absolutize as _;
         use tempfile::TempDir;
 
         use super::*;
 
-        fn config_factory(genesis_public_key: &PublicKey) -> toml::Table {
+        fn config_factory() -> toml::Table {
             let (pubkey, privkey) = KeyPair::random().into_parts();
 
             let mut table = toml::Table::new();
@@ -757,8 +730,7 @@ mod tests {
                 .write("private_key", ExposedPrivateKey(privkey))
                 .write(["network", "address"], socket_addr!(127.0.0.1:1337))
                 .write(["network", "public_address"], socket_addr!(127.0.0.1:1337))
-                .write(["torii", "address"], socket_addr!(127.0.0.1:8080))
-                .write(["genesis", "public_key"], genesis_public_key);
+                .write(["torii", "address"], socket_addr!(127.0.0.1:8080));
             table
         }
 
@@ -769,7 +741,7 @@ mod tests {
             std::fs::write(&executor_path, dummy_wasm).unwrap();
             let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
             let wasm_dir = tmp_dir.path().join("wasm/");
-            let builder = GenesisBuilder::new(chain, executor_path, wasm_dir);
+            let builder = GenesisBuilder::new_unix_epoch(chain, executor_path, wasm_dir);
 
             (tmp_dir, builder)
         }
@@ -778,32 +750,31 @@ mod tests {
         fn relative_file_paths_resolution() -> eyre::Result<()> {
             // Given
 
-            let genesis_key_pair = KeyPair::random();
             let (_tmp_dir, builder) = test_builder();
-            let genesis = builder.build_and_sign(&genesis_key_pair)?;
+            let genesis = builder.build_spec();
 
-            let mut config = config_factory(genesis_key_pair.public_key());
+            let mut config = config_factory();
             iroha_config::base::toml::Writer::new(&mut config)
-                .write(["genesis", "file"], "./genesis/genesis.signed.scale")
+                .write(["genesis", "file"], "./genesis/genesis.json")
                 .write(["kura", "store_dir"], "../storage")
                 .write(["snapshot", "store_dir"], "../snapshots")
                 .write(["dev_telemetry", "out_file"], "../logs/telemetry");
 
             let dir = tempfile::tempdir()?;
-            let genesis_path = dir.path().join("config/genesis/genesis.signed.scale");
+            let genesis_path = dir.path().join("config/genesis/genesis.json");
             let executor_path = dir.path().join("config/genesis/executor.wasm");
             let config_path = dir.path().join("config/config.toml");
             std::fs::create_dir(dir.path().join("config"))?;
             std::fs::create_dir(dir.path().join("config/genesis"))?;
             std::fs::write(config_path, toml::to_string(&config)?)?;
-            std::fs::write(genesis_path, genesis.0.encode())?;
+            std::fs::write(genesis_path, serde_json::to_string_pretty(&genesis)?)?;
             std::fs::write(executor_path, "")?;
 
             let config_path = dir.path().join("config/config.toml");
 
             // When
 
-            let (config, _logger, genesis) = read_config_and_genesis(&Args {
+            let (config, _logger, _genesis) = read_config_and_genesis(&Args {
                 config: Some(config_path),
                 terminal_colors: false,
                 trace_config: false,
@@ -811,9 +782,6 @@ mod tests {
             .map_err(|report| eyre::eyre!("{report:?}"))?;
 
             // Then
-
-            // No need to check whether genesis.file is resolved - if not, genesis wouldn't be read
-            assert!(genesis.is_some());
 
             assert_eq!(
                 config.kura.store_dir.resolve_relative_path().absolutize()?,
@@ -835,36 +803,6 @@ mod tests {
                     .resolve_relative_path()
                     .absolutize()?,
                 dir.path().join("logs/telemetry")
-            );
-
-            Ok(())
-        }
-
-        #[test]
-        fn fails_with_no_trusted_peers_and_submit_role() -> eyre::Result<()> {
-            // Given
-
-            let genesis_key_pair = KeyPair::random();
-            let mut config = config_factory(genesis_key_pair.public_key());
-            iroha_config::base::toml::Writer::new(&mut config);
-
-            let dir = tempfile::tempdir()?;
-            std::fs::write(dir.path().join("config.toml"), toml::to_string(&config)?)?;
-            std::fs::write(dir.path().join("executor.wasm"), "")?;
-            let config_path = dir.path().join("config.toml");
-
-            // When & Then
-
-            let report = read_config_and_genesis(&Args {
-                config: Some(config_path),
-                terminal_colors: false,
-                trace_config: false,
-            })
-            .unwrap_err();
-
-            assert_contains!(
-                format!("{report:#}"),
-                "The network consists from this one peer only"
             );
 
             Ok(())

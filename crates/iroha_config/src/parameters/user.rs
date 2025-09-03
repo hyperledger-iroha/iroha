@@ -167,18 +167,13 @@ impl Root {
 
 #[derive(Debug, ReadConfig)]
 pub struct Genesis {
-    #[config(env = "GENESIS_PUBLIC_KEY")]
-    pub public_key: WithOrigin<PublicKey>,
     #[config(env = "GENESIS")]
-    pub file: Option<WithOrigin<PathBuf>>,
+    pub file: WithOrigin<PathBuf>,
 }
 
 impl From<Genesis> for actual::Genesis {
     fn from(genesis: Genesis) -> Self {
-        actual::Genesis {
-            public_key: genesis.public_key.into_value(),
-            file: genesis.file,
-        }
+        actual::Genesis { file: genesis.file }
     }
 }
 

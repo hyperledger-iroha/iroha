@@ -1,79 +1,94 @@
 //! Genesis-related logic and constructs. Contains the [`GenesisBlock`],
-//! [`RawGenesisTransaction`] and the [`GenesisBuilder`] structures.
+//! [`GenesisSpec`] and the [`GenesisBuilder`] structures.
+
 use std::{
     fmt::Debug,
     fs::{self, File},
     io::BufReader,
     path::{Path, PathBuf},
     sync::LazyLock,
+    time::SystemTime,
 };
 
 use derive_more::Constructor;
 use eyre::{eyre, Result, WrapErr};
-use iroha_crypto::KeyPair;
+use humantime::Timestamp;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{block::SignedBlock, parameter::Parameter, prelude::*};
-use iroha_schema::IntoSchema;
-use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, DisplayFromStr};
 
-/// Domain of the genesis account, technically required for the pre-genesis state
+/// Genesis domain hardcoded for the pre-genesis state.
 pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> = LazyLock::new(|| "genesis".parse().unwrap());
 
-/// Genesis block.
+/// Genesis account hardcoded for the pre-genesis state, used as the placeholder authority for processing genesis transactions.
+pub static GENESIS_ACCOUNT_ID: LazyLock<AccountId> = LazyLock::new(|| {
+    // TODO #5022: replace this seeded key with a secure, non-personal key.
+    let public_key = KeyPair::from_seed(b"genesis".to_vec(), Algorithm::Ed25519)
+        .into_parts()
+        .0;
+    AccountId::new(GENESIS_DOMAIN_ID.clone(), public_key)
+});
+
+/// Genesis block generated from [`GenesisSpec`], consisting of the following transactions:
 ///
-/// First transaction must contain single [`Upgrade`] instruction to set executor.
-/// Subsequent transactions can be parameter settings, instructions, topology change, in this order if they exist.
+/// 1. Single `Upgrade` instruction to set the executor.
+/// 2. Optional `SetParameter` instructions.
+/// 3. Optional instructions to preset domains, assets, roles, etc.
+/// 4. Optional `Register::trigger` instructions for Wasm executables.
+/// 5. Optional `Register::peer` instructions to set the initial topology.
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct GenesisBlock(pub SignedBlock);
 
-/// Format of genesis.json user file.
-/// It should be signed, converted to [`GenesisBlock`],
-/// and serialized in SCALE format before supplying to Iroha peer.
-/// See `kagami genesis sign`.
-#[derive(Debug, Clone, Serialize, Deserialize, IntoSchema, Encode, Decode)]
-pub struct RawGenesisTransaction {
-    /// Unique id of blockchain
+/// Format of the genesis configuration file.
+/// Can be converted into a [`GenesisBlock`].
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisSpec {
+    /// Timestamp for genesis block creation.
+    #[serde_as(as = "DisplayFromStr")]
+    creation_time: humantime::Timestamp,
+    /// Unique chain identifier.
     chain: ChainId,
-    /// Path to the [`Executor`] file
+    /// Path to the executor file.
     executor: WasmPath,
-    /// Parameters
+    /// Optional parameters override.
     #[serde(skip_serializing_if = "Option::is_none")]
     parameters: Option<Parameters>,
-    /// Instructions
+    /// Various instructions to preset domains, assets, roles, etc.
     instructions: Vec<InstructionBox>,
-    /// Path to the directory that contains *.wasm libraries
+    /// Directory containing additional Wasm libraries.
     wasm_dir: WasmPath,
-    /// Triggers whose executable is wasm, not instructions
+    /// Wasm-based triggers to register.
     wasm_triggers: Vec<GenesisWasmTrigger>,
-    /// Initial topology
+    /// Initial peer list defining the network topology.
     topology: Vec<PeerId>,
 }
 
-/// Path to `*.wasm` file or their directory
-#[derive(Debug, Clone, Deserialize, Serialize, IntoSchema)]
-#[schema(transparent = "String")]
+/// Path for either a Wasm file or a directory containing Wasm files.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WasmPath(PathBuf);
 
-impl RawGenesisTransaction {
+impl GenesisSpec {
     const WARN_ON_GENESIS_GTE: u64 = 1024 * 1024 * 1024; // 1Gb
 
-    /// Construct [`RawGenesisTransaction`] from a json file at `json_path`,
-    /// resolving relative paths to `json_path`.
+    /// Loads a [`GenesisSpec`] from a JSON file at `path`,
+    /// resolving any relative paths against the `path`.
     ///
     /// # Errors
     ///
-    /// - file not found
-    /// - metadata access to the file failed
-    /// - deserialization failed
-    pub fn from_path(json_path: impl AsRef<Path>) -> Result<Self> {
-        let here = json_path
+    /// Returns an error if:
+    /// - The file is not found.
+    /// - Metadata access fails.
+    /// - Deserialization fails.
+    pub fn from_json(path: impl AsRef<Path>) -> Result<Self> {
+        let here = path
             .as_ref()
             .parent()
             .expect("json file should be in some directory");
-        let file = File::open(&json_path).wrap_err_with(|| {
-            eyre!("failed to open genesis at {}", json_path.as_ref().display())
-        })?;
+        let file = File::open(&path)
+            .wrap_err_with(|| eyre!("failed to open genesis at {}", path.as_ref().display()))?;
         let size = file
             .metadata()
             .wrap_err("failed to access genesis file metadata")?
@@ -83,30 +98,30 @@ impl RawGenesisTransaction {
         }
         let reader = BufReader::new(file);
 
-        let mut value: Self = serde_json::from_reader(reader).wrap_err_with(|| {
+        let mut spec: Self = serde_json::from_reader(reader).wrap_err_with(|| {
             eyre!(
-                "failed to deserialize raw genesis transaction from {}",
-                json_path.as_ref().display()
+                "failed to deserialize genesis spec from {}",
+                path.as_ref().display()
             )
         })?;
 
-        value.executor.resolve(here);
-        value.wasm_dir.resolve(here);
-        value
-            .wasm_triggers
+        spec.executor.resolve(here);
+        spec.wasm_dir.resolve(here);
+        spec.wasm_triggers
             .iter_mut()
-            .for_each(|trigger| trigger.action.executable.resolve(&value.wasm_dir.0));
+            .for_each(|trigger| trigger.action.executable.resolve(&spec.wasm_dir.0));
 
-        Ok(value)
+        Ok(spec)
     }
 
-    /// Revert to builder to add modifications.
+    /// Converts this spec back into a [`GenesisBuilder`] for further modifications.
     pub fn into_builder(self) -> GenesisBuilder {
         let parameters = self
             .parameters
             .map_or(Vec::new(), |parameters| parameters.parameters().collect());
 
         GenesisBuilder {
+            creation_time: self.creation_time,
             chain: self.chain,
             executor: self.executor,
             parameters,
@@ -117,39 +132,53 @@ impl RawGenesisTransaction {
         }
     }
 
-    /// Build and sign genesis block.
+    /// Converts this spec into a genesis block.
+    ///
+    /// - Genesis block has no block signatures.
+    /// - Transaction signatures are dummy and not verified.
+    /// - Transaction timestamps are set to the genesis block's.
     ///
     /// # Errors
     ///
-    /// Fails if `RawGenesisTransaction::parse` fails.
-    pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
+    /// Fails if `instructions_list` fails.
+    pub fn into_block(self) -> Result<GenesisBlock> {
         let chain = self.chain.clone();
-        let genesis_account = AccountId::new(
-            GENESIS_DOMAIN_ID.clone(),
-            genesis_key_pair.public_key().clone(),
-        );
+        let creation_time_ms = self
+            .creation_time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            .try_into()
+            .expect("shouldn't overflow within 584942417 years");
         let mut transactions = vec![];
-        for instructions in self.parse()? {
-            let transaction = TransactionBuilder::new(chain.clone(), genesis_account.clone())
-                .with_instructions(instructions)
-                .sign(genesis_key_pair.private_key());
+        for instructions in self.into_instruction_batches()? {
+            let transaction = TransactionBuilder::new_with_time(
+                chain.clone(),
+                GENESIS_ACCOUNT_ID.clone(),
+                creation_time_ms,
+            )
+            .with_instructions(instructions)
+            .genesis_sign();
             transactions.push(transaction);
         }
-        let block = SignedBlock::genesis(transactions, genesis_key_pair.private_key());
 
-        Ok(GenesisBlock(block))
+        Ok(GenesisBlock(SignedBlock::genesis(
+            transactions,
+            creation_time_ms,
+        )))
     }
 
-    /// Parse [`RawGenesisTransaction`] to the list of source instructions of the genesis transactions
+    /// Converts the [`GenesisSpec`] into batches of instructions, one batch per genesis transaction.
     ///
     /// # Errors
     ///
-    /// Fails if `self.executor` path fails to load [`Executor`].
-    fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
-        let mut instructions_list = vec![];
+    /// Returns an error if the `self.executor` path cannot be loaded as an executor,
+    /// or if any of the `self.wasm_triggers` paths cannot be loaded as a Wasm executable.
+    fn into_instruction_batches(self) -> Result<Vec<Vec<InstructionBox>>> {
+        let mut instruction_batches = vec![];
 
         let upgrade_executor = Upgrade::new(Executor::new(self.executor.try_into()?)).into();
-        instructions_list.push(vec![upgrade_executor]);
+        instruction_batches.push(vec![upgrade_executor]);
 
         if let Some(parameters) = self.parameters {
             let instructions = parameters
@@ -157,11 +186,11 @@ impl RawGenesisTransaction {
                 .map(SetParameter::new)
                 .map(InstructionBox::from)
                 .collect();
-            instructions_list.push(instructions);
+            instruction_batches.push(instructions);
         }
 
         if !self.instructions.is_empty() {
-            instructions_list.push(self.instructions);
+            instruction_batches.push(self.instructions);
         }
 
         if !self.wasm_triggers.is_empty() {
@@ -174,7 +203,7 @@ impl RawGenesisTransaction {
                 .map(Register::trigger)
                 .map(InstructionBox::from)
                 .collect();
-            instructions_list.push(instructions);
+            instruction_batches.push(instructions);
         }
 
         if !self.topology.is_empty() {
@@ -184,17 +213,19 @@ impl RawGenesisTransaction {
                 .map(Register::peer)
                 .map(InstructionBox::from)
                 .collect();
-            instructions_list.push(instructions)
+            instruction_batches.push(instructions)
         }
 
-        Ok(instructions_list)
+        Ok(instruction_batches)
     }
 }
 
-/// Builder to build [`RawGenesisTransaction`] and [`GenesisBlock`].
-/// No guarantee of validity of the built genesis transactions and block.
+/// Builder for [`GenesisSpec`] and [`GenesisBlock`].
+///
+/// Note: The generated transactions and block are not validated.
 #[must_use]
 pub struct GenesisBuilder {
+    creation_time: humantime::Timestamp,
     chain: ChainId,
     executor: WasmPath,
     parameters: Vec<Parameter>,
@@ -204,9 +235,10 @@ pub struct GenesisBuilder {
     topology: Vec<PeerId>,
 }
 
-/// Domain editing mode of the [`GenesisBuilder`] to register accounts and assets under the domain.
+/// Domain-specific registration mode of the [`GenesisBuilder`].
 #[must_use]
 pub struct GenesisDomainBuilder {
+    creation_time: humantime::Timestamp,
     chain: ChainId,
     executor: WasmPath,
     parameters: Vec<Parameter>,
@@ -219,8 +251,14 @@ pub struct GenesisDomainBuilder {
 
 impl GenesisBuilder {
     /// Construct [`GenesisBuilder`].
-    pub fn new(chain: ChainId, executor: impl Into<PathBuf>, wasm_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        chain: ChainId,
+        executor: impl Into<PathBuf>,
+        wasm_dir: impl Into<PathBuf>,
+        creation_time: Timestamp,
+    ) -> Self {
         Self {
+            creation_time,
             chain,
             executor: executor.into().into(),
             parameters: Vec::new(),
@@ -229,6 +267,15 @@ impl GenesisBuilder {
             wasm_triggers: Vec::new(),
             topology: Vec::new(),
         }
+    }
+
+    /// Construct [`GenesisBuilder`] with the creation time set to `UNIX_EPOCH`.
+    pub fn new_unix_epoch(
+        chain: ChainId,
+        executor: impl Into<PathBuf>,
+        wasm_dir: impl Into<PathBuf>,
+    ) -> Self {
+        Self::new(chain, executor, wasm_dir, SystemTime::UNIX_EPOCH.into())
     }
 
     /// Entry a domain registration and transition to [`GenesisDomainBuilder`].
@@ -248,6 +295,7 @@ impl GenesisBuilder {
         self.instructions.push(Register::domain(new_domain).into());
 
         GenesisDomainBuilder {
+            creation_time: self.creation_time,
             chain: self.chain,
             executor: self.executor,
             parameters: self.parameters,
@@ -283,21 +331,22 @@ impl GenesisBuilder {
         self
     }
 
-    /// Finish building, sign, and produce a [`GenesisBlock`].
+    /// Finish building and produce a [`GenesisBlock`].
     ///
     /// # Errors
     ///
-    /// Fails if internal [`RawGenesisTransaction::build_and_sign`] fails.
-    pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
-        self.build_raw().build_and_sign(genesis_key_pair)
+    /// Fails if internal [`GenesisSpec::build_block`] fails.
+    pub fn build_block(self) -> Result<GenesisBlock> {
+        self.build_spec().into_block()
     }
 
-    /// Finish building and produce a [`RawGenesisTransaction`].
-    pub fn build_raw(self) -> RawGenesisTransaction {
+    /// Finish building and produce a [`GenesisSpec`].
+    pub fn build_spec(self) -> GenesisSpec {
         let parameters =
             (!self.parameters.is_empty()).then(|| self.parameters.into_iter().collect());
 
-        RawGenesisTransaction {
+        GenesisSpec {
+            creation_time: self.creation_time,
             chain: self.chain,
             executor: self.executor,
             parameters,
@@ -313,6 +362,7 @@ impl GenesisDomainBuilder {
     /// Finish this domain and return to genesis block building.
     pub fn finish_domain(self) -> GenesisBuilder {
         GenesisBuilder {
+            creation_time: self.creation_time,
             chain: self.chain,
             executor: self.executor,
             parameters: self.parameters,
@@ -346,23 +396,6 @@ impl GenesisDomainBuilder {
     }
 }
 
-impl Encode for WasmPath {
-    fn encode(&self) -> Vec<u8> {
-        self.0
-            .to_str()
-            .expect("path contains not valid UTF-8")
-            .encode()
-    }
-}
-
-impl Decode for WasmPath {
-    fn decode<I: parity_scale_codec::Input>(
-        input: &mut I,
-    ) -> std::result::Result<Self, parity_scale_codec::Error> {
-        String::decode(input).map(PathBuf::from).map(WasmPath)
-    }
-}
-
 impl From<PathBuf> for WasmPath {
     fn from(value: PathBuf) -> Self {
         Self(value)
@@ -390,14 +423,14 @@ impl WasmPath {
 }
 
 /// Human-readable alternative to [`Trigger`] whose action has wasm executable
-#[derive(Debug, Clone, Serialize, Deserialize, IntoSchema, Encode, Decode, Constructor)]
+#[derive(Debug, Clone, Serialize, Deserialize, Constructor)]
 pub struct GenesisWasmTrigger {
     id: TriggerId,
     action: GenesisWasmAction,
 }
 
 /// Human-readable alternative to [`Action`] which has wasm executable
-#[derive(Debug, Clone, Serialize, Deserialize, IntoSchema, Encode, Decode)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenesisWasmAction {
     executable: WasmPath,
     repeats: Repeats,
@@ -457,14 +490,13 @@ mod tests {
         std::fs::write(&executor_path, dummy_wasm).unwrap();
         let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
         let wasm_dir = tmp_dir.path().join("wasm/");
-        let builder = GenesisBuilder::new(chain, executor_path, wasm_dir);
+        let builder = GenesisBuilder::new_unix_epoch(chain, executor_path, wasm_dir);
 
         (tmp_dir, builder)
     }
 
     #[test]
     fn load_new_genesis_block() -> Result<()> {
-        let genesis_key_pair = KeyPair::random();
         let (alice_public_key, _) = KeyPair::random().into_parts();
         let (_tmp_dir, builder) = test_builder();
 
@@ -472,7 +504,7 @@ mod tests {
             .domain("wonderland".parse()?)
             .account(alice_public_key)
             .finish_domain()
-            .build_and_sign(&genesis_key_pair)?;
+            .build_block()?;
 
         Ok(())
     }
@@ -505,7 +537,7 @@ mod tests {
             .finish_domain();
 
         // In real cases executor should be constructed from a wasm blob
-        let finished_genesis = genesis_builder.build_and_sign(&KeyPair::random())?;
+        let finished_genesis = genesis_builder.build_block()?;
 
         let transactions = &finished_genesis
             .0
@@ -603,6 +635,7 @@ mod tests {
         fn test(parameters: &str) {
             let genesis_json = format!(
                 r#"{{
+                "creation_time": "1970-01-01T00:00:00Z",
                 "chain": "0",
                 "executor": "executor.wasm",
                 "parameters": {parameters},
@@ -613,7 +646,7 @@ mod tests {
                 }}"#
             );
 
-            let _genesis: RawGenesisTransaction =
+            let _genesis: GenesisSpec =
                 serde_json::from_str(&genesis_json).expect("Failed to deserialize");
         }
 

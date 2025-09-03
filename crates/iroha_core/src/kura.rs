@@ -945,10 +945,8 @@ mod tests {
         ChainId, Level,
     };
     use iroha_futures::supervisor::Supervisor;
-    use iroha_genesis::GenesisBuilder;
-    use iroha_test_samples::{
-        gen_account_in, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-    };
+    use iroha_genesis::{GenesisBuilder, GENESIS_ACCOUNT_ID};
+    use iroha_test_samples::{gen_account_in, ALICE_ID, ALICE_KEYPAIR, PEER_KEYPAIR};
     use nonzero_ext::nonzero;
     use tempfile::TempDir;
 
@@ -1199,14 +1197,13 @@ mod tests {
 
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
-        let (genesis_id, genesis_key_pair) = gen_account_in("genesis");
         let genesis_domain_id = DomainId::from_str("genesis").expect("Valid");
-        let genesis_domain = Domain::new(genesis_domain_id).build(&genesis_id);
-        let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
+        let genesis_domain = Domain::new(genesis_domain_id).build(&GENESIS_ACCOUNT_ID);
+        let genesis_account = Account::new(GENESIS_ACCOUNT_ID.clone()).build(&GENESIS_ACCOUNT_ID);
         let (account_id, account_keypair) = gen_account_in("wonderland");
         let domain_id = DomainId::from_str("wonderland").expect("Valid");
-        let domain = Domain::new(domain_id).build(&genesis_id);
-        let account = Account::new(account_id.clone()).build(&genesis_id);
+        let domain = Domain::new(domain_id).build(&GENESIS_ACCOUNT_ID);
+        let account = Account::new(account_id.clone()).build(&GENESIS_ACCOUNT_ID);
 
         let live_query_store = {
             let _rt_guard = rt.enter();
@@ -1237,26 +1234,24 @@ mod tests {
         );
 
         let executor_path = "../../defaults/executor.wasm";
-        let genesis =
-            GenesisBuilder::new(chain_id.clone(), executor_path, "wasm/libs/not/installed")
-                .set_topology(topology.as_ref().to_owned())
-                .build_and_sign(&genesis_key_pair)
-                .expect("genesis block should be built");
+        let genesis = GenesisBuilder::new_unix_epoch(
+            chain_id.clone(),
+            executor_path,
+            "wasm/libs/not/installed",
+        )
+        .set_topology(topology.as_ref().to_owned())
+        .build_block()
+        .expect("genesis block should be built");
 
         {
             let mut state_block = state.block(genesis.0.header());
-            let block_genesis = ValidBlock::validate(
-                genesis.0.clone(),
-                &topology,
-                &chain_id,
-                &genesis_id,
-                &mut state_block,
-            )
-            .unpack(|_| {})
-            .unwrap()
-            .commit(&topology)
-            .unpack(|_| {})
-            .unwrap();
+            let block_genesis =
+                ValidBlock::validate(genesis.0.clone(), &topology, &chain_id, &mut state_block)
+                    .unpack(|_| {})
+                    .unwrap()
+                    .commit(&topology)
+                    .unpack(|_| {})
+                    .unwrap();
             let _events =
                 state_block.apply_without_execution(&block_genesis, topology.as_ref().to_owned());
             state_block.commit();
@@ -1358,10 +1353,7 @@ mod tests {
 
         fn next(&mut self) -> Arc<SignedBlock> {
             let tx = {
-                let builder = TransactionBuilder::new(
-                    ChainId::from("test"),
-                    SAMPLE_GENESIS_ACCOUNT_ID.to_owned(),
-                );
+                let builder = TransactionBuilder::new(ChainId::from("test"), ALICE_ID.to_owned());
 
                 let tx = if self.blocks.is_empty() {
                     builder.with_instructions([Upgrade::new(Executor::new(
@@ -1370,7 +1362,7 @@ mod tests {
                 } else {
                     builder.with_instructions([Log::new(Level::INFO, "test".to_owned())])
                 }
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+                .sign(ALICE_KEYPAIR.private_key());
 
                 AcceptedTransaction::new_unchecked(tx)
             };
@@ -1378,7 +1370,7 @@ mod tests {
             let prev = self.blocks.last().cloned();
             let block: SignedBlock = BlockBuilder::new(vec![tx])
                 .chain(0, prev.as_ref().map(AsRef::as_ref))
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+                .sign(PEER_KEYPAIR.private_key())
                 .unpack(|_| {})
                 .into();
 

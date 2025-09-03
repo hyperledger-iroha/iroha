@@ -34,7 +34,7 @@ async fn genesis_transactions_are_validated_by_executor() {
     timeout(Duration::from_secs(5), async {
         join!(
             // Peer should start...
-            peer.start(network.config_layers(), Some(&genesis)),
+            peer.start(network.config_layers(), genesis),
             peer.once(|event| matches!(event, PeerLifecycleEvent::ServerStarted)),
             // ...but it should shortly exit with an error
             peer.once(|event| match event {
