@@ -12,6 +12,7 @@ use std::{
 
 use derive_more::Constructor;
 use eyre::{eyre, Result, WrapErr};
+use humantime::Timestamp;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{block::SignedBlock, parameter::Parameter, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -250,9 +251,14 @@ pub struct GenesisDomainBuilder {
 
 impl GenesisBuilder {
     /// Construct [`GenesisBuilder`].
-    pub fn new(chain: ChainId, executor: impl Into<PathBuf>, wasm_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        chain: ChainId,
+        executor: impl Into<PathBuf>,
+        wasm_dir: impl Into<PathBuf>,
+        creation_time: Timestamp,
+    ) -> Self {
         Self {
-            creation_time: SystemTime::UNIX_EPOCH.into(),
+            creation_time,
             chain,
             executor: executor.into().into(),
             parameters: Vec::new(),
@@ -261,6 +267,15 @@ impl GenesisBuilder {
             wasm_triggers: Vec::new(),
             topology: Vec::new(),
         }
+    }
+
+    /// Construct [`GenesisBuilder`] with the creation time set to `UNIX_EPOCH`.
+    pub fn new_unix_epoch(
+        chain: ChainId,
+        executor: impl Into<PathBuf>,
+        wasm_dir: impl Into<PathBuf>,
+    ) -> Self {
+        Self::new(chain, executor, wasm_dir, SystemTime::UNIX_EPOCH.into())
     }
 
     /// Entry a domain registration and transition to [`GenesisDomainBuilder`].
@@ -475,7 +490,7 @@ mod tests {
         std::fs::write(&executor_path, dummy_wasm).unwrap();
         let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
         let wasm_dir = tmp_dir.path().join("wasm/");
-        let builder = GenesisBuilder::new(chain, executor_path, wasm_dir);
+        let builder = GenesisBuilder::new_unix_epoch(chain, executor_path, wasm_dir);
 
         (tmp_dir, builder)
     }

@@ -741,7 +741,7 @@ mod tests {
             std::fs::write(&executor_path, dummy_wasm).unwrap();
             let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
             let wasm_dir = tmp_dir.path().join("wasm/");
-            let builder = GenesisBuilder::new(chain, executor_path, wasm_dir);
+            let builder = GenesisBuilder::new_unix_epoch(chain, executor_path, wasm_dir);
 
             (tmp_dir, builder)
         }

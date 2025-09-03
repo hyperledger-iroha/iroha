@@ -1214,11 +1214,14 @@ mod tests {
         );
 
         let executor_path = "../../defaults/executor.wasm";
-        let genesis =
-            GenesisBuilder::new(chain_id.clone(), executor_path, "wasm/libs/not/installed")
-                .set_topology(topology.as_ref().to_owned())
-                .build_block()
-                .expect("genesis block should be built");
+        let genesis = GenesisBuilder::new_unix_epoch(
+            chain_id.clone(),
+            executor_path,
+            "wasm/libs/not/installed",
+        )
+        .set_topology(topology.as_ref().to_owned())
+        .build_block()
+        .expect("genesis block should be built");
 
         {
             let mut state_block = state.block(genesis.0.header());
