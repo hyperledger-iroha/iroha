@@ -6,6 +6,7 @@ use iroha::{
     },
 };
 use iroha_test_network::*;
+use nonzero_ext::nonzero;
 
 mod account;
 mod asset;
@@ -34,8 +35,12 @@ fn too_big_fetch_size_is_not_allowed() {
 }
 
 #[test]
-fn find_blocks_reversed() -> eyre::Result<()> {
-    let (network, rt) = NetworkBuilder::new().start_blocking()?;
+fn find_blocks() -> eyre::Result<()> {
+    let (network, rt) = NetworkBuilder::new()
+        .with_config_layer(|cfg| {
+            cfg.write(["logger", "level"], "DEBUG");
+        })
+        .start_blocking()?;
     let client = network.client();
 
     // Waiting for empty block to be committed
@@ -46,16 +51,31 @@ fn find_blocks_reversed() -> eyre::Result<()> {
     // Waiting for empty block to be committed
     rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 4).await })?;
 
-    let blocks = client.query(FindBlocks).execute_all()?;
+    let blocks = client
+        .query(FindBlocks::new(Order::Descending))
+        .execute_all()?;
     assert_eq!(blocks.len(), 4);
-    assert_eq!(blocks[blocks.len() - 1].header().prev_block_hash(), None);
-    for i in 0..blocks.len() - 1 {
-        assert_eq!(
-            blocks[i].header().prev_block_hash(),
-            Some(blocks[i + 1].header().hash())
-        );
-    }
+    assert!(blocks
+        .windows(2)
+        .all(|wnd| wnd[0].header() > wnd[1].header()
+            && wnd[0].header().prev_block_hash().unwrap() == wnd[1].header().hash()));
     assert!(blocks[0].is_empty());
+
+    let blocks_asc = client
+        .query(FindBlocks::new(Order::Ascending))
+        .execute_all()?;
+    assert_eq!(blocks_asc, {
+        let mut blocks = blocks.clone();
+        blocks.reverse();
+        blocks
+    });
+
+    // Covering the use case from #5454: deterministically fetching the genesis block
+    let genesis = client
+        .query(FindBlocks::new(Order::Ascending))
+        .with_pagination(Pagination::new(Some(nonzero!(1u64)), 0))
+        .execute_single()?;
+    assert!(genesis.header().is_genesis());
 
     Ok(())
 }

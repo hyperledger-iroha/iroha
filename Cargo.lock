@@ -306,6 +306,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
+name = "ascii_table"
+version = "4.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb7e515f68a8667f957e85c7d59639fe1fa2e0b06c3c2394869b73a404e52ed"
+
+[[package]]
 name = "assert_matches"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -316,6 +322,16 @@ name = "assertables"
 version = "7.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c24e9d990669fbd16806bff449e4ac644fd9b1fca014760087732fe4102f131"
+
+[[package]]
+name = "async-fn-stream"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e71711442f1016c768c259bec59300a10efe753bc3e686ec19e2c6a54a97c29b"
+dependencies = [
+ "futures-util",
+ "pin-project-lite",
+]
 
 [[package]]
 name = "async-stream"
@@ -3059,6 +3075,7 @@ dependencies = [
 name = "integration_tests"
 version = "0.0.0"
 dependencies = [
+ "ascii_table",
  "assert_matches",
  "derive_more",
  "executor_custom_data_model",
@@ -3072,6 +3089,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_genesis",
+ "iroha_logger",
  "iroha_primitives",
  "iroha_telemetry",
  "iroha_test_network",
@@ -3100,6 +3118,7 @@ name = "iroha"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "assertables",
+ "async-fn-stream",
  "attohttpc",
  "base64 0.22.1",
  "derive_more",

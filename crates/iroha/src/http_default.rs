@@ -1,13 +1,10 @@
 //! Defaults for various items used in communication over http(s).
-use std::net::TcpStream;
 
 use attohttpc::{
     body as atto_body, RequestBuilder as AttoHttpRequestBuilder, Response as AttoHttpResponse,
 };
 use eyre::{eyre, Error, Result, WrapErr};
 use http::header::HeaderName;
-use tungstenite::{client::IntoClientRequest, stream::MaybeTlsStream, WebSocket};
-pub use tungstenite::{Error as WebSocketError, Message as WebSocketMessage};
 use url::Url;
 
 use crate::http::{Method, RequestBuilder, Response};
@@ -95,82 +92,6 @@ impl RequestBuilder for DefaultRequestBuilder {
         }
     }
 }
-
-/// Request builder built on top of [`http::request::Builder`]. Used for `WebSocket` connections.
-pub struct DefaultWebSocketRequestBuilder(Result<http::request::Builder>);
-
-impl DefaultWebSocketRequestBuilder {
-    /// Same as [`DefaultRequestBuilder::and_then`].
-    fn and_then<F>(self, func: F) -> Self
-    where
-        F: FnOnce(http::request::Builder) -> Result<http::request::Builder>,
-    {
-        Self(self.0.and_then(func))
-    }
-
-    /// Consumes itself to build request.
-    pub fn build(self) -> Result<DefaultWebSocketStreamRequest> {
-        let builder = self.0?;
-        let mut request = builder
-            .uri_ref()
-            .ok_or_else(|| eyre!("Missing URI"))?
-            .into_client_request()?;
-        for (header, value) in builder
-            .headers_ref()
-            .ok_or_else(|| eyre!("No headers found"))?
-        {
-            request.headers_mut().entry(header).or_insert(value.clone());
-        }
-        Ok(DefaultWebSocketStreamRequest(request))
-    }
-}
-
-/// `WebSocket` request built by [`DefaultWebSocketRequestBuilder`]
-pub struct DefaultWebSocketStreamRequest(http::Request<()>);
-
-impl DefaultWebSocketStreamRequest {
-    /// Open [`WebSocketStream`] synchronously.
-    pub fn connect(self) -> Result<WebSocketStream> {
-        let (stream, _) = tungstenite::connect(self.0)?;
-        Ok(stream)
-    }
-
-    /// Open [`AsyncWebSocketStream`].
-    pub async fn connect_async(self) -> Result<AsyncWebSocketStream> {
-        let (stream, _) = tokio_tungstenite::connect_async(self.0).await?;
-        Ok(stream)
-    }
-}
-
-impl RequestBuilder for DefaultWebSocketRequestBuilder {
-    fn new(method: Method, url: Url) -> Self {
-        Self(Ok(http::Request::builder()
-            .method(method)
-            .uri(url.as_ref())))
-    }
-
-    fn param<K, V: ?Sized>(self, _key: K, _val: &V) -> Self {
-        Self(self.0.and(Err(eyre!("No params expected"))))
-    }
-
-    fn header<N: AsRef<str>, V: ToString + ?Sized>(self, name: N, value: &V) -> Self {
-        self.and_then(|b| Ok(b.header(header_name_from_str(name.as_ref())?, value.to_string())))
-    }
-
-    fn body(self, data: Vec<u8>) -> Self {
-        self.and_then(|b| {
-            if data.is_empty() {
-                Ok(b)
-            } else {
-                Err(eyre!("Empty body expected, got: {:?}", data))
-            }
-        })
-    }
-}
-
-pub type WebSocketStream = WebSocket<MaybeTlsStream<TcpStream>>;
-pub type AsyncWebSocketStream =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 struct ClientResponse(AttoHttpResponse);
 

@@ -47,9 +47,9 @@ pub type EventsSender = broadcast::Sender<EventBox>;
 /// The network message
 #[derive(Clone, Debug, Encode, Decode)]
 pub enum NetworkMessage {
-    /// Blockchain concensus data message
+    /// Blockchain consensus data message
     SumeragiBlock(Box<BlockMessage>),
-    /// Blockchain concensus control flow message
+    /// Blockchain consensus control flow message
     SumeragiControlFlow(Box<ControlFlowMessage>),
     /// Block sync message
     BlockSync(Box<BlockSyncMessage>),
