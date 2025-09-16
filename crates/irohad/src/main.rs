@@ -540,9 +540,7 @@ fn read_genesis(json_path: &Path) -> Result<GenesisBlock, ConfigError> {
         .and_then(GenesisSpec::into_block)
         .map_err(|err| {
             eprintln!(
-                "\
-                failed to build a genesis block from {}\n\
-                {err}",
+                "failed to build a genesis block from {}\n{err}",
                 json_path.display()
             );
             ConfigError::ReadGenesis.into()
