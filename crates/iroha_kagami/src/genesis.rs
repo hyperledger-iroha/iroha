@@ -18,7 +18,7 @@ use crate::{Outcome, RunArgs};
 /// Generate a genesis configuration and standard-output in JSON format
 #[derive(clap::Args, Debug, Clone)]
 pub struct Args {
-    /// Creation time of the genesis block in RFC 3339 format
+    /// Creation time of the genesis block in RFC 3339 format (e.g. "2018-02-16T00:31:37Z")
     #[clap(long)]
     creation_time: Timestamp,
     /// Relative path from the directory of output file to the executor.wasm file
