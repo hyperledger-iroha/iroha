@@ -497,9 +497,6 @@ mod tests {
 
     #[tokio::test]
     async fn commit_blocks() {
-        // this indicates time padding applied in the block builder
-        const CORRECTION: u64 = 1;
-
         let sut = SystemUnderTest::new();
 
         // commit first (genesis) block
@@ -527,7 +524,7 @@ mod tests {
         let metrics = sut.telemetry.metrics().await;
         assert_eq!(metrics.block_height.get(), 2);
         assert_eq!(metrics.block_height_non_empty.get(), 2);
-        assert_eq!(metrics.last_commit_time_ms.get(), 150 - CORRECTION);
+        assert_eq!(metrics.last_commit_time_ms.get(), 150);
         assert_eq!(metrics.txs.with_label_values(&["accepted"]).get(), 0);
         assert_eq!(metrics.txs.with_label_values(&["rejected"]).get(), 2);
         assert_eq!(metrics.txs.with_label_values(&["total"]).get(), 2);
@@ -541,14 +538,14 @@ mod tests {
         // old data
         assert_eq!(metrics.block_height.get(), 2);
         assert_eq!(metrics.block_height_non_empty.get(), 2);
-        assert_eq!(metrics.last_commit_time_ms.get(), 150 - CORRECTION);
+        assert_eq!(metrics.last_commit_time_ms.get(), 150);
 
         sut.report_commit_block(block.as_ref().header()).await;
 
         let metrics = sut.telemetry.metrics().await;
         assert_eq!(metrics.block_height.get(), 3);
         assert_eq!(metrics.block_height_non_empty.get(), 3);
-        assert_eq!(metrics.last_commit_time_ms.get(), 170 - CORRECTION);
+        assert_eq!(metrics.last_commit_time_ms.get(), 170);
     }
 
     #[tokio::test]
