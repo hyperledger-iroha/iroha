@@ -1,7 +1,5 @@
 #![allow(missing_docs)]
 
-use std::time::Duration;
-
 use eyre::Result;
 use iroha::{
     client::Client,
@@ -16,9 +14,10 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::{gen_account_in, ALICE_ID, BOB_ID, BOB_KEYPAIR};
-use tokio::{join, time::timeout};
 
 #[tokio::test]
+// TODO: Detect an `InvalidGenesis` error instead of relying on a panic.
+#[should_panic = "a peer exited unexpectedly"]
 async fn genesis_transactions_are_validated_by_executor() {
     // `wonderland` domain is owned by Alice,
     //  so the default executor will deny a genesis account to register asset definition.
@@ -31,22 +30,7 @@ async fn genesis_transactions_are_validated_by_executor() {
     let genesis = network.genesis();
     let peer = network.peer();
 
-    timeout(Duration::from_secs(5), async {
-        join!(
-            // Peer should start...
-            peer.start(network.config_layers(), genesis),
-            peer.once(|event| matches!(event, PeerLifecycleEvent::ServerStarted)),
-            // ...but it should shortly exit with an error
-            peer.once(|event| match event {
-                // TODO: handle "Invalid genesis" in a more granular way
-                //       https://github.com/hyperledger-iroha/iroha/issues/5423
-                PeerLifecycleEvent::Terminated { status } => !status.success(),
-                _ => false,
-            })
-        )
-    })
-    .await
-    .expect("peer should panic within timeout");
+    let _ = peer.start_checked(network.config_layers(), genesis).await;
 }
 
 fn get_assets(iroha: &Client, id: &AccountId) -> Vec<Asset> {
