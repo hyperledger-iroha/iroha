@@ -86,7 +86,7 @@ Commands related to genesis
 
 ###### **Options:**
 
-* `--creation-time <CREATION_TIME>` — Creation time of the genesis block in RFC 3339 format
+* `--creation-time <CREATION_TIME>` — Creation time of the genesis block in RFC 3339 format (e.g. "2018-02-16T00:31:37Z")
 * `--executor <PATH>` — Relative path from the directory of output file to the executor.wasm file
 * `--wasm-dir <PATH>` — Relative path from the directory of output file to the directory that contains *.wasm libraries
 
