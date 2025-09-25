@@ -189,10 +189,6 @@ impl GenesisSpec {
             instruction_batches.push(instructions);
         }
 
-        if !self.instructions.is_empty() {
-            instruction_batches.push(self.instructions);
-        }
-
         if !self.wasm_triggers.is_empty() {
             let instructions = self
                 .wasm_triggers
@@ -204,6 +200,10 @@ impl GenesisSpec {
                 .map(InstructionBox::from)
                 .collect();
             instruction_batches.push(instructions);
+        }
+
+        if !self.instructions.is_empty() {
+            instruction_batches.push(self.instructions);
         }
 
         if !self.topology.is_empty() {
@@ -431,6 +431,7 @@ pub struct GenesisWasmTrigger {
 
 /// Human-readable alternative to [`Action`] which has wasm executable
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// TODO: include metadata field
 pub struct GenesisWasmAction {
     executable: WasmPath,
     repeats: Repeats,
