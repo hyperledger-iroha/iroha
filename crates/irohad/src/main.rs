@@ -538,13 +538,8 @@ pub fn read_config_and_genesis(
 fn read_genesis(json_path: &Path) -> Result<GenesisBlock, ConfigError> {
     GenesisSpec::from_json(json_path)
         .and_then(GenesisSpec::into_block)
-        .map_err(|err| {
-            eprintln!(
-                "failed to build a genesis block from {}\n{err}",
-                json_path.display()
-            );
-            ConfigError::ReadGenesis.into()
-        })
+        .into_report()
+        .map_err(|report| report.change_context(ConfigError::ReadGenesis))
 }
 
 fn validate_config(config: &Config) -> Result<(), ConfigError> {
@@ -706,6 +701,7 @@ async fn main() -> error_stack::Result<(), MainError> {
 
 #[cfg(test)]
 mod tests {
+    use assertables::{assert_contains, assert_contains_as_result};
     use iroha_genesis::GenesisBuilder;
 
     use super::*;
@@ -845,5 +841,20 @@ mod tests {
     fn user_can_provide_any_extension() {
         let _args = Args::try_parse_from(["test", "--config", "file.toml.but.not"])
             .expect("should allow doing this as well");
+    }
+
+    #[test]
+    fn details_provided_when_genesis_is_malformed() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"Not an OKAY JSON").unwrap();
+
+        let report = read_genesis(file.path()).unwrap_err();
+
+        let printed = format!("{report:?}");
+        assert_contains!(printed, &file.path().display().to_string());
+        // from `iroha_genesis`
+        assert_contains!(printed, "failed to deserialize genesis spec");
+        // from `serde_json`
+        assert_contains!(printed, "expected value at line 1 column 1");
     }
 }
