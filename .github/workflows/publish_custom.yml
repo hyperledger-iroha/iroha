@@ -51,7 +51,7 @@ jobs:
         with:
           ref: ${{ github.event.inputs.checkout_ref }}
       - name: Download wasm libs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: wasm-libs
           path: ${{ env.DEFAULTS_DIR }}/libs

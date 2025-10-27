@@ -45,7 +45,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Download WASMs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: wasm
           path: ${{ env.WASM_TARGET_DIR }}
