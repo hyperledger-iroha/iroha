@@ -1,4 +1,0 @@
-extends = "base.toml"
-
-[genesis]
-file = "genesis.json"
