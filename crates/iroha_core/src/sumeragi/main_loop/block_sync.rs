@@ -1,0 +1,804 @@
+//! Block sync and missing-block request handlers.
+
+use iroha_logger::prelude::*;
+
+use super::*;
+
+impl Actor {
+    fn send_fetch_pending_block_response(&mut self, peer: PeerId, mut msg: BlockMessage) {
+        if let BlockMessage::BlockSyncUpdate(update) = &mut msg {
+            let block_hash = update.block.hash();
+            let height = update.block.header().height().get();
+            let view = u64::from(update.block.header().view_change_index());
+            Self::apply_cached_qcs_to_block_sync_update(
+                update,
+                &self.qc_cache,
+                &self.vote_log,
+                block_hash,
+                height,
+                view,
+            );
+        }
+        self.schedule_background(BackgroundRequest::Post { peer, msg });
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn handle_block_sync_update(
+        &mut self,
+        update: super::message::BlockSyncUpdate,
+    ) -> Result<()> {
+        let super::message::BlockSyncUpdate {
+            block,
+            qc: incoming_qc,
+            availability_qc: incoming_availability_qc,
+            precommit_votes,
+            commit_certificate,
+            validator_checkpoint,
+        } = update;
+        let block_hash = block.hash();
+        let block_height = block.header().height().get();
+        let block_view = u64::from(block.header().view_change_index());
+        let requested_missing_block = self
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash);
+        if let Some(local_view) = self.stale_view(block_height, block_view) {
+            let da_enabled = self.runtime_da_enabled();
+            if !da_enabled && !requested_missing_block {
+                debug!(
+                    height = block_height,
+                    view = block_view,
+                    local_view,
+                    kind = "BlockSyncUpdate",
+                    "dropping consensus message for stale view"
+                );
+                return Ok(());
+            }
+            debug!(
+                height = block_height,
+                view = block_view,
+                local_view,
+                da_enabled,
+                missing_request = requested_missing_block,
+                "accepting BlockSyncUpdate for stale view"
+            );
+        }
+        if let Ok(height_usize) = usize::try_from(block_height)
+            && let Some(nz_height) = NonZeroUsize::new(height_usize)
+            && let Some(committed) = self.kura.get_block(nz_height)
+        {
+            let committed_hash = committed.hash();
+            if committed_hash != block_hash {
+                info!(
+                    committed_height = height_usize,
+                    committed_hash = %committed_hash,
+                    incoming_hash = %block_hash,
+                    "dropping block sync update that conflicts with committed block"
+                );
+                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+                return Ok(());
+            }
+        }
+        if self.kura.get_block_height_by_hash(block_hash).is_some() {
+            info!(
+                hash = ?block_hash,
+                height = block_height,
+                "skipping block sync update for already known block"
+            );
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
+            return Ok(());
+        }
+        let persisted_roster =
+            persisted_roster_for_block(self.state.as_ref(), &self.kura, block_height, block_hash);
+        let cert_hint = commit_certificate.as_ref();
+        let checkpoint_hint = validator_checkpoint.as_ref();
+        let Some(selection) = select_block_sync_roster(
+            &block,
+            block_hash,
+            block_height,
+            persisted_roster,
+            cert_hint,
+            checkpoint_hint,
+            self.state.as_ref(),
+            self.common_config.trusted_peers.value(),
+            self.common_config.peer.id(),
+            self.mode_tag(),
+            requested_missing_block,
+        ) else {
+            let roster_snapshot = self
+                .state
+                .commit_roster_snapshot_for_block(block_height, block_hash)
+                .is_some();
+            warn!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                cert_hint = cert_hint.is_some(),
+                checkpoint_hint = checkpoint_hint.is_some(),
+                requested_missing_block,
+                roster_snapshot,
+                "dropping block sync update: no verifiable roster available"
+            );
+            super::status::inc_block_sync_drop_invalid_signatures();
+            super::status::inc_block_sync_roster_drop_missing();
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.note_block_sync_roster_drop("missing");
+            }
+            return Ok(());
+        };
+        super::status::inc_block_sync_roster_source(selection.source.as_str());
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.note_block_sync_roster_source(selection.source.as_str());
+        }
+        info!(
+            height = block_height,
+            view = block_view,
+            block = %block_hash,
+            source = selection.source.as_str(),
+            "block sync roster selected"
+        );
+        let topology = super::network_topology::Topology::new(selection.roster.clone());
+        if let Some(cert) = selection.commit_certificate.clone() {
+            super::status::record_commit_certificate(cert);
+        }
+        if let Some(checkpoint) = selection.checkpoint.clone() {
+            super::status::record_validator_checkpoint(checkpoint);
+        }
+        if let (Some(cert), Some(checkpoint)) = (
+            selection.commit_certificate.as_ref(),
+            selection.checkpoint.as_ref(),
+        ) {
+            {
+                let mut journal = self.state.commit_roster_journal.write();
+                journal.upsert(cert.clone(), checkpoint.clone());
+                if let Err(err) = journal.persist() {
+                    warn!(
+                        ?err,
+                        height = block_height,
+                        block = %block_hash,
+                        "failed to persist commit roster journal from block sync"
+                    );
+                }
+            }
+            let sidecar = crate::kura::RosterSidecar::new_v1(
+                block_height,
+                block_hash,
+                Some(cert.clone()),
+                Some(checkpoint.clone()),
+            );
+            self.kura.write_roster_metadata(&sidecar);
+        }
+        let had_incoming_qc = incoming_qc.is_some();
+        let prf_seed = if self.mode_tag() == NPOS_TAG {
+            let state_view = self.state.view();
+            Some(super::npos_seed_for_height(&state_view, block_height))
+        } else {
+            None
+        };
+        let block_signers = {
+            let state_view = self.state.view();
+            match validated_block_signers(&block, &topology, &state_view, self.mode_tag(), prf_seed)
+            {
+                Ok(signers) => signers,
+                Err(err) => {
+                    super::status::inc_block_sync_drop_invalid_signatures();
+                    warn!(
+                        ?err,
+                        hash = ?block_hash,
+                        height = block_height,
+                        view = block_view,
+                        "dropping block sync update with invalid or insufficient signatures"
+                    );
+                    return Ok(());
+                }
+            }
+        };
+        let availability_qc = incoming_availability_qc.and_then(|qc| {
+            if qc.height != block_height {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    hash = %block_hash,
+                    qc_height = qc.height,
+                    "ignoring block sync AvailabilityQC with mismatched height"
+                );
+                return None;
+            }
+            if qc.subject_block_hash != block_hash {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    hash = %block_hash,
+                    qc_hash = %qc.subject_block_hash,
+                    "ignoring block sync AvailabilityQC with mismatched block hash"
+                );
+                return None;
+            }
+            if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Available) {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    hash = %block_hash,
+                    phase = ?qc.phase,
+                    "ignoring block sync QC with non-availability phase"
+                );
+                return None;
+            }
+            match validate_block_sync_qc(
+                &qc,
+                &topology,
+                &block_signers,
+                block_view,
+                &self.common_config.chain,
+                self.mode_tag(),
+                prf_seed,
+            ) {
+                Ok(_) => Some(qc),
+                Err(err) => {
+                    record_qc_validation_error(self.telemetry_handle(), &err);
+                    warn!(
+                        ?err,
+                        reason = qc_validation_reason(&err),
+                        hash = %block_hash,
+                        height = block_height,
+                        view = block_view,
+                        block_signers = block_signers.len(),
+                        "dropping block sync AvailabilityQC after validation failure"
+                    );
+                    None
+                }
+            }
+        });
+        let commit_quorum = topology.min_votes_for_commit().max(1);
+        let mut candidate_qc =
+            incoming_qc.or_else(|| crate::block_sync::BlockSynchronizer::block_sync_qc_for(&block));
+        candidate_qc = candidate_qc.and_then(|qc| {
+            if qc.height != block_height {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    hash = %block_hash,
+                    qc_height = qc.height,
+                    "dropping block sync QC with mismatched height"
+                );
+                return None;
+            }
+            if qc.subject_block_hash != block_hash {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    hash = %block_hash,
+                    qc_hash = %qc.subject_block_hash,
+                    "dropping block sync QC with mismatched block hash"
+                );
+                return None;
+            }
+            if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit) {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    hash = %block_hash,
+                    phase = ?qc.phase,
+                    "dropping block sync QC with non-precommit phase"
+                );
+                return None;
+            }
+            Some(qc)
+        });
+        let original_candidate_qc = candidate_qc.clone();
+
+        let candidate_qc_present = candidate_qc.is_some();
+        let candidate_qc_signers = candidate_qc.as_ref().map(qc_signer_count);
+        let block_signer_count = block_signers.len();
+        let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        if !block_sync_quorum_available(
+            block_signer_count,
+            commit_quorum,
+            candidate_qc_present,
+            requested_missing_block,
+            block_height,
+            local_height,
+        ) {
+            super::status::inc_block_sync_drop_invalid_signatures();
+            warn!(
+                hash = ?block_hash,
+                height = block_height,
+                view = block_view,
+                block_signers = block_signer_count,
+                signatures = block.signatures().count(),
+                commit_quorum,
+                candidate_qc_present,
+                candidate_qc_signers,
+                missing_request = requested_missing_block,
+                local_height,
+                "dropping block sync update missing commit-role quorum"
+            );
+            return Ok(());
+        } else if requested_missing_block
+            && block_signer_count < commit_quorum
+            && !candidate_qc_present
+        {
+            info!(
+                hash = ?block_hash,
+                height = block_height,
+                view = block_view,
+                signatures = block_signer_count,
+                commit_quorum,
+                "applying block sync update below commit quorum to satisfy missing-block request"
+            );
+        }
+        let validated_qc = candidate_qc.as_ref().and_then(|qc| {
+            match validate_block_sync_qc(
+                qc,
+                &topology,
+                &block_signers,
+                block_view,
+                &self.common_config.chain,
+                self.mode_tag(),
+                prf_seed,
+            ) {
+                Ok(_) => Some(qc.clone()),
+                Err(err) => {
+                    record_qc_validation_error(self.telemetry_handle(), &err);
+                    if had_incoming_qc {
+                        super::status::inc_block_sync_qc_replaced();
+                    }
+                    warn!(
+                        ?err,
+                        reason = qc_validation_reason(&err),
+                        hash = ?block_hash,
+                        height = block_height,
+                        view = block_view,
+                        block_signers = block_signer_count,
+                        candidate_qc_signers,
+                        had_incoming_qc,
+                        "dropping block sync QC after validation failure"
+                    );
+                    None
+                }
+            }
+        });
+
+        let derive_valid_qc = || {
+            cached_qc_for(
+                &self.qc_cache,
+                crate::sumeragi::consensus::Phase::Precommit,
+                block_hash,
+                block_height,
+                block_view,
+            )
+            .and_then(|qc| {
+                validate_block_sync_qc(
+                    &qc,
+                    &topology,
+                    &block_signers,
+                    block_view,
+                    &self.common_config.chain,
+                    self.mode_tag(),
+                    prf_seed,
+                )
+                .ok()
+                .map(|_| qc)
+            })
+        };
+
+        let (mut incoming_qc, incoming_qc_validated) = match (candidate_qc.take(), validated_qc) {
+            (None, None) => {
+                let derived = derive_valid_qc();
+                let derived_validated = derived.is_some();
+                (derived, derived_validated)
+            }
+            (_, Some(qc)) => (Some(qc), true),
+            (Some(_), None) if had_incoming_qc => {
+                let derived = derive_valid_qc();
+                let derived_validated = derived.is_some();
+                (derived, derived_validated)
+            }
+            (Some(_), None) => (None, false),
+        };
+        if incoming_qc.is_none() && had_incoming_qc {
+            if let Some(qc) = original_candidate_qc {
+                let signature_topology = super::topology_for_view(
+                    &topology,
+                    qc.height,
+                    qc.view,
+                    self.mode_tag(),
+                    prf_seed,
+                );
+                if super::qc_aggregate_consistent(
+                    &qc,
+                    &signature_topology,
+                    &self.common_config.chain,
+                    self.mode_tag(),
+                ) {
+                    let qc_signers = qc_signer_count(&qc);
+                    info!(
+                        hash = %block_hash,
+                        height = block_height,
+                        view = block_view,
+                        qc_signers,
+                        "accepting block sync QC validated from aggregate signature despite local validation failure"
+                    );
+                    incoming_qc = Some(qc);
+                }
+            }
+        }
+        let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
+        let allow_nonextending_qc = selection.commit_certificate.is_some()
+            || commit_certificate.as_ref().is_some_and(|cert| {
+                super::validate_commit_certificate_roster(cert, block_hash).is_ok()
+            })
+            || incoming_qc_validated;
+        if incoming_qc.is_none() && block_signer_count < commit_quorum && !requested_missing_block {
+            let now = Instant::now();
+            let cooldown = self.rebroadcast_cooldown();
+            if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
+                let targets = Self::build_fetch_targets(&block_signers, &topology);
+                if targets.is_empty() {
+                    debug!(
+                        height = block_height,
+                        view = block_view,
+                        block = %block_hash,
+                        "skipping pending-block fetch: no viable targets"
+                    );
+                } else {
+                    let request = super::message::FetchPendingBlock {
+                        requester: self.common_config.peer.id.clone(),
+                        block_hash,
+                    };
+                    let msg = BlockMessage::FetchPendingBlock(request);
+                    for peer in targets {
+                        self.schedule_background(BackgroundRequest::Post {
+                            peer,
+                            msg: msg.clone(),
+                        });
+                    }
+                    info!(
+                        height = block_height,
+                        view = block_view,
+                        block = %block_hash,
+                        block_signers = block_signer_count,
+                        commit_quorum,
+                        "requesting pending block to recover missing QC"
+                    );
+                }
+            } else {
+                trace!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    cooldown_ms = cooldown.as_millis(),
+                    "skipping pending-block fetch due to cooldown"
+                );
+            }
+        }
+        info!(
+            hash = ?block_hash,
+            height = block_height,
+            block_signers = block_signer_count,
+            candidate_qc_present,
+            candidate_qc_signers,
+            incoming_qc_signers,
+            "applying block sync update"
+        );
+
+        let created = super::message::BlockCreated { block };
+        let creation_result = self.handle_block_created(created);
+        let block_known_after_creation = self.block_known_locally(block_hash);
+        let creation_ok = creation_result.is_ok();
+        let ready_for_qc = block_sync_ready_for_qc(block_known_after_creation, &creation_result);
+        if !ready_for_qc {
+            if let Err(err) = &creation_result {
+                warn!(
+                    ?err,
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    "dropping block sync update: failed to apply block payload"
+                );
+            } else {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    "dropping block sync update: block not accepted locally"
+                );
+            }
+        }
+
+        if let Some(qc) = availability_qc {
+            if creation_ok && block_known_after_creation {
+                self.process_availability_qc(&qc, true);
+            }
+            self.qc_cache.insert(
+                (
+                    crate::sumeragi::consensus::Phase::Available,
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    qc.epoch,
+                ),
+                qc,
+            );
+        }
+
+        for vote in precommit_votes {
+            self.handle_vote(vote);
+        }
+
+        let qc_to_apply = if ready_for_qc { incoming_qc } else { None };
+
+        block_sync_apply_qc_after_block(
+            creation_result,
+            block_known_after_creation,
+            qc_to_apply,
+            |qc| {
+                if topology.as_ref().is_empty() {
+                    warn!(
+                        height = block_height,
+                        view = block_view,
+                        "dropping block sync QC: empty commit topology"
+                    );
+                    return Ok(());
+                }
+                if qc.subject_block_hash != block_hash {
+                    warn!(
+                        incoming_hash = %block_hash,
+                        qc_hash = %qc.subject_block_hash,
+                        "ignoring block sync QC that does not match block hash"
+                    );
+                    return Ok(());
+                }
+                if qc.height != block_height {
+                    warn!(
+                        incoming_hash = %block_hash,
+                        height = block_height,
+                        qc_height = qc.height,
+                        "ignoring block sync QC that does not match block height"
+                    );
+                    return Ok(());
+                }
+                if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit) {
+                    warn!(
+                        incoming_hash = %block_hash,
+                        phase = ?qc.phase,
+                        "ignoring block sync QC with non-precommit phase"
+                    );
+                    return Ok(());
+                }
+                let qc_signers = qc_signer_count(&qc);
+                match validate_block_sync_qc(
+                    &qc,
+                    &topology,
+                    &block_signers,
+                    block_view,
+                    &self.common_config.chain,
+                    self.mode_tag(),
+                    prf_seed,
+                ) {
+                    Ok((signer_set, present_signers)) => {
+                        crate::sumeragi::status::record_precommit_signers(
+                            crate::sumeragi::status::PrecommitSignerRecord {
+                                block_hash,
+                                height: qc.height,
+                                view: qc.view,
+                                epoch: qc.epoch,
+                                signers: signer_set.clone(),
+                                bls_aggregate_signature: qc
+                                    .aggregate
+                                    .bls_aggregate_signature
+                                    .clone(),
+                                roster_len: topology.as_ref().len(),
+                            },
+                        );
+                        self.note_validated_qc_tally(
+                            &qc,
+                            QcSignerTally {
+                                voting_signers: signer_set.clone(),
+                                present_signers,
+                            },
+                        );
+                        if !self.process_precommit_qc(&qc, true, allow_nonextending_qc) {
+                            info!(
+                                incoming_hash = %block_hash,
+                                height = block_height,
+                                view = block_view,
+                                "dropping block sync QC that conflicts with locked chain"
+                            );
+                            return Ok(());
+                        }
+                        self.qc_cache.insert(
+                            (
+                                qc.phase,
+                                qc.subject_block_hash,
+                                qc.height,
+                                qc.view,
+                                qc.epoch,
+                            ),
+                            qc.clone(),
+                        );
+                        if let Some(pending) =
+                            self.pending.pending_blocks.remove(&qc.subject_block_hash)
+                        {
+                            let qc_header = crate::sumeragi::consensus::QcHeaderRef {
+                                phase: crate::sumeragi::consensus::Phase::Precommit,
+                                subject_block_hash: qc.subject_block_hash,
+                                height: qc.height,
+                                view: qc.view,
+                                epoch: qc.epoch,
+                            };
+                            let _ = self.finalize_pending_block(qc_header, pending, None);
+                        }
+                        if let Some(highest) = self.highest_qc {
+                            self.maybe_broadcast_new_view(highest, None, None);
+                        }
+                        #[cfg(feature = "telemetry")]
+                        if let Some(telemetry) = self.telemetry_handle() {
+                            telemetry.note_qc_signer_counts(
+                                "precommit",
+                                present_signers,
+                                signer_set.len(),
+                            );
+                        }
+                        debug!(
+                            incoming_hash = %block_hash,
+                            signers = signer_set.len(),
+                            qc_signers,
+                            "applied block sync QC after validation"
+                        );
+                        self.process_commit_candidates();
+                    }
+                    Err(err) => {
+                        record_qc_validation_error(self.telemetry_handle(), &err);
+                        warn!(
+                            ?err,
+                            reason = qc_validation_reason(&err),
+                            incoming_hash = %block_hash,
+                            height = block_height,
+                            view = block_view,
+                            qc_signers,
+                            block_signers = block_signer_count,
+                            "dropping block sync QC after validation failure"
+                        );
+                    }
+                }
+                Ok(())
+            },
+        )
+    }
+
+    pub(super) fn handle_fetch_pending_block(
+        &mut self,
+        request: super::message::FetchPendingBlock,
+    ) -> Result<()> {
+        let block_hash = request.block_hash;
+        let peer = request.requester;
+
+        if let Some(inflight) = self
+            .commit
+            .inflight
+            .as_ref()
+            .filter(|inflight| inflight.block_hash == block_hash)
+        {
+            let block = &inflight.pending.block;
+            let block_hash = block.hash();
+            let block_height = block.header().height().get();
+            let block_view = u64::from(block.header().view_change_index());
+            let update = super::block_sync_update_with_roster(
+                block,
+                self.state.as_ref(),
+                self.kura.as_ref(),
+                self.mode_tag(),
+                self.common_config.trusted_peers.value(),
+                self.common_config.peer.id(),
+            );
+            let mut update = update;
+            Self::apply_cached_qcs_to_block_sync_update(
+                &mut update,
+                &self.qc_cache,
+                &self.vote_log,
+                block_hash,
+                block_height,
+                block_view,
+            );
+            let has_roster =
+                update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
+            let has_cached_qc = update.qc.is_some()
+                || update.availability_qc.is_some()
+                || !update.precommit_votes.is_empty();
+            if !has_roster && !has_cached_qc {
+                let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
+                self.send_fetch_pending_block_response(peer.clone(), msg);
+            } else {
+                self.send_fetch_pending_block_response(
+                    peer.clone(),
+                    BlockMessage::BlockSyncUpdate(update),
+                );
+            }
+            return Ok(());
+        }
+
+        if let Some(pending) = self.pending.pending_blocks.get(&block_hash) {
+            let block = &pending.block;
+            let block_hash = block.hash();
+            let block_height = block.header().height().get();
+            let block_view = u64::from(block.header().view_change_index());
+            let update = super::block_sync_update_with_roster(
+                block,
+                self.state.as_ref(),
+                self.kura.as_ref(),
+                self.mode_tag(),
+                self.common_config.trusted_peers.value(),
+                self.common_config.peer.id(),
+            );
+            let mut update = update;
+            Self::apply_cached_qcs_to_block_sync_update(
+                &mut update,
+                &self.qc_cache,
+                &self.vote_log,
+                block_hash,
+                block_height,
+                block_view,
+            );
+            let has_roster =
+                update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
+            let has_cached_qc = update.qc.is_some()
+                || update.availability_qc.is_some()
+                || !update.precommit_votes.is_empty();
+            if !has_roster && !has_cached_qc {
+                let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
+                self.send_fetch_pending_block_response(peer.clone(), msg);
+            } else {
+                self.send_fetch_pending_block_response(
+                    peer.clone(),
+                    BlockMessage::BlockSyncUpdate(update),
+                );
+            }
+            return Ok(());
+        }
+
+        if let Some(height) = self.kura.get_block_height_by_hash(block_hash) {
+            if let Some(block) = self.kura.get_block(height) {
+                let block = block.as_ref();
+                let block_hash = block.hash();
+                let block_height = block.header().height().get();
+                let block_view = u64::from(block.header().view_change_index());
+                let update = super::block_sync_update_with_roster(
+                    block,
+                    self.state.as_ref(),
+                    self.kura.as_ref(),
+                    self.mode_tag(),
+                    self.common_config.trusted_peers.value(),
+                    self.common_config.peer.id(),
+                );
+                let mut update = update;
+                Self::apply_cached_qcs_to_block_sync_update(
+                    &mut update,
+                    &self.qc_cache,
+                    &self.vote_log,
+                    block_hash,
+                    block_height,
+                    block_view,
+                );
+                let has_roster =
+                    update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
+                let has_cached_qc = update.qc.is_some()
+                    || update.availability_qc.is_some()
+                    || !update.precommit_votes.is_empty();
+                let msg = if !has_roster && !has_cached_qc {
+                    BlockMessage::BlockCreated(super::message::BlockCreated::from(block))
+                } else {
+                    BlockMessage::BlockSyncUpdate(update)
+                };
+                self.send_fetch_pending_block_response(peer.clone(), msg);
+            }
+        }
+
+        Ok(())
+    }
+}

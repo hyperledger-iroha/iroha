@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Verið velkomin í Hyperledger Iroha!",
+  "error.trace_config_setup": "Gat ekki sett upp stillingar rekja",
+  "error.config": "Stillingarvilla",
+  "error.logger": "Gat ekki frumstillt skráningarkerfið",
+  "error.start": "Ekki tókst að ræsa Iroha",
+  "error.run": "Villa kom upp við keyrslu Iroha",
+  "error.start_p2p": "Ekki var hægt að ræsa jafningjanetið",
+  "error.init_kura": "Ekki var hægt að frumstilla Kura (blokkar geymslu)",
+  "error.start_dev_telemetry": "Ekki var hægt að ræsa þróunar-telemetrí þjónustuna",
+  "error.start_telemetry": "Telemetrí þjónustan gat ekki hafist",
+  "error.listen_os_signal": "Ekki var hægt að setja upp hlustun á OS-merki",
+  "error.start_torii": "Ekki var hægt að ræsa Torii (Iroha HTTP API hlið)"
+}

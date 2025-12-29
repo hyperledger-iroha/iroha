@@ -1,0 +1,17 @@
+extends = ["minimal_with_trusted_peers.toml"]
+
+[gov.sorafs_penalty]
+utilisation_floor_bps = 7600
+uptime_floor_bps = 9650
+por_success_floor_bps = 9800
+strike_threshold = 4
+penalty_bond_bps = 1800
+cooldown_windows = 3
+max_pdp_failures = 1
+max_potr_breaches = 2
+
+[gov.sorafs_telemetry]
+require_submitter = true
+require_nonce = true
+max_window_gap_secs = 7200
+reject_zero_capacity = true

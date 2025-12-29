@@ -1,0 +1,21 @@
+[package]
+name = "iroha_file_mmap"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Safe read-only file mapping wrapper used by Iroha storage subsystems"
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+memmap2 = "0.9.9"
+
+[dev-dependencies]
+tempfile = "3.23.0"

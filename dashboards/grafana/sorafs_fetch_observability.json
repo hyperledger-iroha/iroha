@@ -1,0 +1,346 @@
+{
+  "title": "SoraFS Fetch Observability",
+  "uid": "sorafs-fetch",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": [
+    "sorafs",
+    "fetch"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "region",
+        "label": "Region",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sorafs_orchestrator_active_fetches, region)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      },
+      {
+        "name": "manifest",
+        "label": "Manifest Digest",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sorafs_orchestrator_active_fetches{region=~\"$region\"}, manifest_id)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Default-On Gates",
+        "type": "dashboard",
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": false,
+        "iconColor": "rgba(255, 165, 0, 1)",
+        "builtIn": 1,
+        "target": {
+          "type": "dashboard",
+          "matchAny": true,
+          "tags": [
+            "sorafs-fetch-default-on"
+          ],
+          "limit": 100
+        }
+      },
+      {
+        "name": "Burn-in Drills",
+        "type": "dashboard",
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": false,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "builtIn": 1,
+        "target": {
+          "type": "dashboard",
+          "matchAny": true,
+          "tags": [
+            "sorafs-fetch-burnin"
+          ],
+          "limit": 100
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Active Fetch Sessions",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(sorafs_orchestrator_active_fetches{region=~\"$region\", manifest_id=~\"$manifest\"})",
+          "legendFormat": "active",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Retry Rate (5 min)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (provider_id) (rate(sorafs_orchestrator_retries_total{region=~\"$region\", manifest_id=~\"$manifest\"}[5m]))",
+          "legendFormat": "{{provider_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "req/s",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "title": "Provider Failures (15 min)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "pluginVersion": "9.5.2",
+      "targets": [
+        {
+          "expr": "sum by (provider_id, reason) (increase(sorafs_orchestrator_provider_failures_total{region=~\"$region\", manifest_id=~\"$manifest\"}[15m]))",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Chunk Latency P95 (5m)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (provider_id, le) (rate(sorafs_orchestrator_chunk_latency_ms_bucket{region=~\"$region\", manifest_id=~\"$manifest\"}[5m])))",
+          "legendFormat": "{{provider_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Throughput MiB/s (5m)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (provider_id) (rate(sorafs_orchestrator_bytes_total{region=~\"$region\", manifest_id=~\"$manifest\"}[5m])) / 1048576",
+          "legendFormat": "{{provider_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "MB/s",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "title": "Latency Stall Events (15 min)",
+      "id": 6,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (provider_id) (increase(sorafs_orchestrator_stalls_total{region=~\"$region\", manifest_id=~\"$manifest\"}[15m]))",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Range Fetch Throttle Rate (5m)",
+      "id": 7,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(torii_sorafs_range_fetch_throttle_events_total[5m])) by (reason)",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "req/s",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Range Fetch Concurrency",
+      "id": 8,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "torii_sorafs_range_fetch_concurrency_current",
+          "legendFormat": "active",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "title": "Privacy Suppression Snapshot (latest drain)",
+      "id": 9,
+      "datasource": "Prometheus",
+      "pluginVersion": "9.5.2",
+      "targets": [
+        {
+          "expr": "soranet_privacy_snapshot_suppressed",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "type": "table",
+      "title": "Privacy Suppression by Mode (latest drain)",
+      "id": 10,
+      "datasource": "Prometheus",
+      "pluginVersion": "9.5.2",
+      "targets": [
+        {
+          "expr": "soranet_privacy_snapshot_suppressed_by_mode",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Privacy Suppression Rate (5m)",
+      "id": 11,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (mode, reason) (rate(soranet_privacy_suppression_total[5m]))",
+          "legendFormat": "{{mode}} \u2022 {{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "req/s",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Privacy Buckets Evicted (1h)",
+      "id": 12,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "increase(soranet_privacy_evicted_buckets_total[1h])",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    }
+  ]
+}

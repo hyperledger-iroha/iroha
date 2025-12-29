@@ -1,0 +1,7 @@
+error: failed to parse numeric: empty literal
+ --> tests/ui/fail/numeric_empty.rs:6:13
+  |
+6 |     let _ = numeric!();
+  |             ^^^^^^^^^^
+  |
+  = note: this error originates in the macro `numeric` (in Nightly builds, run with -Z macro-backtrace for more info)

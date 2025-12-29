@@ -1,0 +1,13 @@
+{
+  "capabilities": 1,
+  "endpoints": 2,
+  "profile_aliases": [
+    "sorafs.sf1@1.0.0",
+    "sorafs-sf1"
+  ],
+  "profile_id": "sorafs.sf1@1.0.0",
+  "provider_id_hex": "0a0b0c0d0e0f0011223344556677889900aa0bb0ccddeeff1122334455667788",
+  "stake_amount": "5000",
+  "stream_budget": null,
+  "transport_hints": null
+}

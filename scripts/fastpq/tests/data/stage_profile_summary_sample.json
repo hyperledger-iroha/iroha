@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-05-30T12:00:00Z",
+  "rows": 20000,
+  "warmups": 1,
+  "iterations": 3,
+  "release_build": true,
+  "capture_trace": true,
+  "stages": [
+    {
+      "stage": "fft",
+      "operation": "fft",
+      "benchmark_json": "artifacts/fft/fastpq_metal_bench.json",
+      "trace_artifact": "artifacts/fft/fft.trace",
+      "stats": {
+        "cpu": {
+          "mean_ms": 112.616,
+          "min_ms": 95.335,
+          "max_ms": 132.929
+        },
+        "gpu": {
+          "mean_ms": 130.986,
+          "min_ms": 115.761,
+          "max_ms": 167.755
+        },
+        "speedup_ratio": 0.86,
+        "speedup_delta_ms": -18.37,
+        "columns": 16,
+        "input_len": 32768
+      },
+      "metal_dispatch_queue": {
+        "dispatch_count": 24,
+        "busy_ratio": 0.22,
+        "overlap_ratio": 0.11,
+        "max_in_flight": 4
+      },
+      "column_staging": {
+        "phases": {
+          "fft": {
+            "flatten_ms": 12.5,
+            "wait_ms": 4.1
+          },
+          "lde": {
+            "flatten_ms": 0.0,
+            "wait_ms": 0.0
+          }
+        }
+      },
+      "kernel_profiles": {
+        "dispatches": 12
+      }
+    },
+    {
+      "stage": "poseidon",
+      "operation": "poseidon_hash_columns",
+      "benchmark_json": "artifacts/poseidon/fastpq_metal_bench.json",
+      "stats": {
+        "cpu": {
+          "mean_ms": 3548.329,
+          "min_ms": 3519.881,
+          "max_ms": 3576.041
+        },
+        "gpu": {
+          "mean_ms": 3642.706,
+          "min_ms": 3539.055,
+          "max_ms": 3758.279
+        },
+        "speedup_ratio": 0.97,
+        "speedup_delta_ms": -94.377,
+        "columns": 16,
+        "input_len": 524288
+      },
+      "metal_dispatch_queue": {
+        "dispatch_count": 0,
+        "busy_ratio": 0.0,
+        "overlap_ratio": 0.0,
+        "max_in_flight": 0
+      }
+    }
+  ]
+}

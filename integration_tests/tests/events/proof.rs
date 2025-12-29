@@ -1,0 +1,132 @@
+//! Integration tests for ZK proof events over the Torii event stream.
+use assert_matches::assert_matches;
+use eyre::Result;
+use futures_util::StreamExt;
+use iroha::data_model::prelude::*;
+use iroha_core::zk::test_utils::halo2_fixture_envelope;
+use iroha_data_model::events::data::prelude::ProofEventFilter;
+use iroha_test_network::*;
+use tokio::task::spawn_blocking;
+use tokio::time::timeout;
+
+use integration_tests::sandbox;
+
+fn halo2_attachment() -> iroha::data_model::proof::ProofAttachment {
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let vk_box = fixture
+        .vk_box("halo2/ipa")
+        .expect("fixture must include a verifying key");
+    let proof_box = fixture.proof_box("halo2/ipa");
+    iroha::data_model::proof::ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk_box)
+}
+
+#[tokio::test]
+async fn verify_proof_emits_verified_event() -> Result<()> {
+    let Some(network) = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new(),
+        stringify!(verify_proof_emits_verified_event),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    let result: Result<()> = async {
+        let mut events = network
+            .client()
+            .listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())])
+            .await?;
+
+        // Build a VerifyProof ISI with inline VK on an accepted backend
+        let attachment = halo2_attachment();
+        let verify: InstructionBox =
+            iroha::data_model::isi::zk::VerifyProof::new(attachment).into();
+
+        {
+            let client = network.client();
+            spawn_blocking(move || client.submit_all_blocking([verify])).await??;
+        }
+        network.ensure_blocks(2).await?;
+
+        // Wait for the proof event and assert it is Verified
+        let proof_event = timeout(network.sync_timeout(), async {
+            loop {
+                let ev = events.next().await.expect("event stream open")?;
+                if let EventBox::Data(event) = ev
+                    && let DataEvent::Proof(pe) = event.as_ref()
+                {
+                    break Ok::<_, eyre::Report>(pe.clone());
+                }
+            }
+        })
+        .await??;
+        assert_matches!(
+            proof_event,
+            iroha::data_model::events::data::proof::ProofEvent::Verified(_)
+        );
+
+        Ok(())
+    }
+    .await;
+    if sandbox::handle_result(result, stringify!(verify_proof_emits_verified_event))?.is_none() {
+        return Ok(());
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn verify_proof_emits_rejected_event() -> Result<()> {
+    let Some(network) = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new(),
+        stringify!(verify_proof_emits_rejected_event),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    let result: Result<()> = async {
+        let mut events = network
+            .client()
+            .listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())])
+            .await?;
+
+        // Build a VerifyProof ISI that deterministically rejects
+        let attachment = iroha::data_model::proof::ProofAttachment::new_inline(
+            "debug/reject".into(),
+            iroha::data_model::proof::ProofBox::new("debug/reject".into(), vec![0xaa]),
+            iroha::data_model::proof::VerifyingKeyBox::new("debug/reject".into(), vec![0xbb]),
+        );
+        let verify: InstructionBox =
+            iroha::data_model::isi::zk::VerifyProof::new(attachment).into();
+
+        {
+            let client = network.client();
+            spawn_blocking(move || client.submit_all_blocking([verify])).await??;
+        }
+        network.ensure_blocks(2).await?;
+
+        let proof_event = timeout(network.sync_timeout(), async {
+            loop {
+                let ev = events.next().await.expect("event stream open")?;
+                if let EventBox::Data(event) = ev
+                    && let DataEvent::Proof(pe) = event.as_ref()
+                {
+                    break Ok::<_, eyre::Report>(pe.clone());
+                }
+            }
+        })
+        .await??;
+        assert_matches!(
+            proof_event,
+            iroha::data_model::events::data::proof::ProofEvent::Rejected(_)
+        );
+
+        Ok(())
+    }
+    .await;
+    if sandbox::handle_result(result, stringify!(verify_proof_emits_rejected_event))?.is_none() {
+        return Ok(());
+    }
+
+    Ok(())
+}

@@ -55,6 +55,7 @@ traces/*
 .swift-build/*
 npm-iroha-js.log
 javascript/npm-iroha-js.log
+javascript/iroha_js/**/*.log
 javascript/iroha_js/scripts/release_matrix.targets.json
 build/*
 dist/*
@@ -93,6 +94,7 @@ docs/source/da/_generated/threat_model_report.json
 java/iroha_android/.gradle-home/
 .target_small/
 target-sm/
+/Library/
 **/.venv/
 **/.pytest_cache/
 **/.mypy_cache/
@@ -111,6 +113,7 @@ IrohaSwift/tmp/
 IrohaSwift/(A\ Document\ Being\ Saved\ By\ swift-test*/
 
 .*.log
+**/*.log
 .*.out
 .cargo/*
 !.cargo/config.toml
@@ -152,6 +155,17 @@ tmp/*
 /fastpq_row_usage_summary.json
 /sora-single/
 /storage/
+/sora-one/
+/bench_trace.json
+/fastpq_*.json
+/libtest.rlib
+/clippy_errors.txt
+/*.log
+/*.aux
+/*.bbl
+/*.blg
+/*.synctex.gz
+/*.toc
 
 integration_tests/fixtures/sumeragi_da*
 !integration_tests/fixtures/sumeragi_da/

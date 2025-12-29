@@ -1,0 +1,13 @@
+{
+  "billing_period": "2026-11",
+  "meter_catalog_path": "billing_meter_catalog.json",
+  "meter_catalog_csv_path": "billing_meter_catalog.csv",
+  "meter_catalog_parquet_path": "billing_meter_catalog.parquet",
+  "rating_plan_path": "billing_rating_plan.toml",
+  "ledger_hooks_path": "billing_ledger_hooks.toml",
+  "ledger_projection_path": "billing_ledger_projection.json",
+  "guardrails_path": "billing_guardrails.yaml",
+  "invoice_template_path": "billing_invoice_template.md",
+  "dispute_template_path": "billing_dispute_template.md",
+  "reconciliation_template_path": "billing_reconciliation_template.md"
+}

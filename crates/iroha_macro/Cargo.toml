@@ -1,0 +1,26 @@
+[package]
+name = "iroha_macro"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[lints]
+workspace = true
+
+[badges]
+is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }
+is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-iroha/iroha" }
+maintenance = { status = "actively-developed" }
+
+[features]
+default = []
+trybuild-tests = []
+
+[dependencies]
+iroha_derive = { path = "../iroha_derive" }
+
+[dev-dependencies]
+norito = {workspace = true}

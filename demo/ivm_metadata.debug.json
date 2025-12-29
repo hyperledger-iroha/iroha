@@ -1,0 +1,7 @@
+{
+  "gas_limit": 1000000,
+  "contract_namespace": "apps",
+  "contract_id": "prediction.market.debug",
+  "gov_namespace": "apps",
+  "gov_contract_id": "prediction.market.debug"
+}

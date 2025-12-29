@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "allow": [
+    {
+      "algorithm": "ed25519",
+      "public_key_hex": "86b385905ff4c67e690ceaf2e705b30a5bbd3d3be588f080fc985204001aaa25"
+    }
+  ]
+}

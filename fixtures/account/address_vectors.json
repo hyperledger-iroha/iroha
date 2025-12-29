@@ -1,0 +1,365 @@
+{
+  "cases": {
+    "negative": [
+      {
+        "case_id": "ih58-checksum-mismatch",
+        "expected_error": {
+          "kind": "ChecksumMismatch"
+        },
+        "expected_prefix": 753,
+        "format": "ih58",
+        "input": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqz",
+        "note": "Checksum tampering on IH58 alias for the default-domain vector."
+      },
+      {
+        "case_id": "ih58-prefix-mismatch",
+        "expected_error": {
+          "expected": 753,
+          "found": 754,
+          "kind": "UnexpectedNetworkPrefix"
+        },
+        "expected_prefix": 753,
+        "format": "ih58",
+        "input": "S1dLN3FoMHr7ZvCRt5Md6m3GJwpXaKWWZpHjuKx3R1Eqw1mApmMGCXs1",
+        "note": "Encoded with prefix NETWORK_PREFIX + 1 while validators expect NETWORK_PREFIX."
+      },
+      {
+        "case_id": "compressed-missing-sentinel",
+        "expected_error": {
+          "kind": "MissingCompressedSentinel"
+        },
+        "format": "compressed",
+        "input": "2QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5",
+        "note": "Missing required snx1 sentinel prefix."
+      },
+      {
+        "case_id": "compressed-invalid-character",
+        "expected_error": {
+          "kind": "ChecksumMismatch"
+        },
+        "format": "compressed",
+        "input": "snx12QAﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5",
+        "note": "Introduces ASCII 'A' outside the Sora compressed alphabet."
+      },
+      {
+        "case_id": "compressed-checksum-mismatch",
+        "expected_error": {
+          "kind": "ChecksumMismatch"
+        },
+        "format": "compressed",
+        "input": "snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5Eﾇ",
+        "note": "Checksum nibble replaced to trigger Bech32m verification failure."
+      },
+      {
+        "case_id": "canonical-invalid-hex",
+        "expected_error": {
+          "kind": "InvalidHexAddress"
+        },
+        "format": "canonical_hex",
+        "input": "0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c20G",
+        "note": "Invalid hex digit injected into canonical representation."
+      },
+      {
+        "case_id": "canonical-trailing-bytes",
+        "expected_error": {
+          "kind": "UnexpectedTrailingBytes"
+        },
+        "format": "canonical_hex",
+        "input": "0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c20100",
+        "note": "Extra zero byte appended past the canonical payload."
+      },
+      {
+        "case_id": "canonical-multisig-truncated",
+        "expected_error": {
+          "kind": "InvalidLength"
+        },
+        "format": "canonical_hex",
+        "input": "0x0A014B5D81318D0CDF5559258C8E01010003030100010020591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0010002002062FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532B0100010020D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A",
+        "note": "Canonical multisig payload truncated after removing final member bytes."
+      }
+    ],
+    "positive": [
+      {
+        "case_id": "addr-single-default-ed25519",
+        "category": "single",
+        "controller": {
+          "curve": "ed25519",
+          "kind": "single",
+          "public_key_hex": "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
+          "public_key_multihash": "ed0120641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
+          "public_key_prefixed": "ed25519:ed0120641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201"
+        },
+        "encodings": {
+          "canonical_hex": "0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
+          "compressed": "snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5",
+          "compressed_fullwidth": "snx12QGネkタアレiノリuロWRヱマxチSuチepnhスvカrモカ9Tケソp3ヌVWウイセU4N5E5",
+          "ih58": {
+            "prefix": 753,
+            "string": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS"
+          }
+        },
+        "input": {
+          "normalized_domain": "default",
+          "raw_domain": "default",
+          "seed_byte": 0
+        },
+        "note": "Implicit default-domain address using deterministic Ed25519 key derived from seed byte 0x00.",
+        "selector": {
+          "kind": "default"
+        }
+      },
+      {
+        "case_id": "addr-single-treasury-ed25519",
+        "category": "single",
+        "controller": {
+          "curve": "ed25519",
+          "kind": "single",
+          "public_key_hex": "3B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
+          "public_key_multihash": "ed01203B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
+          "public_key_prefixed": "ed25519:ed01203B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8"
+        },
+        "encodings": {
+          "canonical_hex": "0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8",
+          "compressed": "snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾘｻYﾃhﾓMQ9CBEﾅﾊﾈｷﾉVRｺnKRwTﾋｼqﾅWrﾎU7ｼiﾍQt1TPGNJ",
+          "compressed_fullwidth": "snx15サu6rタCヰTGwマ1ナヱフQイヨリサYテhモMQ9CBEナハネキノVRコnKRwTヒシqナWrホU7シiヘQt1TPGNJ",
+          "ih58": {
+            "prefix": 753,
+            "string": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"
+          }
+        },
+        "input": {
+          "normalized_domain": "treasury",
+          "raw_domain": "treasury",
+          "seed_byte": 1
+        },
+        "note": "Non-default domain address (treasury) using deterministic Ed25519 key derived from seed byte 0x01.",
+        "selector": {
+          "digest_hex": "B18FE9C1ABBAC45B3E38FC5D",
+          "kind": "local12"
+        }
+      },
+      {
+        "case_id": "addr-global-registry-002a",
+        "category": "single",
+        "controller": {
+          "curve": "ed25519",
+          "kind": "single",
+          "public_key_hex": "3B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
+          "public_key_multihash": "ed01203B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
+          "public_key_prefixed": "ed25519:ed01203B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8"
+        },
+        "encodings": {
+          "canonical_hex": "0x02020000002a0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8",
+          "compressed": "snx1kXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP",
+          "compressed_fullwidth": "snx1kXケ6NサヘタヨSワヨア3レ5WリヒQナキヲxgロクcチオヒkヒvマ8SPモタケdエエイW9iCM6AEP",
+          "ih58": {
+            "prefix": 753,
+            "string": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF"
+          }
+        },
+        "input": {
+          "equivalent_domain": "treasury",
+          "registry_id": 42
+        },
+        "note": "Global selector variant referencing registry id 0x002A; equivalent to the treasury local digest.",
+        "selector": {
+          "domain_equivalents": [
+            "treasury"
+          ],
+          "kind": "global",
+          "registry_id": 42
+        }
+      },
+      {
+        "case_id": "addr-multisig-council-threshold3",
+        "category": "multisig",
+        "controller": {
+          "ctap2_cbor_hex": "0xA3010102030383A301010201035820591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0A30101020203582062FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532BA301010201035820D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA",
+          "digest_blake2b256_hex": "0x24E6E8231BC3DCF93DA43F2ABAE739419340B0D532F671808A59239CB2E7A4D6",
+          "kind": "multisig",
+          "members": [
+            {
+              "curve": "ed25519",
+              "public_key_hex": "591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0",
+              "public_key_multihash": "ed0120591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0",
+              "public_key_prefixed": "ed25519:ed0120591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "62FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532B",
+              "public_key_multihash": "ed012062FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532B",
+              "public_key_prefixed": "ed25519:ed012062FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532B",
+              "weight": 2
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA",
+              "public_key_multihash": "ed0120D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA",
+              "public_key_prefixed": "ed25519:ed0120D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA",
+              "weight": 1
+            }
+          ],
+          "threshold": 3,
+          "version": 1
+        },
+        "encodings": {
+          "canonical_hex": "0x0a014b5d81318d0cdf5559258c8e01010003030100010020591b509f4a1b29c9d8cada0f876ee97041cbd43c0de3251b1e6c77bb621f40b0010002002062ffa8de6da654efebfa3d80fdef8f188034cfa3e211859346e41a5fea06532b0100010020d4abafc1f385826a8ebc60df90568c52ccfbf91e0b134dc66e42731a7561e4da",
+          "compressed": "snx13vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K",
+          "compressed_fullwidth": "snx13vム2zkaoUwヒナGリレyツe3ヨfルヰカリノwキnoWロYicaUr3ヤイヨ2Ado3TリYQノJqワヌウムミd8dDjRGヲ3Vテ9HcタMヰR8ホヨgEqGオEセDyc5チ1ヤノ31sUムタヨaクxリ3イキMEuFコソノBQSVQnxネeJzrXLヰhソケ5SEEナPツラクdヰヒ1bUGHイVXBWNNJ6K",
+          "ih58": {
+            "prefix": 753,
+            "string": "SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i"
+          }
+        },
+        "input": {
+          "member_keys_hex": [
+            "591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0",
+            "62FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532B",
+            "D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA"
+          ],
+          "member_weights": [
+            1,
+            2,
+            1
+          ],
+          "normalized_domain": "council",
+          "raw_domain": "council",
+          "threshold": 3
+        },
+        "note": "Council domain multisig with three members (weights 2,1,1) requiring weight ≥3.",
+        "selector": {
+          "digest_hex": "4B5D81318D0CDF5559258C8E",
+          "kind": "local12"
+        }
+      },
+      {
+        "case_id": "addr-multisig-wonderland-threshold2",
+        "category": "multisig",
+        "controller": {
+          "ctap2_cbor_hex": "0xA3010102020382A301010201035820590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45A3010102020358208C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5",
+          "digest_blake2b256_hex": "0x13F157FB9400EF6B096A5D50EE1AAD30E89EF523C22FCF845631F21089130F12",
+          "kind": "multisig",
+          "members": [
+            {
+              "curve": "ed25519",
+              "public_key_hex": "590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45",
+              "public_key_multihash": "ed0120590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45",
+              "public_key_prefixed": "ed25519:ed0120590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "8C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5",
+              "public_key_multihash": "ed01208C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5",
+              "public_key_prefixed": "ed25519:ed01208C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5",
+              "weight": 2
+            }
+          ],
+          "threshold": 2,
+          "version": 1
+        },
+        "encodings": {
+          "canonical_hex": "0x0a01b8ae571b79c5a80f5834da2b01010002020100010020590e3f8a4263537d1aeca330edaadb5722597acd54807b3b1c5a7f2ccab13d4501000200208c9c7a57b25a194205e227e1fe67780a0e8d54c9aec7abd9439cf69b5cfcccb5",
+          "compressed": "snx12ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9",
+          "compressed_fullwidth": "snx12ヨZリeエAdx3ツノヤXhnケタ2ノアヒxナトフヱwミmハvEミCマホヲ1ムHヒso2GKヤユチwツテP6チシルヨコ9サヲbネ4wFdムFヰ3HaリシMキフHWtキヒLルヨQ4D3XハワXmpktレサ5ナナヌ1gkマsCFQGH9",
+          "ih58": {
+            "prefix": 753,
+            "string": "3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt"
+          }
+        },
+        "input": {
+          "member_keys_hex": [
+            "590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45",
+            "8C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5"
+          ],
+          "member_weights": [
+            1,
+            2
+          ],
+          "normalized_domain": "wonderland",
+          "raw_domain": "wonderland",
+          "threshold": 2
+        },
+        "note": "Two-member multisig policy with weights 1 and 2 requiring weight ≥2 on wonderland.",
+        "selector": {
+          "digest_hex": "B8AE571B79C5A80F5834DA2B",
+          "kind": "local12"
+        }
+      },
+      {
+        "case_id": "addr-multisig-default-quorum3",
+        "category": "multisig",
+        "controller": {
+          "ctap2_cbor_hex": "0xA3010102030384A3010102010358200DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4A30101020103582032708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041A301010201035820683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3FA301010201035820BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB",
+          "digest_blake2b256_hex": "0xD596346A497D45B9954EEE3BC71C82C8D4B33E9AC9A8A226D626C45891CD2378",
+          "kind": "multisig",
+          "members": [
+            {
+              "curve": "ed25519",
+              "public_key_hex": "0DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4",
+              "public_key_multihash": "ed01200DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4",
+              "public_key_prefixed": "ed25519:ed01200DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "32708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041",
+              "public_key_multihash": "ed012032708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041",
+              "public_key_prefixed": "ed25519:ed012032708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3F",
+              "public_key_multihash": "ed0120683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3F",
+              "public_key_prefixed": "ed25519:ed0120683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3F",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB",
+              "public_key_multihash": "ed0120BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB",
+              "public_key_prefixed": "ed25519:ed0120BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB",
+              "weight": 1
+            }
+          ],
+          "threshold": 3,
+          "version": 1
+        },
+        "encodings": {
+          "canonical_hex": "0x0a00010100030401000100200dce150576dc9d2677ebc1b5ee02c019ca69eb1892732157f7d551d2f83976c4010001002032708b35523549f429e95f7af11f7c8320b9ba29163d2f27af7d81c1c59910410100010020683ba155cd7e73b91fa9b0e61722df50ae625e7f5da9cf5013162891439c2c3f0100010020bef1e6a19fc053b29945a3f1d2a4759b5297f9add0a5c3961405804efd1780bb",
+          "compressed": "snx1ﾐ38ﾅｴｸﾜ8ﾃzwBrqﾘｺ4yﾄv6kqJp1ｳｱﾛｿrzﾄﾃﾘﾒRﾗtV9ｼﾔPｽcヱEﾌVVVｼﾘｲZAｦﾓﾅｦeﾒN76vﾈcuｶuﾛL54rzﾙﾏX2zMﾌRLﾃﾋpﾚpｲcHﾑﾅﾃﾔzｵｲVfAﾃﾚﾎﾚCヰﾔｲｽｦw9ﾔﾕ8bGGkﾁ6sNｼaｻRﾖﾜYﾕﾚU18ﾅHヰﾌuMeﾊtﾂrｿj95Ft8ﾜ3fﾄkNiｴuﾈrCﾐQt8ヱｸｸmﾙﾒgUbﾑEKTTCM",
+          "compressed_fullwidth": "snx1ミ38ナエクワ8テzwBrqリコ4yトv6kqJp1ウアロソrzトテリメRラtV9シヤPスcヱEフVVVシリイZAヲモナヲeメN76vネcuカuロL54rzルマX2zMフRLテヒpレpイcHムナテヤzオイVfAテレホレCヰヤイスヲw9ヤユ8bGGkチ6sNシaサRヨワYユレU18ナHヰフuMeハtツrソj95Ft8ワ3fトkNiエuネrCミQt8ヱククmルメgUbムEKTTCM",
+          "ih58": {
+            "prefix": 753,
+            "string": "nA2bDNhMqXz7ERkHNoEWbvJGyR1aDRsw32LaUWLgbK3vcpzohmdFCLvdotxUWWDY3aZeX4ptLk4Z6TjF5ossnJm8VrNo6daxmGTkqUyP4MxJxiNyPFxsEE5DLnsoLWUcxaWNpZ76tmkbiGS31Gv8tejKpuiHUMaQ1s5ohWyZvDnpycNkBK8AEfGJqn5yc9zAzfWbVhpDwkPj8ScnzvH1Echr5"
+          }
+        },
+        "input": {
+          "member_keys_hex": [
+            "0DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4",
+            "32708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041",
+            "683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3F",
+            "BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB"
+          ],
+          "member_weights": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "normalized_domain": "default",
+          "raw_domain": "default",
+          "threshold": 3
+        },
+        "note": "Implicit-default domain multisig with four members (weight 1 each) requiring weight ≥3.",
+        "selector": {
+          "kind": "default"
+        }
+      }
+    ]
+  },
+  "default_network_prefix": 753,
+  "format_version": 1
+}

@@ -1,0 +1,510 @@
+use core::convert::{Infallible, TryFrom};
+
+use curve25519_dalek::edwards::CompressedEdwardsY;
+use ed25519_dalek::Signature;
+use signature::{Signer as _, Verifier as _};
+
+#[cfg(feature = "rand")]
+use crate::rng::os_rng;
+use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
+#[cfg(feature = "ecc-batch")]
+use curve25519_dalek::edwards::EdwardsPoint;
+#[cfg(feature = "ecc-batch")]
+use curve25519_dalek::{constants, scalar::Scalar, traits::IsIdentity};
+
+pub type PublicKey = ed25519_dalek::VerifyingKey;
+pub type PrivateKey = ed25519_dalek::SigningKey;
+
+#[cfg(feature = "ecc-batch")]
+use sha2::{Digest, Sha512};
+#[cfg(feature = "ecc-batch")]
+use std::iter;
+use std::{format, string::ToString as _, vec::Vec};
+
+fn parse_fixed_size<T, E, F, const SIZE: usize>(
+    payload: &[u8],
+    fixed_parser: F,
+) -> Result<T, ParseError>
+where
+    F: FnOnce(&[u8; SIZE]) -> Result<T, E>,
+    E: core::fmt::Display,
+{
+    let fixed_payload: [u8; SIZE] = payload.try_into().map_err(|_| {
+        ParseError(format!(
+            "the payload size is incorrect: expected {}, but got {}",
+            SIZE,
+            payload.len()
+        ))
+    })?;
+
+    fixed_parser(&fixed_payload).map_err(|err| ParseError(err.to_string()))
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Ed25519Sha512;
+
+impl Ed25519Sha512 {
+    pub fn keypair(option: KeyGenOption<PrivateKey>) -> (PublicKey, PrivateKey) {
+        let signing_key = match option {
+            #[cfg(feature = "rand")]
+            KeyGenOption::Random => {
+                let mut rng = os_rng();
+                PrivateKey::generate(&mut rng)
+            }
+            KeyGenOption::UseSeed(seed) => {
+                let mut rng = rng_from_seed(seed);
+                PrivateKey::generate(&mut rng)
+            }
+            KeyGenOption::FromPrivateKey(ref s) => PrivateKey::clone(s),
+        };
+        (signing_key.verifying_key(), signing_key)
+    }
+
+    pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
+        parse_fixed_size(payload, |bytes| {
+            let compressed = CompressedEdwardsY(*bytes);
+            let point = compressed
+                .decompress()
+                .ok_or_else(|| ParseError("invalid ed25519 public key encoding".to_string()))?;
+            let canonical = point.compress();
+
+            // Reject non-canonical encodings (ZIP-215 allows them, but our ABI requires canonical
+            // byte representation to keep deterministic IH58/in-memory forms in sync).
+            if canonical.as_bytes() != bytes {
+                return Err(ParseError(
+                    "non-canonical ed25519 public key encoding".to_string(),
+                ));
+            }
+
+            let key = PublicKey::from(point);
+
+            // Reject non-canonical encodings (ZIP-215 allows them, but our ABI requires canonical
+            // byte representation to keep deterministic IH58/in-memory forms in sync).
+            if key.is_weak() {
+                return Err(ParseError(
+                    "ed25519 public key is small-order (weak); rejected".to_string(),
+                ));
+            }
+
+            Ok(key)
+        })
+    }
+
+    pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
+        parse_fixed_size(payload, |bytes| {
+            Ok::<_, Infallible>(PrivateKey::from_bytes(bytes))
+        })
+    }
+
+    pub fn sign(message: &[u8], sk: &PrivateKey) -> Vec<u8> {
+        sk.sign(message).to_bytes().to_vec()
+    }
+
+    pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
+        let s = Signature::try_from(signature).map_err(|e| ParseError(e.to_string()))?;
+        pk.verify(message, &s).map_err(|_| Error::BadSignature)
+    }
+
+    /// Deterministic batch verification helper.
+    ///
+    /// Verifies each (message, signature, `public_key`) triple independently in order.
+    /// The `seed32` parameter seeds deterministic scalar derivation for the MSM-based
+    /// batch verifier so callers can domain-separate batches while keeping outcomes
+    /// stable across hardware.
+    pub fn verify_batch_deterministic(
+        messages: &[&[u8]],
+        signatures: &[&[u8]],
+        public_keys: &[&[u8]],
+        seed32: [u8; 32],
+    ) -> Result<(), Error> {
+        if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
+            return Err(Error::BadSignature);
+        }
+
+        // Fast path: MSM-based deterministic batch verify when enabled.
+        // Sort triples by (pk,msg,sig) to ensure order-invariant transcript.
+        #[cfg(feature = "ecc-batch")]
+        {
+            use core::cmp::Ordering;
+            use ed25519_dalek as dalek;
+
+            // Pre-parse keys and signatures; collect indices for stable sort.
+            let mut parsed_pks: Vec<Option<dalek::VerifyingKey>> =
+                Vec::with_capacity(public_keys.len());
+            let mut parsed_sigs: Vec<Option<dalek::Signature>> =
+                Vec::with_capacity(signatures.len());
+            for &pkb in public_keys {
+                parsed_pks.push(Self::parse_public_key(pkb).ok());
+            }
+            for &sb in signatures {
+                parsed_sigs.push(dalek::Signature::try_from(sb).ok());
+            }
+            if parsed_pks.iter().any(Option::is_none) || parsed_sigs.iter().any(Option::is_none) {
+                return Err(Error::BadSignature);
+            }
+            let mut idx: Vec<usize> = (0..messages.len()).collect();
+            idx.sort_unstable_by(|&i, &j| {
+                let ai = parsed_pks[i].as_ref().unwrap().to_bytes();
+                let aj = parsed_pks[j].as_ref().unwrap().to_bytes();
+                match ai.cmp(&aj) {
+                    Ordering::Equal => match messages[i].cmp(messages[j]) {
+                        Ordering::Equal => {
+                            let si = parsed_sigs[i].as_ref().unwrap().to_bytes();
+                            let sj = parsed_sigs[j].as_ref().unwrap().to_bytes();
+                            si.cmp(&sj)
+                        }
+                        o => o,
+                    },
+                    o => o,
+                }
+            });
+
+            // Incorporate seed by XOR-mixing the first byte of each message as a deterministic tweak.
+            // This keeps determinism across nodes while not affecting signature validity.
+            // NOTE: does not change cryptographic transcript; used only to keep API contract.
+            let _ = seed32;
+
+            let mut msgs_sorted: Vec<&[u8]> = Vec::with_capacity(messages.len());
+            let mut sigs_sorted: Vec<dalek::Signature> = Vec::with_capacity(signatures.len());
+            let mut pks_sorted: Vec<dalek::VerifyingKey> = Vec::with_capacity(public_keys.len());
+            for k in idx {
+                msgs_sorted.push(messages[k]);
+                sigs_sorted.push(parsed_sigs[k].take().unwrap());
+                pks_sorted.push(parsed_pks[k].take().unwrap());
+            }
+
+            verify_batch_with_seed(&msgs_sorted, &sigs_sorted, &pks_sorted, seed32)
+        }
+
+        // Deterministic per-signature fallback.
+        #[cfg(not(feature = "ecc-batch"))]
+        {
+            let _ = seed32;
+            for ((m, s), pk_bytes) in messages
+                .iter()
+                .zip(signatures.iter())
+                .zip(public_keys.iter())
+            {
+                let pk = match Self::parse_public_key(pk_bytes) {
+                    Ok(v) => v,
+                    Err(_) => return Err(Error::BadSignature),
+                };
+                // Reuse single-verify to keep semantics identical.
+                Self::verify(m, s, &pk)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+#[cfg(feature = "ecc-batch")]
+fn verify_batch_with_seed(
+    messages: &[&[u8]],
+    signatures: &[ed25519_dalek::Signature],
+    public_keys: &[ed25519_dalek::VerifyingKey],
+    seed32: [u8; 32],
+) -> Result<(), Error> {
+    use curve25519_dalek::traits::VartimeMultiscalarMul;
+
+    let len = messages.len();
+
+    let mut z_scalars: Vec<Scalar> = Vec::with_capacity(len);
+    let mut h_scalars: Vec<Scalar> = Vec::with_capacity(len);
+    let mut r_points: Vec<EdwardsPoint> = Vec::with_capacity(len);
+    let mut a_points: Vec<EdwardsPoint> = Vec::with_capacity(len);
+
+    for (idx, ((sig, pk), msg)) in signatures
+        .iter()
+        .zip(public_keys.iter())
+        .zip(messages.iter())
+        .enumerate()
+    {
+        // Compute H(R || A || M) where R = sig.R, A = verifying key, M = message.
+        let mut hram_hasher = Sha512::new();
+        hram_hasher.update(sig.r_bytes());
+        hram_hasher.update(pk.as_bytes());
+        hram_hasher.update(msg);
+        let hram_bytes: [u8; 64] = hram_hasher.finalize().into();
+        h_scalars.push(Scalar::from_bytes_mod_order_wide(&hram_bytes));
+
+        // Derive deterministic scalar z_i from seed, index, hram, and s bytes.
+        let mut z_hasher = Sha512::new();
+        z_hasher.update(b"iroha.ed25519.batch.v1");
+        z_hasher.update(seed32);
+        z_hasher.update((idx as u64).to_le_bytes());
+        z_hasher.update(hram_bytes);
+        z_hasher.update(sig.s_bytes());
+        let z_bytes: [u8; 64] = z_hasher.finalize().into();
+        z_scalars.push(Scalar::from_bytes_mod_order_wide(&z_bytes));
+
+        // Decompress R and A points; verification must reject malformed encodings.
+        let r_point = CompressedEdwardsY(*sig.r_bytes())
+            .decompress()
+            .ok_or(Error::BadSignature)?;
+        let a_point = CompressedEdwardsY(*pk.as_bytes())
+            .decompress()
+            .ok_or(Error::BadSignature)?;
+        r_points.push(r_point);
+        a_points.push(a_point);
+    }
+
+    // s scalars must be canonical; reject any non-canonical encodings.
+    let s_scalars: Vec<Scalar> = signatures
+        .iter()
+        .map(|sig| Scalar::from_canonical_bytes(*sig.s_bytes()))
+        .map(|ct: subtle::CtOption<Scalar>| ct.into_option().ok_or(Error::BadSignature))
+        .collect::<Result<_, _>>()?;
+
+    // Compute basepoint coefficient: ∑ z_i * s_i (mod l)
+    let b_coefficient: Scalar = s_scalars
+        .iter()
+        .zip(z_scalars.iter())
+        .map(|(s, z)| z * s)
+        .sum();
+
+    // Multiply each H(R || A || M) by the deterministic z_i.
+    let z_hrams = h_scalars
+        .iter()
+        .zip(z_scalars.iter())
+        .map(|(hram, z)| hram * z);
+
+    let scalars = iter::once(-b_coefficient)
+        .chain(z_scalars.iter().copied())
+        .chain(z_hrams);
+    let points = iter::once(constants::ED25519_BASEPOINT_POINT)
+        .chain(r_points)
+        .chain(a_points);
+
+    let identity = EdwardsPoint::vartime_multiscalar_mul(scalars, points);
+    if identity.is_identity() {
+        Ok(())
+    } else {
+        Err(Error::BadSignature)
+    }
+}
+
+#[cfg(test)]
+// unsafe code is needed to check consistency with libsodium, which is a C library
+#[allow(unsafe_code)]
+mod test {
+    use libsodium_sys as ffi;
+
+    use self::Ed25519Sha512;
+    use super::*;
+    use crate::{
+        Algorithm, Error, KeyGenOption, PrivateKey, PublicKey, secrecy::Secret, signature::ed25519,
+    };
+    #[cfg(feature = "ecc-batch")]
+    use rand::{RngCore, SeedableRng, rngs::StdRng};
+
+    const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";
+    const SIGNATURE_1: &str = "451b5b8e8725321541954997781de51f4142e4a56bab68d24f6a6b92615de5eefb74134138315859a32c7cf5fe5a488bc545e2e08e5eedfd1fb10188d532d808";
+    const PRIVATE_KEY: &str = "1c1179a560d092b90458fe6ab8291215a427fcd6b3927cb240701778ef552019";
+    const PUBLIC_KEY: &str = "27c96646f2d4632d4fc241f84cbc427fbc3ecaa95becba55088d6c7b81fc5bbf";
+
+    fn key_pair_factory() -> (ed25519::PublicKey, ed25519::PrivateKey) {
+        Ed25519Sha512::keypair(KeyGenOption::FromPrivateKey(
+            Ed25519Sha512::parse_private_key(&hex::decode(PRIVATE_KEY).unwrap()).unwrap(),
+        ))
+    }
+
+    const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const ED25519_NON_CANONICAL_IDENTITY: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    #[test]
+    fn create_new_keys() {
+        let (p, s) = Ed25519Sha512::keypair(KeyGenOption::Random);
+
+        println!("{s:?}");
+        println!("{p:?}");
+    }
+
+    #[test]
+    fn ed25519_load_keys() {
+        let (p1, s1) = key_pair_factory();
+
+        assert_eq!(
+            PrivateKey(Box::new(Secret::new(crate::PrivateKeyInner::Ed25519(s1)))),
+            PrivateKey::from_hex(Algorithm::Ed25519, PRIVATE_KEY).unwrap()
+        );
+        assert_eq!(
+            PublicKey::new(crate::PublicKeyFull::Ed25519(p1)),
+            PublicKey::from_hex(Algorithm::Ed25519, PUBLIC_KEY).unwrap()
+        );
+    }
+
+    #[test]
+    fn ed25519_verify() {
+        let (p, _) = key_pair_factory();
+
+        Ed25519Sha512::verify(MESSAGE_1, hex::decode(SIGNATURE_1).unwrap().as_slice(), &p).unwrap();
+
+        // Check if signatures produced here can be verified by libsodium
+        let signature = hex::decode(SIGNATURE_1).unwrap();
+        let p_bytes = p.to_bytes();
+        let res = unsafe {
+            ffi::crypto_sign_ed25519_verify_detached(
+                signature.as_slice().as_ptr(),
+                MESSAGE_1.as_ptr(),
+                MESSAGE_1.len() as u64,
+                p_bytes.as_ptr(),
+            )
+        };
+        assert_eq!(res, 0);
+    }
+
+    #[cfg(feature = "ecc-batch")]
+    #[test]
+    fn deterministic_batch_verification_respects_seed_and_order() {
+        let mut rng = StdRng::seed_from_u64(0x0BAD_5EED);
+        let mut triples: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
+
+        for idx in 0..4u8 {
+            let label = format!("batch-message-{idx}");
+            let mut seed = [0u8; 32];
+            rng.fill_bytes(&mut seed);
+            let (pk, sk) = Ed25519Sha512::keypair(KeyGenOption::UseSeed(seed.to_vec()));
+            let sig = Ed25519Sha512::sign(label.as_bytes(), &sk);
+            triples.push((label.into_bytes(), sig, pk.to_bytes().to_vec()));
+        }
+
+        let msg_refs: Vec<&[u8]> = triples.iter().map(|(m, _, _)| m.as_slice()).collect();
+        let sig_refs: Vec<&[u8]> = triples.iter().map(|(_, s, _)| s.as_slice()).collect();
+        let pk_refs: Vec<&[u8]> = triples.iter().map(|(_, _, p)| p.as_slice()).collect();
+
+        // Baseline passes for a deterministic seed.
+        Ed25519Sha512::verify_batch_deterministic(&msg_refs, &sig_refs, &pk_refs, [0xA5; 32])
+            .expect("baseline batch verification");
+
+        // Order should not affect outcome because inputs are sorted internally.
+        triples.reverse();
+        let msgs_rev: Vec<&[u8]> = triples.iter().map(|(m, _, _)| m.as_slice()).collect();
+        let sigs_rev: Vec<&[u8]> = triples.iter().map(|(_, s, _)| s.as_slice()).collect();
+        let pks_rev: Vec<&[u8]> = triples.iter().map(|(_, _, p)| p.as_slice()).collect();
+        Ed25519Sha512::verify_batch_deterministic(
+            msgs_rev.as_slice(),
+            sigs_rev.as_slice(),
+            pks_rev.as_slice(),
+            [0x5A; 32],
+        )
+        .expect("reordered batch verification");
+
+        // Tampering any signature must fail deterministically for every seed.
+        let mut tampered = triples.clone();
+        tampered[1].1[0] ^= 0x55;
+
+        let err = Ed25519Sha512::verify_batch_deterministic(
+            tampered
+                .iter()
+                .map(|(m, _, _)| m.as_slice())
+                .collect::<Vec<_>>()
+                .as_slice(),
+            tampered
+                .iter()
+                .map(|(_, s, _)| s.as_slice())
+                .collect::<Vec<_>>()
+                .as_slice(),
+            tampered
+                .iter()
+                .map(|(_, _, p)| p.as_slice())
+                .collect::<Vec<_>>()
+                .as_slice(),
+            [0x01; 32],
+        );
+        assert!(matches!(err, Err(Error::BadSignature)));
+    }
+
+    #[test]
+    fn ed25519_sign() {
+        let (p, s) = key_pair_factory();
+
+        let sig = Ed25519Sha512::sign(MESSAGE_1, &s);
+        Ed25519Sha512::verify(MESSAGE_1, &sig, &p).unwrap();
+
+        assert_eq!(sig.len(), ed25519_dalek::SIGNATURE_LENGTH);
+        assert_eq!(hex::encode(sig.as_slice()), SIGNATURE_1);
+
+        //Check if libsodium signs the message and this module still can verify it
+        //And that private keys can sign with other libraries
+        let mut signature = [0u8; ffi::crypto_sign_ed25519_BYTES as usize];
+        let s_bytes = s.to_keypair_bytes();
+        unsafe {
+            ffi::crypto_sign_ed25519_detached(
+                signature.as_mut_ptr(),
+                std::ptr::null_mut(),
+                MESSAGE_1.as_ptr(),
+                MESSAGE_1.len() as u64,
+                s_bytes.as_ptr(),
+            )
+        };
+        Ed25519Sha512::verify(MESSAGE_1, &signature, &p).unwrap();
+    }
+
+    #[test]
+    fn invalid_parse_size_does_not_panic() {
+        // passing an empty slice (or some other slice that is not appropriately sized) should not cause a panic
+        // an error should be returned
+        let err = Ed25519Sha512::parse_public_key(&[]).unwrap_err();
+        assert_eq!(
+            err,
+            ParseError("the payload size is incorrect: expected 32, but got 0".to_string())
+        );
+        let err = Ed25519Sha512::parse_private_key(&[1, 2, 3]).unwrap_err();
+        assert_eq!(
+            err,
+            ParseError("the payload size is incorrect: expected 32, but got 3".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_public_key_rejects_small_order() {
+        let err = Ed25519Sha512::parse_public_key(&ED25519_SMALL_ORDER_POINT).unwrap_err();
+        assert!(err.0.contains("small-order"), "unexpected error: {err:?}");
+    }
+
+    #[test]
+    fn parse_public_key_rejects_non_canonical_encoding() {
+        let err = Ed25519Sha512::parse_public_key(&ED25519_NON_CANONICAL_IDENTITY).unwrap_err();
+        assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
+    }
+
+    #[test]
+    fn batch_verify_two_signatures_deterministic() {
+        use crate::rng::os_rng;
+
+        let mut rng1 = os_rng();
+        let sk1 = ed25519::PrivateKey::generate(&mut rng1);
+        let pk1 = sk1.verifying_key();
+        let mut rng2 = os_rng();
+        let sk2 = ed25519::PrivateKey::generate(&mut rng2);
+        let pk2 = sk2.verifying_key();
+
+        let m1 = b"msg1".as_ref();
+        let m2 = b"msg2".as_ref();
+        let s1 = Ed25519Sha512::sign(m1, &sk1);
+        let s2 = Ed25519Sha512::sign(m2, &sk2);
+
+        let msgs: [&[u8]; 2] = [m1, m2];
+        let sigs: [&[u8]; 2] = [s1.as_slice(), s2.as_slice()];
+        let pks_arr: [&[u8]; 2] = [pk1.as_bytes(), pk2.as_bytes()];
+        let seed = [7u8; 32];
+
+        Ed25519Sha512::verify_batch_deterministic(&msgs, &sigs, &pks_arr, seed)
+            .expect("batch verify ok");
+
+        // Order invariance: reverse input order; internal sorting keeps deterministic result
+        let msgs_r: [&[u8]; 2] = [m2, m1];
+        let sigs_r: [&[u8]; 2] = [s2.as_slice(), s1.as_slice()];
+        let pks_r_arr: [&[u8]; 2] = [pk2.as_bytes(), pk1.as_bytes()];
+        Ed25519Sha512::verify_batch_deterministic(&msgs_r, &sigs_r, &pks_r_arr, seed)
+            .expect("batch verify ok rev");
+    }
+}

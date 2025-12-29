@@ -1,0 +1,182 @@
+---
+title: SoraFS Operations Playbook
+summary: Incident response guides and chaos drill procedures for SoraFS operators.
+---
+
+# SoraFS Operations Playbook
+
+This playbook bundles the operational runbooks required for SF-7b. It covers the
+high-priority incident classes (gateway outage, proof failure, replication lag),
+defines the chaos-drill cadence, and provides a reusable postmortem template for
+incident retrospectives.
+
+> **Portal:** This runbook is mirrored in the Docusaurus portal at
+> `docs/portal/docs/sorafs/operations-playbook.md`. Keep the two copies in sync
+> until the legacy Sphinx set is retired.
+
+## Key References
+
+- Observability assets: refer to the Grafana dashboards under
+  `dashboards/grafana/` and Prometheus alert rules in `dashboards/alerts/`.
+- Metric catalog: `docs/source/sorafs_observability_plan.md`.
+- Orchestrator telemetry surfaces: `docs/source/sorafs_orchestrator_plan.md`.
+
+## Auth & Governance Checklist
+
+- RBAC tokens: SoraFS instructions remain gated by their dedicated permission tokens (pin register/approve/retire/alias; capacity declare/telemetry/dispute; replication order issue/complete; pricing/credit upsert). Keep grants in sync with governance onboarding/offboarding.
+- Provider binding: every provider id must be bound to an owner account via config/genesis/CLI before issuing orders or telemetry; `gov.sorafs_telemetry.require_submitter/require_nonce` defaults stay on, with global and per-provider submitter allow-lists enforced by the executor.
+- SoraNet privacy ingest: `/v1/soranet/privacy/{event,share}` stays disabled until `torii.soranet_privacy_ingest.enabled=true`. Tokens must match `torii.soranet_privacy_ingest.tokens` (`X-SoraNet-Privacy-Token` or `X-API-Token`), submitters must come from `allow_cidrs` (empty list denies), and rate limits apply via `rate_per_sec`/`burst`; rejects emit `soranet_privacy_ingest_reject_total{endpoint,reason}`.
+- Operations: when rotating submitter tokens/allow-lists, update `torii.soranet_privacy_ingest.*` and `gov.sorafs_telemetry` maps together, deploy the config bundle, and confirm a test submission succeeds while rejects counters reset; rotate provider ownership with `RegisterProviderOwner`/`UnregisterProviderOwner` before issuing orders/telemetry.
+
+## Escalation Matrix
+
+| Priority | Trigger examples | Primary on-call | Backup | Notes |
+|----------|------------------|-----------------|--------|-------|
+| P1 | Global gateway outage, PoR failure rate > 5% (15 min), replication backlog doubling every 10 min | Storage SRE | Observability TL | Engage governance council if impact exceeds 30 min. |
+| P2 | Regional gateway latency SLO breach, orchestrator retry spike without SLA impact | Observability TL | Storage SRE | Continue rollout but gate new manifests. |
+| P3 | Non-critical alerts (manifest staleness, capacity 80–90%) | Intake triage | Ops guild | Address within next business day. |
+
+## Runbooks
+
+### Gateway Outage / Degraded Availability
+
+**Detection**
+
+- Alerts: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
+- Dashboard: `dashboards/grafana/sorafs_gateway_overview.json`.
+
+**Immediate actions**
+
+1. Confirm scope (single provider vs fleet) via request-rate panel.
+2. Switch Torii routing to healthy providers (if multi-provider) by toggling
+   `sorafs_gateway_route_weights` in the ops config (documented in `docs/source/sorafs_gateway_self_cert.md`).
+3. If all providers impacted, enable “direct fetch” fallback for CLI/SDK
+   clients (see `docs/source/sorafs_node_client_protocol.md`).
+
+**Triage**
+
+- Check stream token utilisation against `sorafs_gateway_stream_token_limit`.
+- Inspect gateway logs for TLS or admission errors.
+- Run `scripts/telemetry/run_schema_diff.sh` to ensure the gateway exported
+  schema matches the expected version.
+
+**Remediation options**
+
+- Restart only the affected gateway process; do not recycle the entire cluster
+  unless multiple providers failing.
+- Increase stream token limit by 10–15% temporarily if saturation confirmed.
+- Re-run self-cert (`scripts/sorafs_gateway_self_cert.sh`) after stabilisation.
+
+**Post-incident**
+
+- File a P1 postmortem using the template in `docs/source/sorafs/postmortem_template.md`.
+- Schedule follow-up chaos drill if remediation relied on manual interventions.
+
+### Proof Failure Spike (PoR / PoTR)
+
+**Detection**
+
+- Alerts: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
+- Dashboard: `dashboards/grafana/sorafs_proof_integrity.json`.
+- Telemetry: `torii_sorafs_proof_stream_events_total` and
+  `sorafs.fetch.error` events with `provider_reason=corrupt_proof`.
+
+**Immediate actions**
+
+1. Freeze new manifest admissions by flagging the manifest registry (see
+   `docs/source/sorafs/manifest_pipeline.md`).
+2. Notify Governance to pause incentives for affected providers.
+
+**Triage**
+
+- Check PoR challenge queue depth vs `sorafs_node_replication_backlog_total`.
+- Validate proof verification pipeline (`crates/sorafs_node/src/potr.rs`)
+  for recent deployments.
+- Compare provider firmware versions with the operator registry.
+
+**Remediation options**
+
+- Trigger PoR replays using `sorafs_cli proof stream` with the latest manifest.
+- If proofs consistently fail, remove provider from active set by updating the
+  governance registry and forcing orchestrator scoreboards to refresh.
+
+**Post-incident**
+
+- Run the PoR chaos drill scenario before the next production deploy.
+- Capture lessons in the postmortem template and update provider
+  qualification checklist.
+
+### Replication Lag / Backlog Growth
+
+**Detection**
+
+- Alerts: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. The rule pack
+  lives in `dashboards/alerts/sorafs_capacity_rules.yml`; run
+  `promtool test rules dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
+  before publishing changes so Alertmanager stays in sync with Grafana evidence.
+- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- Metrics: `sorafs_node_replication_backlog_total`,
+  `sorafs_node_manifest_refresh_age_seconds`.
+
+**Immediate actions**
+
+1. Verify backlog scope (single provider or fleet) and pause non-essential
+   replication tasks.
+2. If backlog isolated, temporarily reassign new orders to alternate
+   providers via the replication scheduler.
+
+**Triage**
+
+- Inspect orchestrator telemetry for retry bursts that may cascade backlog.
+- Confirm storage targets have sufficient headroom (`sorafs_node_capacity_utilisation_percent`).
+- Review recent configuration changes (chunk profile updates, proof cadence).
+
+**Remediation options**
+
+- Run `sorafs_cli` with the `--rebalance` option to redistribute content.
+- Scale replication workers horizontally for the impacted provider.
+- Trigger manifest refresh to re-align TTL windows.
+
+**Post-incident**
+
+- Schedule a capacity drill focusing on provider saturation failure.
+- Update replication SLA documentation in `docs/source/sorafs_node_client_protocol.md`.
+
+## Chaos Drill Cadence
+
+- **Quarterly**: Combined gateway outage + orchestrator retry storm simulation.
+- **Biannual**: PoR/PoTR failure injection across two providers with recovery.
+- **Monthly spot-check**: Replication lag scenario using staging manifests.
+- Track drills in the shared runbook log (`ops/drill-log.md`) via the helper
+  script:
+
+  ```bash
+  scripts/telemetry/log_sorafs_drill.sh \
+    --scenario "Gateway outage chaos drill" \
+    --status pass \
+    --ic "Alex Morgan" \
+    --scribe "Priya Patel" \
+    --notes "Failover to west cluster succeeded" \
+    --log ops/drill-log.md \
+    --link "docs/source/sorafs/postmortem_template.md"
+  ```
+
+  The script appends a Markdown row with the provided metadata so drills remain
+  auditable and can be correlated with postmortems or governance reports. Validate
+  the log before merging changes with:
+
+  ```bash
+  scripts/telemetry/validate_drill_log.sh
+  ```
+
+- Use `--status scheduled` when announcing upcoming drills, `pass`/`fail` for
+  completed runs, and `follow-up` when action items remain open.
+- Override the destination with `--log` for dry-runs or automated verification;
+  without it the script continues to update `ops/drill-log.md`.
+
+## Postmortem Template
+
+Use `docs/source/sorafs/postmortem_template.md` for every P1/P2 incident and
+for chaos drill retrospectives. The template includes sections for timeline,
+impact quantification, contributing factors, corrective actions, and follow-up
+verification tasks.

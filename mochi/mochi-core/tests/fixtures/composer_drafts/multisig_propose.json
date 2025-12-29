@@ -1,0 +1,14 @@
+[
+  {
+    "kind": "multisig_propose",
+    "account": "multisig@wonderland",
+    "transaction_ttl_ms": 3600000,
+    "instructions": [
+      {
+        "kind": "mint_asset",
+        "asset": "rose#wonderland#alice@wonderland",
+        "quantity": "5"
+      }
+    ]
+  }
+]

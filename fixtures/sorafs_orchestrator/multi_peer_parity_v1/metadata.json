@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "profile_handle": "sorafs.sf1@1.0.0",
+  "fixture": "multi_peer_parity_v1",
+  "plan_file": "plan.json",
+  "providers_file": "providers.json",
+  "telemetry_file": "telemetry.json",
+  "options_file": "options.json",
+  "payload_path": "fuzz/sorafs_chunker/sf1_profile_v1_input.bin",
+  "payload_bytes": 1048576,
+  "chunk_count": 5,
+  "provider_count": 4,
+  "max_chunk_length": 403145,
+  "now_unix_secs": 1725000000,
+  "description": "Deterministic multi-peer fetch scenario shared by SDK parity tests."
+}

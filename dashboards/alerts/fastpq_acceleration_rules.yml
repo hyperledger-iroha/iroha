@@ -1,0 +1,121 @@
+groups:
+  - name: fastpq-acceleration
+    rules:
+      - alert: FastpqMetalDowngrade
+        expr: |
+          (
+            sum by (device_class) (rate(fastpq_execution_mode_total{requested=~"auto|gpu", backend="metal"}[5m]))
+              / clamp_min(
+                  sum by (device_class) (rate(fastpq_execution_mode_total{requested=~"auto|gpu"}[5m])),
+                  1e-6
+              )
+          ) < 0.5
+          and sum by (device_class) (rate(fastpq_execution_mode_total{requested=~"auto|gpu"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "FASTPQ Metal adoption below 50%"
+          description: |
+            Operators requested the GPU backend but fewer than half of the prover
+            resolutions landed on Metal over the last 15 minutes. Inspect
+            `fastpq_execution_mode_total` to confirm the fallback backend, re-run
+            `fastpq_metal_bench` to capture evidence, and review the latest
+            `zero_fill_hotspots` block in the benchmark bundle to ensure host
+            padding bandwidth stayed within expectations.
+      - alert: FastpqBackendNoneBurst
+        expr: sum by (device_class) (rate(fastpq_execution_mode_total{backend="none"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FASTPQ resolved to backend=none"
+          description: |
+            Nodes are resolving the FASTPQ backend to `none`, which means the
+            metallib/device was unavailable. Verify the Metal artefacts on the
+            affected hosts, ensure the benchmark bundle is refreshed, and check
+            its `zero_fill_hotspots` entry so padding regressions are captured
+            alongside the fallback evidence.
+      - alert: FastpqCpuFallbackBurst
+        expr: |
+          (
+            sum by (device_class) (
+              rate(
+                fastpq_execution_mode_total{requested=~"auto|gpu", backend="cpu"}[5m]
+              )
+            )
+            /
+            clamp_min(
+              sum by (device_class) (
+                rate(fastpq_execution_mode_total{requested=~"auto|gpu"}[5m])
+              ),
+              1e-6
+            )
+          ) > 0.05
+          and sum by (device_class) (rate(fastpq_execution_mode_total{requested=~"auto|gpu"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "FASTPQ CPU fallback burst detected"
+          description: |
+            More than 5% of GPU-requested proofs resolved on the CPU backend for
+            at least 10 minutes. Inspect `fastpq_execution_mode_total` for the
+            affected device class, confirm whether the queue headroom or zero-fill
+            alerts also fired, rerun `fastpq_metal_bench`, and attach the updated
+            evidence bundle before re-enabling GPU defaults.
+      - alert: FastpqQueueHeadroomLow
+        expr: |
+          (
+            avg by (device_class) (fastpq_metal_queue_depth{metric="limit"})
+            -
+            avg by (device_class) (fastpq_metal_queue_depth{metric="max_in_flight"})
+          ) < 1
+          and avg by (device_class) (fastpq_metal_queue_depth{metric="max_in_flight"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FASTPQ Metal queue headroom exhausted"
+          description: |
+            Metal dispatch queues are running without the required headroom
+            (limit − max_in_flight < 1) for the last 10 minutes. Check the
+            `metal_dispatch_queue` block in the latest benchmark artefact and
+            reduce `FASTPQ_METAL_MAX_IN_FLIGHT` or rerun the queue tuner before
+            continuing the rollout.
+      - alert: FastpqZeroFillRegression
+        expr: max_over_time(fastpq_zero_fill_duration_ms[15m]) > 0.40
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "FASTPQ zero-fill latency exceeded Stage7-1 limit"
+          description: |
+            Host-side zero-fill work exceeded the 0.40 ms Stage7-1 ceiling in
+            the last 15 minutes. Capture a fresh `zero_fill_hotspots` sample via
+            `fastpq_metal_bench`, review PCIe/memory telemetry on the affected
+            host, and attach the evidence bundle to the Stage7 rollout ticket.
+      - alert: FastpqQueueDutyCycleDrop
+        expr: |
+          (
+            avg by (device_class, queue) (
+              avg_over_time(
+                fastpq_metal_queue_ratio{metric="busy"}[15m]
+              )
+            ) < 0.5
+          )
+          and on (device_class)
+          sum by (device_class) (
+            rate(fastpq_execution_mode_total{requested=~"auto|gpu"}[15m])
+          ) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FASTPQ Metal queue duty cycle below 50%"
+          description: |
+            The Metal dispatch queue busy ratio averaged below the 50% Stage7-1
+            target over the last 15 minutes while GPU work was still being
+            scheduled. Inspect `fastpq_metal_queue_ratio{metric="busy"}` for the
+            affected queue, confirm providers are not throttled, and collect new
+            benchmark artefacts before resuming the rollout.

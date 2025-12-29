@@ -1,0 +1,5 @@
+error: Failed to parse `127.(0.0.1)` as an IPv4 address: invalid IPv4 address syntax
+ --> tests/ui/fail/socket_addr_bad.rs:6:26
+  |
+6 |     let _ = socket_addr!(127.(0.0.1):8080);
+  |                          ^^^^^^^^^^^

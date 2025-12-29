@@ -1,0 +1,10 @@
+HTTP/1.1 503 Service Unavailable
+Date: Tue, 01 Apr 2026 10:00:00 GMT
+Sora-Name: demo.sora
+Sora-Content-CID: bafybeigdyrzt2vx7demoexamplecid
+Sora-Proof: eyJhbGlhcyI6ImRlbW8uc29yYSIsIm1hbmlmZXN0IjoiYmFmeWJlaWdkcXh4c2lnbmVkIn0=
+Sora-Proof-Status: ok
+Content-Security-Policy: default-src 'self'; img-src data:; object-src 'none'
+Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+Cache-Control: max-age=600, stale-while-revalidate=120
+X-Sora-TLS-State: ech-enabled;expiry=2026-06-01T00:00:00Z

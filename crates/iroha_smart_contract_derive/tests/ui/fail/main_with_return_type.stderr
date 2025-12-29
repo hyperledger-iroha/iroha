@@ -1,0 +1,16 @@
+error: Smart contract entrypoint must not have a return type
+ --> tests/ui/fail/main_with_return_type.rs:5:1
+  |
+5 | #[iroha_smart_contract::main]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `iroha_smart_contract::main` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0580]: `main` function has wrong type
+ --> tests/ui/fail/main_with_return_type.rs:6:1
+  |
+6 | fn main(host: Iroha, context: Context) -> () {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ incorrect number of function parameters
+  |
+  = note: expected signature `fn()`
+             found signature `fn(iroha_smart_contract::Iroha, SmartContractContext)`

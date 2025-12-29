@@ -1,0 +1,151 @@
+version: 0.1.0
+description: Seed RBAC catalogue for SNNet-15D control-plane APIs.
+scopes:
+  - id: org:admin
+    resources: [orgs, projects, roles, service_tokens]
+    actions: [create, update, delete, assign]
+    audit: required
+  - id: org:billing
+    resources: [billing, ledger]
+    actions: [read, export]
+    audit: required
+  - id: org:audit
+    resources: [audit]
+    actions: [read, export]
+    audit: required
+  - id: org:reader
+    resources: [orgs, projects, domains]
+    actions: [read]
+    audit: required
+  - id: domain:write
+    resources: [domains, certificates]
+    actions: [create, update, validate, delete]
+    audit: required
+  - id: domain:read
+    resources: [domains, certificates]
+    actions: [read]
+    audit: required
+  - id: dns:write
+    resources: [zones, records]
+    actions: [create, update, delete, publish]
+    audit: required
+  - id: dns:read
+    resources: [zones, records]
+    actions: [read]
+    audit: required
+  - id: cache:write
+    resources: [cache_profiles, purge_jobs, rate_limits]
+    actions: [create, update, delete, execute]
+    audit: required
+  - id: cache:read
+    resources: [cache_profiles, purge_jobs, rate_limits]
+    actions: [read]
+    audit: required
+  - id: waf:write
+    resources: [waf_rules]
+    actions: [create, update, delete]
+    audit: required
+  - id: waf:read
+    resources: [waf_rules]
+    actions: [read]
+    audit: required
+  - id: analytics:query
+    resources: [analytics]
+    actions: [query]
+    audit: required
+  - id: analytics:export
+    resources: [analytics]
+    actions: [export]
+    audit: required
+  - id: billing:read
+    resources: [meters, statements]
+    actions: [read, export]
+    audit: required
+  - id: moderation:write
+    resources: [moderation_tokens, enforcement_receipts]
+    actions: [create, update]
+    audit: required
+  - id: moderation:read
+    resources: [moderation_tokens, enforcement_receipts]
+    actions: [read]
+    audit: required
+roles:
+  - id: org-owner
+    description: Full admin; can assign any role inside the org.
+    scopes:
+      - org:admin
+      - org:billing
+      - org:audit
+      - domain:write
+      - dns:write
+      - cache:write
+      - waf:write
+      - analytics:export
+      - billing:read
+      - moderation:write
+  - id: platform-admin
+    description: Control-plane SRE with access to infra breakers and audit feeds.
+    scopes:
+      - org:audit
+      - cache:write
+      - dns:write
+      - waf:write
+      - analytics:query
+      - billing:read
+      - domain:read
+  - id: domain-admin
+    description: Owns domains, TLS/ECH automation, purge/rate-limit controls.
+    scopes:
+      - domain:write
+      - dns:write
+      - cache:write
+      - waf:read
+      - analytics:query
+  - id: security-ops
+    description: Manages WAF policies, moderation flows, and audit exports.
+    scopes:
+      - waf:write
+      - moderation:write
+      - analytics:query
+      - org:audit
+  - id: billing-admin
+    description: Billing-only role for credit top-ups and statements.
+    scopes:
+      - org:billing
+      - billing:read
+  - id: support-observer
+    description: Read-only observer with audit visibility.
+    scopes:
+      - org:reader
+      - domain:read
+      - dns:read
+      - cache:read
+      - waf:read
+      - analytics:query
+      - moderation:read
+principals:
+  - id: service-default
+    description: Service token used by automation and CI.
+    allowed_scopes:
+      - cache:write
+      - dns:write
+      - analytics:query
+    ttl_minutes: 60
+    rotate_after_minutes: 30
+audit:
+  retention_days: 90
+  export_formats: [jsonl, ndjson, parquet]
+  fields:
+    - id
+    - ts
+    - actor
+    - scopes
+    - action
+    - target
+    - request_id
+    - ip
+    - user_agent
+    - result
+  routing:
+    - stream: s3://${bucket}/audit/{org}/{date}/events.ndjson
+    - stream: nats://soracn-audit

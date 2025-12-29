@@ -1,0 +1,6 @@
+{
+  "key_hex": "0123456789abcdeffedcba9876543210",
+  "nonce_hex": "00001234567800000000abcd",
+  "aad_hex": "feedfacedeadbeeffeedfacedeadbeefabaddad2",
+  "plaintext_hex": "d9313225f88406e5a55909c5aff5269a"
+}

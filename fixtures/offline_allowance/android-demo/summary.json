@@ -1,0 +1,25 @@
+{
+  "label": "android-demo",
+  "certificate_id_hex": "0B68E846F2FC72D9FABDAE1F38F2D6ECBED387F5E30B32E3C429BFDF0FAB7DBF",
+  "controller": "34mSYnDgbaJM58rbLoif4Tkp7G6zNhAfct4B9QLcNFzMSQjFmyWod961RVTGBpe8a2SykUPyZ@wonderland",
+  "allowance_asset": "usd#sora#34mSYnCXkCzHXm31UDHh7SJfGvFJMFkT4FY4YhqjRbneXvpQgL6hAxjt9PQ4n9JBzYwiuLRwF@treasury",
+  "allowance_amount": "150.00",
+  "commitment_hex": "B6BC64AF113FF5CEEB7183C09BBE31EC972A324CAF5AC378B7DFD951BDAAEF62",
+  "blinding_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+  "attestation_bytes": 4,
+  "metadata_keys": [
+    "android.attestation.package_names",
+    "android.attestation.require_rollback_resistance",
+    "android.attestation.require_strongbox",
+    "android.attestation.signing_digests_sha256",
+    "android.integrity.policy"
+  ],
+  "verdict_id_hex": null,
+  "attestation_nonce_hex": null,
+  "refresh_at_ms": null,
+  "certificate_json": "android-demo/certificate.json",
+  "certificate_norito": "android-demo/certificate.norito",
+  "register_instruction_json": "android-demo/register_instruction.json",
+  "register_instruction_norito": "android-demo/register_instruction.norito",
+  "submitted": false
+}

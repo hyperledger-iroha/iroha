@@ -1,0 +1,63 @@
+[
+  {
+    "label": "bouncycastle:r-zero",
+    "mutation": "r_zero",
+    "message_hex": "746573742d62636f756e63652d723d30"
+  },
+  {
+    "label": "bouncycastle:s-zero",
+    "mutation": "s_zero",
+    "message_hex": "746573742d62636f756e63652d733d30"
+  },
+  {
+    "label": "gmssl:distid-mismatch",
+    "mutation": "distid_mismatch",
+    "message_hex": "746573742d676d73736c2d646973746964"
+  },
+  {
+    "label": "gmssl:public-key-tamper",
+    "mutation": "pubkey_flip",
+    "message_hex": "746573742d676d73736c2d7075626b6579"
+  },
+  {
+    "label": "bouncycastle:r-equals-n",
+    "mutation": "r_equals_order",
+    "message_hex": "746573742d62632d723d6e"
+  },
+  {
+    "label": "bouncycastle:s-equals-n",
+    "mutation": "s_equals_order",
+    "message_hex": "746573742d62632d733d6e"
+  },
+  {
+    "label": "bouncycastle:r-overflow",
+    "mutation": "r_overflow",
+    "message_hex": "746573742d62632d723e6e"
+  },
+  {
+    "label": "bouncycastle:s-overflow",
+    "mutation": "s_overflow",
+    "message_hex": "746573742d62632d733e6e"
+  },
+  {
+    "label": "bouncycastle:signature-zeroed",
+    "mutation": "signature_zeroed",
+    "message_hex": "746573742d62632d7369672d7a65726f"
+  },
+  {
+    "label": "gmssl:signature-truncate",
+    "mutation": "signature_truncated",
+    "message_hex": "746573742d676d73736c2d73686f7274"
+  },
+  {
+    "label": "gmssl:signature-extend",
+    "mutation": "signature_extended",
+    "message_hex": "746573742d676d73736c2d6c6f6e67"
+  },
+  {
+    "label": "gmssl:message-tamper",
+    "mutation": "message_tamper",
+    "message_hex": "746573742d676d73736c2d6d7367",
+    "verify_message_hex": "746573742d676d73736c2d6d73672d616c74"
+  }
+]

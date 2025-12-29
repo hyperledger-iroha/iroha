@@ -1,0 +1,25 @@
+{
+  "pop": "soranet-pop-m0",
+  "tls_keys": {
+    "status": "pending",
+    "notes": "Rotate to SRCv2 dual-sig certs and publish attestation hash."
+  },
+  "sdr_receipts": {
+    "status": "ready",
+    "path": "/var/lib/soranet/sdr/receipts",
+    "notes": "Ensure receipts are mirrored to ClickHouse for audit joins."
+  },
+  "cache_binding": {
+    "status": "ready",
+    "expect_header": "sora-cache-version",
+    "notes": "Gateway rejects unknown cache versions; align with honey probes."
+  },
+  "canary_hosts": {
+    "status": "ready",
+    "hosts": [
+      "canary1.soranet-pop-m0.gw.sora.id",
+      "canary2.soranet-pop-m0.gw.sora.id"
+    ],
+    "notes": "Use canaries for PQ cipher rollout before flipping defaults."
+  }
+}

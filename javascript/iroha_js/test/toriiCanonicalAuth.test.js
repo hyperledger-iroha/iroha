@@ -1,0 +1,44 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  ToriiClient,
+  canonicalRequestMessage,
+  generateKeyPair,
+  verifyEd25519,
+} from "../src/index.js";
+
+test("ToriiClient attaches canonical signing headers for app endpoints", async () => {
+  const captured = [];
+  const client = new ToriiClient("http://localhost:8080", {
+    fetchImpl: async (url, init) => {
+      captured.push({ url, init });
+      return new Response(JSON.stringify({ items: [], total: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 9) });
+
+  await client.listAccountAssets("alice@wonderland", {
+    canonicalAuth: { accountId: "alice@wonderland", privateKey },
+    limit: 1,
+  });
+
+  assert.equal(captured.length, 1);
+  const { url, init } = captured[0];
+  assert.equal(init.headers["X-Iroha-Account"], "alice@wonderland");
+  const signatureB64 = init.headers["X-Iroha-Signature"];
+  assert.ok(typeof signatureB64 === "string" && signatureB64.length > 0);
+
+  const parsed = new URL(url);
+  const message = canonicalRequestMessage({
+    method: init.method,
+    path: parsed.pathname,
+    query: parsed.search ? parsed.search.slice(1) : "",
+    body: "",
+  });
+  const signature = Buffer.from(signatureB64, "base64");
+  assert.ok(verifyEd25519(message, signature, publicKey));
+});

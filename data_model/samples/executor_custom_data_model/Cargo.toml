@@ -1,0 +1,19 @@
+[package]
+name = "executor_custom_data_model"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[dependencies]
+iroha_executor_data_model.workspace = true
+iroha_data_model = { workspace = true, features = ["fault_injection"] }
+iroha_schema.workspace = true
+
+norito = {workspace = true}
+
+[dev-dependencies]
+base64 = { workspace = true }
+iroha_crypto = { workspace = true, features = ["std", "rand"] }

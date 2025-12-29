@@ -1,0 +1,23 @@
+{
+  "max_parallel": 3,
+  "max_peers": 3,
+  "retry_budget": 5,
+  "provider_failure_threshold": 2,
+  "per_chunk_retry_limit": 5,
+  "global_parallel_limit": 3,
+  "verify_digests": true,
+  "verify_lengths": true,
+  "use_scoreboard": true,
+  "return_scoreboard": true,
+  "telemetry_region": "fixture",
+  "rollout_phase": "ramp",
+  "policy_override": {
+    "transport_policy": "soranet-strict",
+    "anonymity_policy": "anon-strict-pq"
+  },
+  "scoreboard": {
+    "now_unix_secs": 1725000000,
+    "telemetry_grace_period_secs": 3600,
+    "latency_cap_ms": 2500
+  }
+}

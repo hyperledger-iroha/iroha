@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "session_id_base64": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
+  "created_at_ms": 1778000000000,
+  "snapshot": {
+    "schema_version": 1,
+    "session_id_base64": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
+    "state": "healthy",
+    "reason": null,
+    "warning_watermark": 0.6,
+    "drop_watermark": 0.85,
+    "last_updated_ms": 1778000001500,
+    "app_to_wallet": {
+      "depth": 2,
+      "bytes": 6,
+      "oldest_sequence": 1,
+      "newest_sequence": 2,
+      "oldest_timestamp_ms": 1778000000000,
+      "newest_timestamp_ms": 1778000000500
+    },
+    "wallet_to_app": {
+      "depth": 1,
+      "bytes": 3,
+      "oldest_sequence": 7,
+      "newest_sequence": 7,
+      "oldest_timestamp_ms": 1778000000900,
+      "newest_timestamp_ms": 1778000000900
+    }
+  },
+  "files": {
+    "app_queue_filename": null,
+    "wallet_queue_filename": null,
+    "metrics_filename": "metrics.ndjson"
+  }
+}

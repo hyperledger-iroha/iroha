@@ -1,0 +1,26 @@
+// Operations for Makoto Free Cash (MFC) token.
+// Provides a simple transfer function and a looped
+// transfer across a range of quantities.
+
+fn send_mfc(from_account: AccountId, to_account: AccountId, amount: int) {
+    // Use constant asset id 1 representing the Makoto Free Cash token
+    transfer_asset(from_account, to_account, asset_definition!("mfc#wonderland"), amount);
+}
+
+fn loop_mfc(from_account: AccountId, to_account: AccountId) {
+    for let qty = 369; qty <= 1337; qty++ {
+        transfer_asset(from_account, to_account, asset_definition!("mfc#wonderland"), qty);
+    }
+}
+
+// Example entry routine demonstrating asset creation and usage.
+// It first registers the Makoto Free Cash asset, mints some
+// quantity to the caller, then performs the transfers.
+fn main(from: AccountId, to: AccountId) { // `to` is optional and defaults to `from`
+    // Register the asset definition before minting any tokens.
+    register_asset("Makoto Free Cash", "MFC", 0, 1);
+    mint_asset(from, asset_definition!("mfc#wonderland"), 1337);
+    let dest = to; // caller may omit `to` by passing the same account
+    send_mfc(from, dest, 369);
+    loop_mfc(from, dest);
+}

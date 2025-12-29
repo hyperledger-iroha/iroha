@@ -1,0 +1,280 @@
+error[E0277]: the trait bound `MissingSerialization: iroha_schema::IntoSchema` is not satisfied
+ --> tests/ui/fail/parameter_missing_traits.rs:6:8
+  |
+6 | struct MissingSerialization {
+  |        ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_schema::IntoSchema` is not implemented for `MissingSerialization`
+ --> tests/ui/fail/parameter_missing_traits.rs:6:1
+  |
+6 | struct MissingSerialization {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `iroha_schema::IntoSchema`:
+            ()
+            AbiVersion
+            AbsoluteOutlier
+            AccessSetHints
+            AccountAddress
+            AccountController
+            AccountDetails
+            AccountEvent
+          and $N others
+note: required by a bound in `iroha_executor_data_model::parameter::Parameter`
+ --> $WORKSPACE/crates/iroha_executor_data_model/src/parameter.rs
+  |
+  | pub trait Parameter: Default + JsonDeserializeOwned + JsonSerialize + IntoSchema {
+  |                                                                       ^^^^^^^^^^ required by this bound in `Parameter`
+  = note: `Parameter` is a "sealed trait", because to implement it you also need to implement `iroha_schema::IntoSchema`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+  = help: the following types implement the trait:
+            iroha_executor_data_model::isi::multisig::MultisigInstructionBox
+            iroha_executor_data_model::isi::multisig::MultisigRegister
+            iroha_executor_data_model::isi::multisig::MultisigPropose
+            iroha_executor_data_model::isi::multisig::MultisigApprove
+            iroha_executor_data_model::isi::multisig::MultisigSpec
+            iroha_executor_data_model::isi::multisig::MultisigProposalValue
+            iroha_executor_data_model::permission::peer::CanManagePeers
+            iroha_executor_data_model::permission::domain::CanRegisterDomain
+          and $N others
+
+error[E0277]: the trait bound `MissingSerialization: JsonDeserialize` is not satisfied
+ --> tests/ui/fail/parameter_missing_traits.rs:6:8
+  |
+6 | struct MissingSerialization {
+  |        ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `JsonDeserialize` is not implemented for `MissingSerialization`
+ --> tests/ui/fail/parameter_missing_traits.rs:6:1
+  |
+6 | struct MissingSerialization {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `JsonDeserialize`:
+            ()
+            AbiVersion
+            AbsoluteOutlier
+            AccessSetHints
+            AccountAddress
+            AccountController
+            AccountDetails
+            AccountEvent
+          and $N others
+  = note: required for `MissingSerialization` to implement `DeserializeOwned`
+note: required by a bound in `iroha_executor_data_model::parameter::Parameter`
+ --> $WORKSPACE/crates/iroha_executor_data_model/src/parameter.rs
+  |
+  | pub trait Parameter: Default + JsonDeserializeOwned + JsonSerialize + IntoSchema {
+  |                                ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Parameter`
+
+error[E0277]: the trait bound `MissingSerialization: JsonSerialize` is not satisfied
+ --> tests/ui/fail/parameter_missing_traits.rs:6:8
+  |
+6 | struct MissingSerialization {
+  |        ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `FastJsonWrite` is not implemented for `MissingSerialization`
+ --> tests/ui/fail/parameter_missing_traits.rs:6:1
+  |
+6 | struct MissingSerialization {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `FastJsonWrite`:
+            &T
+            &mut T
+            AbsoluteOutlier
+            AccessSetHints
+            AccountController
+            AccountDetails
+            AccountEvent
+            AccountEventFilter
+          and $N others
+  = note: required for `MissingSerialization` to implement `JsonSerialize`
+note: required by a bound in `iroha_executor_data_model::parameter::Parameter`
+ --> $WORKSPACE/crates/iroha_executor_data_model/src/parameter.rs
+  |
+  | pub trait Parameter: Default + JsonDeserializeOwned + JsonSerialize + IntoSchema {
+  |                                                       ^^^^^^^^^^^^^ required by this bound in `Parameter`
+
+error[E0277]: the trait bound `MissingSerialization: iroha_schema::IntoSchema` is not satisfied
+ --> tests/ui/fail/parameter_missing_traits.rs:5:19
+  |
+5 | #[derive(Default, Parameter)]
+  |                   ^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_schema::IntoSchema` is not implemented for `MissingSerialization`
+ --> tests/ui/fail/parameter_missing_traits.rs:6:1
+  |
+6 | struct MissingSerialization {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `iroha_schema::IntoSchema`:
+            ()
+            AbiVersion
+            AbsoluteOutlier
+            AccessSetHints
+            AccountAddress
+            AccountController
+            AccountDetails
+            AccountEvent
+          and $N others
+note: required by a bound in `iroha_executor_data_model::parameter::Parameter::id`
+ --> $WORKSPACE/crates/iroha_executor_data_model/src/parameter.rs
+  |
+  | pub trait Parameter: Default + JsonDeserializeOwned + JsonSerialize + IntoSchema {
+  |                                                                       ^^^^^^^^^^ required by this bound in `Parameter::id`
+  |     /// Parameter id, according to [`IntoSchema`].
+  |     fn id() -> CustomParameterId {
+  |        -- required by a bound in this associated function
+  = note: this error originates in the derive macro `Parameter` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `MissingSerialization: DeserializeOwned` is not satisfied
+ --> tests/ui/fail/parameter_missing_traits.rs:5:19
+  |
+5 | #[derive(Default, Parameter)]
+  |                   ^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `JsonDeserialize` is not implemented for `MissingSerialization`
+ --> tests/ui/fail/parameter_missing_traits.rs:6:1
+  |
+6 | struct MissingSerialization {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `JsonDeserialize`:
+            ()
+            AbiVersion
+            AbsoluteOutlier
+            AccessSetHints
+            AccountAddress
+            AccountController
+            AccountDetails
+            AccountEvent
+          and $N others
+  = note: required for `MissingSerialization` to implement `DeserializeOwned`
+note: required by a bound in `iroha_executor_data_model::parameter::Parameter::id`
+ --> $WORKSPACE/crates/iroha_executor_data_model/src/parameter.rs
+  |
+  | pub trait Parameter: Default + JsonDeserializeOwned + JsonSerialize + IntoSchema {
+  |                                ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Parameter::id`
+  |     /// Parameter id, according to [`IntoSchema`].
+  |     fn id() -> CustomParameterId {
+  |        -- required by a bound in this associated function
+  = note: this error originates in the derive macro `Parameter` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `MissingSerialization: JsonSerialize` is not satisfied
+ --> tests/ui/fail/parameter_missing_traits.rs:5:19
+  |
+5 | #[derive(Default, Parameter)]
+  |                   ^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `FastJsonWrite` is not implemented for `MissingSerialization`
+ --> tests/ui/fail/parameter_missing_traits.rs:6:1
+  |
+6 | struct MissingSerialization {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `FastJsonWrite`:
+            &T
+            &mut T
+            AbsoluteOutlier
+            AccessSetHints
+            AccountController
+            AccountDetails
+            AccountEvent
+            AccountEventFilter
+          and $N others
+  = note: required for `MissingSerialization` to implement `JsonSerialize`
+note: required by a bound in `iroha_executor_data_model::parameter::Parameter::id`
+ --> $WORKSPACE/crates/iroha_executor_data_model/src/parameter.rs
+  |
+  | pub trait Parameter: Default + JsonDeserializeOwned + JsonSerialize + IntoSchema {
+  |                                                       ^^^^^^^^^^^^^ required by this bound in `Parameter::id`
+  |     /// Parameter id, according to [`IntoSchema`].
+  |     fn id() -> CustomParameterId {
+  |        -- required by a bound in this associated function
+  = note: this error originates in the derive macro `Parameter` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `MissingSerialization: iroha_schema::IntoSchema` is not satisfied
+ --> tests/ui/fail/parameter_missing_traits.rs:6:8
+  |
+6 | struct MissingSerialization {
+  |        ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `iroha_schema::IntoSchema` is not implemented for `MissingSerialization`
+ --> tests/ui/fail/parameter_missing_traits.rs:6:1
+  |
+6 | struct MissingSerialization {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `iroha_schema::IntoSchema`:
+            ()
+            AbiVersion
+            AbsoluteOutlier
+            AccessSetHints
+            AccountAddress
+            AccountController
+            AccountDetails
+            AccountEvent
+          and $N others
+note: required by a bound in `iroha_executor_data_model::parameter::Parameter::id`
+ --> $WORKSPACE/crates/iroha_executor_data_model/src/parameter.rs
+  |
+  | pub trait Parameter: Default + JsonDeserializeOwned + JsonSerialize + IntoSchema {
+  |                                                                       ^^^^^^^^^^ required by this bound in `Parameter::id`
+  |     /// Parameter id, according to [`IntoSchema`].
+  |     fn id() -> CustomParameterId {
+  |        -- required by a bound in this associated function
+
+error[E0277]: the trait bound `MissingSerialization: DeserializeOwned` is not satisfied
+ --> tests/ui/fail/parameter_missing_traits.rs:6:8
+  |
+6 | struct MissingSerialization {
+  |        ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `JsonDeserialize` is not implemented for `MissingSerialization`
+ --> tests/ui/fail/parameter_missing_traits.rs:6:1
+  |
+6 | struct MissingSerialization {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `JsonDeserialize`:
+            ()
+            AbiVersion
+            AbsoluteOutlier
+            AccessSetHints
+            AccountAddress
+            AccountController
+            AccountDetails
+            AccountEvent
+          and $N others
+  = note: required for `MissingSerialization` to implement `DeserializeOwned`
+note: required by a bound in `iroha_executor_data_model::parameter::Parameter::id`
+ --> $WORKSPACE/crates/iroha_executor_data_model/src/parameter.rs
+  |
+  | pub trait Parameter: Default + JsonDeserializeOwned + JsonSerialize + IntoSchema {
+  |                                ^^^^^^^^^^^^^^^^^^^^ required by this bound in `Parameter::id`
+  |     /// Parameter id, according to [`IntoSchema`].
+  |     fn id() -> CustomParameterId {
+  |        -- required by a bound in this associated function
+
+error[E0277]: the trait bound `MissingSerialization: JsonSerialize` is not satisfied
+ --> tests/ui/fail/parameter_missing_traits.rs:6:8
+  |
+6 | struct MissingSerialization {
+  |        ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `FastJsonWrite` is not implemented for `MissingSerialization`
+ --> tests/ui/fail/parameter_missing_traits.rs:6:1
+  |
+6 | struct MissingSerialization {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `FastJsonWrite`:
+            &T
+            &mut T
+            AbsoluteOutlier
+            AccessSetHints
+            AccountController
+            AccountDetails
+            AccountEvent
+            AccountEventFilter
+          and $N others
+  = note: required for `MissingSerialization` to implement `JsonSerialize`
+note: required by a bound in `iroha_executor_data_model::parameter::Parameter::id`
+ --> $WORKSPACE/crates/iroha_executor_data_model/src/parameter.rs
+  |
+  | pub trait Parameter: Default + JsonDeserializeOwned + JsonSerialize + IntoSchema {
+  |                                                       ^^^^^^^^^^^^^ required by this bound in `Parameter::id`
+  |     /// Parameter id, according to [`IntoSchema`].
+  |     fn id() -> CustomParameterId {
+  |        -- required by a bound in this associated function

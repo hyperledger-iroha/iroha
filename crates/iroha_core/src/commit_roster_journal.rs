@@ -1,0 +1,425 @@
+//! Durable commit-roster journal persisted alongside the block store.
+//!
+//! This journal keeps per-height commit certificates and validator set
+//! checkpoints so block-sync consumers can rebuild validator rosters after a
+//! restart without depending on in-memory status caches.
+
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    fs,
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+};
+
+use iroha_crypto::HashOf;
+use iroha_data_model::{
+    block::BlockHeader,
+    consensus::{CommitCertificate, ValidatorSetCheckpoint},
+};
+use iroha_logger::warn;
+use norito::{
+    codec::{Decode, Encode},
+    decode_from_bytes, to_bytes,
+};
+use thiserror::Error;
+
+/// Persisted commit-roster journal payload.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+struct PersistedCommitRosters {
+    /// Journal version for forward compatibility.
+    version: u32,
+    /// Stored commit roster entries.
+    entries: Vec<CommitRosterRecord>,
+}
+
+/// Persisted commit-roster entry.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+struct CommitRosterRecord {
+    /// Block height certified by this entry.
+    height: u64,
+    /// Block hash certified by this entry.
+    block_hash: HashOf<BlockHeader>,
+    /// Commit certificate for the block.
+    commit_certificate: CommitCertificate,
+    /// Validator set checkpoint for the block.
+    validator_checkpoint: ValidatorSetCheckpoint,
+}
+
+/// Errors returned when loading or persisting commit rosters.
+#[derive(Debug, Error)]
+pub enum CommitRosterJournalError {
+    /// Failed to read the persisted journal.
+    #[error("failed to read commit roster journal {path}: {source}")]
+    Read {
+        /// Path that failed.
+        path: PathBuf,
+        /// Source error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// Failed to decode the persisted journal.
+    #[error("failed to decode commit roster journal {path}: {source}")]
+    Decode {
+        /// Path that failed.
+        path: PathBuf,
+        /// Source decode error.
+        #[source]
+        source: norito::core::Error,
+    },
+    /// Failed to write the journal to disk.
+    #[error("failed to persist commit roster journal {path}: {source}")]
+    Write {
+        /// Path that failed.
+        path: PathBuf,
+        /// Source error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// Failed to encode the journal payload.
+    #[error("failed to encode commit roster journal: {0}")]
+    Encode(#[source] norito::core::Error),
+    /// Persisted journal uses an unsupported version.
+    #[error("unsupported commit roster journal version {version} at {path}")]
+    UnsupportedVersion {
+        /// Path for the journal.
+        path: PathBuf,
+        /// Unsupported version encountered.
+        version: u32,
+    },
+}
+
+/// Snapshot combining commit certificate and validator checkpoint for a block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitRosterSnapshot {
+    /// Commit certificate for the block.
+    pub commit_certificate: CommitCertificate,
+    /// Validator set checkpoint for the block.
+    pub validator_checkpoint: ValidatorSetCheckpoint,
+}
+
+/// Journal that records commit rosters derived from committed blocks.
+#[derive(Debug)]
+pub struct CommitRosterJournal {
+    entries: BTreeMap<(u64, HashOf<BlockHeader>), CommitRosterSnapshot>,
+    path: PathBuf,
+    retention: NonZeroUsize,
+}
+
+impl CommitRosterJournal {
+    /// Filename used to persist commit roster journals next to the block store.
+    pub const JOURNAL_FILE: &'static str = "commit-rosters.norito";
+    const JOURNAL_VERSION: u32 = 1;
+
+    /// Build the canonical journal path under the provided root.
+    #[must_use]
+    pub fn journal_path(root: &Path) -> PathBuf {
+        root.join(Self::JOURNAL_FILE)
+    }
+
+    /// Construct a fresh journal with no entries.
+    #[must_use]
+    pub fn new(path: impl Into<PathBuf>, retention: NonZeroUsize) -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            path: path.into(),
+            retention,
+        }
+    }
+
+    /// Load a journal from disk, preferring higher-view entries when duplicates exist.
+    ///
+    /// Missing files are treated as empty journals. Unsupported versions surface an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommitRosterJournalError::Read`] or [`CommitRosterJournalError::Decode`] when
+    /// persistence fails.
+    pub fn load(
+        path: impl Into<PathBuf>,
+        retention: NonZeroUsize,
+    ) -> Result<Self, CommitRosterJournalError> {
+        let path = path.into();
+        let mut journal = Self::new(path.clone(), retention);
+        if path.as_os_str().is_empty() || !path.exists() {
+            return Ok(journal);
+        }
+
+        let bytes = fs::read(&path).map_err(|source| CommitRosterJournalError::Read {
+            path: path.clone(),
+            source,
+        })?;
+
+        let persisted: PersistedCommitRosters =
+            decode_from_bytes(&bytes).map_err(|source| CommitRosterJournalError::Decode {
+                path: path.clone(),
+                source,
+            })?;
+
+        if persisted.version != Self::JOURNAL_VERSION {
+            return Err(CommitRosterJournalError::UnsupportedVersion {
+                path,
+                version: persisted.version,
+            });
+        }
+
+        for entry in persisted.entries {
+            if entry.height != entry.commit_certificate.height
+                || entry.block_hash != entry.commit_certificate.block_hash
+            {
+                warn!(
+                    height = entry.height,
+                    block = %entry.block_hash,
+                    cert_height = entry.commit_certificate.height,
+                    cert_block = %entry.commit_certificate.block_hash,
+                    "dropping commit roster entry with mismatched commit certificate metadata"
+                );
+                continue;
+            }
+            if entry.height != entry.validator_checkpoint.height
+                || entry.block_hash != entry.validator_checkpoint.block_hash
+            {
+                warn!(
+                    height = entry.height,
+                    block = %entry.block_hash,
+                    checkpoint_height = entry.validator_checkpoint.height,
+                    checkpoint_block = %entry.validator_checkpoint.block_hash,
+                    "dropping commit roster entry with mismatched checkpoint metadata"
+                );
+                continue;
+            }
+            journal.upsert(entry.commit_certificate, entry.validator_checkpoint);
+        }
+
+        journal.enforce_retention();
+        Ok(journal)
+    }
+
+    /// Upsert a commit roster entry, replacing older views for the same block hash/height.
+    pub fn upsert(
+        &mut self,
+        commit_certificate: CommitCertificate,
+        validator_checkpoint: ValidatorSetCheckpoint,
+    ) {
+        let key = (commit_certificate.height, commit_certificate.block_hash);
+        match self.entries.entry(key) {
+            Entry::Occupied(mut entry) => {
+                if entry.get().commit_certificate.view <= commit_certificate.view {
+                    entry.insert(CommitRosterSnapshot {
+                        commit_certificate,
+                        validator_checkpoint,
+                    });
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(CommitRosterSnapshot {
+                    commit_certificate,
+                    validator_checkpoint,
+                });
+            }
+        }
+        self.enforce_retention();
+    }
+
+    /// Persist the journal to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommitRosterJournalError::Write`] when the journal cannot be written or
+    /// [`CommitRosterJournalError::Encode`] when encoding fails.
+    pub fn persist(&mut self) -> Result<(), CommitRosterJournalError> {
+        if self.path.as_os_str().is_empty() {
+            return Ok(());
+        }
+        // Ensure persisted payload honours the configured retention window.
+        self.enforce_retention();
+        let payload = PersistedCommitRosters {
+            version: Self::JOURNAL_VERSION,
+            entries: self
+                .entries
+                .iter()
+                .map(|((height, block_hash), snapshot)| CommitRosterRecord {
+                    height: *height,
+                    block_hash: *block_hash,
+                    commit_certificate: snapshot.commit_certificate.clone(),
+                    validator_checkpoint: snapshot.validator_checkpoint.clone(),
+                })
+                .collect(),
+        };
+        let bytes = to_bytes(&payload).map_err(CommitRosterJournalError::Encode)?;
+        if let Some(parent) = self.path.parent() {
+            if let Err(err) = fs::create_dir_all(parent) {
+                return Err(CommitRosterJournalError::Write {
+                    path: self.path.clone(),
+                    source: err,
+                });
+            }
+        }
+        fs::write(&self.path, bytes).map_err(|source| CommitRosterJournalError::Write {
+            path: self.path.clone(),
+            source,
+        })
+    }
+
+    /// Retrieve the snapshot for `height`/`block_hash` if present.
+    #[must_use]
+    pub fn get(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<CommitRosterSnapshot> {
+        self.entries.get(&(height, block_hash)).cloned()
+    }
+
+    /// Return all stored snapshots in height/hash order.
+    #[must_use]
+    pub fn snapshots(&self) -> Vec<CommitRosterSnapshot> {
+        self.entries.values().cloned().collect()
+    }
+
+    fn enforce_retention(&mut self) {
+        while self.entries.len() > self.retention.get() {
+            if let Some(oldest) = self.entries.keys().next().copied() {
+                self.entries.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+    use iroha_data_model::block::{BlockHeader, BlockSignature};
+    use iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1;
+    use iroha_data_model::peer::PeerId;
+    use std::num::NonZeroU64;
+    use tempfile::tempdir;
+
+    fn sample_cert(view: u64) -> (CommitCertificate, ValidatorSetCheckpoint) {
+        cert_with_height(2, view)
+    }
+
+    fn cert_with_height(height: u64, view: u64) -> (CommitCertificate, ValidatorSetCheckpoint) {
+        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer = PeerId::new(kp.public_key().clone());
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let block_hash = header.hash();
+        let signature = SignatureOf::from_hash(kp.private_key(), block_hash);
+        let block_sig = BlockSignature::new(0, signature);
+        let roster = vec![peer];
+        let cert = CommitCertificate {
+            height,
+            block_hash,
+            view,
+            epoch: 0,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            signatures: vec![block_sig.clone()],
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            height,
+            block_hash,
+            roster,
+            vec![block_sig],
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        (cert, checkpoint)
+    }
+
+    fn retention(limit: usize) -> NonZeroUsize {
+        NonZeroUsize::new(limit).expect("non-zero retention")
+    }
+
+    #[test]
+    fn journal_roundtrips_entries() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(cert.clone(), checkpoint.clone());
+        journal.persist().expect("persist");
+
+        let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
+        let snapshots = loaded.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0],
+            CommitRosterSnapshot {
+                commit_certificate: cert,
+                validator_checkpoint: checkpoint,
+            }
+        );
+    }
+
+    #[test]
+    fn journal_prefers_higher_view_for_same_block() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (low_view_cert, checkpoint) = sample_cert(1);
+        let (high_view_cert, _) = sample_cert(3);
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(low_view_cert, checkpoint.clone());
+        journal.upsert(high_view_cert.clone(), checkpoint);
+        journal.persist().expect("persist");
+
+        let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
+        let snapshots = loaded.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].commit_certificate.view, high_view_cert.view);
+    }
+
+    #[test]
+    fn get_returns_matching_snapshot() {
+        let (cert, checkpoint) = sample_cert(2);
+        let mut journal = CommitRosterJournal::new(PathBuf::from("unused"), retention(4));
+        journal.upsert(cert.clone(), checkpoint.clone());
+
+        let found = journal
+            .get(cert.height, cert.block_hash)
+            .expect("snapshot must be present");
+        assert_eq!(found.commit_certificate, cert);
+        assert_eq!(found.validator_checkpoint, checkpoint);
+
+        assert!(
+            journal.get(cert.height + 1, cert.block_hash).is_none(),
+            "mismatched height should not return a snapshot"
+        );
+    }
+
+    #[test]
+    fn retention_drops_oldest_entries() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(2));
+        for height in 1..=3 {
+            let (cert, checkpoint) = cert_with_height(height, 0);
+            journal.upsert(cert, checkpoint);
+        }
+        let snapshots = journal.snapshots();
+        let heights: Vec<_> = snapshots
+            .iter()
+            .map(|snapshot| snapshot.commit_certificate.height)
+            .collect();
+        assert_eq!(heights, vec![2, 3]);
+
+        journal.persist().expect("persist");
+        let reloaded = CommitRosterJournal::load(path, retention(2)).expect("load");
+        let reloaded_heights: Vec<_> = reloaded
+            .snapshots()
+            .into_iter()
+            .map(|snapshot| snapshot.commit_certificate.height)
+            .collect();
+        assert_eq!(reloaded_heights, vec![2, 3]);
+    }
+}

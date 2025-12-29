@@ -1,0 +1,40 @@
+groups:
+  - name: ministry-moderation
+    interval: 1m
+    rules:
+      - alert: ModerationIngestStalled
+        expr: sum by (environment) (rate(moderation_requests_total[5m])) < 0.01
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Moderation ingest stalled"
+          description: |
+            Environment {{ $labels.environment }} has not processed moderation requests for 10 minutes (5m rate {{ printf "%.4f" $value }} req/s).
+      - alert: ModerationDriftSpike
+        expr: max by (environment, manifest_id, model_id) (moderation_model_drift_score) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model drift exceeds budget"
+          description: |
+            Drift score {{ printf "%.2f" $value }} for model {{ $labels.model_id }} (manifest {{ $labels.manifest_id }}) exceeds the 20% ceiling.
+      - alert: ModerationQueueBacklog
+        expr: max by (environment, manifest_id) (moderation_quarantine_queue_depth) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Quarantine backlog growing"
+          description: |
+            Queue depth {{ printf "%.0f" $value }} exceeded the 50 item target for manifest {{ $labels.manifest_id }}.
+      - alert: ModerationLatencyDegraded
+        expr: histogram_quantile(0.95, sum by (environment, manifest_id, le) (rate(moderation_inference_latency_seconds_bucket[5m]))) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Inference latency above 2s P95"
+          description: |
+            Moderation inference latency exceeded 2 seconds (P95={{ printf "%.2f" $value }}s) for manifest {{ $labels.manifest_id }}.

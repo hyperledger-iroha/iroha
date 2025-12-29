@@ -1,0 +1,7 @@
+error: Structs with only one named field support transparent type inference, try to specify it explicitly using #[schema(transparent = "Type")]
+ --> tests/ui_fail/transparent_struct_multiple_fields.rs:3:10
+  |
+3 | #[derive(IntoSchema)]
+  |          ^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `IntoSchema` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,5 @@
+extends = ["base.toml", "base_trusted_peers.toml"]
+
+[ivm.banner]
+show = false
+beep = false

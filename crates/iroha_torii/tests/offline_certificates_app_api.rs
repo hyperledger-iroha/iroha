@@ -1,0 +1,407 @@
+//! Integration tests for offline certificate renewal and revocation endpoints.
+#![cfg(feature = "app_api")]
+
+use std::{str::FromStr, sync::Arc};
+
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+};
+use http_body_util::BodyExt as _;
+use iroha_config::parameters::actual::{Queue as QueueConfig, ToriiOfflineIssuer};
+use iroha_core::{
+    kiso::KisoHandle,
+    kura::Kura,
+    query::store::LiveQueryStore,
+    queue::Queue,
+    smartcontracts::Execute,
+    state::{State, World},
+};
+use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+use iroha_data_model::{
+    ChainId,
+    account::AccountId,
+    asset::{AssetDefinitionId, AssetId},
+    block::BlockHeader,
+    isi::offline::RegisterOfflineAllowance,
+    metadata::Metadata,
+    name::Name,
+    offline::{
+        OfflineAllowanceCommitment, OfflineVerdictRevocationReason, OfflineWalletCertificate,
+        OfflineWalletPolicy,
+    },
+};
+use iroha_primitives::numeric::Numeric;
+use iroha_torii::filter::{Pagination, QueryEnvelope};
+use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
+use nonzero_ext::nonzero;
+use norito::json::{self, Map, Value};
+use tokio::sync::{broadcast, watch};
+use tower::ServiceExt as _;
+
+#[tokio::test]
+async fn offline_certificates_revoke_returns_verdict_id() {
+    let harness = build_cert_harness();
+    let mut map = Map::new();
+    map.insert(
+        "authority".into(),
+        Value::from(harness.fixtures.controller.to_string()),
+    );
+    map.insert(
+        "private_key".into(),
+        Value::from(
+            iroha_crypto::ExposedPrivateKey(harness.fixtures.controller_keys.private_key().clone())
+                .to_string(),
+        ),
+    );
+    map.insert(
+        "certificate_id_hex".into(),
+        Value::from(harness.fixtures.certificate_hex.clone()),
+    );
+    map.insert(
+        "reason".into(),
+        Value::from(OfflineVerdictRevocationReason::IssuerRequest.as_str()),
+    );
+    let body = json::to_vec(&Value::Object(map)).expect("serialize revoke request");
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/certificates/revoke")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+    let json_body: Value = json::from_slice(&bytes).expect("json");
+
+    assert_eq!(
+        json_body["verdict_id_hex"].as_str(),
+        Some(harness.fixtures.verdict_hex.as_str())
+    );
+}
+
+#[tokio::test]
+async fn offline_allowances_renew_returns_new_certificate_id() {
+    let harness = build_cert_harness();
+    let mut map = Map::new();
+    map.insert(
+        "authority".into(),
+        Value::from(harness.fixtures.controller.to_string()),
+    );
+    map.insert(
+        "private_key".into(),
+        Value::from(
+            iroha_crypto::ExposedPrivateKey(harness.fixtures.controller_keys.private_key().clone())
+                .to_string(),
+        ),
+    );
+    map.insert(
+        "certificate".into(),
+        json::to_value(&harness.fixtures.renewed_certificate).expect("certificate value"),
+    );
+    let body = json::to_vec(&Value::Object(map)).expect("serialize renew request");
+
+    let uri = format!(
+        "/v1/offline/allowances/{}/renew",
+        harness.fixtures.certificate_hex
+    );
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(uri)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+    let json_body: Value = json::from_slice(&bytes).expect("json");
+
+    assert_eq!(
+        json_body["certificate_id_hex"].as_str(),
+        Some(harness.fixtures.renewed_hex.as_str())
+    );
+}
+
+#[tokio::test]
+async fn offline_certificates_issue_returns_signed_certificate() {
+    let harness = build_cert_harness();
+    let mut map = Map::new();
+    map.insert(
+        "certificate".into(),
+        certificate_draft_json(&harness.fixtures.certificate),
+    );
+    let body = json::to_vec(&Value::Object(map)).expect("serialize issue request");
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/certificates/issue")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+    let json_body: Value = json::from_slice(&bytes).expect("json");
+
+    let certificate_value = json_body["certificate"].clone();
+    let certificate: OfflineWalletCertificate =
+        json::from_value(certificate_value).expect("certificate");
+    let certificate_id_hex = json_body["certificate_id_hex"]
+        .as_str()
+        .expect("certificate_id_hex");
+    assert_eq!(
+        certificate_id_hex,
+        hex::encode(certificate.certificate_id().as_ref())
+    );
+
+    let payload = certificate.operator_signing_bytes().expect("payload");
+    certificate
+        .operator_signature
+        .verify(harness.fixtures.controller_keys.public_key(), &payload)
+        .expect("operator signature");
+}
+
+#[tokio::test]
+async fn offline_certificates_renew_issue_returns_signed_certificate() {
+    let harness = build_cert_harness();
+    let mut map = Map::new();
+    map.insert(
+        "certificate".into(),
+        certificate_draft_json(&harness.fixtures.renewed_certificate),
+    );
+    let body = json::to_vec(&Value::Object(map)).expect("serialize renew issue request");
+
+    let uri = format!(
+        "/v1/offline/certificates/{}/renew/issue",
+        harness.fixtures.certificate_hex
+    );
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(uri)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+    let json_body: Value = json::from_slice(&bytes).expect("json");
+
+    let certificate_value = json_body["certificate"].clone();
+    let certificate: OfflineWalletCertificate =
+        json::from_value(certificate_value).expect("certificate");
+    let certificate_id_hex = json_body["certificate_id_hex"]
+        .as_str()
+        .expect("certificate_id_hex");
+    assert_eq!(
+        certificate_id_hex,
+        hex::encode(certificate.certificate_id().as_ref())
+    );
+
+    let payload = certificate.operator_signing_bytes().expect("payload");
+    certificate
+        .operator_signature
+        .verify(harness.fixtures.controller_keys.public_key(), &payload)
+        .expect("operator signature");
+}
+
+#[tokio::test]
+async fn offline_certificates_query_lists_allowances() {
+    let harness = build_cert_harness();
+    let envelope = QueryEnvelope {
+        pagination: Pagination {
+            limit: Some(25),
+            ..Pagination::default()
+        },
+        ..QueryEnvelope::default()
+    };
+    let body = json::to_vec(&envelope).expect("serialize envelope");
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/certificates/query")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+    let json_body: Value = json::from_slice(&bytes).expect("json");
+
+    let items = json_body["items"].as_array().expect("items array");
+    assert!(
+        items.iter().any(|item| {
+            item["certificate_id_hex"].as_str() == Some(harness.fixtures.certificate_hex.as_str())
+        }),
+        "query results contain seeded allowance"
+    );
+}
+
+struct CertHarness {
+    app: Router,
+    fixtures: CertFixtures,
+}
+
+struct CertFixtures {
+    controller: AccountId,
+    controller_keys: KeyPair,
+    certificate: OfflineWalletCertificate,
+    renewed_certificate: OfflineWalletCertificate,
+    certificate_hex: String,
+    renewed_hex: String,
+    verdict_hex: String,
+}
+
+fn build_cert_harness() -> CertHarness {
+    let fixtures = build_cert_fixtures();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.offline_issuer = Some(ToriiOfflineIssuer {
+        operator_private_key: iroha_crypto::ExposedPrivateKey(
+            fixtures.controller_keys.private_key().clone(),
+        ),
+        allowed_controllers: vec![fixtures.controller.clone()],
+    });
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(
+        World::default(),
+        Arc::clone(&kura),
+        query,
+    ));
+
+    seed_allowance(&state, &fixtures.certificate);
+
+    let queue_cfg = QueueConfig::default();
+    let (events_sender, _) = broadcast::channel(64);
+    let queue = Arc::new(Queue::from_config(queue_cfg, events_sender.clone()));
+    let (peers_tx, peers_rx) = watch::channel(<_>::default());
+    drop(peers_tx);
+
+    let torii = Torii::new_with_handle(
+        ChainId::from("test-chain"),
+        kiso,
+        cfg.torii.clone(),
+        queue,
+        events_sender,
+        LiveQueryStore::start_test(),
+        kura,
+        state,
+        cfg.common.key_pair.clone(),
+        OnlinePeersProvider::new(peers_rx),
+        None,
+        MaybeTelemetry::disabled(),
+    );
+
+    CertHarness {
+        app: torii.api_router_for_tests(),
+        fixtures,
+    }
+}
+
+fn build_cert_fixtures() -> CertFixtures {
+    let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
+    let controller_keys = KeyPair::from_seed(vec![0x21; 32], Algorithm::Ed25519);
+    let controller = AccountId::of(domain.clone(), controller_keys.public_key().clone());
+    let spend_keys = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
+    let asset_definition =
+        AssetDefinitionId::new(domain.clone(), Name::from_str("xor").expect("asset name"));
+    let allowance_asset = AssetId::new(asset_definition, controller.clone());
+
+    let verdict_id = Hash::new(b"verdict-1");
+
+    let certificate = OfflineWalletCertificate {
+        controller: controller.clone(),
+        allowance: OfflineAllowanceCommitment {
+            asset: allowance_asset.clone(),
+            amount: Numeric::new(1_000, 0),
+            commitment: vec![0xA1; 32],
+        },
+        spend_public_key: spend_keys.public_key().clone(),
+        attestation_report: Vec::new(),
+        issued_at_ms: 1_700_000_000,
+        expires_at_ms: 1_800_000_000,
+        policy: OfflineWalletPolicy {
+            max_balance: Numeric::new(1_000, 0),
+            max_tx_value: Numeric::new(500, 0),
+            expires_at_ms: 1_800_000_000,
+        },
+        operator_signature: Signature::from_bytes(&[0; 64]),
+        metadata: Metadata::default(),
+        verdict_id: Some(verdict_id),
+        attestation_nonce: None,
+        refresh_at_ms: None,
+    };
+    let mut renewed_certificate = certificate.clone();
+    renewed_certificate.issued_at_ms = 1_750_000_000;
+    renewed_certificate.expires_at_ms = 1_850_000_000;
+
+    let certificate_hex = hex::encode(certificate.certificate_id().as_ref());
+    let renewed_hex = hex::encode(renewed_certificate.certificate_id().as_ref());
+    let verdict_hex = hex::encode(verdict_id.as_ref());
+
+    CertFixtures {
+        controller,
+        controller_keys,
+        certificate,
+        renewed_certificate,
+        certificate_hex,
+        renewed_hex,
+        verdict_hex,
+    }
+}
+
+fn certificate_draft_json(certificate: &OfflineWalletCertificate) -> Value {
+    let mut value = json::to_value(certificate).expect("certificate value");
+    match &mut value {
+        Value::Object(map) => {
+            map.remove("operator_signature");
+        }
+        _ => panic!("certificate json must be object"),
+    }
+    value
+}
+
+fn seed_allowance(state: &Arc<State>, certificate: &OfflineWalletCertificate) {
+    let header_one = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_321, 0);
+    let mut block = state.block(header_one);
+    let mut tx = block.transaction();
+    RegisterOfflineAllowance {
+        certificate: certificate.clone(),
+    }
+    .execute(&certificate.controller, &mut tx)
+    .expect("allowance registration");
+    tx.apply();
+    block.commit().expect("commit block");
+}

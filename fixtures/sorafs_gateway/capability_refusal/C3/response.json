@@ -1,0 +1,10 @@
+{
+  "status": 412,
+  "body": {
+    "error": "admission_mismatch",
+    "reason": "manifest digest is not covered by the admission envelope",
+    "details": {
+      "manifest_digest": "9bd42b2e745e8f808dd9c5b641297fd3b637b09283023aaaecdc2d013648645a"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+[package]
+name = "find_cuda_helper"
+version = "0.2.0"
+edition = "2024"
+description = "Helper crate for locating CUDA libraries (workspace patched)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hyperledger/i23"
+authors = ["Hyperledger Iroha Contributors"]
+
+[dependencies]
+glob = "0.3"

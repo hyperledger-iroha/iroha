@@ -1,0 +1,16 @@
+error: #[main] attribute does not accept arguments
+ --> tests/ui/fail/main_with_attr.rs:5:1
+  |
+5 | #[main(trace)]
+  | ^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `main` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0580]: `main` function has wrong type
+ --> tests/ui/fail/main_with_attr.rs:6:1
+  |
+6 | fn main(host: Iroha, context: Context) {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ incorrect number of function parameters
+  |
+  = note: expected signature `fn()`
+             found signature `fn(iroha_trigger::Iroha, TriggerContext)`

@@ -1,0 +1,36 @@
+groups:
+  - name: soranet-privacy
+    interval: 1m
+    rules:
+      - alert: SoranetPrivacyDowngradeSpike
+        expr: sum(rate(soranet_privacy_circuit_events_total{kind="downgrade"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Downgrade rejection spike"
+          description: "Downgrade rejects are breaching the configured threshold."
+      - alert: SoranetPrivacySuppressedBuckets
+        expr: avg_over_time(soranet_privacy_bucket_suppressed[10m]) == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Privacy buckets suppressed"
+          description: "All reported buckets are suppressed; investigate collector health and contributor thresholds."
+      - alert: SoranetPrivacyCollectorIdle
+        expr: changes(soranet_privacy_last_poll_unixtime[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Privacy collector idle"
+          description: "No SoraNet privacy polls have succeeded in the last 5 minutes."
+      - alert: SoranetPrivacyCollectorDisabled
+        expr: soranet_privacy_collector_enabled == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Privacy collector disabled"
+          description: "The SoraNet privacy collector is disabled or failed to start; SNNet-5 guard adoption must block until it is re-enabled."

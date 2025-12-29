@@ -1,0 +1,59 @@
+[package]
+authors = ["Jason Ozias <jason.g.ozias@gmail.com>"]
+categories = ["development-tools", "development-tools::build-utils"]
+description = "Generate 'cargo:rustc-env' instructions via 'build.rs' for use in your code via the 'env!' macro"
+documentation = "https://docs.rs/vergen"
+edition = "2021"
+homepage = "https://github.com/rustyhorde/vergen"
+keywords = ["cargo", "instructions", "build", "tool"]
+license = "MIT OR Apache-2.0"
+rust-version = "1.81.0"
+name = "vergen-git2"
+readme = "README.md"
+repository = "https://github.com/rustyhorde/vergen"
+version = "1.0.7"
+
+[package.metadata.cargo-matrix]
+[[package.metadata.cargo-matrix.channel]]
+name = "default"
+always_deny = ["emit_and_set", "unstable"]
+
+[[package.metadata.cargo-matrix.channel]]
+name = "nightly"
+always_deny = ["emit_and_set"]
+always_include = ["unstable"]
+
+[features]
+default = []
+build = ["vergen/build"]
+cargo = ["vergen/cargo"]
+emit_and_set = ["vergen-lib/emit_and_set"]
+rustc = ["vergen/rustc"]
+unstable = ["vergen/unstable", "vergen-lib/unstable"]
+si = ["vergen/si"]
+
+[dependencies]
+anyhow = "1.0.95"
+derive_builder = "0.20.2"
+git2-rs = { version = "0.20.1", package = "git2", default-features = false }
+time = { version = "0.3.37", features = [
+    "formatting",
+    "local-offset",
+    "parsing",
+] }
+vergen = { version = "9.0.5", path = "../vergen", default-features = false }
+vergen-lib = { version = "0.1.6", path = "../vergen-lib", features = ["git"] }
+
+[build-dependencies]
+rustversion = "1.0.19"
+
+[dev-dependencies]
+lazy_static = "1.5.0"
+regex = "1.11.1"
+serial_test = "3.2.0"
+temp-env = "0.3.6"
+test_util = { path = "../test_util", features = ["repo", "unstable"] }
+
+[package.metadata.docs.rs]
+features = ["build", "cargo", "emit_and_set", "rustc", "si"]
+rustdoc-args = ["--cfg", "docsrs"]

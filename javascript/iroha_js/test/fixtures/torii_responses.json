@@ -1,0 +1,283 @@
+{
+  "iterable": {
+    "accountListPage": {
+      "items": [
+        { "id": "alice@wonderland" }
+      ],
+      "total": 1
+    }
+  },
+  "governance": {
+    "proposalDeployContract": {
+      "found": true,
+      "proposal": {
+        "proposer": "alice@test",
+        "created_height": 42,
+        "status": "Approved",
+        "kind": {
+          "DeployContract": {
+            "namespace": "registry",
+            "contract_id": "router",
+            "code_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "abi_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "abi_version": "1"
+          }
+        }
+      }
+    },
+    "referendumMissing": {
+      "found": false,
+      "referendum": null
+    },
+    "locks": {
+      "found": true,
+      "referendum_id": "ref-1",
+      "locks": {
+        "alice@test": {
+          "owner": "alice@test",
+          "amount": 10,
+          "expiry_height": 55,
+          "direction": 1,
+          "duration_blocks": 5
+        }
+      }
+    },
+    "unlockStats": {
+      "height_current": "100",
+      "expired_locks_now": "2",
+      "referenda_with_expired": "1",
+      "last_sweep_height": "95"
+    },
+    "tally": {
+      "referendum_id": "ref-1",
+      "approve": "7",
+      "reject": 3,
+      "abstain": "1"
+    },
+    "draftResponse": {
+      "ok": true,
+      "proposal_id": "CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD",
+      "tx_instructions": [
+        { "wire_id": "FinalizeReferendum", "payload_hex": "0XAAAAAAAA" },
+        { "wire_id": "PersistCouncilForEpoch" }
+      ]
+    },
+    "deployContractDraft": {
+      "ok": true,
+      "proposal_id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "tx_instructions": [
+        { "wire_id": "ProposeDeployContract" }
+      ]
+    },
+    "plainBallotResponse": {
+      "ok": true,
+      "accepted": true,
+      "reason": null,
+      "tx_instructions": [
+        { "wire_id": "CastPlainBallot" }
+      ]
+    },
+    "zkBallotAccepted": {
+      "ok": true,
+      "accepted": true,
+      "reason": null,
+      "tx_instructions": [
+        { "wire_id": "CastZkBallot" }
+      ]
+    },
+    "zkBallotDeferred": {
+      "ok": true,
+      "accepted": false,
+      "reason": "build transaction skeleton",
+      "tx_instructions": [
+        { "wire_id": "CastZkBallot" }
+      ]
+    },
+    "protectedNamespacesApply": {
+      "ok": true,
+      "applied": 2
+    },
+    "protectedNamespacesGet": {
+      "found": true,
+      "namespaces": ["apps", "system"]
+    },
+    "councilCurrent": {
+      "epoch": 77,
+      "members": [
+        { "account_id": "alice@wonderland" },
+        { "account_id": "bob@wonderland" }
+      ],
+      "alternates": [{ "account_id": "carol@wonderland" }],
+      "candidate_count": 3,
+      "verified": 2,
+      "derived_by": "Vrf"
+    },
+    "councilDerive": {
+      "epoch": 9,
+      "members": [
+        { "account_id": "validator@test" }
+      ],
+      "alternates": [],
+      "total_candidates": 1,
+      "verified": 1,
+      "derived_by": "Vrf"
+    },
+    "councilPersist": {
+      "epoch": 1,
+      "members": [],
+      "alternates": [],
+      "total_candidates": 1,
+      "verified": 1,
+      "derived_by": "Vrf"
+    },
+    "councilAudit": {
+      "epoch": 10,
+      "seed_hex": "abababababababababababababababab",
+      "beacon_hex": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "members_count": 5,
+      "candidate_count": 8,
+      "alternates_count": 2,
+      "verified": 7,
+      "derived_by": "Vrf",
+      "chain_id": "chain"
+    }
+  },
+  "repo": {
+    "list": {
+      "items": [
+        {
+          "id": "alpha_repo",
+          "initiator": "alice@wonderland",
+          "counterparty": "bob@wonderland",
+          "custodian": null,
+          "cash_leg": {
+            "asset_definition_id": "usd#wonderland",
+            "quantity": "1000",
+            "metadata": {}
+          },
+          "collateral_leg": {
+            "asset_definition_id": "bond#wonderland",
+            "quantity": "1100",
+            "metadata": { "isin": "US0000000001" }
+          },
+          "rate_bps": 150,
+          "maturity_timestamp_ms": 1728000000,
+          "initiated_timestamp_ms": 1600000000,
+          "last_margin_check_timestamp_ms": 1600086400,
+          "governance": {
+            "haircut_bps": 1500,
+            "margin_frequency_secs": 86400
+          }
+        }
+      ],
+      "total": 1
+    }
+  },
+  "uaid": {
+    "portfolio": {
+      "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+      "totals": {
+        "accounts": 2,
+        "positions": 3
+      },
+      "dataspaces": [
+        {
+          "dataspace_id": 0,
+          "dataspace_alias": "global",
+          "accounts": [
+            {
+              "account_id": "holder1@portfolio",
+              "label": null,
+              "assets": [
+                {
+                  "asset_id": "cash#portfolio::holder1@portfolio",
+                  "asset_definition_id": "cash#portfolio",
+                  "quantity": "500"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "dataspace_id": 11,
+          "dataspace_alias": "cbdc",
+          "accounts": [
+            {
+              "account_id": "holder2@portfolio",
+              "label": "primary-cbdc",
+              "assets": [
+                {
+                  "asset_id": "wholesale#cbdc::holder2@portfolio",
+                  "asset_definition_id": "wholesale#cbdc",
+                  "quantity": "250"
+                },
+                {
+                  "asset_id": "fx#cbdc::holder2@portfolio",
+                  "asset_definition_id": "fx#cbdc",
+                  "quantity": "25"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "bindings": {
+      "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+      "dataspaces": [
+        {
+          "dataspace_id": 0,
+          "dataspace_alias": "global",
+          "accounts": ["holder1@portfolio"]
+        },
+        {
+          "dataspace_id": 11,
+          "dataspace_alias": "cbdc",
+          "accounts": ["holder2@portfolio"]
+        }
+      ]
+    },
+    "manifests": {
+      "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+      "manifests": [
+        {
+          "dataspace_id": 11,
+          "dataspace_alias": "cbdc",
+          "manifest_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "status": "Active",
+          "lifecycle": {
+            "activated_epoch": 4097,
+            "expired_epoch": null,
+            "revocation": null
+          },
+          "accounts": ["wholesale@cbdc"],
+          "manifest": {
+            "version": "V1",
+            "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+            "dataspace": 11,
+            "issued_ms": 1762723200000,
+            "activation_epoch": 4097,
+            "expiry_epoch": 4600,
+            "entries": [
+              {
+                "scope": { "program": "cbdc.transfer" },
+                "effect": {
+                  "Allow": {
+                    "max_amount": "500000000",
+                    "window": "PerDay"
+                  }
+                },
+                "notes": "Allow CBDC transfers"
+              },
+              {
+                "scope": { "program": "cbdc.transfer" },
+                "effect": { "Deny": { "reason": "maintenance" } },
+                "notes": null
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

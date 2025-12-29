@@ -1,0 +1,71 @@
+{
+  "title": "SoraFS Proof Streaming Overview",
+  "panels": [
+    {
+      "title": "Proof Outcomes",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "id": 1,
+      "targets": [
+        {
+          "expr": "sum by (kind)(rate(torii_sorafs_proof_stream_events_total{result=\"success\"}[5m]))",
+          "legendFormat": "{{kind}} success"
+        },
+        {
+          "expr": "sum by (kind)(rate(torii_sorafs_proof_stream_events_total{result=\"failure\"}[5m]))",
+          "legendFormat": "{{kind}} failure"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "Failure Reasons",
+      "type": "piechart",
+      "datasource": "Prometheus",
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum by (reason)(rate(torii_sorafs_proof_stream_events_total{result=\"failure\"}[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "title": "Proof Latency p50/p95",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "id": 3,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (kind, le)(rate(torii_sorafs_proof_stream_latency_ms_bucket[5m])))",
+          "legendFormat": "{{kind}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (kind, le)(rate(torii_sorafs_proof_stream_latency_ms_bucket[5m])))",
+          "legendFormat": "{{kind}} p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "milliseconds"
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  }
+}

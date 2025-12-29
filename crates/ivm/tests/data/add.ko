@@ -1,0 +1,5 @@
+// Simple program showing basic arithmetic.
+// Returns the sum of two input values.
+seiyaku Example {
+    kotoage fn add(a, b) { let c = a + b; }
+}

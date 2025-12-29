@@ -1,0 +1,32 @@
+[
+  {
+    "quarter": "2025-Q4",
+    "scenarios": [
+      "prefix-withdrawal"
+    ],
+    "owner": "sre-oncall"
+  },
+  {
+    "quarter": "2026-Q1",
+    "scenarios": [
+      "trustless-verifier-failure"
+    ],
+    "owner": "sre-oncall"
+  },
+  {
+    "quarter": "2026-Q2",
+    "scenarios": [
+      "resolver-brownout"
+    ],
+    "owner": "sre-oncall"
+  },
+  {
+    "quarter": "2026-Q3",
+    "scenarios": [
+      "prefix-withdrawal",
+      "trustless-verifier-failure",
+      "resolver-brownout"
+    ],
+    "owner": "sre-oncall"
+  }
+]

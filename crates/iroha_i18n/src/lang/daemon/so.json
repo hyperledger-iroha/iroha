@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Ku soo dhawoow Hyperledger Iroha!",
+  "error.trace_config_setup": "Komba qaabaynta raadraaca lagama hirgelin",
+  "error.config": "Khalad qaabayn!",
+  "error.logger": "Habka diiwaangelinta lama bilaabin",
+  "error.start": "Iroha lama bilaabin",
+  "error.run": "Khalad ayaa dhacay intii lagu jiray socodsiinta Iroha",
+  "error.start_p2p": "Shabakadda P2P lama bilaabin",
+  "error.init_kura": "Kura (kaydsiga blocks) lama bilaabin",
+  "error.start_dev_telemetry": "Adeegga telemetry ee horumarinta lama bilaabin",
+  "error.start_telemetry": "Adeegga telemetry lama bilaabin",
+  "error.listen_os_signal": "Saaridda dhegeysiga calaamadaha OS lagama hirgelin",
+  "error.start_torii": "Torii (iridda Iroha HTTP API) lama bilaabin"
+}

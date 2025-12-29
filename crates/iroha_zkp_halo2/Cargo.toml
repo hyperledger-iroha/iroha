@@ -1,0 +1,35 @@
+[package]
+name = "iroha_zkp_halo2"
+version.workspace = true
+edition = "2024"
+license = "Apache-2.0"
+description = "Transparent (untrusted setup) Halo2-style proof system skeleton with IPA polynomial commitments"
+repository = "https://github.com/hyperledger-iroha/iroha"
+categories = ["cryptography"]
+
+[lib]
+name = "iroha_zkp_halo2"
+path = "src/lib.rs"
+
+[dependencies]
+tiny-keccak = { workspace = true }
+thiserror = { workspace = true, default-features = false }
+norito = {workspace = true}
+iroha_schema = { workspace = true, optional = true }
+halo2curves = { workspace = true }
+hex = { workspace = true, features = ["alloc"] }
+rayon = { workspace = true, optional = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
+poseidon-primitives = "0.2.0"
+
+[dev-dependencies]
+hex-literal = { workspace = true }
+criterion = { workspace = true }
+
+[features]
+default = []
+# Mirror Norito derive cfgs so the derive macro can see destination-crate features
+schema-structural = ["dep:iroha_schema"]
+parallel = ["dep:rayon"]
+goldilocks_backend = []

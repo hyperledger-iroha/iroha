@@ -1,0 +1,269 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Sora Name Service Arbitration Case",
+  "description": "Canonical schema for SN-6a arbitration tooling.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "case_id",
+    "selector",
+    "dispute_type",
+    "priority",
+    "reported_at",
+    "status",
+    "reporter",
+    "respondents",
+    "allegations",
+    "evidence",
+    "sla",
+    "actions"
+  ],
+  "properties": {
+    "case_id": {
+      "type": "string",
+      "pattern": "^(SNS-[0-9]{4}-[0-9]{5}|[0-9a-fA-F-]{10,})$",
+      "description": "Immutable identifier shared across governance tooling."
+    },
+    "selector": {
+      "type": "object",
+      "required": ["suffix_id", "label", "global_form"],
+      "properties": {
+        "suffix_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "global_form": {
+          "type": "string",
+          "pattern": "^[a-z0-9.-]+\\.[a-z]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "dispute_type": {
+      "type": "string",
+      "enum": [
+        "ownership",
+        "policy_violation",
+        "abuse",
+        "billing",
+        "other"
+      ]
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["urgent", "high", "standard", "info"]
+    },
+    "reported_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "acknowledged_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "triage",
+        "hearing",
+        "decision",
+        "remediation",
+        "closed",
+        "suspended"
+      ]
+    },
+    "reporter": {
+      "type": "object",
+      "required": ["role", "contact"],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "registrar",
+            "steward",
+            "guardian",
+            "public",
+            "support"
+          ]
+        },
+        "contact": {
+          "type": "string",
+          "minLength": 3
+        },
+        "reference_ticket": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "respondents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["role", "account_id"],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "registrant",
+              "controller",
+              "registrar",
+              "steward",
+              "other"
+            ]
+          },
+          "account_id": {
+            "type": "string",
+            "minLength": 3
+          },
+          "contact": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "allegations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["code", "summary"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Policy clause or handbook reference."
+          },
+          "summary": {
+            "type": "string"
+          },
+          "policy_reference": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "hash"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["document", "screenshot", "log", "governance", "other"]
+          },
+          "uri": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[A-Fa-f0-9]{64}$"
+          },
+          "description": {
+            "type": "string"
+          },
+          "sealed": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "sla": {
+      "type": "object",
+      "required": ["acknowledge_by", "resolution_by"],
+      "properties": {
+        "acknowledge_by": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "resolution_by": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["approved_by", "reason", "new_resolution_by"],
+            "properties": {
+              "approved_by": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "new_resolution_by": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["timestamp", "actor", "action"],
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "decision": {
+      "type": "object",
+      "properties": {
+        "finding": {
+          "type": "string",
+          "enum": ["upheld", "rejected", "partial", "withdrawn"]
+        },
+        "remedies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "effective_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "publication_state": {
+          "type": "string",
+          "enum": ["public", "redacted", "sealed"]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

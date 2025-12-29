@@ -1,0 +1,15 @@
+{
+  "provider_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "complainant_id_hex": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "replication_order_id_hex": "9999999999999999999999999999999999999999999999999999999999999999",
+  "kind": "replication_shortfall",
+  "submitted_epoch": 1700600900,
+  "description": "Alpha provider failed to ingest replication order after sustained outage; request remediation.",
+  "requested_remedy": "Slash 15% of committed stake and redistribute bonded rewards to standby providers.",
+  "evidence": {
+    "digest_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+    "media_type": "application/zip",
+    "uri": "https://example.com/evidence/sorafs-alpha-outage.zip",
+    "size_bytes": 2048
+  }
+}

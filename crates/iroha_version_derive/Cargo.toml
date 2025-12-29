@@ -1,0 +1,31 @@
+[package]
+name = "iroha_version_derive"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+trybuild-tests = []
+packed-struct = []
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true, features = ["default", "full"] }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+manyhow = { workspace = true }
+darling = { workspace = true }
+
+[dev-dependencies]
+norito = {workspace = true}
+iroha_version = { workspace = true, features = ["derive", "json"] }
+iroha_macro = { workspace = true }
+trybuild = { workspace = true }

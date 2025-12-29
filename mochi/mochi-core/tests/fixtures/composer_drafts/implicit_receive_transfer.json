@@ -1,0 +1,8 @@
+[
+  {
+    "kind": "transfer_asset",
+    "asset": "rose#wonderland#alice@wonderland",
+    "quantity": "1",
+    "destination": "newcomer@wonderland"
+  }
+]

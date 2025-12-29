@@ -1,0 +1,212 @@
+{
+  "title": "Ministry Transparency Overview",
+  "uid": "ministry-transparency",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "tags": ["ministry", "transparency", "sora"],
+  "tempoAnnotations": {
+    "enabled": false
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(ministry_transparency_publication_lag_seconds, environment)",
+        "refresh": 1,
+        "current": {
+          "text": "prod",
+          "value": "prod"
+        },
+        "includeAll": true
+      },
+      {
+        "name": "policy",
+        "label": "Policy",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(ministry_transparency_ai_accuracy_drift, policy)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Appeal SLA Miss Rate",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "max by (environment) (ministry_transparency_appeal_sla_miss_rate{environment=~\"$environment\"})",
+          "legendFormat": "Miss rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Denylist Churn (stacked, 5m rate)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (action) (rate(ministry_transparency_denylist_changes_total{environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "stacked": true,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AI Accuracy Drift (policy)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "avg by (policy) (ministry_transparency_ai_accuracy_drift{environment=~\"$environment\", policy=~\"$policy\"})",
+          "legendFormat": "{{policy}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": -1,
+          "max": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Publication Lag",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "max(ministry_transparency_publication_lag_seconds{environment=~\"$environment\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 604800},
+              {"color": "red", "value": 1209600}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "DP Budget Remaining",
+      "id": 5,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "min(ministry_transparency_dp_budget_remaining{environment=~\"$environment\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "orange", "value": 0.15},
+              {"color": "green", "value": 0.3}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Volunteer Briefs & Workshops",
+      "id": 6,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (language) (ministry_transparency_volunteer_briefs_total{environment=~\"$environment\"})",
+          "format": "table",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(ministry_transparency_workshops_total{environment=~\"$environment\"})",
+          "format": "table",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    }
+  ]
+}

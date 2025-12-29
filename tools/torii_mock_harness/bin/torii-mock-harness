@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Copyright 2026 Hyperledger Iroha Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
+
+BIN_RELEASE="${REPO_ROOT}/target/release/torii-mock-harness"
+BIN_DEBUG="${REPO_ROOT}/target/debug/torii-mock-harness"
+
+if [[ -x "$BIN_RELEASE" ]]; then
+  exec "$BIN_RELEASE" "$@"
+elif [[ -x "$BIN_DEBUG" ]]; then
+  exec "$BIN_DEBUG" "$@"
+else
+  echo "[torii-mock-harness] compiled binary not found; running via cargo run" >&2
+  exec cargo run -p xtask --bin torii-mock-harness -- "$@"
+fi

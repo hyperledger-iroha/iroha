@@ -1,0 +1,20 @@
+{
+  "job_name": "ci/xcode-swift-parity",
+  "duration_seconds": 1425.5,
+  "tests": [
+    {
+      "name": "swift test",
+      "duration_seconds": 1085.2
+    },
+    {
+      "name": "make swift-dashboards",
+      "duration_seconds": 94.4
+    },
+    {
+      "name": "swift-status-export",
+      "duration_seconds": 38.7
+    }
+  ],
+  "buildkite_url": "https://buildkite.com/org/ci-xcode-swift-parity",
+  "notes": "Sample metadata shared with Android parity dashboards."
+}

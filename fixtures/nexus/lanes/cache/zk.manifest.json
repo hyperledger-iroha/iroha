@@ -1,0 +1,25 @@
+{
+  "lane": "zk",
+  "governance": "council",
+  "version": 1,
+  "validators": [
+    "dana@wonderland",
+    "erin@wonderland",
+    "frank@wonderland"
+  ],
+  "quorum": 2,
+  "protected_namespaces": [
+    "zk",
+    "confidential"
+  ],
+  "privacy_commitments": [
+    {
+      "id": 1,
+      "scheme": "merkle",
+      "merkle": {
+        "root": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "max_depth": 16
+      }
+    }
+  ]
+}

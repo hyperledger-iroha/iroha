@@ -1,0 +1,654 @@
+// Copyright 2024 Hyperledger Iroha Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package org.hyperledger.iroha.norito;
+
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+
+/** Factory helpers for Norito adapters. */
+public final class NoritoAdapters {
+  private NoritoAdapters() {}
+
+  public static TypeAdapter<Long> uint(int bits) {
+    return new UIntAdapter(bits);
+  }
+
+  public static TypeAdapter<Long> sint(int bits) {
+    return new IntAdapter(bits);
+  }
+
+  public static TypeAdapter<Boolean> boolAdapter() {
+    return BoolAdapter.INSTANCE;
+  }
+
+  public static TypeAdapter<byte[]> bytesAdapter() {
+    return BytesAdapter.INSTANCE;
+  }
+
+  public static TypeAdapter<byte[]> fixedBytes(int length) {
+    return new FixedBytesAdapter(length);
+  }
+
+  public static TypeAdapter<String> stringAdapter() {
+    return StringAdapter.INSTANCE;
+  }
+
+  public static <T> TypeAdapter<Optional<T>> option(TypeAdapter<T> inner) {
+    return new OptionAdapter<>(inner);
+  }
+
+  public static <T, E> TypeAdapter<Result<T, E>> result(TypeAdapter<T> ok, TypeAdapter<E> err) {
+    return new ResultAdapter<>(ok, err);
+  }
+
+  public static <T> TypeAdapter<List<T>> sequence(TypeAdapter<T> element) {
+    return new SequenceAdapter<>(element);
+  }
+
+  public static <K, V> TypeAdapter<Map<K, V>> map(TypeAdapter<K> key, TypeAdapter<V> value) {
+    return new MapAdapter<>(key, value);
+  }
+
+  public static TypeAdapter<List<Object>> tuple(List<TypeAdapter<Object>> elements) {
+    return new TupleAdapter(elements);
+  }
+
+  public static StructField field(String name, TypeAdapter<?> adapter) {
+    return new StructField(name, adapter);
+  }
+
+  public static StructAdapter struct(List<StructField> fields, StructAdapter.StructFactory factory) {
+    return new StructAdapter(fields, factory);
+  }
+
+  public static StructAdapter struct(List<StructField> fields) {
+    return new StructAdapter(fields, null);
+  }
+
+  private static final class UIntAdapter implements TypeAdapter<Long> {
+    private final int bits;
+
+    private UIntAdapter(int bits) {
+      if (bits != 8 && bits != 16 && bits != 32 && bits != 64) {
+        throw new IllegalArgumentException("Unsupported unsigned size");
+      }
+      this.bits = bits;
+    }
+
+    @Override
+    public void encode(NoritoEncoder encoder, Long value) {
+      encoder.writeUInt(value, bits);
+    }
+
+    @Override
+    public Long decode(NoritoDecoder decoder) {
+      return decoder.readUInt(bits);
+    }
+
+    @Override
+    public int fixedSize() {
+      return bits / 8;
+    }
+  }
+
+  private static final class IntAdapter implements TypeAdapter<Long> {
+    private final int bits;
+
+    private IntAdapter(int bits) {
+      if (bits != 8 && bits != 16 && bits != 32 && bits != 64) {
+        throw new IllegalArgumentException("Unsupported integer size");
+      }
+      this.bits = bits;
+    }
+
+    @Override
+    public void encode(NoritoEncoder encoder, Long value) {
+      encoder.writeInt(value, bits);
+    }
+
+    @Override
+    public Long decode(NoritoDecoder decoder) {
+      return decoder.readInt(bits);
+    }
+
+    @Override
+    public int fixedSize() {
+      return bits / 8;
+    }
+  }
+
+  private static final class BoolAdapter implements TypeAdapter<Boolean> {
+    private static final BoolAdapter INSTANCE = new BoolAdapter();
+
+    @Override
+    public void encode(NoritoEncoder encoder, Boolean value) {
+      encoder.writeByte(Boolean.TRUE.equals(value) ? 1 : 0);
+    }
+
+    @Override
+    public Boolean decode(NoritoDecoder decoder) {
+      return decoder.readByte() != 0;
+    }
+
+    @Override
+    public int fixedSize() {
+      return 1;
+    }
+  }
+
+  private static final class BytesAdapter implements TypeAdapter<byte[]> {
+    private static final BytesAdapter INSTANCE = new BytesAdapter();
+
+    @Override
+    public void encode(NoritoEncoder encoder, byte[] value) {
+      boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+      encoder.writeLength(value.length, compact);
+      encoder.writeBytes(value);
+    }
+
+    @Override
+    public byte[] decode(NoritoDecoder decoder) {
+      long length = decoder.readLength(decoder.compactLenActive());
+      if (length > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("Byte array too large");
+      }
+      return decoder.readBytes((int) length);
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class FixedBytesAdapter implements TypeAdapter<byte[]> {
+    private final int length;
+
+    private FixedBytesAdapter(int length) {
+      if (length <= 0) {
+        throw new IllegalArgumentException("length must be positive");
+      }
+      this.length = length;
+    }
+
+    @Override
+    public void encode(NoritoEncoder encoder, byte[] value) {
+      if (value.length != length) {
+        throw new IllegalArgumentException(
+            "expected " + length + " bytes, found " + value.length);
+      }
+      encoder.writeBytes(value);
+    }
+
+    @Override
+    public byte[] decode(NoritoDecoder decoder) {
+      return decoder.readBytes(length);
+    }
+
+    @Override
+    public int fixedSize() {
+      return length;
+    }
+  }
+
+  private static final class StringAdapter implements TypeAdapter<String> {
+    private static final StringAdapter INSTANCE = new StringAdapter();
+
+    @Override
+    public void encode(NoritoEncoder encoder, String value) {
+      byte[] data = value.getBytes(StandardCharsets.UTF_8);
+      BytesAdapter.INSTANCE.encode(encoder, data);
+    }
+
+    @Override
+    public String decode(NoritoDecoder decoder) {
+      byte[] data = BytesAdapter.INSTANCE.decode(decoder);
+      return new String(data, StandardCharsets.UTF_8);
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class OptionAdapter<T> implements TypeAdapter<Optional<T>> {
+    private final TypeAdapter<T> inner;
+
+    private OptionAdapter(TypeAdapter<T> inner) {
+      this.inner = inner;
+    }
+
+    @Override
+    public void encode(NoritoEncoder encoder, Optional<T> value) {
+      if (value.isPresent()) {
+        encoder.writeByte(1);
+        inner.encode(encoder, value.get());
+      } else {
+        encoder.writeByte(0);
+      }
+    }
+
+    @Override
+    public Optional<T> decode(NoritoDecoder decoder) {
+      int tag = decoder.readByte();
+      return switch (tag) {
+        case 0 -> Optional.empty();
+        case 1 -> Optional.of(inner.decode(decoder));
+        default -> throw new IllegalArgumentException("Invalid Option tag: " + tag);
+      };
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class ResultAdapter<T, E> implements TypeAdapter<Result<T, E>> {
+    private final TypeAdapter<T> ok;
+    private final TypeAdapter<E> err;
+
+    private ResultAdapter(TypeAdapter<T> ok, TypeAdapter<E> err) {
+      this.ok = ok;
+      this.err = err;
+    }
+
+    @Override
+    public void encode(NoritoEncoder encoder, Result<T, E> value) {
+      if (value instanceof Result.Ok<T, E> okValue) {
+        encoder.writeByte(0);
+        ok.encode(encoder, okValue.value());
+      } else if (value instanceof Result.Err<T, E> errValue) {
+        encoder.writeByte(1);
+        err.encode(encoder, errValue.error());
+      } else {
+        throw new IllegalArgumentException("Unknown Result variant");
+      }
+    }
+
+    @Override
+    public Result<T, E> decode(NoritoDecoder decoder) {
+      int tag = decoder.readByte();
+      return switch (tag) {
+        case 0 -> new Result.Ok<>(ok.decode(decoder));
+        case 1 -> new Result.Err<>(err.decode(decoder));
+        default -> throw new IllegalArgumentException("Invalid Result tag: " + tag);
+      };
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class SequenceAdapter<T> implements TypeAdapter<List<T>> {
+    private final TypeAdapter<T> element;
+
+    private SequenceAdapter(TypeAdapter<T> element) {
+      this.element = element;
+    }
+
+    @Override
+    public void encode(NoritoEncoder encoder, List<T> values) {
+      boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_SEQ_LEN) != 0;
+      encoder.writeLength(values.size(), compactLen);
+      if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
+        encodePacked(encoder, values);
+      } else {
+        for (T value : values) {
+          element.encode(encoder, value);
+        }
+      }
+    }
+
+    private void encodePacked(NoritoEncoder encoder, List<T> values) {
+      List<byte[]> encodedElements = new ArrayList<>(values.size());
+      for (T value : values) {
+        NoritoEncoder child = encoder.childEncoder();
+        element.encode(child, value);
+        encodedElements.add(child.toByteArray());
+      }
+      if ((encoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0) {
+        for (byte[] chunk : encodedElements) {
+          encoder.append(Varint.encode(chunk.length));
+        }
+      } else {
+        long offset = 0;
+        encoder.writeUInt(offset, 64);
+        for (byte[] chunk : encodedElements) {
+          offset += chunk.length;
+          encoder.writeUInt(offset, 64);
+        }
+      }
+      for (byte[] chunk : encodedElements) {
+        encoder.append(chunk);
+      }
+    }
+
+    @Override
+    public List<T> decode(NoritoDecoder decoder) {
+      long length = decoder.readLength(decoder.compactSeqLenActive());
+      if (length > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("Sequence too large");
+      }
+      int count = (int) length;
+      if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
+        return decodePacked(decoder, count);
+      }
+      List<T> values = new ArrayList<>(count);
+      for (int i = 0; i < count; i++) {
+        values.add(element.decode(decoder));
+      }
+      return values;
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+
+    private List<T> decodePacked(NoritoDecoder decoder, int count) {
+      boolean varintOffsets = (decoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0;
+      if (count == 0) {
+        int tailLen = decoder.remaining();
+        if (tailLen == 0) {
+          return Collections.emptyList();
+        }
+        if (tailLen >= Long.BYTES) {
+          byte[] prefix = decoder.readBytes(Long.BYTES);
+          for (byte b : prefix) {
+            if (b != 0) {
+              throw new IllegalArgumentException(
+                  "Packed sequence declared zero length but carried trailing data");
+            }
+          }
+          return Collections.emptyList();
+        }
+        throw new IllegalArgumentException(
+            "Packed sequence declared zero length but carried trailing data");
+      }
+
+      List<Integer> sizes = new ArrayList<>(count);
+      if (varintOffsets) {
+        for (int i = 0; i < count; i++) {
+          long size = decoder.readVarint();
+          if (size > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Packed element too large");
+          }
+          sizes.add((int) size);
+        }
+      } else {
+        long previous = decoder.readUInt(64);
+        if (previous != 0) {
+          throw new IllegalArgumentException("Packed offsets must start at 0");
+        }
+        for (int i = 0; i < count; i++) {
+          long current = decoder.readUInt(64);
+          long delta = current - previous;
+          if (delta < 0 || delta > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Invalid packed offsets");
+          }
+          sizes.add((int) delta);
+          previous = current;
+        }
+      }
+
+      List<T> values = new ArrayList<>(count);
+      for (int size : sizes) {
+        byte[] chunk = decoder.readBytes(size);
+        NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags(), decoder.flagsHint());
+        T value = element.decode(child);
+        if (child.remaining() != 0) {
+          throw new IllegalArgumentException("Packed element did not consume all bytes");
+        }
+        values.add(value);
+      }
+      return values;
+    }
+  }
+
+  private static final class MapAdapter<K, V> implements TypeAdapter<Map<K, V>> {
+    private final TypeAdapter<K> key;
+    private final TypeAdapter<V> value;
+    private final TupleAdapter tupleAdapter;
+
+    private MapAdapter(TypeAdapter<K> key, TypeAdapter<V> value) {
+      this.key = key;
+      this.value = value;
+      List<TypeAdapter<Object>> elements = new ArrayList<>(2);
+      elements.add((TypeAdapter<Object>) key);
+      elements.add((TypeAdapter<Object>) value);
+      this.tupleAdapter = new TupleAdapter(elements);
+    }
+
+    @Override
+    public void encode(NoritoEncoder encoder, Map<K, V> map) {
+      SequenceAdapter<List<Object>> seq = new SequenceAdapter<>(tupleAdapter);
+      List<List<Object>> tuples = new ArrayList<>(map.size());
+      for (Map.Entry<K, V> entry : map.entrySet()) {
+        tuples.add(List.of(entry.getKey(), entry.getValue()));
+      }
+      seq.encode(encoder, tuples);
+    }
+
+    @Override
+    public Map<K, V> decode(NoritoDecoder decoder) {
+      SequenceAdapter<List<Object>> seq = new SequenceAdapter<>(tupleAdapter);
+      List<List<Object>> tuples = seq.decode(decoder);
+      Map<K, V> map = new LinkedHashMap<>();
+      for (List<Object> tuple : tuples) {
+        map.put((K) tuple.get(0), (V) tuple.get(1));
+      }
+      return map;
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return true;
+    }
+  }
+
+  private static final class TupleAdapter implements TypeAdapter<List<Object>> {
+    private final List<TypeAdapter<Object>> elements;
+
+    private TupleAdapter(List<TypeAdapter<Object>> elements) {
+      this.elements = elements;
+    }
+
+    @Override
+    public void encode(NoritoEncoder encoder, List<Object> value) {
+      if (value.size() != elements.size()) {
+        throw new IllegalArgumentException("Tuple size mismatch");
+      }
+      for (int i = 0; i < elements.size(); i++) {
+        elements.get(i).encode(encoder, value.get(i));
+      }
+    }
+
+    @Override
+    public List<Object> decode(NoritoDecoder decoder) {
+      List<Object> values = new ArrayList<>(elements.size());
+      for (TypeAdapter<Object> element : elements) {
+        values.add(element.decode(decoder));
+      }
+      return values;
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      for (TypeAdapter<Object> element : elements) {
+        if (!element.isSelfDelimiting()) {
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+
+  public static final class StructField {
+    private final String name;
+    private final TypeAdapter<?> adapter;
+
+    public StructField(String name, TypeAdapter<?> adapter) {
+      this.name = Objects.requireNonNull(name);
+      this.adapter = Objects.requireNonNull(adapter);
+    }
+
+    public String name() {
+      return name;
+    }
+
+    public TypeAdapter<?> adapter() {
+      return adapter;
+    }
+  }
+
+  public static final class StructAdapter implements TypeAdapter<Object> {
+    @FunctionalInterface
+    public interface StructFactory {
+      Object create(Map<String, Object> fields);
+    }
+
+    private final List<StructField> fields;
+    private final StructFactory factory;
+
+    private StructAdapter(List<StructField> fields, StructFactory factory) {
+      this.fields = List.copyOf(fields);
+      this.factory = factory;
+    }
+
+    @Override
+    public void encode(NoritoEncoder encoder, Object value) {
+      if ((encoder.flags() & NoritoHeader.PACKED_STRUCT) != 0
+          && (encoder.flags() & NoritoHeader.FIELD_BITSET) != 0) {
+        encodePacked(encoder, value);
+        return;
+      }
+      for (StructField field : fields) {
+        Object fieldValue = extractField(value, field.name());
+        ((TypeAdapter<Object>) field.adapter()).encode(encoder, fieldValue);
+      }
+    }
+
+    private void encodePacked(NoritoEncoder encoder, Object value) {
+      List<byte[]> payloads = new ArrayList<>(fields.size());
+      int bitset = 0;
+      for (int i = 0; i < fields.size(); i++) {
+        StructField field = fields.get(i);
+        Object fieldValue = extractField(value, field.name());
+        NoritoEncoder child = encoder.childEncoder();
+        ((TypeAdapter<Object>) field.adapter()).encode(child, fieldValue);
+        byte[] bytes = child.toByteArray();
+        payloads.add(bytes);
+        if (needsExplicitSize(field.adapter())) {
+          bitset |= (1 << i);
+        }
+      }
+      int bitsetBytes = (fields.size() + 7) / 8;
+      for (int i = 0; i < bitsetBytes; i++) {
+        encoder.writeByte((bitset >> (i * 8)) & 0xFF);
+      }
+      for (int i = 0; i < fields.size(); i++) {
+        if ((bitset & (1 << i)) != 0) {
+          encoder.append(Varint.encode(payloads.get(i).length));
+        }
+      }
+      for (byte[] bytes : payloads) {
+        encoder.append(bytes);
+      }
+    }
+
+    @Override
+    public Object decode(NoritoDecoder decoder) {
+      Map<String, Object> values = new LinkedHashMap<>();
+      if ((decoder.flags() & NoritoHeader.PACKED_STRUCT) != 0
+          && (decoder.flags() & NoritoHeader.FIELD_BITSET) != 0) {
+        decodePacked(decoder, values);
+      } else {
+        for (StructField field : fields) {
+          Object value = ((TypeAdapter<Object>) field.adapter()).decode(decoder);
+          values.put(field.name(), value);
+        }
+      }
+      if (factory != null) {
+        return factory.create(values);
+      }
+      return values;
+    }
+
+    private void decodePacked(NoritoDecoder decoder, Map<String, Object> values) {
+      int bitsetBytes = (fields.size() + 7) / 8;
+      byte[] bitsetData = decoder.readBytes(bitsetBytes);
+      int bitset = 0;
+      for (int i = 0; i < bitsetBytes; i++) {
+        bitset |= (bitsetData[i] & 0xFF) << (i * 8);
+      }
+      List<Integer> encodedSizes = new ArrayList<>();
+      for (int i = 0; i < fields.size(); i++) {
+        if ((bitset & (1 << i)) != 0) {
+          long size = decoder.readVarint();
+          if (size > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Packed field too large");
+          }
+          encodedSizes.add((int) size);
+        } else {
+          encodedSizes.add(null);
+        }
+      }
+      for (int i = 0; i < fields.size(); i++) {
+        StructField field = fields.get(i);
+        TypeAdapter<Object> adapter = (TypeAdapter<Object>) field.adapter();
+        Integer size = encodedSizes.get(i);
+        Object value;
+        if (size != null) {
+          byte[] chunk = decoder.readBytes(size);
+          NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags(), decoder.flagsHint());
+          value = adapter.decode(child);
+          if (child.remaining() != 0) {
+            throw new IllegalArgumentException("Packed field did not consume all bytes");
+          }
+        } else {
+          value = adapter.decode(decoder);
+        }
+        values.put(field.name(), value);
+      }
+    }
+
+    private static boolean needsExplicitSize(TypeAdapter<?> adapter) {
+      if (adapter.fixedSize() >= 0) {
+        return false;
+      }
+      return !adapter.isSelfDelimiting();
+    }
+
+    private static Object extractField(Object value, String name) {
+      if (value instanceof Map<?, ?> map) {
+        return map.get(name);
+      }
+      try {
+        Method method = value.getClass().getMethod(name);
+        return method.invoke(value);
+      } catch (NoSuchMethodException missing) {
+        String candidate = "get" + Character.toUpperCase(name.charAt(0)) + name.substring(1);
+        try {
+          Method method = value.getClass().getMethod(candidate);
+          return method.invoke(value);
+        } catch (Exception inner) {
+          throw new IllegalArgumentException("Unable to extract field " + name, inner);
+        }
+      } catch (Exception ex) {
+        throw new IllegalArgumentException("Unable to extract field " + name, ex);
+      }
+    }
+  }
+}

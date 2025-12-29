@@ -1,0 +1,358 @@
+import { Buffer } from "node:buffer";
+import {
+  AccountAddress,
+  AccountAddressError,
+  AccountAddressErrorCode,
+  DEFAULT_DOMAIN_NAME,
+  canonicalizeDomainLabel,
+} from "./address.js";
+import { getNativeBinding } from "./native.js";
+import {
+  createValidationError,
+  ValidationErrorCode,
+} from "./validationError.js";
+
+function fail(code, message, path) {
+  throw createValidationError(code, message, path);
+}
+
+function assertString(value, name) {
+  if (typeof value !== "string" || value.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+  }
+  return value;
+}
+
+export function canonicalizeMultihashHex(value, name) {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length % 2 !== 0) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be an even-length hexadecimal string`,
+      name,
+    );
+  }
+  let bytes;
+  try {
+    bytes = Buffer.from(trimmed, "hex");
+  } catch {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be an even-length hexadecimal string`,
+      name,
+    );
+  }
+  if (bytes.length === 0) {
+    fail(ValidationErrorCode.INVALID_MULTIHASH, `${name} must contain multihash bytes`, name);
+  }
+
+  let fnEnd = 0;
+  while (fnEnd < bytes.length && (bytes[fnEnd] & 0x80) !== 0) {
+    fnEnd += 1;
+  }
+  if (fnEnd >= bytes.length) {
+    fail(
+      ValidationErrorCode.INVALID_MULTIHASH,
+      `${name} is missing multihash function bytes`,
+      name,
+    );
+  }
+
+  let lenEnd = fnEnd + 1;
+  while (lenEnd < bytes.length && (bytes[lenEnd] & 0x80) !== 0) {
+    lenEnd += 1;
+  }
+  if (lenEnd >= bytes.length) {
+    fail(
+      ValidationErrorCode.INVALID_MULTIHASH,
+      `${name} is missing multihash length bytes`,
+      name,
+    );
+  }
+
+  const payload = bytes.subarray(lenEnd + 1);
+  if (payload.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_MULTIHASH,
+      `${name} must include a multihash payload`,
+      name,
+    );
+  }
+
+  const fnHex = bytes.subarray(0, fnEnd + 1).toString("hex").toUpperCase();
+  const lenHex = bytes.subarray(fnEnd + 1, lenEnd + 1).toString("hex").toUpperCase();
+  const payloadHex = payload.toString("hex").toUpperCase();
+
+  return `${fnHex}${lenHex}${payloadHex}`;
+}
+
+function tryParseCanonicalSignatory(signatory) {
+  try {
+    const { address } = AccountAddress.parseAny(signatory);
+    return address.canonicalHex();
+  } catch (error) {
+    if (isAliasFormatError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+let cachedNativeBinding;
+
+function canonicalizeUsingNative(signatory, domain) {
+  if (cachedNativeBinding === undefined) {
+    cachedNativeBinding = getNativeBinding();
+  }
+  const binding = cachedNativeBinding;
+  if (
+    !binding ||
+    typeof binding.noritoEncodeInstruction !== "function" ||
+    typeof binding.noritoDecodeInstruction !== "function"
+  ) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.stringify({
+      Register: {
+        Account: {
+          id: `${signatory}@${domain}`,
+          metadata: {},
+        },
+      },
+    });
+    const encoded = binding.noritoEncodeInstruction(payload);
+    const decodedJson = binding.noritoDecodeInstruction(encoded);
+    const decoded = JSON.parse(decodedJson);
+    const accountId = decoded?.Register?.Account?.id;
+    if (typeof accountId === "string") {
+      const at = accountId.lastIndexOf("@");
+      if (at !== -1) {
+        return accountId.slice(0, at);
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+const ALIAS_FORMAT_ERROR_CODES = new Set([
+  AccountAddressErrorCode.INVALID_IH58_PREFIX,
+  AccountAddressErrorCode.INVALID_IH58_PREFIX_ENCODING,
+  AccountAddressErrorCode.INVALID_IH58_ENCODING,
+  AccountAddressErrorCode.CHECKSUM_MISMATCH,
+  AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
+  AccountAddressErrorCode.COMPRESSED_TOO_SHORT,
+  AccountAddressErrorCode.INVALID_COMPRESSED_CHAR,
+  AccountAddressErrorCode.INVALID_COMPRESSED_BASE,
+  AccountAddressErrorCode.INVALID_COMPRESSED_DIGIT,
+  AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT,
+  AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG,
+  AccountAddressErrorCode.UNEXPECTED_EXTENSION_FLAG,
+]);
+
+function isAliasFormatError(error) {
+  return (
+    error instanceof AccountAddressError &&
+    (error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT ||
+      ALIAS_FORMAT_ERROR_CODES.has(error.code))
+  );
+}
+
+function canonicalizeSignatory(signatory, domain, name) {
+  const trimmed = signatory.trim();
+  if (trimmed.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+  }
+
+  const nativeCanonical = canonicalizeUsingNative(trimmed, domain);
+  if (nativeCanonical) {
+    return nativeCanonical;
+  }
+
+  if (trimmed.length > 2 && (trimmed.startsWith("0x") || trimmed.startsWith("0X"))) {
+    try {
+      const { address } = AccountAddress.parseAny(trimmed, undefined, domain);
+      const controller = address && address._controller;
+      if (controller && controller.publicKey) {
+        const keyBytes = Buffer.from(controller.publicKey);
+        const curveId = controller.curve;
+        if (curveId === 1) {
+          const prefix = Buffer.from([0xed, 0x01, keyBytes.length]);
+          const candidate = Buffer.concat([prefix, keyBytes]).toString("hex");
+          return canonicalizeMultihashHex(candidate, name);
+        }
+      }
+    } catch (error) {
+      if (error instanceof AccountAddressError) {
+        if (isAliasFormatError(error)) {
+          throw error;
+        }
+        if (error.code !== AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT) {
+          throw createValidationError(
+            ValidationErrorCode.INVALID_ACCOUNT_ID,
+            error.message,
+            name,
+            error,
+          );
+        }
+      } else {
+        throw error;
+      }
+      // fall back to manual canonicalisation when the format is not recognised.
+    }
+    const hexBody = trimmed.slice(2);
+    return canonicalizeMultihashHex(hexBody, name);
+  }
+
+  const direct = tryParseCanonicalSignatory(trimmed);
+  if (direct) {
+    return direct;
+  }
+
+  const colonIndex = trimmed.indexOf(":");
+  if (colonIndex !== -1) {
+    const algorithm = trimmed.slice(0, colonIndex);
+    const body = trimmed.slice(colonIndex + 1);
+    const canonicalBody = canonicalizeSignatory(body, domain, `${name}.body`);
+    return `${algorithm}:${canonicalBody}`;
+  }
+
+  if (/^[0-9A-Fa-f]+$/.test(trimmed) && trimmed.length % 2 === 0) {
+    return canonicalizeMultihashHex(trimmed, name);
+  }
+
+  return trimmed;
+}
+
+export function normalizeAccountId(value, name) {
+  const raw = assertString(value, name).trim();
+  const atIndex = raw.lastIndexOf("@");
+  let canonicalDomain;
+  let signatoryRaw;
+  if (atIndex === -1) {
+    try {
+      AccountAddress.parseAny(raw, undefined, DEFAULT_DOMAIN_NAME);
+    } catch (error) {
+      if (error instanceof AccountAddressError) {
+        fail(
+          ValidationErrorCode.INVALID_ACCOUNT_ID,
+          `${name} must include a domain suffix using '@'`,
+          name,
+        );
+      }
+      throw error;
+    }
+    signatoryRaw = raw;
+    canonicalDomain = DEFAULT_DOMAIN_NAME;
+  } else {
+    signatoryRaw = raw.slice(0, atIndex);
+    const domain = raw.slice(atIndex + 1).trim();
+    if (domain.length === 0) {
+      fail(
+        ValidationErrorCode.INVALID_ACCOUNT_ID,
+        `${name} must include a domain after '@'`,
+        name,
+      );
+    }
+    try {
+      canonicalDomain = canonicalizeDomainLabel(domain);
+    } catch (error) {
+      if (error instanceof AccountAddressError) {
+        throw createValidationError(
+          ValidationErrorCode.INVALID_ACCOUNT_ID,
+          error.message,
+          name,
+          error,
+        );
+      }
+      throw error;
+    }
+  }
+
+  const canonicalSignatory = canonicalizeSignatory(
+    signatoryRaw,
+    canonicalDomain,
+    `${name}.signatory`,
+  );
+  let normalizedSignatory = canonicalSignatory;
+  if (typeof normalizedSignatory === "string") {
+    const withoutPrefix = normalizedSignatory.replace(/^0x/i, "");
+    if (/^[0-9A-Fa-f]+$/.test(withoutPrefix)) {
+      normalizedSignatory = withoutPrefix.toUpperCase();
+    }
+  }
+  validateAccountDomainSelector(normalizedSignatory, canonicalDomain, name);
+  return `${normalizedSignatory}@${canonicalDomain}`;
+}
+
+function validateAccountDomainSelector(signatory, domain, name) {
+  const literal = String(signatory);
+  const attempts = [];
+  const isHexLike = /^[0-9A-Fa-f]+$/.test(literal) && literal.length % 2 === 0;
+  if (isHexLike && !(literal.startsWith("0x") || literal.startsWith("0X"))) {
+    attempts.push(`0x${literal}`);
+  }
+  attempts.push(literal);
+  for (const candidate of attempts) {
+    try {
+      AccountAddress.parseAny(candidate, undefined, domain);
+      return;
+    } catch (error) {
+      if (isAliasFormatError(error)) {
+        return;
+      }
+      if (error instanceof AccountAddressError) {
+        throw createValidationError(
+          ValidationErrorCode.INVALID_ACCOUNT_ID,
+          error.message,
+          name,
+          error,
+        );
+      }
+      throw error;
+    }
+  }
+}
+
+export function normalizeAssetId(value, name) {
+  const raw = assertString(value, name).trim();
+  if (raw.length === 0) {
+    fail(ValidationErrorCode.INVALID_ASSET_ID, `${name} must be a non-empty string`, name);
+  }
+  const doubleHashIndex = raw.indexOf("##");
+  if (doubleHashIndex !== -1) {
+    const definition = raw.slice(0, doubleHashIndex);
+    const accountPart = raw.slice(doubleHashIndex + 2);
+    if (accountPart.length === 0) {
+      fail(
+        ValidationErrorCode.INVALID_ASSET_ID,
+        `${name} must include an account after '##'`,
+        name,
+      );
+    }
+    return `${definition}##${normalizeAccountId(
+      accountPart,
+      `${name}.account`,
+    )}`;
+  }
+  const segments = raw.split("#");
+  if (segments.length >= 3) {
+    const accountPart = segments.pop();
+    if (accountPart === undefined || accountPart.length === 0) {
+      fail(ValidationErrorCode.INVALID_ASSET_ID, `${name} must include an account segment`, name);
+    }
+    segments.push(normalizeAccountId(accountPart, `${name}.account`));
+    return segments.join("#");
+  }
+  if (raw.includes("#")) {
+    fail(
+      ValidationErrorCode.INVALID_ASSET_ID,
+      `${name} must use '##' to separate asset definitions and account IDs`,
+      name,
+    );
+  }
+  return raw;
+}

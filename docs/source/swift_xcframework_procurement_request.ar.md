@@ -1,0 +1,20 @@
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/source/swift_xcframework_procurement_request.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 7cfd10c450c0e17aaea2db3da7b3242d0497587192a8973b8b96236d0368bbc6
+source_last_modified: "2025-11-02T04:40:39.915070+00:00"
+translation_last_reviewed: null
+---
+
+# قيد الترجمة
+
+<div dir="rtl">
+هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+
+هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
+</div>

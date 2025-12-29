@@ -1,0 +1,25 @@
+groups:
+  - name: soranet-incentives
+    rules:
+      - alert: SoranetRelayBondDeficit
+        expr: sum by (relay) (increase(soranet_reward_skips_total{reason="insufficient_bond"}[10m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Relay dropped below minimum bond
+          description: >
+            Relay {{ $labels.relay }} reported insufficient-bond skips in the last 10m. Freeze payouts
+            until exit bonds meet the configured policy.
+      - alert: SoranetRewardPayoutAnomaly
+        expr: |
+          sum by (relay) (increase(soranet_reward_events_total{result="rewarded"}[15m])) > 0
+          and sum by (relay) (increase(soranet_reward_payout_nanos_total{result="rewarded"}[15m])) < 100000000
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Reward payouts below 0.1 XOR floor
+          description: >
+            Relay {{ $labels.relay }} minted less than 0.1 XOR over the last 15m despite reward events.
+            Investigate measurement inputs and treasury reconciliation before enabling automated payouts.

@@ -1,0 +1,31 @@
+{
+  "scenario": "salt-rotation",
+  "epoch_id": 98765,
+  "relay_results": [
+    {
+      "relay_id": "relay-a",
+      "fetch_latency_ms": 182,
+      "cache_swap_ms": 27,
+      "status": "ok"
+    },
+    {
+      "relay_id": "relay-b",
+      "fetch_latency_ms": 195,
+      "cache_swap_ms": 31,
+      "status": "ok"
+    }
+  ],
+  "client_results": [
+    {
+      "client_id": "sdk-ios",
+      "refresh_latency_ms": 243,
+      "status": "ok"
+    },
+    {
+      "client_id": "sdk-android",
+      "refresh_latency_ms": 251,
+      "status": "ok"
+    }
+  ],
+  "notes": "Transcript redacted for sensitive identifiers; metrics retained for parity evidence."
+}

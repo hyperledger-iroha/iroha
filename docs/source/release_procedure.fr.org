@@ -1,0 +1,16 @@
+#+COMMENT: Auto-generated stub for French (fr) translation. Replace this content with the full translation.
+
+#+LANGUAGE: fr
+#+DIRECTION: ltr
+#+SOURCE: docs/source/release_procedure.org
+#+STATUS: needs-translation
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: 82936055bafd33d2237b4b103ac3acd8fc87a5c546b5b0c0388b43e2d8ece1ab
+#+SOURCE_LAST_MODIFIED: 2025-10-25T15:23:17.003683+00:00
+#+TRANSLATION_LAST_REVIEWED: 
+
+* Traduction en cours
+
+Ce fichier sert de modèle pour la traduction française du document anglais. Après avoir terminé la traduction, mettez à jour la valeur de `#+STATUS`.
+
+Remplacez cette section par le texte traduit complet et mettez `#+STATUS` à `complete` une fois la traduction finalisée. Assurez-vous que `#+LAST_REVIEWED` reflète la dernière révision par rapport à l’original anglais.

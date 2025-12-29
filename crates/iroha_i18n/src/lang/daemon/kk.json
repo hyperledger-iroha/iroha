@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha жүйесіне қош келдіңіз!",
+  "error.trace_config_setup": "Конфигурацияны бақылауды баптау мүмкін болмады",
+  "error.config": "Конфигурация қатесі!",
+  "error.logger": "Журнал жүйесін іске қосу мүмкін болмады",
+  "error.start": "Iroha іске қосу мүмкін болмады",
+  "error.run": "Iroha орындалу барысында қате орын алды",
+  "error.start_p2p": "P2P желісін іске қосу мүмкін болмады",
+  "error.init_kura": "Kura (блок қоймасы) іске қосу мүмкін болмады",
+  "error.start_dev_telemetry": "Әзірлеушілер телеметрия қызметін іске қосу мүмкін болмады",
+  "error.start_telemetry": "Телеметрия қызметін іске қосу мүмкін болмады",
+  "error.listen_os_signal": "ОЖ сигналдарын тыңдауды баптау мүмкін болмады",
+  "error.start_torii": "Torii (Iroha HTTP API қақпасы) іске қосу мүмкін болмады"
+}

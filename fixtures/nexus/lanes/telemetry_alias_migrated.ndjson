@@ -1,0 +1,2 @@
+{"msg":"nexus.lane.topology","event":"{\"action\":\"alias_migrated\",\"lane_id\":2,\"alias_before\":\"core\",\"alias_after\":\"payments\",\"slug_before\":\"core\",\"slug_after\":\"payments\"}"}
+{"msg":"nexus.lane.topology","event":"{\"action\":\"provisioned\",\"lane_id\":1,\"alias\":\"core\",\"slug\":\"core\"}"}

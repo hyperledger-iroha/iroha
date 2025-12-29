@@ -1,0 +1,7 @@
+error: failed to parse numeric: multiple dots
+ --> tests/ui/fail/numeric_invalid.rs:6:13
+  |
+6 |     let _ = numeric!(12.3.4);
+  |             ^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `numeric` (in Nightly builds, run with -Z macro-backtrace for more info)

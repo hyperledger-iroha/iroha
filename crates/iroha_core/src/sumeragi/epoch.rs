@@ -1,0 +1,715 @@
+//! Epoch manager for `NPoS` Sumeragi.
+//!
+//! Maintains deterministic per-epoch randomness `S_e` derived from the
+//! previous epoch seed and the set of validator VRF reveals observed in the
+//! current epoch. The resulting entropy drives PRF-based leader and collector
+//! selection while also tracking commit/reveal participation for penalty
+//! reporting.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::sumeragi::consensus::{VrfCommit, VrfReveal};
+use iroha_crypto::blake2::{Blake2b512, Digest as _};
+use iroha_data_model::ChainId;
+use iroha_data_model::consensus::VrfEpochRecord;
+
+#[derive(Debug, Clone)]
+struct LateRevealEntry {
+    reveal: [u8; 32],
+    noted_at_height: u64,
+}
+
+/// Epoch manager holding the current epoch index and seed `S_e`.
+#[derive(Debug, Clone)]
+pub struct EpochManager {
+    epoch: u64,
+    seed: [u8; 32],
+    /// Epoch length in blocks
+    epoch_length_blocks: u64,
+    /// Commit window deadline offset (blocks since epoch start)
+    commit_deadline_offset: u64,
+    /// Reveal window deadline offset (blocks since epoch start)
+    reveal_deadline_offset: u64,
+    /// Accumulated reveals for the current epoch keyed by signer index
+    reveals: BTreeMap<u32, [u8; 32]>,
+    /// Accumulated commits for the current epoch keyed by signer index
+    commits: BTreeMap<u32, [u8; 32]>,
+    /// Late reveals accepted after the reveal window (do not mutate seed).
+    late_reveals: BTreeMap<u32, LateRevealEntry>,
+    /// Validator roster snapshot (set of `ValidatorIndex`) for the current epoch (optional)
+    validator_roster: Option<std::collections::BTreeSet<u32>>,
+    /// Last computed penalties (epoch, list of signer indices) to be consumed by caller
+    last_penalties: Option<(u64, Vec<u32>)>,
+    /// Detailed penalties: `(epoch, committed_without_reveal, neither_committed_nor_revealed, roster_len)`
+    last_penalties_detailed: Option<(u64, Vec<u32>, Vec<u32>, u32)>,
+    /// Snapshot of the most recently finalized epoch (captured before clearing state).
+    last_epoch_snapshot: Option<EpochSnapshot>,
+}
+
+/// Snapshot of VRF participation state at a particular point within or at the end of an epoch.
+#[derive(Debug, Clone)]
+pub(crate) struct EpochSnapshot {
+    pub epoch: u64,
+    pub seed: [u8; 32],
+    pub commits: Vec<(u32, [u8; 32])>,
+    pub reveals: Vec<(u32, [u8; 32])>,
+    pub late_reveals: Vec<(u32, [u8; 32], u64)>,
+    pub committed_no_reveal: Vec<u32>,
+    pub no_participation: Vec<u32>,
+    pub roster_len: u32,
+    pub updated_at_height: u64,
+}
+
+impl EpochManager {
+    /// Construct an `EpochManager` with a seed derived from `chain_id`.
+    pub fn new_from_chain(chain_id: &ChainId) -> Self {
+        let hash = iroha_crypto::Hash::new(chain_id.clone().into_inner().as_bytes());
+        let seed: [u8; 32] = hash.into();
+        Self {
+            epoch: 0,
+            seed,
+            epoch_length_blocks: 3600,
+            commit_deadline_offset: 100,
+            reveal_deadline_offset: 140,
+            reveals: BTreeMap::new(),
+            commits: BTreeMap::new(),
+            late_reveals: BTreeMap::new(),
+            validator_roster: None,
+            last_penalties: None,
+            last_penalties_detailed: None,
+            last_epoch_snapshot: None,
+        }
+    }
+
+    /// Current epoch index.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Current per-epoch seed `S_e` including the mixed-in reveals observed in this epoch.
+    pub fn seed(&self) -> [u8; 32] {
+        self.current_entropy()
+    }
+
+    /// Advance to the next epoch by evolving the seed deterministically from collected reveals.
+    pub fn next_epoch(&mut self) {
+        let new_seed = self.current_entropy();
+        self.seed = new_seed;
+        self.epoch = self.epoch.saturating_add(1);
+        self.reveals.clear();
+        self.clear_commits();
+        self.late_reveals.clear();
+        self.validator_roster = None;
+    }
+
+    /// Configure epoch parameters (length and window offsets).
+    pub fn set_params(&mut self, epoch_len: u64, commit_off: u64, reveal_off: u64) {
+        self.epoch_length_blocks = epoch_len.max(1);
+        self.commit_deadline_offset = commit_off.min(self.epoch_length_blocks);
+        self.reveal_deadline_offset = reveal_off.min(self.epoch_length_blocks);
+    }
+
+    /// Return the 1-based position of `height` within the current epoch, if defined.
+    pub fn position_in_epoch(&self, height: u64) -> Option<u64> {
+        if self.epoch_length_blocks == 0 || height == 0 {
+            None
+        } else {
+            Some(self.pos_in_epoch(height))
+        }
+    }
+
+    /// Epoch length in blocks.
+    pub fn epoch_length_blocks(&self) -> u64 {
+        self.epoch_length_blocks
+    }
+
+    /// Inclusive end (1-based position) of the commit window for the current epoch.
+    pub fn commit_window_end(&self) -> u64 {
+        self.commit_deadline_offset.min(self.epoch_length_blocks)
+    }
+
+    /// Inclusive end (1-based position) of the reveal window for the current epoch.
+    pub fn reveal_window_end(&self) -> u64 {
+        self.reveal_deadline_offset.min(self.epoch_length_blocks)
+    }
+
+    /// Check whether a position (1-based) falls inside the commit window.
+    pub fn is_commit_window_position(&self, pos: u64) -> bool {
+        self.is_in_commit_window(pos)
+    }
+
+    /// Check whether a position (1-based) falls inside the reveal window.
+    pub fn is_reveal_window_position(&self, pos: u64) -> bool {
+        self.is_in_reveal_window(pos)
+    }
+
+    /// Note a VRF commit (skeleton; currently unused for validation). Returns whether accepted.
+    pub fn try_note_commit_at_height(&mut self, height: u64, c: VrfCommit) -> VrfNoteResult {
+        let pos = self.pos_in_epoch(height);
+        if c.epoch != self.epoch {
+            return VrfNoteResult::RejectedEpochMismatch;
+        }
+        if !self.is_in_commit_window(pos) {
+            return VrfNoteResult::RejectedOutOfWindow;
+        }
+        // Record commitment (by signer)
+        self.commits_mut().insert(c.signer, c.commitment);
+        VrfNoteResult::Accepted
+    }
+
+    /// Note a VRF reveal for the current epoch. Returns whether accepted and reason if rejected.
+    pub fn try_note_reveal_at_height(&mut self, height: u64, r: VrfReveal) -> VrfNoteResult {
+        let pos = self.pos_in_epoch(height);
+        if r.epoch != self.epoch {
+            return VrfNoteResult::RejectedEpochMismatch;
+        }
+        if !self.is_in_reveal_window(pos) {
+            let Some(commit) = self.commits().get(&r.signer).copied() else {
+                return VrfNoteResult::RejectedOutOfWindow;
+            };
+            let c: [u8; 32] = iroha_crypto::Hash::new(r.reveal).into();
+            if c != commit {
+                return VrfNoteResult::RejectedInvalidReveal;
+            }
+            self.late_reveals.insert(
+                r.signer,
+                LateRevealEntry {
+                    reveal: r.reveal,
+                    noted_at_height: height,
+                },
+            );
+            return VrfNoteResult::AcceptedLate;
+        }
+        // Verify against prior commitment if any: blake2b32(reveal) == commitment
+        if let Some(commit) = self.commits().get(&r.signer).copied() {
+            let c: [u8; 32] = iroha_crypto::Hash::new(r.reveal).into();
+            if c != commit {
+                return VrfNoteResult::RejectedInvalidReveal;
+            }
+        }
+        self.reveals.insert(r.signer, r.reveal);
+        self.late_reveals.remove(&r.signer);
+        VrfNoteResult::Accepted
+    }
+
+    /// Backward-compatible wrapper: note a VRF commit without reporting result.
+    pub fn note_commit_at_height(&mut self, height: u64, c: VrfCommit) {
+        let _ = self.try_note_commit_at_height(height, c);
+    }
+
+    /// Backward-compatible wrapper: note a VRF reveal without reporting result.
+    pub fn note_reveal_at_height(&mut self, height: u64, r: VrfReveal) {
+        let _ = self.try_note_reveal_at_height(height, r);
+    }
+
+    /// Called on each block commit; advances epoch and computes new seed at epoch boundaries.
+    pub fn on_block_commit(&mut self, height: u64) {
+        if self.epoch_length_blocks == 0 {
+            return;
+        }
+        if height > 0 && height.is_multiple_of(self.epoch_length_blocks) {
+            // Compute penalties at epoch end.
+            let mut committed_no_reveal: Vec<u32> = Vec::new();
+            for signer in self.commits.keys() {
+                if !self.reveals.contains_key(signer) && !self.late_reveals.contains_key(signer) {
+                    committed_no_reveal.push(*signer);
+                }
+            }
+            // Compute neither-committed-nor-revealed using roster snapshot (exact set when available)
+            let roster_set: BTreeSet<u32> = if let Some(r) = &self.validator_roster {
+                r.clone()
+            } else {
+                // Fallback: derive contiguous set 0..=max_index from observed signers
+                let max_idx = self
+                    .commits
+                    .keys()
+                    .chain(self.reveals.keys())
+                    .copied()
+                    .max()
+                    .unwrap_or(0);
+                (0..=max_idx).collect()
+            };
+            let mut participated: BTreeSet<u32> = BTreeSet::new();
+            for k in self.commits.keys() {
+                participated.insert(*k);
+            }
+            for k in self.reveals.keys() {
+                participated.insert(*k);
+            }
+            for k in self.late_reveals.keys() {
+                participated.insert(*k);
+            }
+            let no_participation: Vec<u32> =
+                roster_set.difference(&participated).copied().collect();
+            let committed_no_reveal_snapshot = committed_no_reveal.clone();
+            let no_participation_snapshot = no_participation.clone();
+            self.last_penalties = Some((self.epoch, committed_no_reveal));
+            let roster_len_u32 = u32::try_from(roster_set.len()).unwrap_or(u32::MAX);
+            self.last_penalties_detailed = Some((
+                self.epoch,
+                committed_no_reveal_snapshot.clone(),
+                no_participation_snapshot.clone(),
+                roster_len_u32,
+            ));
+            self.last_epoch_snapshot = Some(EpochSnapshot {
+                epoch: self.epoch,
+                seed: self.seed,
+                commits: self.commits.iter().map(|(idx, val)| (*idx, *val)).collect(),
+                reveals: self.reveals.iter().map(|(idx, val)| (*idx, *val)).collect(),
+                late_reveals: self
+                    .late_reveals
+                    .iter()
+                    .map(|(idx, entry)| (*idx, entry.reveal, entry.noted_at_height))
+                    .collect(),
+                committed_no_reveal: committed_no_reveal_snapshot,
+                no_participation: no_participation_snapshot,
+                roster_len: roster_len_u32,
+                updated_at_height: height,
+            });
+            let new_seed = self.current_entropy();
+            self.seed = new_seed;
+            self.epoch = self.epoch.saturating_add(1);
+            self.reveals.clear();
+            self.clear_commits();
+            self.late_reveals.clear();
+            self.validator_roster = None;
+        }
+    }
+
+    /// Snapshot validator roster indices for the current epoch.
+    pub fn set_validator_roster_indices(&mut self, indices: impl IntoIterator<Item = u32>) {
+        self.validator_roster = Some(indices.into_iter().collect());
+    }
+
+    /// Take last penalties report if available.
+    pub fn take_last_penalties(&mut self) -> Option<(u64, Vec<u32>)> {
+        self.last_penalties.take()
+    }
+
+    /// Take last detailed penalties if available.
+    pub fn take_last_penalties_detailed(&mut self) -> Option<(u64, Vec<u32>, Vec<u32>, u32)> {
+        self.last_penalties_detailed.take()
+    }
+
+    /// Take the most recently finalized epoch snapshot, if any.
+    pub(crate) fn take_last_epoch_snapshot(&mut self) -> Option<EpochSnapshot> {
+        self.last_epoch_snapshot.take()
+    }
+
+    /// Snapshot the current epoch state for persistence/telemetry.
+    pub(crate) fn snapshot_current_epoch(
+        &self,
+        roster_len_hint: u32,
+        updated_at_height: u64,
+    ) -> EpochSnapshot {
+        let roster_len = self
+            .validator_roster
+            .as_ref()
+            .and_then(|set| u32::try_from(set.len()).ok())
+            .unwrap_or(roster_len_hint);
+        EpochSnapshot {
+            epoch: self.epoch,
+            seed: self.seed(),
+            commits: self.commits.iter().map(|(idx, val)| (*idx, *val)).collect(),
+            reveals: self.reveals.iter().map(|(idx, val)| (*idx, *val)).collect(),
+            late_reveals: self
+                .late_reveals
+                .iter()
+                .map(|(idx, entry)| (*idx, entry.reveal, entry.noted_at_height))
+                .collect(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            roster_len,
+            updated_at_height,
+        }
+    }
+
+    /// Restore epoch manager state from a persisted VRF epoch record.
+    pub(crate) fn restore_from_record(&mut self, record: &VrfEpochRecord) {
+        self.epoch = record.epoch;
+        self.seed = record.seed;
+        self.reveals = record
+            .participants
+            .iter()
+            .filter_map(|p| p.reveal.map(|rev| (p.signer, rev)))
+            .collect();
+        self.commits = record
+            .participants
+            .iter()
+            .filter_map(|p| p.commitment.map(|commit| (p.signer, commit)))
+            .collect();
+        self.late_reveals = record
+            .late_reveals
+            .iter()
+            .map(|entry| {
+                (
+                    entry.signer,
+                    LateRevealEntry {
+                        reveal: entry.reveal,
+                        noted_at_height: entry.noted_at_height,
+                    },
+                )
+            })
+            .collect();
+        if record.roster_len > 0 {
+            let mut roster = std::collections::BTreeSet::new();
+            for idx in 0..record.roster_len {
+                roster.insert(idx);
+            }
+            self.validator_roster = Some(roster);
+        } else {
+            self.validator_roster = None;
+        }
+        self.last_penalties = None;
+        self.last_penalties_detailed = None;
+        self.last_epoch_snapshot = None;
+        if record.finalized {
+            // Finalized epochs do not carry active commit/reveal state.
+            self.reveals.clear();
+            self.clear_commits();
+        }
+    }
+
+    /// Epoch index that a block at `height` belongs to.
+    pub fn epoch_for_height(&self, height: u64) -> u64 {
+        if self.epoch_length_blocks == 0 || height == 0 {
+            return 0;
+        }
+        (height - 1) / self.epoch_length_blocks
+    }
+
+    fn pos_in_epoch(&self, height: u64) -> u64 {
+        if self.epoch_length_blocks == 0 {
+            return 0;
+        }
+        // 1-based position in epoch window
+        let pos0 = (height - 1) % self.epoch_length_blocks;
+        pos0 + 1
+    }
+
+    fn is_in_commit_window(&self, pos: u64) -> bool {
+        pos > 0 && pos <= self.commit_deadline_offset.min(self.epoch_length_blocks)
+    }
+
+    fn is_in_reveal_window(&self, pos: u64) -> bool {
+        let start = self.commit_deadline_offset.min(self.epoch_length_blocks);
+        let end = self.reveal_deadline_offset.min(self.epoch_length_blocks);
+        pos > start && pos <= end
+    }
+
+    // Commit storage (per-epoch). We keep it opaque to allow future refactors.
+    fn commits(&self) -> &BTreeMap<u32, [u8; 32]> {
+        &self.commits
+    }
+    fn commits_mut(&mut self) -> &mut BTreeMap<u32, [u8; 32]> {
+        &mut self.commits
+    }
+    fn clear_commits(&mut self) {
+        self.commits.clear();
+    }
+
+    fn current_entropy(&self) -> [u8; 32] {
+        let mut h = Blake2b512::new();
+        iroha_crypto::blake2::digest::Update::update(&mut h, &self.seed);
+        for (signer, reveal) in &self.reveals {
+            iroha_crypto::blake2::digest::Update::update(&mut h, &signer.to_be_bytes());
+            iroha_crypto::blake2::digest::Update::update(&mut h, reveal);
+        }
+        let digest = iroha_crypto::blake2::Digest::finalize(h);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest[..32]);
+        out
+    }
+}
+
+#[cfg(test)]
+impl EpochManager {
+    /// Test-only: return current validator roster snapshot length if present.
+    pub fn test_current_roster_len(&self) -> Option<usize> {
+        self.validator_roster
+            .as_ref()
+            .map(std::collections::BTreeSet::len)
+    }
+
+    /// Test-only accessor returning the number of recorded late reveals.
+    pub fn test_late_reveals_len(&self) -> usize {
+        self.late_reveals.len()
+    }
+}
+
+/// Result of attempting to note a VRF commit/reveal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VrfNoteResult {
+    /// Input accepted for the current epoch in the appropriate window.
+    Accepted,
+    /// Input accepted as a late reveal (clears penalties but does not mutate the seed).
+    AcceptedLate,
+    /// Rejected because the epoch index does not match the manager's current epoch.
+    RejectedEpochMismatch,
+    /// Rejected because the current height is not within the appropriate window.
+    RejectedOutOfWindow,
+    /// Rejected because the reveal does not match a prior commitment.
+    RejectedInvalidReveal,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn commit_and_reveal_window_and_epoch_rollover() {
+        let chain = ChainId::from("iroha:test:epoch");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+        // Height 1..3: commit window
+        for h in 1..=3 {
+            em.note_commit_at_height(
+                h,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: [1u8; 32],
+                    signer: 1,
+                },
+            );
+        }
+        // Prepare a reveal matching commitment
+        let mut h = iroha_crypto::blake2::Blake2b512::new();
+        iroha_crypto::blake2::digest::Update::update(&mut h, &[9u8; 32]);
+        let d = iroha_crypto::blake2::Digest::finalize(h);
+        let mut commit = [0u8; 32];
+        commit.copy_from_slice(&d[..32]);
+        em.note_commit_at_height(
+            3,
+            VrfCommit {
+                epoch: 0,
+                commitment: commit,
+                signer: 2,
+            },
+        );
+        // Height 4..6: reveal window
+        for hh in 4..=6 {
+            em.note_reveal_at_height(
+                hh,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: [0u8; 32],
+                    signer: 1,
+                },
+            );
+        }
+        // Valid reveal for signer 2
+        em.note_reveal_at_height(
+            6,
+            VrfReveal {
+                epoch: 0,
+                reveal: [9u8; 32],
+                signer: 2,
+            },
+        );
+        // Epoch boundary at height 10: evolves seed and clears state
+        let s_before = em.seed();
+        em.on_block_commit(10);
+        let s_after = em.seed();
+        assert_ne!(s_before, s_after);
+        assert_eq!(em.epoch(), 1);
+    }
+
+    #[test]
+    fn invalid_reveal_and_out_of_window_ignored_and_penalty_applies() {
+        let chain = ChainId::from("iroha:test:epoch2");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+        // Commit in window for signer 3
+        em.note_commit_at_height(
+            2,
+            VrfCommit {
+                epoch: 0,
+                commitment: [2u8; 32],
+                signer: 3,
+            },
+        );
+        // Invalid reveal (hash does not match commit) for signer 3 within reveal window
+        em.note_reveal_at_height(
+            5,
+            VrfReveal {
+                epoch: 0,
+                reveal: [7u8; 32],
+                signer: 3,
+            },
+        );
+        // Commit outside window for signer 4 (ignored)
+        em.note_commit_at_height(
+            8,
+            VrfCommit {
+                epoch: 0,
+                commitment: [1u8; 32],
+                signer: 4,
+            },
+        );
+        // Epoch boundary -> compute penalties
+        em.on_block_commit(10);
+        let penalties = em.take_last_penalties().unwrap();
+        assert_eq!(penalties.0, 0);
+        assert_eq!(penalties.1, vec![3]); // signer 3 committed but did not (validly) reveal
+    }
+
+    #[test]
+    fn try_note_commit_and_reveal_return_status() {
+        let chain = ChainId::from("iroha:test:epoch3");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+        // Out of commit window
+        let rc = em.try_note_commit_at_height(
+            9,
+            VrfCommit {
+                epoch: 0,
+                commitment: [1u8; 32],
+                signer: 0,
+            },
+        );
+        assert_eq!(rc, VrfNoteResult::RejectedOutOfWindow);
+        // Valid commit then invalid reveal (mismatch)
+        let _ = em.try_note_commit_at_height(
+            2,
+            VrfCommit {
+                epoch: 0,
+                commitment: [2u8; 32],
+                signer: 1,
+            },
+        );
+        let rr = em.try_note_reveal_at_height(
+            5,
+            VrfReveal {
+                epoch: 0,
+                reveal: [9u8; 32],
+                signer: 1,
+            },
+        );
+        assert_eq!(rr, VrfNoteResult::RejectedInvalidReveal);
+    }
+
+    #[test]
+    fn late_reveal_clears_penalty_without_seed_change() {
+        let chain = ChainId::from("iroha:test:epoch_late");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+
+        let reveal = [0x55; 32];
+        let commit: [u8; 32] = iroha_crypto::Hash::new(reveal).into();
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commit,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        let seed_before = em.seed();
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                7,
+                VrfReveal {
+                    epoch: 0,
+                    reveal,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::AcceptedLate
+        );
+        assert_eq!(em.seed(), seed_before);
+        assert_eq!(em.test_late_reveals_len(), 1);
+
+        em.on_block_commit(10);
+        let penalties = em.take_last_penalties().unwrap();
+        assert!(penalties.1.is_empty(), "late reveal should clear penalties");
+    }
+
+    #[test]
+    fn penalties_use_validator_roster_snapshot() {
+        let chain = ChainId::from("iroha:test:epoch4");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(8, 3, 6);
+
+        // Roster contains three validators {0,1,2}
+        em.set_validator_roster_indices([0, 1, 2]);
+
+        // Valid commit + reveal for signer 0
+        let reveal0 = [11u8; 32];
+        let commit0: [u8; 32] = iroha_crypto::Hash::new(reveal0).into();
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commit0,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                5,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: reveal0,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+
+        // Commit without reveal for signer 1 (penalty target)
+        assert_eq!(
+            em.try_note_commit_at_height(
+                3,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: [0xAA; 32],
+                    signer: 1,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+
+        // Signer 2 neither commits nor reveals → should appear in no-participation list
+
+        // Trigger epoch rollover at height 8
+        em.on_block_commit(8);
+
+        let penalties = em
+            .take_last_penalties_detailed()
+            .expect("penalties should be produced");
+        assert_eq!(penalties.0, 0);
+        assert_eq!(penalties.1, vec![1]); // signer 1 committed but failed to reveal
+        assert_eq!(penalties.2, vec![2]); // signer 2 did not participate at all
+        assert_eq!(penalties.3, 3); // roster size propagated
+    }
+
+    #[test]
+    fn zero_participation_epoch_marks_all_validators() {
+        let chain = ChainId::from("iroha:test:epoch_zero_participation");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(6, 2, 4);
+
+        em.set_validator_roster_indices(0..4);
+
+        em.on_block_commit(6);
+
+        let (_, committed_no_reveal, no_participation, roster_len) = em
+            .take_last_penalties_detailed()
+            .expect("penalties should be recorded");
+        assert!(
+            committed_no_reveal.is_empty(),
+            "no commits recorded, penalties should be empty"
+        );
+        assert_eq!(
+            no_participation,
+            vec![0, 1, 2, 3],
+            "every validator should appear in no-participation list"
+        );
+        assert_eq!(roster_len, 4);
+    }
+}

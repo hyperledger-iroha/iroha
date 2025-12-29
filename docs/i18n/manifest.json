@@ -1,0 +1,88 @@
+{
+  "primary_language": {
+    "code": "en",
+    "name": "English"
+  },
+  "target_languages": [
+    {
+      "code": "es",
+      "name": "Spanish",
+      "autonym": "Español",
+      "dir": "ltr"
+    },
+    {
+      "code": "pt",
+      "name": "Portuguese",
+      "autonym": "Português",
+      "dir": "ltr"
+    },
+    {
+      "code": "fr",
+      "name": "French",
+      "autonym": "Français",
+      "dir": "ltr"
+    },
+    {
+      "code": "ru",
+      "name": "Russian",
+      "autonym": "Русский",
+      "dir": "ltr"
+    },
+    {
+      "code": "ar",
+      "name": "Arabic",
+      "autonym": "العربية",
+      "dir": "rtl"
+    },
+    {
+      "code": "ur",
+      "name": "Urdu",
+      "autonym": "اردو",
+      "dir": "rtl"
+    },
+    {
+      "code": "ja",
+      "name": "Japanese",
+      "autonym": "日本語",
+      "dir": "ltr"
+    },
+    {
+      "code": "he",
+      "name": "Hebrew",
+      "autonym": "עברית",
+      "dir": "rtl"
+    }
+  ],
+  "include": [
+    "docs/**/*.md",
+    "docs/**/*.org",
+    "*.md",
+    "*.org"
+  ],
+  "exclude": [
+    "*.ja.md",
+    "*.ja.org",
+    "*.he.md",
+    "*.he.org",
+    "**/*.ja.md",
+    "**/*.ja.org",
+    "**/*.he.md",
+    "**/*.he.org",
+    "**/*.generated.md",
+    "docs/source/generated/**",
+    "docs/source/confidential_key_vectors.json",
+    "docs/source/norito_json_inventory.json",
+    "docs/source/grafana_*.json",
+    "target/**",
+    "vendor/**",
+    "artifacts/**",
+    "tmp/**",
+    "clean_copy/**",
+    "rust_out/**",
+    "node_modules/**",
+    "javascript/iroha_js/node_modules/**",
+    "docs/i18n/**",
+    "**/AGENTS.md",
+    "**/AGENTS.org"
+  ]
+}

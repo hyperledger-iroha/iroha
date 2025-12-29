@@ -1,0 +1,27 @@
+{
+  "lane_governance": [
+    {
+      "alias": "payments",
+      "manifest_ready": true,
+      "manifest_required": true,
+      "manifest_path": "/var/lib/iroha/manifests/payments.json",
+      "validator_ids": [
+        "alice@wonderland",
+        "bob@wonderland"
+      ],
+      "quorum": 2
+    },
+    {
+      "alias": "core",
+      "manifest_ready": true,
+      "manifest_required": true,
+      "manifest_path": "/var/lib/iroha/manifests/core.json",
+      "validator_ids": [
+        "alice@wonderland",
+        "charlie@wonderland",
+        "dana@wonderland"
+      ],
+      "quorum": 3
+    }
+  ]
+}

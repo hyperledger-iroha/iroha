@@ -1,0 +1,275 @@
+{
+  "title": "SoraNet Privacy Metrics",
+  "uid": "soranet-privacy",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "refresh": "1m",
+  "tags": ["soranet", "privacy"],
+  "templating": {
+    "list": [
+      {
+        "name": "mode",
+        "label": "Relay Mode",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(soranet_privacy_circuit_events_total, mode)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      },
+      {
+        "name": "bucket_start",
+        "label": "Bucket Start",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(soranet_privacy_circuit_events_total{mode=~\"$mode\"}, bucket_start)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Circuit Outcomes (per bucket)",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (kind) (increase(soranet_privacy_circuit_events_total{mode=~\"$mode\", bucket_start=~\"$bucket_start\"}[5m]))",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Throttle Events (per bucket)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (scope) (increase(soranet_privacy_throttles_total{mode=~\"$mode\", bucket_start=~\"$bucket_start\"}[5m]))",
+          "legendFormat": "{{scope}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Buckets Suppressed",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "soranet_privacy_bucket_suppressed{mode=~\"$mode\", bucket_start=~\"$bucket_start\"}",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bool",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Suppression Reasons (5m)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(soranet_privacy_suppression_total{mode=~\"$mode\"}[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "SN16 Downgrade Ratio (5m)",
+      "id": 10,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "100 * sum by (mode) (increase(sn16_handshake_downgrade_total{mode=~\"$mode\"}[5m])) / clamp_min(sum by (mode) (increase(sn16_handshake_mode_total{mode=~\"$mode\"}[5m])), 1)",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "SN16 Downgrade Reasons (5m)",
+      "id": 11,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(sn16_handshake_downgrade_total{mode=~\"$mode\"}[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Suppressed Bucket %",
+      "id": 5,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "100 * sum(soranet_privacy_bucket_suppressed{mode=~\"$mode\", bucket_start=~\"$bucket_start\"}) / clamp_min(count(soranet_privacy_bucket_suppressed{mode=~\"$mode\", bucket_start=~\"$bucket_start\"}), 1)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Minutes Since Last Poll",
+      "id": 9,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "(time() - soranet_privacy_last_poll_unixtime) / 60",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Collector Share Backlog",
+      "id": 12,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "soranet_privacy_pending_collectors{mode=~\"$mode\"}",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Snapshot Suppression Ratio",
+      "id": 13,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "100 * soranet_privacy_snapshot_suppression_ratio",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    }
+  ]
+}

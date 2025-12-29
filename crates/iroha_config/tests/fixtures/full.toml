@@ -1,0 +1,129 @@
+# This config has ALL fields specified (except `extends`)
+
+chain = "0"
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201ca347641228c3b79aa43839dedc85fa51c0e8b9b6a00f6b0d6b0423e902973f"
+
+trusted_peers = [
+  "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@localhost:8081",
+]
+
+[genesis]
+public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+file = "genesis.signed.nrt"
+
+[network]
+address = "addr:localhost:3840#EB2D"
+public_address = "addr:localhost:3840#EB2D"
+block_gossip_period_ms = 10_000
+block_gossip_size = 4
+transaction_gossip_period_ms = 1_000
+transaction_gossip_size = 500
+idle_timeout_ms = 10_000
+
+[torii]
+address = "addr:localhost:5000#A9D1"
+max_content_len = 16_000
+query_idle_time_ms = 30_000
+query_store_capacity = 128
+query_store_capacity_per_user = 128
+
+[torii.sorafs.discovery]
+discovery_enabled = true
+known_capabilities = ["torii_gateway", "chunk_range_fetch", "vendor_reserved"]
+
+[torii.sorafs.discovery.admission]
+envelopes_dir = "tests/fixtures/sorafs_admission"
+
+[torii.sorafs.storage]
+enabled = true
+data_dir = "./storage/sorafs"
+max_capacity_bytes = 107374182400
+max_parallel_fetches = 64
+max_pins = 20000
+por_sample_interval_secs = 900
+alias = "tenant.alpha"
+
+[torii.sorafs.storage.adverts]
+stake_pointer = "stake.pool.default"
+availability = "warm"
+max_latency_ms = 750
+topics = ["sorafs.sf1.primary:global", "sorafs.sf1.backup:eu"]
+
+[sorafs.discovery]
+discovery_enabled = true
+known_capabilities = ["torii_gateway", "chunk_range_fetch", "vendor_reserved"]
+
+[sorafs.discovery.admission]
+envelopes_dir = "tests/fixtures/sorafs_admission"
+
+[sorafs.storage]
+enabled = true
+data_dir = "./storage/sorafs"
+max_capacity_bytes = 107374182400
+max_parallel_fetches = 64
+max_pins = 20000
+por_sample_interval_secs = 900
+alias = "tenant.alpha"
+
+[sorafs.storage.adverts]
+stake_pointer = "stake.pool.default"
+availability = "warm"
+max_latency_ms = 750
+topics = ["sorafs.sf1.primary:global", "sorafs.sf1.backup:eu"]
+
+[sorafs.quota]
+capacity_declaration_window_secs = 3600
+capacity_telemetry_window_secs = 900
+deal_telemetry_window_secs = 900
+capacity_dispute_window_secs = 1800
+por_submission_window_secs = 900
+
+[torii.sorafs.quota]
+capacity_declaration_window_secs = 3600
+capacity_telemetry_window_secs = 900
+deal_telemetry_window_secs = 900
+capacity_dispute_window_secs = 1800
+por_submission_window_secs = 900
+
+[kura]
+init_mode = "strict"
+store_dir = "./storage"
+blocks_in_memory = 1024
+fsync_mode = "batched"
+fsync_interval_ms = 50
+
+[kura.debug]
+output_new_blocks = true
+
+[sumeragi.debug]
+force_soft_fork = true
+
+[logger]
+level = "TRACE"
+format = "compact"
+
+[queue]
+capacity = 65_536
+capacity_per_user = 65_536
+transaction_time_to_live_ms = 100
+
+[snapshot]
+mode = "read_write"
+create_every_ms = 60_000
+store_dir = "./storage/snapshot"
+
+[telemetry]
+name = "test"
+url = "http://test.com"
+min_retry_period_ms = 5_000
+max_retry_delay_exponent = 4
+
+[dev_telemetry]
+out_file = "./dev_telemetry.json"
+
+[crypto]
+enable_sm_openssl_preview = false
+default_hash = "blake2b-256"
+allowed_signing = ["ed25519", "secp256k1"]
+sm2_distid_default = "CN12345678901234"

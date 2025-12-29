@@ -1,0 +1,79 @@
+{
+  "manifest_id": "c9bdf0b2-63a3-4a90-8d70-908d119c2c7e",
+  "issued_at": "2026-02-10T11:32:00Z",
+  "runner_hash": "ea3c0fd0ff4bd4510e94c7c293b261f601cc0c4f9fbacd99b0401d233a7cdc20",
+  "runtime_version": "sorafs-ai-runner 0.4.0",
+  "models": [
+    {
+      "model_id": "5a2a6503-09ac-4025-84d0-670a541a9a1d",
+      "family": "vision",
+      "artifact_digest": "2a2b6d4046f4f6ce9c5c75384b2df62ee4cd7c0f226fd5b546f9cbaa17aacd55",
+      "weights_digest": "b505d8fbf6b6a7d9e4c702bb9e6d13f92cc2a1051f35cc8050fa51d356eb5a6e",
+      "opset": 17,
+      "weight": 1.0,
+      "critical_labels": [
+        "csam",
+        "extreme_violence"
+      ],
+      "max_eval_ms": 820
+    },
+    {
+      "model_id": "76c8b69f-38fd-4d7d-966c-1f8d90bcbf05",
+      "family": "multimodal",
+      "artifact_digest": "0b6c23d7689332698d6146a1aeb64efca18f10834b7df9f0ba077db5a7eaa9c3",
+      "weights_digest": "dd5b7c6d5f09ff6348012a34d5bb63fdcb5b1e289996a8892ed0b240be7c748a",
+      "opset": 17,
+      "weight": 1.0,
+      "critical_labels": [
+        "harassment",
+        "self_harm"
+      ],
+      "max_eval_ms": 1420
+    },
+    {
+      "model_id": "15e65647-7b1f-4106-bae3-4040b1a9361e",
+      "family": "perceptual",
+      "artifact_digest": "3b77b1dbf2cd817d4df04721cb6e44cfbfba604f6b00c6bb0f1c973e18d09eaa",
+      "weights_digest": "4ce1c55e580c945b1194a01bc3a1a49330e39c5ea84b497b6eb07eaf35c57488",
+      "opset": 17,
+      "weight": 0.5,
+      "critical_labels": [
+        "hash_cluster"
+      ],
+      "max_eval_ms": 210
+    }
+  ],
+  "calibration_dataset": {
+    "dataset_id": "c0956583-355a-43cc-9a60-e3a5d9a0f7d0",
+    "slug": "ai-moderation-calibration-202602",
+    "uri": "sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst",
+    "entries": {
+      "manifest": 480,
+      "chunk": 12800,
+      "metadata": 920,
+      "audio": 160
+    },
+    "label_distribution": {
+      "safe": 0.68,
+      "suspect": 0.19,
+      "escalate": 0.13
+    }
+  },
+  "calibration_hash": "9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab",
+  "thresholds": {
+    "quarantine": 0.42,
+    "escalate": 0.78
+  },
+  "run_nonce": "5c17f4a9d5c84bb3fd05f7dfe913558dd4df957b9b6c8d44fac16cdb9e2b0ef9",
+  "governance_signature": {
+    "algorithm": "ed25519",
+    "public_key": "d15f58c8c6b2fae52c71c8e43ad1ba81710bd3ef4a8332e61f5f195cd6a20a40",
+    "signature": "7e37a1b5fa38b9c10b1cfc2442ed0adf204566361c2c36fd0459d84104e1cbd70c08d9f241432a9e27fa34af91274566e1b7a42fd2467c11dd2c2f0dff1a3804",
+    "signed_at": "2026-02-10T11:33:12Z",
+    "signer": "ministry-council-seat-03"
+  },
+  "summary": {
+    "policy_motion": "MINFO-2026-02-07",
+    "notes": "First governance-signed moderation manifest anchored in DAG height 912044."
+  }
+}

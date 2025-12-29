@@ -1,0 +1,75 @@
+# HELP nexus_lane_configured_total Configured Nexus lanes
+# TYPE nexus_lane_configured_total gauge
+nexus_lane_configured_total 3
+# HELP nexus_lane_block_height Latest block height per lane
+# TYPE nexus_lane_block_height gauge
+nexus_lane_block_height{alias="payments"} 1280
+nexus_lane_block_height{alias="core"} 1304
+nexus_lane_block_height{alias="zk"} 512
+# HELP nexus_lane_finality_lag_slots Finality lag (slots) per lane
+# TYPE nexus_lane_finality_lag_slots gauge
+nexus_lane_finality_lag_slots{alias="payments"} 1
+nexus_lane_finality_lag_slots{alias="core"} 0
+nexus_lane_finality_lag_slots{alias="zk"} 2
+# HELP nexus_lane_settlement_backlog_xor Settlement backlog share per lane
+# TYPE nexus_lane_settlement_backlog_xor gauge
+nexus_lane_settlement_backlog_xor{alias="payments"} 0.2
+nexus_lane_settlement_backlog_xor{alias="core"} 0.3
+nexus_lane_settlement_backlog_xor{alias="zk"} 0.0
+# HELP nexus_scheduler_lane_headroom_events_total Structured headroom telemetry events per lane
+# TYPE nexus_scheduler_lane_headroom_events_total counter
+nexus_scheduler_lane_headroom_events_total{lane="payments"} 0
+nexus_scheduler_lane_headroom_events_total{lane="core"} 0
+nexus_scheduler_lane_headroom_events_total{lane="zk"} 0
+# HELP nexus_scheduler_lane_teu_capacity TEU capacity per lane
+# TYPE nexus_scheduler_lane_teu_capacity gauge
+nexus_scheduler_lane_teu_capacity{lane="payments"} 120
+nexus_scheduler_lane_teu_capacity{lane="core"} 150
+nexus_scheduler_lane_teu_capacity{lane="zk"} 90
+# HELP nexus_scheduler_lane_teu_slot_committed Slots committed against TEU capacity
+# TYPE nexus_scheduler_lane_teu_slot_committed gauge
+nexus_scheduler_lane_teu_slot_committed{lane="payments"} 45
+nexus_scheduler_lane_teu_slot_committed{lane="core"} 60
+nexus_scheduler_lane_teu_slot_committed{lane="zk"} 20
+# HELP nexus_scheduler_lane_teu_deferral_total Deferred TEU slots per lane
+# TYPE nexus_scheduler_lane_teu_deferral_total counter
+nexus_scheduler_lane_teu_deferral_total{lane="payments",reason="pq"} 0
+nexus_scheduler_lane_teu_deferral_total{lane="core",reason="pq"} 0
+nexus_scheduler_lane_teu_deferral_total{lane="zk",reason="pq"} 1
+# HELP nexus_scheduler_must_serve_truncations_total Must-serve truncations per lane
+# TYPE nexus_scheduler_must_serve_truncations_total counter
+nexus_scheduler_must_serve_truncations_total{lane="payments"} 0
+nexus_scheduler_must_serve_truncations_total{lane="core"} 0
+nexus_scheduler_must_serve_truncations_total{lane="zk"} 0
+# HELP nexus_lane_governance_sealed Lane governance sealed gauge
+# TYPE nexus_lane_governance_sealed gauge
+nexus_lane_governance_sealed{alias="payments"} 0
+nexus_lane_governance_sealed{alias="core"} 0
+nexus_lane_governance_sealed{alias="zk"} 0
+# HELP iroha_da_quorum_ratio Latest DA quorum ratio across attesters
+# TYPE iroha_da_quorum_ratio gauge
+iroha_da_quorum_ratio 0.98
+# HELP iroha_oracle_staleness_seconds Oracle staleness
+# TYPE iroha_oracle_staleness_seconds gauge
+iroha_oracle_staleness_seconds 30
+# HELP iroha_oracle_twap_window_seconds Oracle TWAP window
+# TYPE iroha_oracle_twap_window_seconds gauge
+iroha_oracle_twap_window_seconds 60
+# HELP iroha_oracle_haircut_basis_points Oracle haircut (basis points)
+# TYPE iroha_oracle_haircut_basis_points gauge
+iroha_oracle_haircut_basis_points 25
+# HELP iroha_settlement_buffer_xor Settlement buffer share (0-1)
+# TYPE iroha_settlement_buffer_xor gauge
+iroha_settlement_buffer_xor 0.4
+# HELP iroha_slot_duration_ms slot duration histogram (NX-18)
+# TYPE iroha_slot_duration_ms histogram
+iroha_slot_duration_ms_bucket{le="250"} 40
+iroha_slot_duration_ms_bucket{le="500"} 180
+iroha_slot_duration_ms_bucket{le="750"} 195
+iroha_slot_duration_ms_bucket{le="1000"} 198
+iroha_slot_duration_ms_bucket{le="+Inf"} 200
+iroha_slot_duration_ms_sum 105000
+iroha_slot_duration_ms_count 200
+# HELP iroha_slot_duration_ms_latest most recent slot duration sample
+# TYPE iroha_slot_duration_ms_latest gauge
+iroha_slot_duration_ms_latest 720

@@ -1,0 +1,22 @@
+[package]
+name = "norito_derive"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true, features = ["default", "full"] }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+heck = { workspace = true }
+
+[features]
+default = []
+
+[dev-dependencies]
+trybuild = "1.0.114"
+norito = {path = "../norito"}

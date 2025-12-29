@@ -1,0 +1,9 @@
+// Map allocation, set and get wrapped in a contract.
+seiyaku MapOps {
+  kotoage fn map_example() -> int {
+    let m = Map::new();
+    m[1] = 42;
+    let v = m[1];
+    return v;
+  }
+}

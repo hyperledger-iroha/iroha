@@ -1,0 +1,37 @@
+[
+  {
+    "id": "A1",
+    "description": "Full CAR replay (sf1 profile)",
+    "status": 200,
+    "error": null,
+    "policy": "success"
+  },
+  {
+    "id": "A2",
+    "description": "Aligned byte-range replay",
+    "status": 206,
+    "error": null,
+    "policy": "success_range"
+  },
+  {
+    "id": "B2",
+    "description": "Missing required SoraFS headers refusal",
+    "status": 428,
+    "error": "manifest_envelope_required",
+    "policy": "manifest_envelope"
+  },
+  {
+    "id": "B5",
+    "description": "Provider not admitted",
+    "status": 412,
+    "error": "provider_not_admitted",
+    "policy": "admission"
+  },
+  {
+    "id": "D1",
+    "description": "Load with GAR denylist trigger",
+    "status": 451,
+    "error": "denylisted",
+    "policy": "denylist"
+  }
+]

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Walletless Follow Game</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">SORA social promo · walletless path</p>
+          <h1>Prep a follow claim without installing a wallet</h1>
+          <p class="lede">
+            Generate a fresh session key, capture the keyed Twitter hash, and emit a ready-to-run
+            Torii submit command that a sponsor can sign and pay for. Everything stays in the
+            browser — no extensions, no middleware.
+          </p>
+        </div>
+        <button id="regen-session" type="button">Regenerate session key</button>
+      </header>
+
+      <section class="grid">
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <p class="eyebrow">Session key</p>
+              <h2>Ephemeral signer</h2>
+            </div>
+          </div>
+          <p class="muted">
+            Keys are generated locally via WebCrypto (Ed25519 when available). Keep the private key
+            for a single promo wave, then rotate.
+          </p>
+          <div class="code-block">
+            <div class="code-label">Public key (hex)</div>
+            <pre id="session-public"></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-label">Private key (hex)</div>
+            <pre id="session-private"></pre>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <p class="eyebrow">Torii + sponsor</p>
+              <h2>Connection details</h2>
+            </div>
+          </div>
+          <form class="stack" id="config-form">
+            <label>
+              Torii URL
+              <input id="torii-url" name="toriiUrl" type="url" placeholder="http://localhost:8080" />
+            </label>
+            <label>
+              Chain ID
+              <input id="chain-id" name="chainId" type="text" placeholder="dev-chain" />
+            </label>
+            <label>
+              Sponsor account ID
+              <input
+                id="sponsor-id"
+                name="sponsorId"
+                type="text"
+                placeholder="sponsor@wonderland"
+              />
+            </label>
+            <label>
+              Session account (optional)
+              <input
+                id="session-account"
+                name="sessionAccount"
+                type="text"
+                placeholder="session@walletless"
+              />
+            </label>
+          </form>
+        </article>
+
+        <article class="card span-2">
+          <div class="card-head">
+            <div>
+              <p class="eyebrow">Follow flow</p>
+              <h2>Build send + claim</h2>
+            </div>
+            <button id="build-flow" type="button">Build Torii command</button>
+          </div>
+          <div class="stack">
+            <label>
+              Binding hash (KeyedHash JSON or hex digest)
+              <textarea
+                id="binding-hash"
+                name="bindingHash"
+                rows="3"
+                placeholder='{"KeyedHash":{"pepper_id":"twitter_follow","digest_hex":"...","uaid_hex":"...","tweet_id":"..."}}'
+              ></textarea>
+            </label>
+            <label>
+              Amount to escrow / send (numeric)
+              <input id="send-amount" name="sendAmount" type="text" placeholder="10" />
+            </label>
+          </div>
+          <div class="code-block">
+            <div class="code-label">Node recipe (direct Torii submit)</div>
+            <pre id="command-output"></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-label">Transaction payload (JSON)</div>
+            <pre id="payload-output"></pre>
+          </div>
+        </article>
+      </section>
+    </main>
+    <script src="app.js" type="module"></script>
+  </body>
+  </html>

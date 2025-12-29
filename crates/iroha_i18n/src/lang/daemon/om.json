@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Baga gara Hyperledger Iroha dhuftan!",
+  "error.trace_config_setup": "Hordoffii qindaa'inaa qindeessuun hin milkoofne",
+  "error.config": "Dogoggora qindaa'inaa!",
+  "error.logger": "Sirna galmeessaa jalqabuun hin danda'amne",
+  "error.start": "Iroha jalqabu hin dandeenye",
+  "error.run": "Iroha hojiirra oolchuu keessatti dogoggorri uumame",
+  "error.start_p2p": "Cimina P2P jalqabu hin dandeenye",
+  "error.init_kura": "Kura (kuusaa buloockii) jalqabu hin dandeenye",
+  "error.start_dev_telemetry": "Tajaajila telemetry misoomaa jalqabu hin dandeenye",
+  "error.start_telemetry": "Tajaajila telemetry jalqabu hin dandeenye",
+  "error.listen_os_signal": "Eessaa OS dhufan dhaggeeffachuuf qindeesuun hin milkoofne",
+  "error.start_torii": "Torii (Iroha HTTP API buufata) jalqabu hin dandeenye"
+}

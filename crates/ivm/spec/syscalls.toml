@@ -1,0 +1,433 @@
+[[syscall]]
+number = "0x01"
+args = "r10=status:u64"
+ret = "u64=status"
+gas = "G_exit"
+
+[[syscall]]
+number = "0x02"
+args = "-"
+ret = "u64=0"
+gas = "G_abort"
+
+[[syscall]]
+number = "0x03"
+args = "r10=&Json"
+ret = "u64=0"
+gas = "G_debug"
+
+[[syscall]]
+number = "0x10"
+args = "r10=&DomainId"
+ret = "u64=0"
+gas = "G_reg_domain"
+
+[[syscall]]
+number = "0x11"
+args = "r10=&DomainId"
+ret = "u64=0"
+gas = "G_unreg_domain"
+
+[[syscall]]
+number = "0x12"
+args = "r10=&DomainId, r11=&AccountId"
+ret = "u64=0"
+gas = "G_xfer_domain"
+
+[[syscall]]
+number = "0x13"
+args = "r10=&AccountId"
+ret = "u64=0"
+gas = "G_reg_acct"
+
+[[syscall]]
+number = "0x14"
+args = "r10=&AccountId"
+ret = "u64=0"
+gas = "G_unreg_acct"
+
+[[syscall]]
+number = "0x15"
+args = "r10=&Json"
+ret = "u64=0"
+gas = "G_reg_peer"
+
+[[syscall]]
+number = "0x16"
+args = "r10=&Json"
+ret = "u64=0"
+gas = "G_unreg_peer"
+
+[[syscall]]
+number = "0x17"
+args = "r10=&AccountId, r11=&Json(pubkey)"
+ret = "u64=0"
+gas = "G_add_sig"
+
+[[syscall]]
+number = "0x18"
+args = "r10=&AccountId, r11=&Json(pubkey)"
+ret = "u64=0"
+gas = "G_rm_sig"
+
+[[syscall]]
+number = "0x19"
+args = "r10=&AccountId, r11=quorum:u64"
+ret = "u64=0"
+gas = "G_set_quorum"
+
+[[syscall]]
+number = "0x1A"
+args = "r10=&AccountId, r11=&Name, r12=&Json"
+ret = "u64=0"
+gas = "G_set_detail + bytes(val)"
+
+[[syscall]]
+number = "0x20"
+args = "r10=&AssetDefinitionId"
+ret = "u64=0"
+gas = "G_reg_asset"
+
+[[syscall]]
+number = "0x21"
+args = "r10=&AssetDefinitionId"
+ret = "u64=0"
+gas = "G_unreg_asset"
+
+[[syscall]]
+number = "0x22"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=amount:u64"
+ret = "u64=0"
+gas = "G_mint"
+
+[[syscall]]
+number = "0x23"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=amount:u64"
+ret = "u64=0"
+gas = "G_burn"
+
+[[syscall]]
+number = "0x24"
+args = "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=amount:u64"
+ret = "u64=0"
+gas = "G_transfer"
+
+[[syscall]]
+number = "0x25"
+args = "r10=&NftId, r11=&AccountId(owner)"
+ret = "u64=0"
+gas = "G_nft_mint_asset"
+
+[[syscall]]
+number = "0x26"
+args = "r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)"
+ret = "u64=0"
+gas = "G_nft_transfer_asset"
+
+[[syscall]]
+number = "0x27"
+args = "r10=&NftId, r11=&Json"
+ret = "u64=0"
+gas = "G_nft_set_metadata"
+
+[[syscall]]
+number = "0x28"
+args = "r10=&NftId"
+ret = "u64=0"
+gas = "G_nft_burn_asset"
+
+[[syscall]]
+number = "0x30"
+args = "r10=&Name, r11=&Json(perms)"
+ret = "u64=0"
+gas = "G_create_role"
+
+[[syscall]]
+number = "0x31"
+args = "r10=&Name"
+ret = "u64=0"
+gas = "G_delete_role"
+
+[[syscall]]
+number = "0x32"
+args = "r10=&AccountId, r11=&Name"
+ret = "u64=0"
+gas = "G_grant_role"
+
+[[syscall]]
+number = "0x33"
+args = "r10=&AccountId, r11=&Name"
+ret = "u64=0"
+gas = "G_revoke_role"
+
+[[syscall]]
+number = "0x34"
+args = "r10=&AccountId, r11=&Name"
+ret = "u64=0"
+gas = "G_grant_perm"
+
+[[syscall]]
+number = "0x35"
+args = "r10=&AccountId, r11=&Name"
+ret = "u64=0"
+gas = "G_revoke_perm"
+
+[[syscall]]
+number = "0x40"
+args = "r10=&Json(spec)"
+ret = "u64=0"
+gas = "G_create_trig"
+
+[[syscall]]
+number = "0x41"
+args = "r10=&Name"
+ret = "u64=0"
+gas = "G_remove_trig"
+
+[[syscall]]
+number = "0x42"
+args = "r10=&Name, r11=enabled:u64"
+ret = "u64=0"
+gas = "G_set_trig"
+
+[[syscall]]
+number = "0x57"
+args = "r10=&Json"
+ret = "ptr (&NoritoBytes)"
+gas = "G_json_encode"
+
+[[syscall]]
+number = "0x58"
+args = "r10=&NoritoBytes(JSON bytes)"
+ret = "ptr (&Json)"
+gas = "G_json_decode"
+
+[[syscall]]
+number = "0x59"
+args = "r10=&Name(schema), r11=&Json"
+ret = "ptr (&NoritoBytes)"
+gas = "-"
+
+[[syscall]]
+number = "0x5A"
+args = "r10=&Name(schema), r11=&NoritoBytes"
+ret = "ptr (&Json)"
+gas = "-"
+
+[[syscall]]
+number = "0x5B"
+args = "r10=&Name(schema)"
+ret = "ptr (&Json{\"id\":...,\"version\":...})"
+gas = "-"
+
+[[syscall]]
+number = "0x5C"
+args = "r10=&NoritoBytes(UTF-8 string)"
+ret = "ptr (&Name)"
+gas = "G_name_decode"
+
+[[syscall]]
+number = "0x5D"
+args = "r10=&PointerType<T>"
+ret = "ptr (&NoritoBytes(TLV envelope))"
+gas = "-"
+
+[[syscall]]
+number = "0x5E"
+args = "r10=&NoritoBytes(TLV envelope), r11=expected?:u16"
+ret = "ptr (&PointerType<T>)"
+gas = "-"
+
+[[syscall]]
+number = "0x5F"
+args = "r10=&Tlv, r11=&Tlv"
+ret = "r10=1/0"
+gas = "-"
+
+[[syscall]]
+number = "0xE0"
+args = "r10=&Blob(TLV)"
+ret = "ptr (r10)"
+gas = "G_input_publish"
+
+# Zero-knowledge verification and state-read syscalls
+[[syscall]]
+number = "0x60"
+args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
+ret = "u64=0/1"
+gas = "G_verify_proof"
+
+[[syscall]]
+number = "0x61"
+args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
+ret = "u64=0/1"
+gas = "G_verify_proof"
+
+[[syscall]]
+number = "0x62"
+args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
+ret = "u64=0/1"
+gas = "G_verify_proof"
+
+[[syscall]]
+number = "0x63"
+args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
+ret = "u64=0/1"
+gas = "G_verify_proof"
+
+[[syscall]]
+number = "0x64"
+args = "r10=&NoritoBytes(RootsGetRequest)"
+ret = "ptr (NoritoBytes in INPUT)"
+gas = "G_roots_get"
+
+[[syscall]]
+number = "0x65"
+args = "r10=&NoritoBytes(VoteGetTallyRequest)"
+ret = "ptr (NoritoBytes in INPUT)"
+gas = "G_vote_get"
+
+# VRF verification syscalls
+[[syscall]]
+number = "0x66"
+args = "r10=&NoritoBytes(VrfVerifyRequest)"
+ret = "r10=ptr (&Blob(32-byte output)), r11=status:u64"
+gas = "G_verify"
+
+[[syscall]]
+number = "0x67"
+args = "r10=&NoritoBytes(VrfVerifyBatchRequest)"
+ret = "r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64"
+gas = "G_verify"
+
+[[syscall]]
+number = "0xA0"
+args = "r10=&Json"
+ret = "u64=0"
+gas = "G_sci"
+
+[[syscall]]
+number = "0xA1"
+args = "r10=&Json"
+ret = "ptr (r10)"
+gas = "G_scq"
+
+[[syscall]]
+number = "0xA2"
+args = "-"
+ret = "u64=count"
+gas = "G_create_nfts_all"
+
+[[syscall]]
+number = "0xA3"
+args = "r10=depth:u64"
+ret = "u64=prev"
+gas = "G_sc_depth"
+
+[[syscall]]
+number = "0xA4"
+args = "-"
+ret = "ptr (AccountId in INPUT)"
+gas = "G_get_auth"
+
+[[syscall]]
+number = "0xF0"
+args = "r10=bytes:u64"
+ret = "ptr (r10)"
+gas = "G_alloc + bytes"
+
+[[syscall]]
+number = "0xF1"
+args = "r10=&Name"
+ret = "ptr (r10)"
+gas = "G_get_pub"
+
+[[syscall]]
+number = "0xF2"
+args = "-"
+ret = "u64=count"
+gas = "G_hwinfo"
+
+[[syscall]]
+number = "0xF3"
+args = "-"
+ret = "u64=bitmap"
+gas = "G_hwinfo"
+
+[[syscall]]
+number = "0xF4"
+args = "-"
+ret = "r10=0/1"
+gas = "G_prove"
+
+[[syscall]]
+number = "0xF5"
+args = "r10=bytes:u64"
+ret = "u64=new_limit"
+gas = "G_grow_heap per page"
+
+[[syscall]]
+number = "0xF6"
+args = "-"
+ret = "r10=0/1"
+gas = "G_verify"
+
+[[syscall]]
+number = "0xF7"
+args = "r10=addr:u64, r11=out:u64, r12=root_out?:u64"
+ret = "u64=len"
+gas = "G_mpath + len"
+
+[[syscall]]
+number = "0xF8"
+args = "-"
+ret = "u64=0/1"
+gas = "G_hwinfo"
+
+[[syscall]]
+number = "0xF9"
+args = "r10=&AccountId, r11=&AssetDefinitionId"
+ret = "u64=amount"
+gas = "G_get_bal"
+
+[[syscall]]
+number = "0xFA"
+args = "r10=addr, r11=out, r12=depth_cap?, r13=root_out?"
+ret = "u64=depth"
+gas = "G_mpath + depth"
+
+[[syscall]]
+number = "0xFB"
+args = "r10=nullifier:u64"
+ret = "u64=0"
+gas = "G_use_null"
+
+[[syscall]]
+number = "0xFC"
+args = "r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8"
+ret = "r10=0/1"
+gas = "G_verify_sig"
+
+[[syscall]]
+number = "0xFD"
+args = "r10=index:u64"
+ret = "r10=value"
+gas = "G_get_priv"
+
+[[syscall]]
+number = "0xFE"
+args = "-"
+ret = "u64=0"
+gas = "G_commit"
+
+[[syscall]]
+number = "0xFF"
+args = "r10=reg, r11=out, r12=depth_cap?, r13=root_out?"
+ret = "u64=depth"
+gas = "G_mpath + depth"
+
+[[syscall]]
+number = "0x00"
+args = "-"
+ret = "-"
+gas = "G_debug"

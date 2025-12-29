@@ -1,0 +1,211 @@
+{
+  "title": "SNS Arbitration Operations",
+  "uid": "sns-arb-ops",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "tags": ["sns", "governance", "arbitration"],
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "suffix",
+        "label": "Suffix",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sns_arbitration_cases_open_total, suffix)",
+        "includeAll": true,
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Open arbitration cases",
+      "id": 1,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 7, "w": 6, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(sns_arbitration_cases_open_total{suffix=~\"$suffix\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 5},
+              {"color": "red", "value": 10}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Current total of active arbitration cases across the selected suffixes."
+    },
+    {
+      "type": "stat",
+      "title": "SLA breaches (30d)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 7, "w": 6, "x": 6, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(increase(sns_arbitration_sla_breach_total{suffix=~\"$suffix\"}[30d]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 1},
+              {"color": "red", "value": 3}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Aggregated acknowledge/resolution SLA breaches over the past month."
+    },
+    {
+      "type": "timeseries",
+      "title": "Open cases by priority",
+      "id": 3,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 7},
+      "targets": [
+        {
+          "expr": "sum by (priority) (sns_arbitration_cases_open_total{suffix=~\"$suffix\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "stacking": {"mode": "normal", "group": "A"}
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "Rolling breakdown of open arbitration cases grouped by priority."
+    },
+    {
+      "type": "timeseries",
+      "title": "Hearing + decision latency (p95)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 7},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(sns_arbitration_hearing_lead_time_seconds_bucket{suffix=~\"$suffix\"}[15m])) by (le))",
+          "legendFormat": "Hearing lead time (s)",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(sns_arbitration_decision_age_seconds_bucket{suffix=~\"$suffix\"}[15m])) by (le))",
+          "legendFormat": "Decision age (s)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "description": "p95 latency for scheduling hearings and publishing decisions. Keeps the SN-6a SLA charted directly from the Prometheus histograms."
+    },
+    {
+      "type": "stat",
+      "title": "Guardian overrides (30d)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 7, "w": 6, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(increase(sns_arbitration_guardian_override_total{suffix=~\"$suffix\"}[30d]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 1},
+              {"color": "red", "value": 3}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Guardian board overrides triggered over the last 30 days."
+    }
+  ]
+}

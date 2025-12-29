@@ -1,0 +1,16 @@
+docs/examples/sorafs_ci_sample/
+├── README.md
+├── manifest.template.json
+└── tree.txt
+fixtures/sorafs_manifest/ci_sample/
+├── payload.txt
+├── payload.car
+├── chunk_plan.json
+├── car_summary.json
+├── manifest.to
+├── manifest.json
+├── proof.json
+├── manifest.bundle.json
+├── manifest.sig
+├── manifest.sign.summary.json
+└── manifest.verify.summary.json

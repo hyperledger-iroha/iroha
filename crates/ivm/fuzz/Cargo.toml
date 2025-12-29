@@ -1,0 +1,30 @@
+[package]
+name = "ivm-fuzz"
+version = "2.0.0-rc.2.0"
+publish = false
+edition = "2024"
+
+[package.metadata.cargo-fuzz]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4.10", features = ["arbitrary-derive"] }
+arbitrary = { version = "1.4.2", features = ["derive"] }
+ivm = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "tlv_validate"
+path = "fuzz_targets/tlv_validate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kotodama_lower"
+path = "fuzz_targets/kotodama_lower.rs"
+test = false
+doc = false
+bench = false

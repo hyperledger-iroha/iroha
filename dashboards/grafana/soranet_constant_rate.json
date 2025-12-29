@@ -1,0 +1,246 @@
+{
+  "title": "SoraNet Constant-Rate Transport",
+  "uid": "soranet-constant-rate",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["soranet", "constant-rate"],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "mode",
+        "label": "Mode",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(soranet_constant_rate_active_neighbors, mode)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      },
+      {
+        "name": "profile",
+        "label": "Profile",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(soranet_constant_rate_active_neighbors{mode=~\"$mode\"}, constant_rate_profile)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Active Constant-Rate Neighbors",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (mode, constant_rate_profile) (soranet_constant_rate_active_neighbors{mode=~\"$mode\", constant_rate_profile=~\"$profile\"})",
+          "legendFormat": "{{mode}} / {{constant_rate_profile}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue Depth per Class",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (mode, constant_rate_profile, class) (soranet_constant_rate_queue_depth_class{mode=~\"$mode\", constant_rate_profile=~\"$profile\"})",
+          "legendFormat": "{{class}} — {{mode}} / {{constant_rate_profile}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Dummy Ratio",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "avg by (mode, constant_rate_profile) (soranet_constant_rate_dummy_ratio{mode=~\"$mode\", constant_rate_profile=~\"$profile\"})",
+          "legendFormat": "{{mode}} / {{constant_rate_profile}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Low Dummy Events (5m)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (mode, constant_rate_profile) (increase(soranet_constant_rate_low_dummy_events_total{mode=~\"$mode\", constant_rate_profile=~\"$profile\"}[5m]))",
+          "legendFormat": "{{mode}} / {{constant_rate_profile}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Degraded Mode (5m window)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "max by (mode, constant_rate_profile) (max_over_time(soranet_constant_rate_degraded{mode=~\"$mode\", constant_rate_profile=~\"$profile\"}[5m]))",
+          "legendFormat": "{{mode}} / {{constant_rate_profile}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      }
+    }
+  ]
+}

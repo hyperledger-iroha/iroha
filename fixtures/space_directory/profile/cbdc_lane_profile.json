@@ -1,0 +1,66 @@
+{
+  "profile_id": "profile.cbdc.wholesale.v1",
+  "dataspace": 11,
+  "activation_epoch": 4096,
+  "governance": {
+    "issuer": "parliament@cbdc",
+    "evidence_ticket": "gov-2026-01-15-cbdc-wholesale",
+    "quorum": 5
+  },
+  "validators": [
+    "cbdc-validator-1@cbdc",
+    "cbdc-validator-2@cbdc",
+    "cbdc-validator-3@cbdc",
+    "cbdc-validator-4@cbdc",
+    "cbdc-validator-5@cbdc"
+  ],
+  "validator_quorum": 3,
+  "protected_namespaces": [
+    "cbdc",
+    "gov"
+  ],
+  "da_profile": {
+    "class": "A",
+    "quorum": 8,
+    "attesters": [
+      "da-attester-1@cbdc",
+      "da-attester-2@cbdc",
+      "da-attester-3@cbdc",
+      "da-attester-4@cbdc",
+      "da-attester-5@cbdc",
+      "da-attester-6@cbdc",
+      "da-attester-7@cbdc",
+      "da-attester-8@cbdc",
+      "da-attester-9@cbdc",
+      "da-attester-10@cbdc",
+      "da-attester-11@cbdc",
+      "da-attester-12@cbdc"
+    ],
+    "rotation_epochs": 96
+  },
+  "composability_group": {
+    "group_id_hex": "3b2a4e8b7047e36de62a1b4a64f48870664f581e06e4b1340f9e963835d02c8b",
+    "activation_epoch": 4097,
+    "whitelist": [
+      {
+        "dataspace": 11,
+        "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+        "capability_manifest": "../capability/cbdc_wholesale.manifest.json"
+      },
+      {
+        "dataspace": 12,
+        "uaid": "uaid:62af083a61d42ca6c269585b9a33c563f4e0a5c0726614f7a98b6aab6b98f70b",
+        "capability_manifest": "../capability/retail_dapp_access.manifest.json"
+      }
+    ],
+    "deny_wins_policy": "UAID revocations take effect immediately; re-activation requires council approval."
+  },
+  "audit_hooks": {
+    "events": [
+      "SpaceDirectoryEvent.ManifestActivated",
+      "SpaceDirectoryEvent.ManifestRevoked"
+    ],
+    "log_schema": "metrics/nexus_space_directory_audit.prom",
+    "pagerduty_service": "Nexus-SpaceDirectory"
+  }
+}

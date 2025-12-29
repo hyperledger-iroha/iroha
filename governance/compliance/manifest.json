@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "hash_algorithm": "blake2b-512",
+  "generated_at": "2027-03-18",
+  "records": [
+    {
+      "id": "opt-outs-2027-q2",
+      "kind": "opt_out_catalog",
+      "source_file": "soranet_opt_outs.json",
+      "digest_b2_hex": "2b9adf0676942a335bb9fb4f4b862bba812f32d36556433c8f69a191a3030790eeba7b5b800374e8b10d9ee7cb08f39ffe364b708618f2443aead2a23f910bd7",
+      "effective_from": "2027-03-18",
+      "expires_at": null,
+      "approval_ref": "Governance Council – SNNet-9 rollout",
+      "contacts": [
+        "governance@soranet.org",
+        "status.soranet.org/gar-opt-outs"
+      ]
+    },
+    {
+      "id": "eu-2027-q2",
+      "kind": "jurisdiction_attestation",
+      "jurisdiction": "EU/EEA",
+      "source_file": "attestations/eu-2027-q2.md",
+      "markdown_digest_b2_hex": "9a7592341649bcad64fe0efa91be48ee9de266e3ee6b3f453c1cdd4114d5713e79ce1b467f3554b190b8a8ac3a8095f540ef4dbdba006e3c07fa064b629e3509",
+      "pdf_filename": "attestations/eu-2027-q2.pdf",
+      "pdf_digest_b2_hex": "UNSIGNED_NO_PDF",
+      "review_date": "2027-03-18",
+      "effective_from": "2027-03-18",
+      "expires_at": "2027-09-30",
+      "approval_ref": "SoraNet Legal & Governance Council",
+      "contacts": [
+        "governance@soranet.org",
+        "legal@soranet.org",
+        "dpo@soranet.org"
+      ]
+    },
+    {
+      "id": "ca-2027-q2",
+      "kind": "jurisdiction_attestation",
+      "jurisdiction": "CA",
+      "source_file": "attestations/ca-2027-q2.md",
+      "markdown_digest_b2_hex": "84f4c408d1e726386a9e40691bcea539ce4fcbeb0ce8ab12727d0c9f2b9fb93dda883837586d2baad28efa13d67ad063ea6b9b1654ac1d5ffd454e72b59179c0",
+      "pdf_filename": "attestations/ca-2027-q2.pdf",
+      "pdf_digest_b2_hex": "UNSIGNED_NO_PDF",
+      "review_date": "2027-03-18",
+      "effective_from": "2027-03-18",
+      "expires_at": "2027-09-30",
+      "approval_ref": "SoraNet Legal & Governance Council",
+      "contacts": [
+        "governance@soranet.org",
+        "legal@soranet.org"
+      ]
+    },
+    {
+      "id": "us-2027-q2",
+      "kind": "jurisdiction_attestation",
+      "jurisdiction": "US",
+      "source_file": "attestations/us-2027-q2.md",
+      "markdown_digest_b2_hex": "1fbafbc0b3cece52e1b390c1cf4328a8261ba9a2b3aac982acac5d28c994704ba750355ec43a896982ce1734b43f8957971e2ac1df32785067f20c0496a0b95f",
+      "pdf_filename": "attestations/us-2027-q2.pdf",
+      "pdf_digest_b2_hex": "UNSIGNED_NO_PDF",
+      "review_date": "2027-03-18",
+      "effective_from": "2027-03-18",
+      "expires_at": "2027-09-30",
+      "approval_ref": "SoraNet Legal & Governance Council",
+      "contacts": [
+        "governance@soranet.org",
+        "legal@soranet.org"
+      ]
+    }
+  ],
+  "notes": [
+    "Digests use blake2b-512 (b2sum). When no PDF is published, pdf_digest_b2_hex is set to UNSIGNED_NO_PDF to make the absence explicit.",
+    "When jurisdiction scopes or opt-out contents change, recompute the digest_b2_hex values and bump the id."
+  ]
+}

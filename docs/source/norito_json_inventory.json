@@ -1,0 +1,6461 @@
+{
+  "generated_at": "2025-12-07T08:46:06Z",
+  "command": "python3 scripts/inventory_serde_usage.py --json docs/source/norito_json_inventory.json --md docs/source/norito_json_inventory.md",
+  "root": "i23",
+  "allowlist": [],
+  "summary": {
+    "total": 644,
+    "flagged": 0,
+    "by_scope": {
+      "test": 15,
+      "example": 1,
+      "tool": 628
+    },
+    "by_category": {
+      "source": 642,
+      "dependency": 2
+    }
+  },
+  "matches": [
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "crates/soranet_pq/tests/kat_vectors.rs",
+      "line": 118,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, norito::json::Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "crates/soranet_pq/tests/kat_vectors.rs",
+      "line": 126,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, norito::json::Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "crates/soranet_pq/tests/kat_vectors.rs",
+      "line": 137,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, norito::json::Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "docs/examples/sorafs_rust_proof_stream.rs",
+      "line": 13,
+      "scope": "example",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let request_body = serde_json::json!({"
+    },
+    {
+      "category": "dependency",
+      "kind": "dependencies:serde",
+      "path": "xtask/Cargo.toml",
+      "line": 67,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "non-production scope",
+      "context": "serde = { version = \"1.0.228\", features = [\"derive\"] }"
+    },
+    {
+      "category": "dependency",
+      "kind": "dependencies:serde_json",
+      "path": "xtask/Cargo.toml",
+      "line": 68,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "non-production scope",
+      "context": "serde_json = \"1.0.145\""
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/bin/control_plane_mock.rs",
+      "line": 26,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/bin/control_plane_mock.rs",
+      "line": 26,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/bin/control_plane_mock.rs",
+      "line": 27,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::{Value, json};"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/bin/control_plane_mock.rs",
+      "line": 43,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/bin/control_plane_mock.rs",
+      "line": 53,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/bin/control_plane_mock.rs",
+      "line": 62,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/bin/control_plane_mock.rs",
+      "line": 213,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/bin/control_plane_mock.rs",
+      "line": 259,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "println!(\"{}\", serde_json::to_string_pretty(&data)?);"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/bin/control_plane_mock.rs",
+      "line": 267,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "println!(\"{}\", serde_json::to_string_pretty(&data)?);"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/bin/control_plane_mock.rs",
+      "line": 275,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "println!(\"{}\", serde_json::to_string_pretty(&data)?);"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/bin/torii_mock_harness.rs",
+      "line": 13,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Deserialize;"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/bin/torii_mock_harness.rs",
+      "line": 13,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Deserialize;"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/bin/torii_mock_harness.rs",
+      "line": 363,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/bin/torii_mock_harness.rs",
+      "line": 365,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/bin/torii_mock_harness.rs",
+      "line": 369,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/bin/torii_mock_harness.rs",
+      "line": 372,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/bin/torii_mock_harness.rs",
+      "line": 374,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/bin/torii_mock_harness.rs",
+      "line": 376,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/bin/torii_mock_harness.rs",
+      "line": 378,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/bin/torii_mock_harness.rs",
+      "line": 380,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/codec.rs",
+      "line": 11,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Deserialize;"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/codec.rs",
+      "line": 11,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Deserialize;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 610,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fn serde_value_to_norito(value: &serde_json::Value) -> Result<NoritoValue, Box<dyn Error>> {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 612,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Null => NoritoValue::Null,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 613,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Bool(b) => NoritoValue::Bool(*b),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 614,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Number(n) => {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 627,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String(s) => NoritoValue::String(s.clone()),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 628,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Array(arr) => NoritoValue::Array("
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 633,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Object(map) => {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 758,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let serde_value: serde_json::Value = toml_value.try_into()?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 766,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fn norito_value_to_serde(value: &NoritoValue) -> serde_json::Value {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 768,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "NoritoValue::Null => serde_json::Value::Null,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 769,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "NoritoValue::Bool(b) => serde_json::Value::Bool(*b),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 772,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Number(v.into())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 774,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Number(v.into())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 776,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Number::from_f64(v)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 777,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": ".map(serde_json::Value::Number)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 778,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": ".unwrap_or(serde_json::Value::Null)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 780,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Null"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 783,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "NoritoValue::String(s) => serde_json::Value::String(s.clone()),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 786,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Array(converted)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 793,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Object(converted)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 798,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fn strip_nulls(value: &mut serde_json::Value) {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 800,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Null => {}"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 801,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Bool(_)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 802,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "| serde_json::Value::Number(_)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 803,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "| serde_json::Value::String(_) => {}"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 804,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Array(items) => {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/codec.rs",
+      "line": 809,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::Object(map) => {"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/docs_preview.rs",
+      "line": 8,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/docs_preview.rs",
+      "line": 8,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/docs_preview.rs",
+      "line": 29,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, PartialEq, Eq, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/docs_preview.rs",
+      "line": 39,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/docs_preview.rs",
+      "line": 45,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/docs_preview.rs",
+      "line": 79,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "println!(\"{}\", serde_json::to_string_pretty(&summary)?);"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/docs_preview.rs",
+      "line": 82,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let rendered = serde_json::to_string_pretty(&summary)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/docs_preview.rs",
+      "line": 91,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let parsed: LogFile = serde_json::from_str(&data)?;"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/fastpq.rs",
+      "line": 10,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/fastpq.rs",
+      "line": 10,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 76,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 82,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize, Default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 92,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 107,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize, Default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 136,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize, Default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 143,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 150,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 159,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 166,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 217,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/fastpq.rs",
+      "line": 220,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/fastpq.rs",
+      "line": 222,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/fastpq.rs",
+      "line": 224,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/fastpq.rs",
+      "line": 226,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/fastpq.rs",
+      "line": 230,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/fastpq.rs",
+      "line": 233,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/fastpq.rs",
+      "line": 235,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/fastpq.rs",
+      "line": 242,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest: MatrixManifest = serde_json::from_slice(&bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/fastpq.rs",
+      "line": 300,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload_bytes = serde_json::to_vec(&payload).context(\"serialize bench manifest payload\")?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/fastpq.rs",
+      "line": 308,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let json = serde_json::to_string_pretty(&signed).context(\"serialize signed manifest\")?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/fastpq.rs",
+      "line": 1412,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest: serde_json::Value ="
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/fastpq.rs",
+      "line": 1413,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(&manifest_text).expect(\"manifest json\");"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/main.rs",
+      "line": 71,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/main.rs",
+      "line": 71,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 555,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 567,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 576,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 644,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "AccelerationOutputFormat::Json => Ok(serde_json::to_string_pretty(state)?),"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 999,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize, JsonSerialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 1008,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize, JsonSerialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 1014,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize, JsonSerialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1295,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let rendered = serde_json::to_string_pretty(&adoption)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1307,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let rendered = serde_json::to_string_pretty(&diff)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1320,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let rendered = serde_json::to_string_pretty(&summary)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1593,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let rendered = serde_json::to_string_pretty(&report)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1613,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut serialized = serde_json::to_string_pretty(&report)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1695,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut rendered = serde_json::to_string_pretty(&summaries)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1726,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut rendered = serde_json::to_string_pretty(&render.payload)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1748,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut rendered = serde_json::to_string_pretty(&payload)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1761,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut rendered = serde_json::to_string_pretty(&plan)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1774,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut rendered = serde_json::to_string_pretty(&plan)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1787,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut rendered = serde_json::to_string_pretty(&plan)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 1826,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut rendered = serde_json::to_string_pretty(&summary.to_json_value())?;"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 9987,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 9995,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 10004,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 10011,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/main.rs",
+      "line": 10017,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 10057,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest_json = serde_json::to_string_pretty(&manifest)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 10081,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest: OpenApiManifest = serde_json::from_str(&manifest_text).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 10513,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(&contents).map_err(|err| format!(\"invalid allowlist JSON: {err}\"))?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 10595,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::Value;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 10652,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let parsed: Value = serde_json::from_str(&json).expect(\"json parse\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 10653,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "assert_eq!(parsed[\"config\"][\"max_gpus\"], serde_json::json!(2));"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 10654,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "assert_eq!(parsed[\"metal\"][\"supported\"], serde_json::json!(true));"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 10655,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "assert_eq!(parsed[\"cuda\"][\"supported\"], serde_json::json!(false));"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 10658,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::json!(\"policy disabled\")"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/main.rs",
+      "line": 10704,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(&manifest_json).expect(\"parse manifest json\");"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/ministry.rs",
+      "line": 17,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/ministry.rs",
+      "line": 17,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry.rs",
+      "line": 18,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::Value as SerdeJsonValue;"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 105,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry.rs",
+      "line": 108,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry.rs",
+      "line": 110,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry.rs",
+      "line": 112,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry.rs",
+      "line": 114,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry.rs",
+      "line": 116,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry.rs",
+      "line": 118,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 122,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 129,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 138,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 145,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 151,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 161,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry.rs",
+      "line": 170,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 174,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 182,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 190,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 198,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 215,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry.rs",
+      "line": 225,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 229,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 239,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 248,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 256,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 266,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry.rs",
+      "line": 660,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let json_value: SerdeJsonValue = serde_json::from_slice(&raw)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry.rs",
+      "line": 661,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload: TransparencyReleaseActionPayload = serde_json::from_value(json_value.clone())?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry.rs",
+      "line": 724,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut json_text = serde_json::to_string_pretty(&json_value)?;"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry.rs",
+      "line": 1291,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry.rs",
+      "line": 2436,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let action = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry.rs",
+      "line": 2450,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "format!(\"{}\\n\", serde_json::to_string_pretty(&action).expect(\"json\")),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry.rs",
+      "line": 2487,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice(&fs::read(json_path).expect(\"read json\")).expect(\"json\");"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 17,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 17,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 18,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::{self, Value as JsonValue};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 64,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let json = serde_json::to_string_pretty(&summary)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 94,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let roster: SortitionRoster = serde_json::from_slice(&roster_bytes).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 184,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let json = serde_json::to_string_pretty(&report)"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 386,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 394,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize, Default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 400,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 404,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 416,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 424,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 430,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 434,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Copy, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 435,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(rename_all = \"snake_case\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 477,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 483,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Deserialize, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 486,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default = \"default_weight\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 488,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 490,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 492,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 494,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default = \"default_true\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 496,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(flatten)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 506,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 519,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 525,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 528,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 530,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 532,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 549,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 551,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 558,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let registry: Self = serde_json::from_str(&raw).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 681,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let json = serde_json::to_vec(&entry.member).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 795,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 800,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 819,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 821,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 833,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let snapshot: Self = serde_json::from_str(&raw).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 856,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 861,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_agenda.rs",
+      "line": 1013,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(TEST_ROSTER).expect(\"parse roster fixture\");"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 22,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Deserialize;"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 22,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Deserialize;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 23,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::Value as JsonValue;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 102,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let roster: JuryRoster = serde_json::from_slice(&roster_bytes).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 354,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 358,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 399,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 403,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default = \"default_weight\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 405,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default = \"default_true\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 407,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 409,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/ministry_jury.rs",
+      "line": 411,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(rename = \"metadata\")]"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/ministry_panel.rs",
+      "line": 32,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::de::DeserializeOwned;"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/ministry_panel.rs",
+      "line": 32,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::de::DeserializeOwned;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_panel.rs",
+      "line": 157,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice(&bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/ministry_panel.rs",
+      "line": 334,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "T: serde::Serialize,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/ministry_panel.rs",
+      "line": 336,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let bytes = serde_json::to_vec_pretty(value).expect(\"serialize serde value\");"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/nexus.rs",
+      "line": 27,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/nexus.rs",
+      "line": 27,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/nexus.rs",
+      "line": 28,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::Value as JsonValue;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/nexus.rs",
+      "line": 133,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let file: LaneComplianceEvidenceFile = serde_json::from_str(&raw).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/nexus.rs",
+      "line": 141,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let serialized_policy = serde_json::to_string(&record.policy).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/nexus.rs",
+      "line": 286,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/nexus.rs",
+      "line": 289,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/nexus.rs",
+      "line": 291,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default = \"json_null\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/nexus.rs",
+      "line": 293,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/nexus.rs",
+      "line": 297,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/nexus.rs",
+      "line": 301,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/nexus.rs",
+      "line": 303,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/nexus.rs",
+      "line": 305,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/nexus.rs",
+      "line": 309,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/nexus.rs",
+      "line": 314,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/nexus.rs",
+      "line": 318,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/nexus.rs",
+      "line": 320,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default = \"json_null\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/nexus.rs",
+      "line": 322,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/nexus.rs",
+      "line": 330,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/nexus.rs",
+      "line": 352,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/nexus.rs",
+      "line": 361,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fn compliance_json_string(&self) -> Result<Option<String>, serde_json::Error> {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/nexus.rs",
+      "line": 364,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": ".map(serde_json::to_string)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/nexus.rs",
+      "line": 453,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let rendered = serde_json::to_string_pretty(rows)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/nexus.rs",
+      "line": 726,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::json;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/nexus.rs",
+      "line": 862,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(compliance.value(0)).expect(\"compliance json parses\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/nexus.rs",
+      "line": 1044,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::to_string_pretty(&file).expect(\"lane compliance serialization\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/nexus.rs",
+      "line": 1052,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(&rendered).expect(\"serde policy json\")"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 20,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 20,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 36,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let spec: BundleSpecFile = serde_json::from_slice(&spec_bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 318,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 323,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 329,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 331,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 333,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 335,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 337,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 341,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 343,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 345,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 347,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 351,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 356,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 362,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 371,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 383,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 384,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(tag = \"kind\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 386,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(rename = \"apple_app_attest\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 393,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(rename = \"android_marker_key\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 398,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 402,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(rename = \"android_provisioned\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 405,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 410,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "device_manifest: serde_json::Value,"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 415,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 508,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 510,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 512,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 514,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 516,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 518,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 519,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "metadata: Option<serde_json::Value>,"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 522,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 532,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let value: serde_json::Value = serde_json::from_slice(&bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 538,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fn parse_certificate_json(value: serde_json::Value) -> Result<OfflineWalletCertificate> {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 644,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fn parse_optional_hash(value: Option<&serde_json::Value>) -> Result<Option<Hash>> {"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 651,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_bundle.rs",
+      "line": 660,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 18,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 18,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 35,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let spec: SpecFile = serde_json::from_slice(&spec_bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 97,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 101,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 105,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 108,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 112,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 120,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 122,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 124,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 126,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 127,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "metadata: Option<serde_json::Value>,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 128,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 133,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 139,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 141,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 143,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 144,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "metadata: Option<serde_json::Value>,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 145,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 147,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 149,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 153,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 158,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 160,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 162,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 163,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "metadata: Option<serde_json::Value>,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 164,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 168,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 172,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 174,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 178,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 179,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "metadata: Option<serde_json::Value>,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 180,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 184,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 198,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 205,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 214,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 217,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 221,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 232,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 459,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut value: serde_json::Value ="
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 460,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(&rendered).wrap_err(\"failed to parse provisioning manifest JSON\")?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 466,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String(encoded),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_provision.rs",
+      "line": 594,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice(&bytes).wrap_err_with(|| {"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 21,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 21,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 132,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice(&bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 320,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let raw: RawPolicy = serde_json::from_slice(&bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 346,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 374,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize, Default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 376,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 378,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 380,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 382,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 384,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 386,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 388,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 390,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 394,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 397,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 497,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let line = serde_json::to_string(entry)?;"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 509,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_pos_verify.rs",
+      "line": 510,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(tag = \"event\", content = \"payload\", rename_all = \"snake_case\")]"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 12,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 12,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 31,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let spec: ProvisionSpec = serde_json::from_slice(&spec_bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 72,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 78,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 80,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 82,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 84,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 88,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 93,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 95,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 97,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 99,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 100,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "device_manifest: Option<serde_json::Value>,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 101,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 103,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 105,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 109,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize, Clone)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 118,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 124,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 137,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 243,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let parsed: serde_json::Value = serde_json::from_str(value.get()).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_provision.rs",
+      "line": 279,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice::<ChallengeSpec>(&bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/offline_tooling.rs",
+      "line": 18,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Serialize;"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/offline_tooling.rs",
+      "line": 18,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Serialize;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_tooling.rs",
+      "line": 43,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "inline: Option<&serde_json::Value>,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_tooling.rs",
+      "line": 53,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let parsed: serde_json::Value = serde_json::from_slice(&bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_tooling.rs",
+      "line": 60,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fn merge_metadata_value(metadata: &mut Metadata, value: &serde_json::Value) -> Result<()> {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_tooling.rs",
+      "line": 67,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let serialized = serde_json::to_string(val)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_tooling.rs",
+      "line": 88,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let rendered = serde_json::to_string_pretty(value)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_tooling.rs",
+      "line": 133,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let inline = serde_json::json!({\"ios.app_attest.team_id\":\"XYZ\"});"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 34,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 34,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 35,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::{self, Value as JsonValue};"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 64,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 70,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 75,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 85,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 86,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "metadata: Option<serde_json::Value>,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 87,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 89,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 91,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 93,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 95,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 97,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 99,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 101,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 103,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 105,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 109,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 116,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 137,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 152,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let spec: SpecFile = serde_json::from_slice(&spec_bytes)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 569,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 597,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 604,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut map = serde_json::Map::new();"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/offline_topup.rs",
+      "line": 606,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let parsed = serde_json::from_str::<JsonValue>(value.get()).unwrap_or(JsonValue::Null);"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/soradns.rs",
+      "line": 25,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/soradns.rs",
+      "line": 25,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 26,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::{self, Value as SerdeJsonValue, json};"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 40,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize, PartialEq, Eq)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 117,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "source: serde_json::Error,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 133,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice(&data).map_err(|source| ManifestCidDigestError::Parse {"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 163,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 174,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 193,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 200,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Vec::is_empty\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 203,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Vec::is_empty\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 206,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Vec::is_empty\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 211,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 212,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(rename_all = \"snake_case\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 240,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 247,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 250,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 257,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 270,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 277,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 297,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 306,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 315,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 324,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 331,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 334,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 339,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Deserialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 341,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 343,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 345,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default, rename = \"contentCid\", alias = \"content_cid\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 347,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default, rename = \"proofStatus\", alias = \"proof_status\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 349,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default, rename = \"generatedAt\", alias = \"generated_at\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 351,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 353,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default, rename = \"headersTemplate\", alias = \"headers_template\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 357,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default, rename = \"jsonPath\", alias = \"json_path\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 360,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(default, rename = \"headersPath\", alias = \"headers_path\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 413,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "source: serde_json::Error,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 457,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "source: serde_json::Error,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 519,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "source: serde_json::Error,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 841,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice(&bytes).map_err(|source| GatewayBindingVerifyError::Parse {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 937,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let proof_value: SerdeJsonValue = serde_json::from_slice(&proof_bytes).map_err(|source| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 1115,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let value: SerdeJsonValue = serde_json::from_slice(&data).map_err(|source| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 1217,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "source: serde_json::Error,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 1305,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice(&data).map_err(|source| HostPatternInputError::Json {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 1438,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let proof_payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 1443,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::to_vec(&proof_payload).map_err(|err| BindingTemplateError::ManifestRoot {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 1494,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut payload = serde_json::Map::new();"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 1835,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "source: serde_json::Error,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 1923,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice(&raw).map_err(|source| GarVerifyError::Parse {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2302,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fn headers_to_value(headers: &BTreeMap<String, String>) -> serde_json::Map<String, SerdeJsonValue> {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2303,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut map = serde_json::Map::new();"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2431,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::to_value(&directory_json).map_err(|err| -> Box<dyn Error> { Box::new(err) })?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2472,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let signing_bytes = serde_json::to_vec(&signing_payload)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2521,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata)?)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2649,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::to_writer(&mut bytes, &serde_value)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2669,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut obj = serde_json::Map::new();"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2684,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "NoritoNumber::I64(v) => serde_json::Number::from(*v),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2685,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "NoritoNumber::U64(v) => serde_json::Number::from(*v),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2686,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "NoritoNumber::F64(v) => serde_json::Number::from_f64(*v)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2699,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut obj = serde_json::Map::new();"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 2778,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 2784,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 2789,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 2797,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 2807,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 2811,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 2818,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soradns.rs",
+      "line": 2826,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soradns.rs",
+      "line": 2833,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2884,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "JsonEncode { source: serde_json::Error },"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2889,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "impl From<serde_json::Error> for DirectoryReleaseError {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2890,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fn from(source: serde_json::Error) -> Self {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2970,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2977,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&file, serde_json::to_vec(&payload).unwrap()).expect(\"write file\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2989,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::json!(["
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 2998,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&file, serde_json::to_vec(&payload).unwrap()).expect(\"write file\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3033,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3036,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).expect(\"write manifest\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3079,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::json!({ \"root_cid\": [0_u8, 1, 2, 3] }).to_string(),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3171,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3174,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).expect(\"write manifest\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3201,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3204,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).expect(\"write manifest\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3246,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3249,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).expect(\"write manifest\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3266,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&binding_path, serde_json::to_vec(&render.payload).unwrap())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3279,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3282,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).expect(\"write manifest\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3450,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": ".map(|pattern| serde_json::Value::String((*pattern).to_string()))"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3452,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3464,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "\"metrics_policy\": serde_json::Value::Null,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3466,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "\"rpt_digest\": serde_json::Value::Null,"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3470,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&gar_path, serde_json::to_vec_pretty(&payload).unwrap()).expect(\"write gar\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3504,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let host_patterns = serde_json::json!(["
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3508,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3520,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&gar_path, serde_json::to_vec_pretty(&payload).unwrap()).expect(\"write gar\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3536,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3548,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&gar_path, serde_json::to_vec_pretty(&payload).unwrap()).expect(\"write gar\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3571,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::json!({ \"root_cid\": manifest_root }).to_string(),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3574,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let proof_payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3578,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let proof_header = BASE64_STANDARD.encode(serde_json::to_vec(&proof_payload).unwrap());"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3579,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3596,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&binding_path, serde_json::to_vec_pretty(&payload).unwrap())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3620,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let proof_payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3624,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let proof_header = BASE64_STANDARD.encode(serde_json::to_vec(&proof_payload).unwrap());"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3625,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3642,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&binding_path, serde_json::to_vec_pretty(&payload).unwrap())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3658,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::json!({ \"root_cid\": manifest_root }).to_string(),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3663,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let proof_payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3667,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let proof_header = BASE64_STANDARD.encode(serde_json::to_vec(&proof_payload).unwrap());"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3668,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3685,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&binding_path, serde_json::to_vec_pretty(&payload).unwrap())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3706,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soradns.rs",
+      "line": 3724,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::to_vec_pretty(&payload).expect(\"serialize binding\"),"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/sorafs.rs",
+      "line": 58,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/sorafs.rs",
+      "line": 58,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::{Deserialize, Serialize};"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 59,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::{self, Value as JsonValue};"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 475,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 484,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 498,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 500,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 504,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize, Default)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 506,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 508,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 510,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 512,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 514,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 516,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 518,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 520,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 522,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 524,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 526,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 528,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 530,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 532,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 534,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 536,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 538,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 540,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 542,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 544,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 546,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 548,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 559,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 568,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 590,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 765,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 782,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/sorafs.rs",
+      "line": 854,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 880,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 887,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 900,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 1065,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let json = serde_json::to_vec_pretty(&report)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 1099,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let json = serde_json::to_vec_pretty(&report)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 1476,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::to_string_pretty(&plan)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 1507,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest: JsonValue = serde_json::from_slice(&manifest_bytes).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 1523,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let proof_payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 1527,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let proof_bytes = serde_json::to_vec(&proof_payload)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2172,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let raw: JsonValue = serde_json::from_slice(&bytes).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2236,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let bundle_json = serde_json::to_string_pretty(&bundle)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2330,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let parsed: JsonValue = serde_json::from_str(&entry.canonical_json)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2333,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let canonical_bytes = serde_json::to_vec(&canonical).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2439,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice(&bytes).map_err(|err| {"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2558,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let value: JsonValue = serde_json::from_slice(&data)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2637,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let bytes = serde_json::to_vec(&canonical)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2654,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut ordered = serde_json::Map::new();"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2764,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::Value as SerdeJsonValue;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2770,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(&rendered).expect(\"matrix payload parses\")"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2868,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let plan_json: serde_json::Value ="
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2869,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(&rendered).expect(\"json plan payload\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2872,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String(\"baaaaaaaa\".into())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2876,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String("
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2883,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String(\"sora:docs\".into())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2887,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String(\"baaaaaaaa\".into())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2891,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String(headers_path.display().to_string())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2934,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let plan_json: serde_json::Value ="
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2935,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(&rendered).expect(\"json plan payload\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2939,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String(rollback_manifest.display().to_string())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2943,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String(\"v0\".into())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2947,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String("
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2954,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String(rollback_headers.display().to_string())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2965,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let sample = serde_json::json!(["
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2980,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&input_path, serde_json::to_vec_pretty(&sample).unwrap()).unwrap();"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 2997,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let bundle: DenylistBundleV1 = serde_json::from_slice(&bundle_bytes).unwrap();"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 3059,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let sample = serde_json::json!(["
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 3063,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&input_path, serde_json::to_vec_pretty(&sample).unwrap()).unwrap();"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 3089,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let sample = serde_json::json!(["
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 3092,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&input_path, serde_json::to_vec_pretty(&sample).unwrap()).unwrap();"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 3103,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let mut bundle_json: serde_json::Value ="
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 3104,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_slice(&fs::read(&pack.bundle_path).unwrap()).unwrap();"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 3106,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::Value::String(\"{\\\"kind\\\":\\\"alias\\\",\\\"alias\\\":\\\"tampered\\\"}\".into());"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 3109,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::to_vec_pretty(&bundle_json).unwrap(),"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 7382,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 7415,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let index_bytes = serde_json::to_vec_pretty(&index)?;"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 7523,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 7535,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 7541,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/sorafs.rs",
+      "line": 7552,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 8096,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload = serde_json::json!({"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/sorafs.rs",
+      "line": 8103,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&path, serde_json::to_vec(&payload).unwrap()).expect(\"write fixture\");"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/soranet.rs",
+      "line": 1,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Serialize;"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/soranet.rs",
+      "line": 1,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Serialize;"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet.rs",
+      "line": 59,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize, PartialEq)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet.rs",
+      "line": 76,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize, PartialEq)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet.rs",
+      "line": 84,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Clone, Serialize, PartialEq)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_attr",
+      "path": "xtask/src/soranet.rs",
+      "line": 87,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[serde(skip_serializing_if = \"Option::is_none\")]"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 23,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Serialize;"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 23,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Serialize;"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 260,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 272,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 281,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 289,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 303,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 310,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 316,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 326,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 335,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 345,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/soranet_billing.rs",
+      "line": 352,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soranet_privacy.rs",
+      "line": 506,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/soranet_privacy.rs",
+      "line": 527,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fn parse_fallback_event(value: &serde_json::Value) -> Option<SoranetPrivacyEventV1> {"
+    },
+    {
+      "category": "source",
+      "kind": "path",
+      "path": "xtask/src/stage1_bench.rs",
+      "line": 10,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Serialize;"
+    },
+    {
+      "category": "source",
+      "kind": "use",
+      "path": "xtask/src/stage1_bench.rs",
+      "line": 10,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde::Serialize;"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/stage1_bench.rs",
+      "line": 22,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/stage1_bench.rs",
+      "line": 35,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "derive",
+      "path": "xtask/src/stage1_bench.rs",
+      "line": 43,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "#[derive(Clone, Debug, Serialize)]"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/src/stage1_bench.rs",
+      "line": 143,
+      "scope": "tool",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let data = serde_json::to_vec_pretty(report)?;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/ministry_agenda.rs",
+      "line": 2,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::Value;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/ministry_agenda.rs",
+      "line": 38,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(&fs::read_to_string(&base_proposal).expect(\"read proposal\"))"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/ministry_agenda.rs",
+      "line": 56,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "fs::write(&modified, serde_json::to_string_pretty(&payload).unwrap())"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/soradns_cli.rs",
+      "line": 7,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::Value;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/soradns_cli.rs",
+      "line": 34,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let parsed: Value = serde_json::from_str(&raw).expect(\"host summary json\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/soradns_cli.rs",
+      "line": 98,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload: Value = serde_json::from_str(&payload_raw).expect(\"binding json\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/soradns_cli.rs",
+      "line": 183,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload: Value = serde_json::from_str(&payload_raw).expect(\"gar json\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/soradns_cli.rs",
+      "line": 264,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let payload: Value = serde_json::from_str(&payload_raw).expect(\"gar json\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/soradns_cli.rs",
+      "line": 302,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let plan: Value = serde_json::from_str(&raw).expect(\"cache plan json\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/soradns_cli.rs",
+      "line": 367,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "let plan: Value = serde_json::from_str(&raw).expect(\"acme plan json\");"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/streaming_bundle_check.rs",
+      "line": 5,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "use serde_json::Value;"
+    },
+    {
+      "category": "source",
+      "kind": "serde_json",
+      "path": "xtask/tests/streaming_bundle_check.rs",
+      "line": 32,
+      "scope": "test",
+      "allowed": true,
+      "reason": "allowed scope",
+      "context": "serde_json::from_str(&raw).expect(\"parse bundle summary JSON\")"
+    }
+  ]
+}

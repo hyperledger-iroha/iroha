@@ -1,0 +1,13 @@
+{
+  "name": "docs.sora",
+  "canonical_label": "pkmpnve4b3o5jsbvodhfaqu7rcb4ipimqxcq5x2wjxit5uyp4zla",
+  "canonical_host": "pkmpnve4b3o5jsbvodhfaqu7rcb4ipimqxcq5x2wjxit5uyp4zla.gw.sora.id",
+  "canonical_wildcard": "*.gw.sora.id",
+  "pretty_host": "docs.sora.gw.sora.name",
+  "san_hosts": [
+    "pkmpnve4b3o5jsbvodhfaqu7rcb4ipimqxcq5x2wjxit5uyp4zla.gw.sora.id",
+    "*.gw.sora.id",
+    "docs.sora.gw.sora.name"
+  ],
+  "notes": "Canonical host and label derived via `cargo xtask soradns-hosts --name docs.sora`."
+}

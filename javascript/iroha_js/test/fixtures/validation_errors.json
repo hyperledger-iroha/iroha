@@ -1,0 +1,207 @@
+{
+  "getHealth_options_invalid": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "getHealth.options",
+    "message": "getHealth options must be an object"
+  },
+  "getHealth_options_extra": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "getHealth.options",
+    "message": "getHealth options contains unsupported fields: extra"
+  },
+  "getStatusSnapshot_invalid_signal": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "getStatusSnapshot.options.signal",
+    "message": "getStatusSnapshot options.signal must be an AbortSignal"
+  },
+  "getStatusSnapshot_options_extra": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "getStatusSnapshot.options",
+    "message": "getStatusSnapshot options contains unsupported fields: note"
+  },
+  "getSumeragiStatus_options_invalid": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "getSumeragiStatus.options",
+    "message": "getSumeragiStatus options must be an object"
+  },
+  "getSumeragiStatus_invalid_signal": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "getSumeragiStatus.options.signal",
+    "message": "getSumeragiStatus options.signal must be an AbortSignal"
+  },
+  "getSumeragiStatus_options_extra": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "getSumeragiStatus.options",
+    "message": "getSumeragiStatus options contains unsupported fields: extra"
+  },
+  "submitIsoPacs008_message_required": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "submitIsoPacs008.message",
+    "message": "submitIsoPacs008.message is required"
+  },
+  "submitIsoPacs008_invalid_signal": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "submitIsoPacs008.options.signal",
+    "message": "submitIsoPacs008.options.signal must be an AbortSignal"
+  },
+  "submitIsoPacs008_content_type_type": {
+    "code": "ERR_INVALID_STRING",
+    "path": "submitIsoPacs008.options.contentType",
+    "message": "submitIsoPacs008.options.contentType must be a string"
+  },
+  "submitIsoPacs008_content_type_empty": {
+    "code": "ERR_INVALID_STRING",
+    "path": "submitIsoPacs008.options.contentType",
+    "message": "submitIsoPacs008.options.contentType must not be empty"
+  },
+  "submitIsoPacs008_retry_profile_type": {
+    "code": "ERR_INVALID_STRING",
+    "path": "submitIsoPacs008.options.retryProfile",
+    "message": "submitIsoPacs008.options.retryProfile must be a string"
+  },
+  "submitIsoPacs008_retry_profile_empty": {
+    "code": "ERR_INVALID_STRING",
+    "path": "submitIsoPacs008.options.retryProfile",
+    "message": "submitIsoPacs008.options.retryProfile must not be empty"
+  },
+  "submitIsoPacs008_unsupported_option": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "submitIsoPacs008.options",
+    "message": "submitIsoPacs008.options contains unsupported fields: extra"
+  },
+  "submitIsoPacs008_options_invalid": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "submitIsoPacs008AndWait.options",
+    "message": "submitIsoPacs008AndWait.options must be a plain object"
+  },
+  "submitIsoPacs008_wait_invalid": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "submitIsoPacs008AndWait.options.wait",
+    "message": "submitIsoPacs008AndWait.options.wait must be a plain object"
+  },
+  "submitIsoPacs009_content_type_type": {
+    "code": "ERR_INVALID_STRING",
+    "path": "submitIsoPacs009.options.contentType",
+    "message": "submitIsoPacs009.options.contentType must be a string"
+  },
+  "submitIsoPacs009_content_type_empty": {
+    "code": "ERR_INVALID_STRING",
+    "path": "submitIsoPacs009.options.contentType",
+    "message": "submitIsoPacs009.options.contentType must not be empty"
+  },
+  "submitIsoPacs009_retry_profile_type": {
+    "code": "ERR_INVALID_STRING",
+    "path": "submitIsoPacs009.options.retryProfile",
+    "message": "submitIsoPacs009.options.retryProfile must be a string"
+  },
+  "submitIsoPacs009_retry_profile_empty": {
+    "code": "ERR_INVALID_STRING",
+    "path": "submitIsoPacs009.options.retryProfile",
+    "message": "submitIsoPacs009.options.retryProfile must not be empty"
+  },
+  "submitIsoPacs009_wait_invalid": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "submitIsoPacs009AndWait.options.wait",
+    "message": "submitIsoPacs009AndWait.options.wait must be a plain object"
+  },
+  "getIsoMessageStatus_retry_profile_type": {
+    "code": "ERR_INVALID_STRING",
+    "path": "getIsoMessageStatus.options.retryProfile",
+    "message": "getIsoMessageStatus.options.retryProfile must be a string"
+  },
+  "getIsoMessageStatus_retry_profile_empty": {
+    "code": "ERR_INVALID_STRING",
+    "path": "getIsoMessageStatus.options.retryProfile",
+    "message": "getIsoMessageStatus.options.retryProfile must not be empty"
+  },
+  "waitForIsoMessageStatus_invalid_signal": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "waitForIsoMessageStatus.options.signal",
+    "message": "waitForIsoMessageStatus options.signal must be an AbortSignal"
+  },
+  "waitForIsoMessageStatus_retry_profile_type": {
+    "code": "ERR_INVALID_STRING",
+    "path": "waitForIsoMessageStatus.options.retryProfile",
+    "message": "waitForIsoMessageStatus.options.retryProfile must be a string"
+  },
+  "waitForIsoMessageStatus_retry_profile_empty": {
+    "code": "ERR_INVALID_STRING",
+    "path": "waitForIsoMessageStatus.options.retryProfile",
+    "message": "waitForIsoMessageStatus.options.retryProfile must not be empty"
+  },
+  "listOfflineAllowances_conflict_verdictId_onlyMissingVerdict": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "options for /v1/offline/allowances.verdictIdHex",
+    "message": "options for /v1/offline/allowances.verdictIdHex cannot be combined with options for /v1/offline/allowances.onlyMissingVerdict"
+  },
+  "listOfflineAllowances_conflict_requireVerdict_onlyMissingVerdict": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "options for /v1/offline/allowances.onlyMissingVerdict",
+    "message": "options for /v1/offline/allowances.onlyMissingVerdict cannot be combined with options for /v1/offline/allowances.requireVerdict"
+  },
+  "listOfflineAllowances_requireVerdict_type": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "options for /v1/offline/allowances.requireVerdict",
+    "message": "options for /v1/offline/allowances.requireVerdict must be a boolean"
+  },
+  "governanceDeriveCouncilVrf_candidates_array": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "governanceDeriveCouncilVrf.payload.candidates",
+    "message": "governanceDeriveCouncilVrf payload.candidates must be a non-empty array"
+  },
+  "governanceDeriveCouncilVrf_candidate_pk": {
+    "code": "ERR_INVALID_STRING",
+    "path": "governanceDeriveCouncilVrf.payload.candidates[0].pk",
+    "message": "governanceDeriveCouncilVrf payload.candidates[0].pk is required"
+  },
+  "governanceDeriveCouncilVrf_variant_value": {
+    "code": "ERR_INVALID_STRING",
+    "path": "governanceDeriveCouncilVrf.payload.candidates[0].variant",
+    "message": "governanceDeriveCouncilVrf payload.candidates[0].variant must be \"Normal\" or \"Small\""
+  },
+  "governanceFinalizeReferendum_referendum_required": {
+    "code": "ERR_INVALID_STRING",
+    "path": "governanceFinalizeReferendum.referendum_id",
+    "message": "governanceFinalizeReferendum.referendum_id is required"
+  },
+  "governanceFinalizeReferendum_proposal_required": {
+    "code": "ERR_INVALID_STRING",
+    "path": "governanceFinalizeReferendum.proposal_id",
+    "message": "governanceFinalizeReferendum.proposal_id is required"
+  },
+  "governanceEnactProposal_window_lower_required": {
+    "code": "ERR_INVALID_NUMERIC",
+    "path": "governanceEnactProposal.window.lower",
+    "message": "governanceEnactProposal.window.lower is required"
+  },
+  "governanceEnactProposal_window_upper_required": {
+    "code": "ERR_INVALID_NUMERIC",
+    "path": "governanceEnactProposal.window.upper",
+    "message": "governanceEnactProposal.window.upper is required"
+  },
+  "governanceEnactProposal_window_bounds": {
+    "code": "ERR_VALUE_OUT_OF_RANGE",
+    "path": "governanceEnactProposal.window.upper",
+    "message": "governanceEnactProposal.window.upper must be greater than or equal to lower"
+  },
+  "getSorafsPorWeeklyReport_iso_week_empty": {
+    "code": "ERR_INVALID_STRING",
+    "path": "getSorafsPorWeeklyReport.isoWeek",
+    "message": "getSorafsPorWeeklyReport.isoWeek must be a non-empty ISO week string"
+  },
+  "getSorafsPorWeeklyReport_iso_week_format": {
+    "code": "ERR_INVALID_STRING",
+    "path": "getSorafsPorWeeklyReport.isoWeek",
+    "message": "getSorafsPorWeeklyReport.isoWeek must match YYYY-Www format"
+  },
+  "getSorafsPorWeeklyReport_iso_week_type": {
+    "code": "ERR_INVALID_OBJECT",
+    "path": "getSorafsPorWeeklyReport.isoWeek",
+    "message": "getSorafsPorWeeklyReport.isoWeek must be an ISO week string or {year, week} object"
+  },
+  "getSorafsPorWeeklyReport_iso_week_range": {
+    "code": "ERR_VALUE_OUT_OF_RANGE",
+    "path": "getSorafsPorWeeklyReport.isoWeek.week",
+    "message": "getSorafsPorWeeklyReport.isoWeek.week must be between 1 and 53"
+  }
+}

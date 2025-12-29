@@ -1,0 +1,117 @@
+rule_files:
+  - ../soradns_gateway_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'soradns_resolver_last_sync_unix_seconds{resolver_id="resolver-a"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'soradns_resolver_bundle_proof_age_max_seconds{resolver_id="resolver-a"}'
+        values: '700 700 700 700 700 700 700 700 700 700 700 700 700 700 700 700 700 700 700 700 700 700'
+      - series: 'soradns_resolver_bundle_proof_ttl_min_seconds{resolver_id="resolver-a"}'
+        values: '180 180 180 180 180 180 180 180 180 180 180 180 180 180 180 180 180 180 180 180 180 180'
+      - series: 'soradns_bundle_cid_drift_total{resolver_id="resolver-a",namehash="docs"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'soradns_resolver_bundle_count{resolver_id="resolver-a"}'
+        values: '1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_tls_cert_expiry_seconds{gateway="gw-1"}'
+        values: '500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000 500000'
+      - series: 'torii_sorafs_tls_renewal_total{gateway="gw-1",result="failure"}'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_alias_cache_refresh_total{gateway="gw-1",result="failure"}'
+        values: '0 0 0 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - alertname: SoraDnsResolverSyncStale
+        eval_time: 21m
+        exp_alerts:
+          - exp_labels:
+              resolver_id: resolver-a
+              severity: warning
+      - alertname: SoraDnsBundleProofStale
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels:
+              resolver_id: resolver-a
+              severity: warning
+      - alertname: SoraDnsBundleProofExpiryRisk
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels:
+              resolver_id: resolver-a
+              severity: critical
+      - alertname: SoraDnsCidDriftDetected
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels:
+              namehash: docs
+              resolver_id: resolver-a
+              severity: warning
+      - alertname: SoraDnsBundleCoverageMissing
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              resolver_id: resolver-a
+              severity: critical
+      - alertname: SoraFsGatewayTlsExpiryWindowLow
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              gateway: gw-1
+              severity: warning
+      - alertname: SoraFsGatewayTlsRenewalFailures
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              gateway: gw-1
+              result: failure
+              severity: warning
+      - alertname: SoraFsAliasCacheRefreshFailures
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              gateway: gw-1
+              result: failure
+              severity: warning
+  - interval: 1m
+    input_series:
+      - series: 'soradns_resolver_last_sync_unix_seconds{resolver_id="resolver-a"}'
+        values: '1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200 1200'
+      - series: 'soradns_resolver_bundle_proof_age_max_seconds{resolver_id="resolver-a"}'
+        values: '300 300 300 300 300 300 300 300 300 300 300 300'
+      - series: 'soradns_resolver_bundle_proof_ttl_min_seconds{resolver_id="resolver-a"}'
+        values: '1800 1800 1800 1800 1800 1800 1800 1800 1800 1800 1800 1800'
+      - series: 'soradns_bundle_cid_drift_total{resolver_id="resolver-a",namehash="docs"}'
+        values: '5 5 5 5 5 5 5 5 5 5 5 5'
+      - series: 'soradns_resolver_bundle_count{resolver_id="resolver-a"}'
+        values: '3 3 3 3 3 3 3 3 3 3 3 3'
+      - series: 'torii_sorafs_tls_cert_expiry_seconds{gateway="gw-1"}'
+        values: '900000 900000 900000 900000 900000 900000 900000 900000 900000 900000 900000 900000'
+      - series: 'torii_sorafs_tls_renewal_total{gateway="gw-1",result="failure"}'
+        values: '5 5 5 5 5 5 5 5 5 5 5 5'
+      - series: 'torii_sorafs_alias_cache_refresh_total{gateway="gw-1",result="failure"}'
+        values: '7 7 7 7 7 7 7 7 7 7 7 7'
+    alert_rule_test:
+      - alertname: SoraDnsResolverSyncStale
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: SoraDnsBundleProofStale
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: SoraDnsBundleProofExpiryRisk
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: SoraDnsCidDriftDetected
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: SoraDnsBundleCoverageMissing
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: SoraFsGatewayTlsExpiryWindowLow
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: SoraFsGatewayTlsRenewalFailures
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: SoraFsAliasCacheRefreshFailures
+        eval_time: 10m
+        exp_alerts: []

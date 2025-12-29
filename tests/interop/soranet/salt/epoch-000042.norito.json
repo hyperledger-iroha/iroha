@@ -1,0 +1,10 @@
+{
+  "blinded_cid_salt_hex": "ee4fd5a8a2b4e9c0f1dc1a67c962e8d9b4a1c0ffee112233445566778899aabb",
+  "emergency_rotation": false,
+  "epoch_id": 42,
+  "notes": "Routine rotation",
+  "previous_epoch": 41,
+  "signature": null,
+  "valid_after": 1767225600000000000,
+  "valid_until": 1767312000000000000
+}

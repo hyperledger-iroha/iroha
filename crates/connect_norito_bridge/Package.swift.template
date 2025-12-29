@@ -1,0 +1,22 @@
+// Swift Package manifest template for NoritoBridge
+// Replace <URL> and <CHECKSUM> with your GitHub Release asset URL and the checksum printed by CI.
+// Save as Package.swift in a separate repo or serve directly.
+
+// swift-tools-version:5.9
+import PackageDescription
+
+let package = Package(
+  name: "NoritoBridge",
+  platforms: [ .iOS(.v13) ],
+  products: [ .library(name: "NoritoBridge", targets: ["NoritoBridge"]) ],
+  targets: [
+    // The XCFramework must include:
+    // - Headers/connect_norito_bridge.h (C FFI header)
+    // - Modules/module.modulemap (maps the header into the 'NoritoBridge' module)
+    .binaryTarget(
+      name: "NoritoBridge",
+      url: "<URL>",
+      checksum: "<CHECKSUM>"
+    )
+  ]
+)

@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/source/sdk/swift/fixture_cadence_rfc.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: e869d472c89f5b832be1125d0c29263328338de0e118ea1fd7c016d4d18db533
+source_last_modified: "2025-11-21T14:39:50.768886+00:00"
+translation_last_reviewed: null
+---
+
+# Tradução em andamento
+
+Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+
+Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.

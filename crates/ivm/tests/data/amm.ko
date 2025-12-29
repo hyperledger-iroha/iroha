@@ -1,0 +1,14 @@
+// Demonstrates a simple Uniswap-style automated market maker swap.
+// Given token reserves and an input amount, it computes the output amount
+// based on the constant product formula.
+seiyaku Example {
+    kotoage fn swap(x_reserve, y_reserve, dx) {
+        // constant product k = x * y
+        let k = x_reserve * y_reserve;
+        // new x reserve after adding input
+        let new_x = x_reserve + dx;
+        // output amount = y_reserve - k / new_x
+        let new_y = k / new_x;
+        let dy = y_reserve - new_y;
+    }
+}

@@ -1,0 +1,39 @@
+[versions]
+compileSdk = "34"
+minSdk = "26"
+coreKtx = "1.12.0"
+appcompat = "1.6.1"
+material = "1.11.0"
+activity = "1.8.2"
+constraintLayout = "2.1.4"
+lifecycle = "2.6.2"
+jxing = "3.5.1"
+junit = "4.13.2"
+androidxJUnit = "1.1.5"
+espresso = "3.5.1"
+
+[libraries]
+androidxCoreKtx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidxAppcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+androidxActivity = { group = "androidx.activity", name = "activity-ktx", version.ref = "activity" }
+androidxConstraintLayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintLayout" }
+androidxLifecycleRuntimeKtx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidxLifecycleLivedataKtx = { group = "androidx.lifecycle", name = "lifecycle-livedata-ktx", version.ref = "lifecycle" }
+androidxLifecycleViewmodelKtx = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-ktx", version.ref = "lifecycle" }
+jxingCore = { group = "com.google.zxing", name = "core", version.ref = "jxing" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidxTestExtJunit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJUnit" }
+androidxTestEspressoCore = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
+
+[bundles]
+androidxUi = [
+    "androidxCoreKtx",
+    "androidxAppcompat",
+    "material",
+    "androidxActivity",
+    "androidxConstraintLayout",
+    "androidxLifecycleRuntimeKtx",
+    "androidxLifecycleLivedataKtx",
+    "androidxLifecycleViewmodelKtx"
+]

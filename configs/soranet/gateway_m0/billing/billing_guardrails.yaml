@@ -1,0 +1,59 @@
+# Guardrails and alert thresholds for SN15-M0 billing
+period: "2026-11"
+version: 2
+caps:
+  http.request:
+    unit: request
+    warn_ratio: 0.85
+    critical_ratio: 0.95
+    hard_cap: 2500000
+  http.egress_gib:
+    unit: gibibyte
+    warn_ratio: 0.82
+    critical_ratio: 0.96
+    hard_cap: 520
+  dns.doh_query:
+    unit: request
+    warn_ratio: 0.82
+    critical_ratio: 0.95
+    hard_cap: 1000000
+  waf.decision:
+    unit: decision
+    warn_ratio: 0.80
+    critical_ratio: 0.95
+    hard_cap: 240000
+  car.verification_ms:
+    unit: ms
+    warn_ratio: 0.85
+    critical_ratio: 0.97
+    hard_cap: 1200000
+  storage.gib_month:
+    unit: gib-month
+    warn_ratio: 0.80
+    critical_ratio: 0.95
+    hard_cap: 600
+alerts:
+  - id: usage-spike
+    signal: http.request
+    trigger: "1.20x rolling_1h vs 7d baseline"
+    route: pager:soranet-edge
+    note: "Catch runaway billing before caps trip"
+  - id: egress-growth
+    signal: http.egress_gib
+    trigger: "1.15x d/d across two regions"
+    route: email:billing@sora.net
+    note: "Keeps cross-region burn visible before invoicing"
+  - id: verification-lag
+    signal: car.verification_ms
+    trigger: "p95 verification_ms > 750 for 15m"
+    route: pager:soranet-edge
+    note: "Trustless verification latency must stay under SLA"
+  - id: dispute-backlog
+    signal: open_disputes
+    trigger: "more than 5 open for >48h"
+    route: email:treasury@sora.net
+    note: "Escrow holds should not accumulate silently"
+notes:
+  - Guardrails throttle before hard stops; hard caps mirror burst_cap per meter.
+  - Alerts are intended for promtool linting and replay in Alertmanager canaries.
+  - Region multipliers and discounts are captured in billing_meter_catalog.(json|csv|parquet) for reconciliation.

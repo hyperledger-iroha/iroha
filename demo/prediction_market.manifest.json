@@ -1,0 +1,24 @@
+{
+  "code_hash": "hash:5DEC0956C761A3A191772B0B8BDC1AFE41FB8146572E16CEFCB91FC2926A6D1F#5ADE",
+  "abi_hash": "hash:377F7125A0F20D40F65ED5E3A179BC5E04D68A385570B54D67D961861E8D9F83#1C50",
+  "compiler_fingerprint": null,
+  "features_bitmap": null,
+  "access_set_hints": null,
+  "entrypoints": [
+    {
+      "name": "main",
+      "kind": {
+        "kind": "Public",
+        "value": null
+      },
+      "permission": "MarketUser",
+      "read_keys": [
+        
+      ],
+      "write_keys": [
+        
+      ]
+    }
+  ],
+  "provenance": null
+}

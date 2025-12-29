@@ -1,0 +1,16 @@
+{
+  "allow_slowdown_bps": 2500,
+  "scenarios": [
+    { "name": "fee_payer", "max_nanos_per_iter": 50000000 },
+    { "name": "fee_sponsor", "max_nanos_per_iter": 50000000 },
+    { "name": "fee_insufficient", "max_nanos_per_iter": 50000000 },
+    { "name": "staking_bond", "max_nanos_per_iter": 50000000 },
+    { "name": "staking_slash", "max_nanos_per_iter": 50000000 },
+    { "name": "commit_cert_verify", "max_nanos_per_iter": 80000000 },
+    { "name": "jdg_attestation_verify", "max_nanos_per_iter": 80000000 },
+    { "name": "bridge_proof_verify", "max_nanos_per_iter": 80000000 },
+    { "name": "commit_cert_assembly", "max_nanos_per_iter": 80000000 },
+    { "name": "access_scheduler", "max_nanos_per_iter": 50000000 },
+    { "name": "torii_proof_endpoint", "max_nanos_per_iter": 120000000 }
+  ]
+}

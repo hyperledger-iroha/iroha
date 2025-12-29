@@ -1,0 +1,23 @@
+{
+  "fastpq_batches": [
+    {
+      "parameter": "fastpq-lane-balanced",
+      "entry_hash": "0xbaselinefeed",
+      "metadata": {
+        "dsid": "0x01"
+      },
+      "row_usage": {
+        "total_rows": 900,
+        "transfer_rows": 540,
+        "non_transfer_rows": 360,
+        "mint_rows": 48,
+        "burn_rows": 24,
+        "role_grant_rows": 4,
+        "role_revoke_rows": 4,
+        "meta_set_rows": 8,
+        "permission_rows": 8,
+        "transfer_ratio": 0.6
+      }
+    }
+  ]
+}

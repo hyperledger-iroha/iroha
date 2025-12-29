@@ -1,0 +1,17 @@
+[package]
+name = "jsonstage1_cuda"
+version.workspace = true
+edition = "2024"
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = []
+cuda-kernel = []
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.2.45"

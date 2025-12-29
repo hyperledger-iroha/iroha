@@ -1,0 +1,57 @@
+use std::sync::{Arc, Mutex};
+
+use ivm::{IVM, Memory, VMError, encoding, host::IVMHost, instruction, syscalls};
+use std::any::Any;
+mod common;
+use common::assemble;
+
+const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
+const SCALL_COMMIT_OUTPUT: [u8; 4] = encoding::wide::encode_sys(
+    instruction::wide::system::SCALL,
+    syscalls::SYSCALL_COMMIT_OUTPUT as u8,
+)
+.to_le_bytes();
+
+struct CaptureHost {
+    out: Arc<Mutex<Vec<u8>>>,
+}
+
+impl IVMHost for CaptureHost {
+    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        match number {
+            syscalls::SYSCALL_COMMIT_OUTPUT => {
+                *self.out.lock().expect("output mutex poisoned") = vm.read_output().to_vec();
+                Ok(0)
+            }
+            _ => Err(VMError::UnknownSyscall(number)),
+        }
+    }
+
+    /// Downcast support for hosts with extra methods/state.
+    fn as_any(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+#[test]
+fn test_commit_output_syscall() {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CaptureHost {
+        out: Arc::clone(&captured),
+    });
+    // program: SCALL COMMIT_OUTPUT; HALT
+    let mut code = [0u8; 8];
+    code[..4].copy_from_slice(&SCALL_COMMIT_OUTPUT);
+    code[4..].copy_from_slice(&HALT);
+    let prog = assemble(&code);
+    vm.load_program(&prog).unwrap();
+    // write some bytes into output region before executing
+    vm.store_u32(Memory::OUTPUT_START, 0xdeadbeef).unwrap();
+    // run
+    vm.run().expect("run failed");
+    let out = captured.lock().expect("output mutex poisoned");
+    assert_eq!(out.len(), Memory::OUTPUT_SIZE as usize);
+    let val = u32::from_le_bytes([out[0], out[1], out[2], out[3]]);
+    assert_eq!(val, 0xdeadbeef);
+}

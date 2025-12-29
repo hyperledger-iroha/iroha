@@ -1,0 +1,20 @@
+[package]
+name = "build-support"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+vergen-git2 = { workspace = true, features = ["cargo"] }
+norito = { workspace = true }
+
+[lib]
+bench = false
+
+[[bin]]
+name = "clippy-inventory"
+path = "src/bin/clippy_inventory.rs"

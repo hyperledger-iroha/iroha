@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# FASTPQ reproducible build container (CPU-only).
+# Images are pinned so the Stage 6 prover builds with a fixed toolchain.
+
+ARG RUST_IMAGE=rust:1.88.0-slim-bookworm
+ARG RUST_TOOLCHAIN=1.88.0
+
+FROM ${RUST_IMAGE} AS fastpq_cpu
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH \
+    CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse \
+    FASTPQ_RUST_TOOLCHAIN=${RUST_TOOLCHAIN}
+
+RUN <<'EOF'
+  set -eu
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    clang \
+    git \
+    mold \
+    pkg-config \
+    python3
+  apt-get clean
+  rm -rf /var/lib/apt/lists/*
+EOF
+
+RUN rustup default "${FASTPQ_RUST_TOOLCHAIN}" && \
+    rustup component add --toolchain "${FASTPQ_RUST_TOOLCHAIN}" \
+      rustfmt \
+      clippy \
+      rust-src \
+      llvm-tools-preview
+
+WORKDIR /workspace
+
+ENTRYPOINT ["bash"]

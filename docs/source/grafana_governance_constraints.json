@@ -1,0 +1,95 @@
+{
+  "$schema": "https://grafana.com/schemas/json/dashboard/v1.json",
+  "title": "Iroha Governance Constraints",
+  "editable": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Proposal Status Counts",
+      "description": "Gauge current governance proposals grouped by status.",
+      "targets": [
+        { "expr": "governance_proposals_status{status=\"proposed\"}", "legendFormat": "proposed" },
+        { "expr": "governance_proposals_status{status=\"approved\"}", "legendFormat": "approved" },
+        { "expr": "governance_proposals_status{status=\"rejected\"}", "legendFormat": "rejected" },
+        { "expr": "governance_proposals_status{status=\"enacted\"}", "legendFormat": "enacted" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Protected Namespace Enforcement (5m)",
+      "description": "Track admissions guarded by protected namespaces over a rolling window.",
+      "targets": [
+        {
+          "expr": "increase(governance_protected_namespace_total{outcome=\"allowed\"}[5m])",
+          "legendFormat": "allowed"
+        },
+        {
+          "expr": "increase(governance_protected_namespace_total{outcome=\"rejected\"}[5m])",
+          "legendFormat": "rejected"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Manifest Activations (5m)",
+      "description": "Counts manifest insertions and namespace bindings emitted by EnactReferendum.",
+      "targets": [
+        {
+          "expr": "increase(governance_manifest_activations_total{event=\"manifest_inserted\"}[5m])",
+          "legendFormat": "manifest inserted"
+        },
+        {
+          "expr": "increase(governance_manifest_activations_total{event=\"instance_bound\"}[5m])",
+          "legendFormat": "instance bound"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Manifest Admission Outcomes (5m)",
+      "description": "Breakdown of queue admission decisions enforced by lane manifests over the last 5 minutes.",
+      "targets": [
+        {
+          "expr": "increase(governance_manifest_admission_total{result=\"allowed\"}[5m])",
+          "legendFormat": "allowed"
+        },
+        {
+          "expr": "increase(governance_manifest_admission_total{result=\"missing_manifest\"}[5m])",
+          "legendFormat": "missing manifest"
+        },
+        {
+          "expr": "increase(governance_manifest_admission_total{result=\"non_validator_authority\"}[5m])",
+          "legendFormat": "non-validator authority"
+        },
+        {
+          "expr": "increase(governance_manifest_admission_total{result=\"quorum_rejected\"}[5m])",
+          "legendFormat": "quorum rejected"
+        },
+        {
+          "expr": "increase(governance_manifest_admission_total{result=\"protected_namespace_rejected\"}[5m])",
+          "legendFormat": "protected namespace rejected"
+        },
+        {
+          "expr": "increase(governance_manifest_admission_total{result=\"runtime_hook_rejected\"}[5m])",
+          "legendFormat": "runtime hook rejected"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+    },
+    {
+      "type": "stat",
+      "title": "Rejected Deploys (24h)",
+      "description": "24-hour growth in protected namespace rejections.",
+      "targets": [
+        {
+          "expr": "increase(governance_protected_namespace_total{outcome=\"rejected\"}[24h])",
+          "legendFormat": "rejected (24h)"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 }
+    }
+  ]
+}

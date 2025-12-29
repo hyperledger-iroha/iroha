@@ -1,0 +1,121 @@
+[package]
+name = "iroha_data_model"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["governance", "json"]
+bridge = []
+# Retained for compatibility dependencies; no additional behavior is gated by `std` in this crate.
+std = []
+# Enable JSON-related functionality
+json = [
+    "iroha_version/json",
+    "iroha_primitives/json",
+    "iroha_crypto/json",
+    "norito/json",
+    "norito_derive",
+    "mv",
+]
+test-fixtures = []
+gost = ["iroha_crypto/gost"]
+sm = ["iroha_crypto/sm"]
+ml-dsa = ["iroha_crypto/ml-dsa"]
+# Enable API for HTTP requests. Should be activated for HTTP clients
+http = []
+# Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)
+#ffi_import = ["iroha_ffi", "iroha_primitives/ffi_import", "iroha_crypto/ffi_import"]
+
+# Expose FFI API for dynamic linking (Internal use only)
+ffi_export = ["iroha_ffi", "iroha_primitives/ffi_export", "iroha_crypto/ffi_export"]
+# Expose API for mutating structures (Internal use only)
+transparent_api = ["iroha_data_model_derive/transparent_api"]
+# Enable fault injection to simulate malicious data tampering during testing.
+fault_injection = []
+fast_dsl = []
+trybuild-tests = []
+ids_projection = []
+governance = []
+zk-ballot = []
+# Recognize `packed-struct` used by derive macros in dependencies.
+# Not enabled by default; declared to silence unexpected-cfg warnings.
+packed-struct = []
+
+# Enable server-side evaluation of committed-transaction predicates via
+# an inherent `applies(&CommittedTransaction)` method on CompoundPredicate.
+tx_predicates = []
+
+## The lightweight query DSL is now the default and unconditional.
+
+[dependencies]
+iroha_data_model_derive = { path = "../iroha_data_model_derive" }
+
+iroha_primitives = { workspace = true }
+iroha_crypto = { workspace = true }
+iroha_macro = { workspace = true }
+error-stack = { workspace = true }
+iroha_version = { workspace = true, features = ["derive"] }
+iroha_schema = { workspace = true }
+iroha_ffi = { workspace = true, optional = true }
+iroha_zkp_halo2 = { workspace = true }
+hex = { workspace = true }
+
+derive_more = { workspace = true, features = ["as_ref", "display", "debug", "constructor", "from_str", "from", "into", "try_into", "deref"] }
+norito = {workspace = true}
+norito_derive = { workspace = true, optional = true }
+mv = { path = "../mv", optional = true }
+sorafs_manifest = { workspace = true }
+thiserror = { workspace = true }
+displaydoc = { workspace = true, features = ["std"] }
+getset = { workspace = true }
+derive-where = { workspace = true }
+base64 = { workspace = true, features = ["alloc"] }
+nonzero_ext = { workspace = true }
+rustc-hash = { workspace = true }
+icu_normalizer = { version = "2.1.1", default-features = false, features = ["compiled_data"] }
+blake2 = "0.10.6"
+blake3 = { workspace = true }
+idna = { version = "1.1.0", default-features = false, features = ["std"] }
+bs58 = "0.5.1"
+time = { workspace = true }
+fastpq_isi = { path = "../fastpq_isi" }
+
+[dev-dependencies]
+iroha_crypto = { workspace = true, features = ["rand", "gost", "sm", "ml-dsa"] }
+hex-literal = { workspace = true }
+ivm = { path = "../ivm" }
+
+criterion = { workspace = true }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
+tempfile = { workspace = true }
+trybuild = { workspace = true }
+
+#[build-dependencies]
+# NOTE: This crate's build.rs only copies a file and does not require syn.
+# Removing syn from build-dependencies avoids compiling a heavy crate during build
+# which significantly speeds up workspace builds.
+
+[[bench]]
+name = "time_event_filter"
+harness = false
+
+
+[[bench]]
+name = "decode_registry"
+harness = false
+
+[[bench]]
+name = "enum_vs_trait"
+harness = false
+
+[[bin]]
+name = "axt_fixtures"
+path = "src/bin/axt_fixtures.rs"
+required-features = ["test-fixtures"]

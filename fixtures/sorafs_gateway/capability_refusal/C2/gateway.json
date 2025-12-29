@@ -1,0 +1,12 @@
+{
+  "base_fixture": "../1.0.0",
+  "mutations": {
+    "manifest.chunking.aliases": [
+      "sorafs-sf1"
+    ],
+    "governance.alias_bindings": []
+  },
+  "notes": [
+    "Remove the canonical `sorafs.sf1@1.0.0` alias from the manifest and governance envelope to reproduce the variant-missing refusal."
+  ]
+}

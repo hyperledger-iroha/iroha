@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/source/ministry/emergency_canon_policy.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 7ee8f62d7e2cabf5ab3c6556ac080724266b4291a76b62dd15e25c0f4e69ed06
+source_last_modified: "2025-11-17T19:22:36.588589+00:00"
+translation_last_reviewed: null
+---
+
+# Traduction en cours
+
+Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+
+Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.

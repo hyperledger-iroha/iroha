@@ -1,0 +1,139 @@
+{
+  "title": "SoraFS Gateway Observability",
+  "uid": "sorafs-gateway",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["sorafs", "gateway"],
+  "templating": {
+    "list": [
+      {
+        "name": "endpoint",
+        "label": "Endpoint",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sorafs_gateway_requests_total, endpoint)",
+        "refresh": 1,
+        "current": {"text": "All", "value": ""},
+        "includeAll": true
+      },
+      {
+        "name": "provider",
+        "label": "Provider",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sorafs_gateway_requests_total{endpoint=~\"$endpoint\"}, provider_id)",
+        "refresh": 1,
+        "current": {"text": "All", "value": ""},
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Trustless Availability (5m)",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (endpoint) (rate(sorafs_gateway_requests_total{result=\"success\", endpoint=~\"$endpoint\", provider_id=~\"$provider\"}[5m])) / sum by (endpoint) (rate(sorafs_gateway_requests_total{endpoint=~\"$endpoint\", provider_id=~\"$provider\"}[5m]))",
+          "legendFormat": "{{endpoint}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "TTFB P95 (5m)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (endpoint, le) (rate(sorafs_gateway_ttfb_ms_bucket{endpoint=~\"$endpoint\", provider_id=~\"$provider\"}[5m])))",
+          "legendFormat": "P95",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "title": "Refusal Breakdown (15m)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (reason, profile, provider_id, status) (increase(sorafs_gateway_requests_total{result!=\"success\", endpoint=~\"$endpoint\", provider_id=~\"$provider\"}[15m]))",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Proof Failure Rate (5m)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (kind) (rate(sorafs_gateway_proof_events_total{result!=\"success\", provider_id=~\"$provider\"}[5m]))",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "req/s",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Proof Success Ratio (5m)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (kind) (rate(sorafs_gateway_proof_events_total{result=\"success\", provider_id=~\"$provider\"}[5m])) / sum by (kind) (rate(sorafs_gateway_proof_events_total{provider_id=~\"$provider\"}[5m]))",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

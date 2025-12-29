@@ -1,0 +1,262 @@
+//! SSE smoke test: verify that `/v1/events/sse` streams trigger and data events.
+
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant};
+
+use eyre::Result;
+use iroha::data_model::prelude::*;
+use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
+use iroha_test_network::NetworkBuilder;
+use iroha_test_samples::ALICE_ID;
+use norito::json::{self, Value as JsonValue};
+
+use integration_tests::sandbox;
+
+const SSE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Wait for the SSE reader to establish a connection (the reader emits a
+/// synthetic `{"connected":true}` payload when headers have been consumed).
+fn wait_for_sse_ready(rx: &Receiver<String>) -> Result<()> {
+    wait_for_sse(rx, SSE_TIMEOUT, |val| {
+        val.get("connected").and_then(JsonValue::as_bool) == Some(true)
+    })
+    .map(|_| ())
+}
+
+#[test]
+fn sse_emits_execute_trigger_event() -> Result<()> {
+    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
+        NetworkBuilder::new(),
+        stringify!(sse_emits_execute_trigger_event),
+    )?
+    else {
+        return Ok(());
+    };
+    let peer = network.peer();
+    let client = peer.client();
+
+    let rx = spawn_sse_reader(peer.api_address());
+    wait_for_sse_ready(&rx)?;
+
+    // Register a simple by-call trigger and execute it. The action mints an asset which,
+    // in turn, should emit a `Data` event captured by the SSE listener.
+    let trigger_id: TriggerId = "sse_smoke_trigger".parse()?;
+    let asset_id = AssetId::new("rose#wonderland".parse()?, ALICE_ID.clone());
+    let register = Register::trigger(Trigger::new(
+        trigger_id.clone(),
+        Action::new(
+            vec![InstructionBox::from(Mint::asset_numeric(1_u32, asset_id))],
+            Repeats::Indefinitely,
+            ALICE_ID.clone(),
+            ExecuteTriggerEventFilter::new()
+                .for_trigger(trigger_id.clone())
+                .under_authority(ALICE_ID.clone()),
+        ),
+    ));
+    if sandbox::handle_result(
+        client.submit_blocking(register),
+        stringify!(sse_emits_execute_trigger_event),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    if sandbox::handle_result(
+        client.submit_blocking(ExecuteTrigger::new(trigger_id)),
+        stringify!(sse_emits_execute_trigger_event),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
+    // Expect ExecuteTrigger + Data events over SSE.
+    let result: Result<()> = (|| {
+        let exec_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
+            summary_contains(val, "ExecuteTriggerEvent")
+        })?;
+        assert_eq!(exec_evt["category"].as_str(), Some("Other"));
+        let alice = &*ALICE_ID;
+        let data_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
+            val["category"].as_str() == Some("Data")
+                && summary_contains(val, "Asset(Added")
+                && summary_contains(val, &format!("rose##{alice}"))
+        })?;
+        assert_eq!(data_evt["category"].as_str(), Some("Data"));
+        Ok(())
+    })();
+
+    if sandbox::handle_result(result, stringify!(sse_emits_execute_trigger_event))?.is_none() {
+        return Ok(());
+    }
+
+    Ok(())
+}
+
+#[test]
+fn sse_captures_time_trigger_and_metadata_events() -> Result<()> {
+    use iroha::data_model::events::time::{ExecutionTime, TimeEventFilter};
+
+    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
+        NetworkBuilder::new(),
+        stringify!(sse_captures_time_trigger_and_metadata_events),
+    )?
+    else {
+        return Ok(());
+    };
+    let peer = network.peer();
+    let client = peer.client();
+    let rx = spawn_sse_reader(peer.api_address());
+    wait_for_sse_ready(&rx)?;
+
+    // Time trigger that sets ALICE's metadata when it fires at pre-commit.
+    let key: Name = "sse_tick".parse()?;
+    let time_trigger = Trigger::new(
+        "sse_time_trigger".parse()?,
+        Action::new(
+            vec![InstructionBox::from(SetKeyValue::account(
+                ALICE_ID.clone(),
+                key.clone(),
+                Json::from(norito::json!("tick")),
+            ))],
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            TimeEventFilter::new(ExecutionTime::PreCommit),
+        ),
+    );
+    if sandbox::handle_result(
+        client.submit_blocking(Register::trigger(time_trigger)),
+        stringify!(sse_captures_time_trigger_and_metadata_events),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
+    // Kick a block so the pre-commit trigger fires.
+    if sandbox::handle_result(
+        client.submit_blocking(Log::new(Level::INFO, "trigger tick".to_string())),
+        stringify!(sse_captures_time_trigger_and_metadata_events),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
+    let result: Result<()> = (|| {
+        let time_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| summary_contains(val, "TimeEvent"))?;
+        assert_eq!(time_evt["category"].as_str(), Some("Other"));
+        let meta_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
+            val["category"].as_str() == Some("Data")
+                && summary_contains(val, "MetadataInserted")
+                && summary_contains(val, key.as_ref())
+        })?;
+        assert_eq!(meta_evt["category"].as_str(), Some("Data"));
+        Ok(())
+    })();
+
+    if sandbox::handle_result(
+        result,
+        stringify!(sse_captures_time_trigger_and_metadata_events),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
+    Ok(())
+}
+
+fn spawn_sse_reader(addr: IrohaSocketAddr) -> Receiver<String> {
+    let (tx, rx) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let target = addr
+            .to_socket_addrs()
+            .expect("resolve SSE endpoint")
+            .next()
+            .expect("SSE endpoint yields socket address");
+        let host = target.to_string();
+        let deadline = Instant::now() + SSE_TIMEOUT;
+        let mut backoff = Duration::from_millis(200);
+
+        // Retry connecting until the server is ready or the overall SSE timeout elapses.
+        while Instant::now() < deadline {
+            if let Ok(mut stream) = TcpStream::connect(target) {
+                stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+                let req = format!(
+                    "GET /v1/events/sse HTTP/1.1\r\nHost: {host}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
+                );
+                if stream.write_all(req.as_bytes()).is_err() {
+                    std::thread::sleep(backoff);
+                    backoff = std::cmp::min(backoff * 2, Duration::from_secs(1));
+                    continue;
+                }
+                let _ = stream.flush();
+
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                // Consume headers
+                while {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap_or(0) != 0 && line != "\r\n"
+                } {}
+                // Signal readiness so the test can submit transactions only after the
+                // SSE connection is live.
+                if tx.send(r#"{"connected":true}"#.to_owned()).is_err() {
+                    return;
+                }
+
+                // Stream SSE payloads; if the server closes the connection unexpectedly,
+                // retry until the overall deadline.
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            if let Some(rest) = line.strip_prefix("data: ")
+                                && tx.send(rest.trim().to_owned()).is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                }
+            } else {
+                std::thread::sleep(backoff);
+                backoff = std::cmp::min(backoff * 2, Duration::from_secs(1));
+            }
+        }
+    });
+    rx
+}
+
+fn wait_for_sse<F>(rx: &Receiver<String>, timeout: Duration, predicate: F) -> Result<JsonValue>
+where
+    F: Fn(&JsonValue) -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(eyre::eyre!(
+                "timed out waiting for SSE payload matching predicate"
+            ));
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let raw = rx
+            .recv_timeout(remaining)
+            .map_err(|_| eyre::eyre!("SSE channel closed before matching event"))?;
+        let val: JsonValue = json::from_str(raw.trim()).expect("valid SSE JSON");
+        if predicate(&val) {
+            return Ok(val);
+        }
+    }
+}
+
+fn summary_contains(val: &JsonValue, needle: &str) -> bool {
+    val.get("summary")
+        .and_then(JsonValue::as_str)
+        .is_some_and(|s| s.contains(needle))
+}

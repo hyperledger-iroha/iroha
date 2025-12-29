@@ -1,0 +1,7 @@
+profile,metal_available,leaves,cpu_ms,metal_ms,speedup
+macos14_arm64_cpu,false,1024,12.400375,,
+macos14_arm64_cpu,false,4096,48.20325,,
+macos14_arm64_cpu,false,8192,93.740042,,
+macos14_arm64_cpu,false,16384,72.546167,,
+macos14_arm64_cpu,false,32768,109.31425,,
+macos14_arm64_cpu,false,65536,180.424583,,

@@ -1,0 +1,16 @@
+#+COMMENT: Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation.
+
+#+LANGUAGE: pt
+#+DIRECTION: ltr
+#+SOURCE: docs/source/lts_selection.org
+#+STATUS: needs-translation
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: ab2409dcdcd5174e23fabef84d9af5556ca8087f7db450eac68650a1777307bc
+#+SOURCE_LAST_MODIFIED: 2025-10-08T11:49:57+00:00
+#+TRANSLATION_LAST_REVIEWED: 
+
+* Tradução em andamento
+
+Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Após concluir a tradução, atualize `#+STATUS` de forma apropriada.
+
+Substitua esta seção pelo texto traduzido completo e atualize `#+STATUS` para `complete` ao concluir. Certifique-se de que `#+LAST_REVIEWED` registre a última revisão em relação ao original em inglês.

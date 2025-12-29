@@ -1,0 +1,38 @@
+[package]
+name = "iroha_derive"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+futures = []
+config_base = []
+telemetry = []
+trybuild-tests = []
+
+[lib]
+proc-macro = true
+
+[dependencies]
+
+syn = { workspace = true, features = ["default", "full", "extra-traits", "visit-mut"] }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+manyhow = { workspace = true }
+darling = { workspace = true }
+iroha_derive_primitives = { path = "../iroha_derive_primitives" }
+
+[dev-dependencies]
+iroha_macro = { workspace = true }
+iroha_config_base = { workspace = true }
+
+impls = { workspace = true }
+expect-test = { workspace = true }
+trybuild = { workspace = true }

@@ -1,0 +1,11 @@
+error: Uninhabited enums are not allowed in FFI
+ --> tests/ui_fail/uninhabited_enum.rs:3:1
+  |
+3 | /// Uninhabited enum
+  | ^^^^^^^^^^^^^^^^^^^^
+
+error: Uninhabited enums are not allowed in FFI
+ --> tests/ui_fail/uninhabited_enum.rs:8:1
+  |
+8 | /// Uninhabited enum
+  | ^^^^^^^^^^^^^^^^^^^^

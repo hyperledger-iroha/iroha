@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Sugeng rawuh ing Hyperledger Iroha!",
+  "error.trace_config_setup": "Ora bisa nyiyapake pelacakan konfigurasi",
+  "error.config": "Kesalahan konfigurasi!",
+  "error.logger": "Ora bisa nginisialisasi sistem log",
+  "error.start": "Ora bisa miwiti Iroha",
+  "error.run": "Kesalahan kelakon nalika mbukak Iroha",
+  "error.start_p2p": "Ora bisa miwiti jaringan P2P",
+  "error.init_kura": "Ora bisa nginisialisasi Kura (panyimpenan blok)",
+  "error.start_dev_telemetry": "Ora bisa miwiti layanan telemetri pangembang",
+  "error.start_telemetry": "Ora bisa miwiti layanan telemetri",
+  "error.listen_os_signal": "Ora bisa nyetel ngrungokake sinyal sistem operasi",
+  "error.start_torii": "Ora bisa miwiti Torii (gerbang Iroha HTTP API)"
+}

@@ -1,0 +1,11 @@
+{
+  "slot_id": "slot-sample",
+  "captured_at": "2026-01-15T12:05:00Z",
+  "pending_transactions": [
+    {
+      "id": "and6-sample-tx-1",
+      "kind": "transfer",
+      "status": "queued"
+    }
+  ]
+}

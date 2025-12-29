@@ -1,0 +1,62 @@
+{
+  "manifest_id": "c9bdf0b2-63a3-4a90-8d70-908d119c2c7e",
+  "dataset_id": "c0956583-355a-43cc-9a60-e3a5d9a0f7d0",
+  "calibration_window": {
+    "start": "2026-02-03T00:00:00Z",
+    "end": "2026-02-05T23:59:59Z"
+  },
+  "metrics": {
+    "combined": {
+      "brier": 0.126,
+      "ece": 0.034,
+      "auroc": 0.982,
+      "thresholds": {
+        "quarantine": 0.42,
+        "escalate": 0.78
+      }
+    }
+  },
+  "models": [
+    {
+      "model_id": "5a2a6503-09ac-4025-84d0-670a541a9a1d",
+      "family": "vision",
+      "brier": 0.141,
+      "ece": 0.031,
+      "auroc": 0.987,
+      "precision_at_quarantine": 0.964,
+      "recall_at_escalate": 0.912
+    },
+    {
+      "model_id": "76c8b69f-38fd-4d7d-966c-1f8d90bcbf05",
+      "family": "multimodal",
+      "brier": 0.118,
+      "ece": 0.028,
+      "auroc": 0.978,
+      "precision_at_quarantine": 0.942,
+      "recall_at_escalate": 0.904
+    },
+    {
+      "model_id": "15e65647-7b1f-4106-bae3-4040b1a9361e",
+      "family": "perceptual",
+      "brier": 0.162,
+      "ece": 0.047,
+      "auroc": 0.953,
+      "precision_at_quarantine": 0.883,
+      "recall_at_escalate": 0.861
+    }
+  ],
+  "verdict_distribution": {
+    "pass": 0.912,
+    "quarantine": 0.068,
+    "escalate": 0.020
+  },
+  "false_positive_backlog": 0,
+  "drift_score": 0.071,
+  "telemetry_digest": "5791937b806cb8a2fe36e0f1f12c74d7f684c0f1cd5adc3dc26fc4f37b7a3c8f",
+  "scorecard_digest": "d2c612cf5c37e8136622608a74f9e557d1642a4a36da53648fe753b44b768a8e",
+  "signoff": {
+    "prepared_by": "ai-platform-guild",
+    "reviewed_at": "2026-02-10T11:45:12Z",
+    "notes": "Metrics meet Brier/ECE targets; PQ-only mode deferred until SNNet-16 PQ guardrail."
+  }
+}

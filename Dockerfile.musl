@@ -1,0 +1,72 @@
+FROM --platform=linux/amd64 archlinux:base-devel AS builder
+
+RUN <<EOT
+  set -eux
+  # Force-sync packages, install archlinux-keyring, repopulate keys
+  pacman -Syy
+  pacman -S archlinux-keyring --noconfirm --disable-download-timeout
+  rm -rf /etc/pacman.d/gnupg/* && pacman-key --init && pacman-key --populate archlinux
+  # Install updates
+  pacman -Syu --noconfirm --disable-download-timeout
+  # Set up Rust toolchain
+  pacman -S rustup wget musl --noconfirm --disable-download-timeout
+EOT
+
+RUN <<EOT
+  set -eux
+  rustup set profile minimal
+  rustup component add --toolchain stable rust-src
+  rustup target add --toolchain stable x86_64-unknown-linux-musl
+EOT
+
+ENV RUSTFLAGS="-C link-arg=-static"
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+
+WORKDIR /iroha
+COPY . .
+RUN cargo build \
+    --bin irohad \
+    --bin iroha \
+    --bin kagami \
+    --target x86_64-unknown-linux-musl \
+    --profile deploy
+
+FROM alpine:3.21
+
+ARG STORAGE=/storage
+ARG TARGET_DIR=/iroha/target/x86_64-unknown-linux-musl/deploy
+ENV BIN_PATH=/usr/local/bin/
+ENV CONFIG_DIR=/config
+
+ENV KURA_STORE_DIR=$STORAGE
+ENV SNAPSHOT_STORE_DIR=$STORAGE/snapshot
+
+ENV USER=iroha
+ENV UID=1001
+ENV GID=1001
+
+RUN <<EOT
+  set -eux
+  apk add --no-cache curl ca-certificates jq
+  addgroup -g $GID $USER
+  adduser \
+    --disabled-password \
+    --gecos "" \
+    --home /app \
+    --ingroup "$USER" \
+    --no-create-home \
+    --uid "$UID" \
+    "$USER"
+  mkdir -p $CONFIG_DIR
+  mkdir -p $STORAGE
+  chown $USER:$USER $STORAGE
+  chown $USER:$USER $CONFIG_DIR
+EOT
+
+COPY --from=builder $TARGET_DIR/irohad $BIN_PATH
+COPY --from=builder $TARGET_DIR/iroha $BIN_PATH
+COPY --from=builder $TARGET_DIR/kagami $BIN_PATH
+COPY defaults/genesis.json $CONFIG_DIR
+COPY defaults/client.toml $CONFIG_DIR
+USER $USER
+CMD ["irohad"]

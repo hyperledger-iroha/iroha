@@ -1,0 +1,2687 @@
+//! This module contains structures and messages for synchronization of blocks between peers.
+use std::num::NonZeroUsize;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
+    num::NonZeroU32,
+    sync::Arc,
+    time::Duration,
+};
+
+use iroha_config::parameters::actual::BlockSync as Config;
+use iroha_crypto::HashOf;
+use iroha_data_model::{
+    block::{BlockHeader, SignedBlock},
+    consensus::{CommitCertificate, ValidatorSetCheckpoint},
+    prelude::*,
+};
+use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_logger::prelude::*;
+use iroha_macro::*;
+use norito::codec::{Decode, Encode};
+use rand::seq::SliceRandom;
+use tokio::sync::mpsc;
+
+use crate::{
+    IrohaNetwork, NetworkMessage,
+    kura::Kura,
+    state::{State, StateReadOnly, StateView, WorldReadOnly},
+    sumeragi::{
+        SumeragiHandle,
+        consensus::{
+            NPOS_TAG, PERMISSIONED_TAG, Phase, Qc, QcAggregate, ValidatorIndex, qc_signer_count,
+        },
+        network_topology::Topology,
+        status,
+    },
+};
+
+/// [`BlockSynchronizer`] actor handle.
+#[derive(Clone)]
+pub struct BlockSynchronizerHandle {
+    message_sender: mpsc::Sender<message::Message>,
+}
+
+impl BlockSynchronizerHandle {
+    /// Send [`message::Message`] to [`BlockSynchronizer`] actor.
+    ///
+    /// Messages are best-effort: if the queue is full, the message is dropped
+    /// to avoid blocking consensus traffic.
+    pub fn message(&self, message: message::Message) {
+        let kind = match &message {
+            message::Message::GetBlocksAfter(_) => "GetBlocksAfter",
+            message::Message::ShareBlocks(_) => "ShareBlocks",
+        };
+        match self.message_sender.try_send(message) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                iroha_logger::debug!(kind, "block sync queue full; dropping block sync message");
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                iroha_logger::warn!(
+                    kind,
+                    "block sync channel disconnected; dropping block sync message"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod handle_tests {
+    use std::collections::BTreeSet;
+
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::peer::PeerId;
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    #[test]
+    fn message_drops_when_queue_full() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let handle = BlockSynchronizerHandle {
+            message_sender: tx.clone(),
+        };
+
+        let peer_id_one = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id_two = PeerId::new(KeyPair::random().public_key().clone());
+        let msg1 = message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+            peer_id_one.clone(),
+            None,
+            None,
+            BTreeSet::new(),
+        ));
+        let msg2 = message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+            peer_id_two.clone(),
+            None,
+            None,
+            BTreeSet::new(),
+        ));
+
+        tx.try_send(msg1).expect("queue has space");
+        handle.message(msg2);
+
+        let received = rx.try_recv().expect("expected queued message");
+        match received {
+            message::Message::GetBlocksAfter(message::GetBlocksAfter { peer_id: got, .. }) => {
+                assert_eq!(got, peer_id_one);
+            }
+            other => panic!("unexpected message queued: {other:?}"),
+        }
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+}
+
+/// Structure responsible for block synchronization between peers.
+pub struct BlockSynchronizer {
+    sumeragi: SumeragiHandle,
+    kura: Arc<Kura>,
+    peer: Peer,
+    gossip_period: Duration,
+    gossip_size: NonZeroU32,
+    network: IrohaNetwork,
+    state: Arc<State>,
+    seen_blocks: BTreeSet<(NonZeroUsize, HashOf<BlockHeader>)>,
+    latest_height: usize,
+    mode_tag: String,
+}
+
+pub use message::RosterMetadata;
+
+impl BlockSynchronizer {
+    /// Start [`Self`] actor.
+    pub fn start(self, shutdown_signal: ShutdownSignal) -> (BlockSynchronizerHandle, Child) {
+        let (message_sender, message_receiver) = mpsc::channel(1);
+        (
+            BlockSynchronizerHandle { message_sender },
+            Child::new(
+                tokio::spawn(self.run(message_receiver, shutdown_signal)),
+                OnShutdown::Abort,
+            ),
+        )
+    }
+
+    /// [`Self`] task.
+    async fn run(
+        mut self,
+        mut message_receiver: mpsc::Receiver<message::Message>,
+        shutdown_signal: ShutdownSignal,
+    ) {
+        let mut gossip_period = tokio::time::interval(self.gossip_period);
+        loop {
+            tokio::select! {
+                _ = gossip_period.tick() => self.request_block().await,
+                Some(msg) = message_receiver.recv() => {
+                    msg.handle_message(&mut self).await;
+                }
+                () = shutdown_signal.receive() => {
+                    debug!("Shutting down block sync");
+                    break;
+                },
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// Sends requests for the latest blocks to a subset of online peers
+    async fn request_block(&mut self) {
+        let now_height = self.state.view().height();
+
+        // This guards against a softfork and adds general redundancy.
+        if now_height == self.latest_height {
+            self.seen_blocks.clear();
+        }
+        self.latest_height = now_height;
+
+        self.seen_blocks
+            .retain(|(height, _hash)| height.get() >= now_height);
+
+        let peers = self
+            .network
+            .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
+        if peers.is_empty() {
+            return;
+        }
+
+        let (targets, stray_targets, gossip_size, world_known) = {
+            let world_peers: BTreeSet<_> =
+                self.state.view().world.peers().iter().cloned().collect();
+            let mut rng = rand::rng();
+            let gossip_size = usize::try_from(self.gossip_size.get()).unwrap_or(usize::MAX);
+            let stray_targets: Vec<_> = peers
+                .iter()
+                .filter(|peer| !world_peers.contains(*peer))
+                .cloned()
+                .collect();
+            let world_targets: Vec<_> = peers
+                .iter()
+                .filter(|peer| world_peers.contains(*peer))
+                .cloned()
+                .collect();
+            let mut targets = stray_targets.clone();
+            let remaining_budget = gossip_size.saturating_sub(targets.len());
+            if remaining_budget > 0 {
+                let sampled = sample_block_sync_targets(&world_targets, remaining_budget, &mut rng);
+                targets.extend(sampled);
+            }
+            (targets, stray_targets, gossip_size, world_peers.len())
+        };
+        if targets.is_empty() {
+            iroha_logger::debug!(
+                height = now_height,
+                online = peers.len(),
+                gossip_limit = gossip_size,
+                "block sync: no peers sampled for gossip"
+            );
+        } else {
+            iroha_logger::info!(
+                height = now_height,
+                online = peers.len(),
+                seen = self.seen_blocks.len(),
+                gossip_limit = gossip_size,
+                target_count = targets.len(),
+                world_known,
+                stray_target_count = stray_targets.len(),
+                stray_targets = ?stray_targets,
+                targets = ?targets,
+                "block sync sampling peers for latest blocks"
+            );
+        }
+        for peer_id in targets {
+            self.request_latest_blocks_from_peer(peer_id).await;
+        }
+    }
+
+    /// Sends request for latest blocks to a chosen peer
+    async fn request_latest_blocks_from_peer(&mut self, peer_id: PeerId) {
+        let (prev_hash, latest_hash) = {
+            let state_view = self.state.view();
+            (state_view.prev_block_hash(), state_view.latest_block_hash())
+        };
+        message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+            self.peer.id().clone(),
+            prev_hash,
+            latest_hash,
+            self.seen_blocks
+                .iter()
+                .map(|(_height, hash)| *hash)
+                .collect(),
+        ))
+        .send_to(&self.network, peer_id)
+        .await;
+    }
+    /// Create [`Self`] from [`Config`]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_config(
+        config: &Config,
+        sumeragi: SumeragiHandle,
+        kura: Arc<Kura>,
+        peer: Peer,
+        network: IrohaNetwork,
+        state: Arc<State>,
+        mode_tag: String,
+    ) -> Self {
+        Self {
+            peer,
+            sumeragi,
+            kura,
+            gossip_period: config.gossip_period,
+            gossip_size: config.gossip_size,
+            network,
+            state,
+            seen_blocks: BTreeSet::new(),
+            latest_height: 0,
+            mode_tag,
+        }
+    }
+
+    /// Build a bitmap from validator indices sized for `roster_len`.
+    fn build_signers_bitmap(signers: &BTreeSet<ValidatorIndex>, roster_len: usize) -> Vec<u8> {
+        if roster_len == 0 {
+            return Vec::new();
+        }
+        let mut bitmap = vec![0u8; roster_len.div_ceil(8)];
+        for signer in signers {
+            let Ok(idx) = usize::try_from(*signer) else {
+                continue;
+            };
+            if idx >= roster_len {
+                continue;
+            }
+            let byte = idx / 8;
+            let bit = idx % 8;
+            bitmap[byte] |= 1u8 << bit;
+        }
+        bitmap
+    }
+
+    /// Compute the minimum votes required for a commit for a roster of length `len`.
+    const fn min_votes_for_len(len: usize) -> usize {
+        if len > 3 {
+            ((len.saturating_sub(1)) / 3) * 2 + 1
+        } else {
+            len
+        }
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    fn qc_from_signers(
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        roster_len: usize,
+        signers: BTreeSet<ValidatorIndex>,
+        aggregate_signature: Vec<u8>,
+    ) -> Option<Qc> {
+        if roster_len == 0 {
+            return None;
+        }
+        let required = Self::min_votes_for_len(roster_len);
+        if signers.len() < required {
+            return None;
+        }
+        if aggregate_signature.is_empty() {
+            return None;
+        }
+        let signers_bitmap = Self::build_signers_bitmap(&signers, roster_len);
+        Some(Qc {
+            phase: Phase::Precommit,
+            subject_block_hash: block_hash,
+            height,
+            view,
+            epoch,
+            aggregate: QcAggregate {
+                signers_bitmap,
+                bls_aggregate_signature: aggregate_signature,
+            },
+        })
+    }
+
+    pub(crate) fn block_sync_qc_for(block: &SignedBlock) -> Option<Qc> {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = u64::from(block.header().view_change_index());
+        let epoch = 0;
+
+        if let Some(record) = status::precommit_signers_for(block_hash) {
+            if record.height != height || record.view != view || record.epoch != epoch {
+                iroha_logger::info!(
+                    height,
+                    view,
+                    record_height = record.height,
+                    record_view = record.view,
+                    "block sync: cached precommit signer record does not match block metadata"
+                );
+                return None;
+            }
+            if let Some(qc) = Self::qc_from_signers(
+                block_hash,
+                record.height,
+                record.view,
+                record.epoch,
+                record.roster_len,
+                record.signers.clone(),
+                record.bls_aggregate_signature.clone(),
+            ) {
+                iroha_logger::info!(
+                    height,
+                    view,
+                    roster_len = record.roster_len,
+                    signers = record.signers.len(),
+                    "block sync: reusing cached precommit signer set for QC"
+                );
+                return Some(qc);
+            }
+
+            iroha_logger::info!(
+                height,
+                view,
+                roster_len = record.roster_len,
+                signers = record.signers.len(),
+                "block sync: cached precommit signer set could not build QC"
+            );
+        }
+        iroha_logger::info!(
+            height,
+            view,
+            block_signatures = block.signatures().count(),
+            "block sync: no QC available for block"
+        );
+        None
+    }
+
+    /// Validate block signatures against the provided topology.
+    pub(crate) fn block_signatures_valid(
+        block: &SignedBlock,
+        topology: &Topology,
+        state: &StateView<'_>,
+    ) -> Result<(), crate::block::SignatureVerificationError> {
+        crate::block::ValidBlock::validate_signatures_subset(block, topology, state)
+    }
+}
+
+fn align_topology_for_block_signatures(
+    mode_tag: &str,
+    topology: &Topology,
+    block: &SignedBlock,
+    prf_seed: Option<[u8; 32]>,
+) -> Topology {
+    let mut rotated = topology.clone();
+    let height = block.header().height().get();
+    let view = u64::from(block.header().view_change_index());
+    match mode_tag {
+        PERMISSIONED_TAG => {
+            if let Ok(view) = usize::try_from(view) {
+                rotated.nth_rotation(view);
+            } else {
+                warn!(
+                    view,
+                    "skipping topology rotation for block signatures: view index exceeds usize"
+                );
+            }
+        }
+        NPOS_TAG => {
+            if let Some(seed) = prf_seed {
+                let leader = rotated.leader_index_prf(seed, height, view);
+                rotated.rotate_preserve_view_to_front(leader);
+            } else {
+                warn!(
+                    height,
+                    view, "skipping topology rotation for block signatures: missing PRF seed"
+                );
+            }
+        }
+        _ => {}
+    }
+    rotated
+}
+
+fn sample_block_sync_targets(
+    peers: &[PeerId],
+    gossip_size: usize,
+    rng: &mut impl rand::Rng,
+) -> Vec<PeerId> {
+    if peers.is_empty() || gossip_size == 0 {
+        return Vec::new();
+    }
+
+    let mut shuffled = peers.to_vec();
+    shuffled.shuffle(rng);
+    let limit = usize::min(gossip_size, shuffled.len());
+    shuffled.truncate(limit);
+    shuffled
+}
+
+#[cfg(test)]
+mod sample_targets_tests {
+    use rand::{SeedableRng, rngs::StdRng};
+
+    use super::*;
+
+    #[test]
+    fn samples_at_most_gossip_size() {
+        let mut rng = StdRng::seed_from_u64(0xB10C_5EED);
+        let peers: Vec<PeerId> = (0..5)
+            .map(|_| {
+                let (pk, _) = iroha_crypto::KeyPair::random().into_parts();
+                PeerId::new(pk)
+            })
+            .collect();
+        let sample = sample_block_sync_targets(&peers, 3, &mut rng);
+        assert_eq!(sample.len(), 3);
+
+        let mut rng_same = StdRng::seed_from_u64(0xB10C_5EED);
+        let repeat = sample_block_sync_targets(&peers, 3, &mut rng_same);
+        assert_eq!(sample, repeat);
+    }
+
+    #[test]
+    fn samples_all_when_under_limit() {
+        let mut rng = StdRng::seed_from_u64(0xCAFE_BABE);
+        let peers: Vec<PeerId> = (0..2)
+            .map(|_| {
+                let (pk, _) = iroha_crypto::KeyPair::random().into_parts();
+                PeerId::new(pk)
+            })
+            .collect();
+        let sample = sample_block_sync_targets(&peers, 5, &mut rng);
+        assert_eq!(sample.len(), peers.len());
+        for peer in peers {
+            assert!(sample.contains(&peer));
+        }
+    }
+}
+
+#[cfg(test)]
+mod signature_topology_tests {
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::block::{BlockHeader, builder::BlockBuilder};
+    use iroha_data_model::peer::PeerId;
+    use nonzero_ext::nonzero;
+
+    use super::*;
+
+    #[test]
+    fn align_topology_for_block_signatures_rotates_npos_prf() {
+        let seed = [0x42; 32];
+        let keypairs = (0..4).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers);
+        let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 2);
+        let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
+
+        let rotated = align_topology_for_block_signatures(NPOS_TAG, &topology, &block, Some(seed));
+        let expected_leader = topology.leader_index_prf(seed, 3, 2);
+
+        assert_eq!(
+            rotated.as_ref().get(0),
+            topology.as_ref().get(expected_leader),
+            "PRF leader should be at index 0"
+        );
+    }
+}
+
+#[cfg(test)]
+mod prf_seed_tests {
+    use std::sync::Arc;
+
+    use iroha_data_model::consensus::VrfEpochRecord;
+    use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+
+    use crate::{
+        prelude::World,
+        query::store::LiveQueryStore,
+        state::State,
+        sumeragi::{npos_seed_for_height, npos_seed_for_height_from_world},
+    };
+
+    use super::*;
+
+    #[test]
+    fn npos_seed_for_height_falls_back_to_chain_hash() {
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        let seed = npos_seed_for_height(&view, 1);
+        let seed_from_world = {
+            let world_view = state.world.view();
+            npos_seed_for_height_from_world(&world_view, view.chain_id(), 1)
+        };
+        let chain = view.chain_id().clone().into_inner();
+        let expected = {
+            let hash = iroha_crypto::Hash::new(chain.as_bytes());
+            <[u8; 32]>::from(hash)
+        };
+        assert_eq!(seed, expected);
+        assert_eq!(seed_from_world, expected);
+    }
+
+    #[test]
+    fn npos_seed_for_height_prefers_epoch_record() {
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let mut world = state.world.block();
+        let mut params = SumeragiNposParameters::default();
+        params.epoch_length_blocks = 10;
+        world
+            .parameters
+            .set_parameter(Parameter::Custom(params.into_custom_parameter()));
+        world.vrf_epochs.insert(
+            2,
+            VrfEpochRecord {
+                epoch: 2,
+                seed: [0xAB; 32],
+                epoch_length: 10,
+                commit_deadline_offset: 3,
+                reveal_deadline_offset: 6,
+                roster_len: 0,
+                finalized: false,
+                updated_at_height: 20,
+                participants: Vec::new(),
+                late_reveals: Vec::new(),
+                committed_no_reveal: Vec::new(),
+                no_participation: Vec::new(),
+                penalties_applied: false,
+                penalties_applied_at_height: None,
+                validator_election: None,
+            },
+        );
+        world.commit();
+
+        let view = state.view();
+        let seed = npos_seed_for_height(&view, 21);
+        let seed_from_world =
+            crate::sumeragi::npos_seed_for_height_from_world(view.world(), view.chain_id(), 21);
+        assert_eq!(seed, [0xAB; 32]);
+        assert_eq!(seed_from_world, [0xAB; 32]);
+    }
+
+    #[test]
+    fn npos_seed_for_height_falls_back_to_epoch_seed() {
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let mut world = state.world.block();
+        let params = SumeragiNposParameters::default().with_epoch_seed([0xEE; 32]);
+        world
+            .parameters
+            .set_parameter(Parameter::Custom(params.into_custom_parameter()));
+        world.commit();
+
+        let view = state.view();
+        let seed = npos_seed_for_height(&view, 1);
+        let seed_from_world =
+            crate::sumeragi::npos_seed_for_height_from_world(view.world(), view.chain_id(), 1);
+        assert_eq!(seed, [0xEE; 32]);
+        assert_eq!(seed_from_world, [0xEE; 32]);
+    }
+}
+
+#[cfg(test)]
+mod roster_metadata_tests {
+    use std::sync::Arc;
+
+    use crate::{prelude::World, query::store::LiveQueryStore, sumeragi::status};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+    use iroha_data_model::{
+        block::{BlockHeader, BlockSignature},
+        consensus::{CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
+        peer::PeerId,
+    };
+    use nonzero_ext::nonzero;
+
+    use super::*;
+
+    fn sample_roster_artifacts() -> (CommitCertificate, ValidatorSetCheckpoint) {
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_hash = header.hash();
+        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer = PeerId::new(kp.public_key().clone());
+        let block_sig =
+            BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
+        let roster = vec![peer];
+        let commit_certificate = CommitCertificate {
+            height: 1,
+            block_hash,
+            view: 0,
+            epoch: 0,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            signatures: vec![block_sig.clone()],
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            1,
+            block_hash,
+            roster,
+            vec![block_sig],
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        (commit_certificate, checkpoint)
+    }
+
+    #[test]
+    fn metadata_falls_back_to_commit_roster_journal() {
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let (commit_certificate, checkpoint) = sample_roster_artifacts();
+        let block_hash = commit_certificate.block_hash;
+        let roster = commit_certificate.validator_set.clone();
+        state
+            .commit_roster_journal
+            .write()
+            .upsert(commit_certificate.clone(), checkpoint.clone());
+
+        let metadata =
+            super::message::roster_metadata_from_state(&state, kura.as_ref(), 1, block_hash)
+                .expect("metadata should be available from journal");
+        assert_eq!(metadata.commit_certificate, Some(commit_certificate));
+        assert_eq!(metadata.validator_checkpoint, Some(checkpoint));
+        assert_eq!(metadata.roster_snapshot().expect("roster"), roster);
+    }
+
+    #[test]
+    fn effective_roster_metadata_prefers_incoming() {
+        let (commit_certificate, checkpoint) = sample_roster_artifacts();
+        let incoming = RosterMetadata {
+            commit_certificate: Some(commit_certificate.clone()),
+            validator_checkpoint: None,
+        };
+        let fallback = RosterMetadata {
+            commit_certificate: None,
+            validator_checkpoint: Some(checkpoint),
+        };
+
+        let effective = super::message::effective_roster_metadata(Some(&incoming), Some(fallback));
+        assert_eq!(effective, Some(incoming));
+    }
+
+    #[test]
+    fn effective_roster_metadata_falls_back_when_incoming_empty() {
+        let (_commit_certificate, checkpoint) = sample_roster_artifacts();
+        let incoming = RosterMetadata {
+            commit_certificate: None,
+            validator_checkpoint: None,
+        };
+        let fallback = RosterMetadata {
+            commit_certificate: None,
+            validator_checkpoint: Some(checkpoint.clone()),
+        };
+
+        let effective =
+            super::message::effective_roster_metadata(Some(&incoming), Some(fallback.clone()));
+        assert_eq!(effective, Some(fallback));
+    }
+
+    #[test]
+    fn effective_roster_metadata_returns_none_when_empty() {
+        let incoming = RosterMetadata {
+            commit_certificate: None,
+            validator_checkpoint: None,
+        };
+        let effective = super::message::effective_roster_metadata(Some(&incoming), None);
+        assert!(effective.is_none());
+    }
+}
+
+#[cfg(test)]
+mod qc_build_tests {
+    use std::collections::BTreeSet;
+
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_data_model::block::{BlockHeader, builder::BlockBuilder};
+    use iroha_data_model::peer::PeerId;
+    use nonzero_ext::nonzero;
+
+    use super::*;
+
+    fn qc_preimage(
+        chain_id: &ChainId,
+        mode_tag: &str,
+        phase: Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+    ) -> Vec<u8> {
+        if phase == Phase::Available {
+            let vote = crate::sumeragi::consensus::AvailableVote {
+                block_hash,
+                height,
+                view,
+                epoch,
+                signer: 0,
+                bls_sig: Vec::new(),
+                signature: Vec::new(),
+            };
+            crate::sumeragi::consensus::available_vote_preimage(chain_id, mode_tag, &vote)
+        } else {
+            let vote = crate::sumeragi::consensus::Vote {
+                phase,
+                block_hash,
+                height,
+                view,
+                epoch,
+                signer: 0,
+                bls_sig: Vec::new(),
+                signature: Vec::new(),
+            };
+            crate::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn aggregate_signature_for_signers(
+        chain_id: &ChainId,
+        mode_tag: &str,
+        phase: Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        signers: &BTreeSet<ValidatorIndex>,
+        topology: &Topology,
+        keypairs: &[KeyPair],
+    ) -> Vec<u8> {
+        if signers.is_empty() {
+            return Vec::new();
+        }
+        let preimage = qc_preimage(chain_id, mode_tag, phase, block_hash, height, view, epoch);
+        let mut signatures = Vec::with_capacity(signers.len());
+        for signer in signers {
+            let idx = usize::try_from(*signer).expect("signer fits usize");
+            let peer = topology.as_ref().get(idx).expect("signer in topology");
+            let kp = keypairs
+                .iter()
+                .find(|kp| kp.public_key() == peer.public_key())
+                .expect("matching keypair");
+            let sig = Signature::new(kp.private_key(), &preimage);
+            signatures.push(sig.payload().to_vec());
+        }
+        let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+        iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate succeeds")
+    }
+
+    #[test]
+    fn qc_from_signers_requires_quorum_and_signature() {
+        let chain_id = ChainId::from("qc-from-signers");
+        let mode_tag = PERMISSIONED_TAG;
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers);
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([1; 32]));
+        let height = 1;
+        let view = 0;
+        let epoch = 0;
+        let mut signers = BTreeSet::new();
+        signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
+        signers.insert(ValidatorIndex::try_from(1).expect("index 1"));
+
+        let aggregate = aggregate_signature_for_signers(
+            &chain_id,
+            mode_tag,
+            Phase::Precommit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &signers,
+            &topology,
+            &keypairs,
+        );
+        let qc = BlockSynchronizer::qc_from_signers(
+            block_hash,
+            height,
+            view,
+            epoch,
+            topology.as_ref().len(),
+            signers.clone(),
+            aggregate,
+        );
+        assert!(qc.is_some(), "QC should be built with quorum signers");
+
+        let qc_empty = BlockSynchronizer::qc_from_signers(
+            block_hash,
+            height,
+            view,
+            epoch,
+            topology.as_ref().len(),
+            signers.clone(),
+            Vec::new(),
+        );
+        assert!(
+            qc_empty.is_none(),
+            "empty aggregate signature must be rejected"
+        );
+
+        let mut partial_signers = BTreeSet::new();
+        partial_signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
+        let partial = BlockSynchronizer::qc_from_signers(
+            block_hash,
+            height,
+            view,
+            epoch,
+            topology.as_ref().len(),
+            partial_signers,
+            vec![0xAA; 48],
+        );
+        assert!(partial.is_none(), "insufficient signers must be rejected");
+    }
+
+    #[test]
+    fn block_sync_qc_for_uses_cached_record() {
+        let chain_id = ChainId::from("block-sync-qc");
+        let mode_tag = PERMISSIONED_TAG;
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = u64::from(block.header().view_change_index());
+
+        let mut signers = BTreeSet::new();
+        signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
+        signers.insert(ValidatorIndex::try_from(1).expect("index 1"));
+        let aggregate = aggregate_signature_for_signers(
+            &chain_id,
+            mode_tag,
+            Phase::Precommit,
+            block_hash,
+            height,
+            view,
+            0,
+            &signers,
+            &topology,
+            &keypairs,
+        );
+        status::record_precommit_signers(status::PrecommitSignerRecord {
+            block_hash,
+            height,
+            view,
+            epoch: 0,
+            signers: signers.clone(),
+            roster_len: topology.as_ref().len(),
+            bls_aggregate_signature: aggregate.clone(),
+        });
+
+        let qc = BlockSynchronizer::block_sync_qc_for(&block).expect("cached QC should be built");
+        assert_eq!(qc.subject_block_hash, block_hash);
+        assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate);
+    }
+}
+
+pub mod message {
+    //! Module containing messages for [`BlockSynchronizer`].
+
+    use super::*;
+    use crate::sumeragi::network_topology::Role;
+
+    /// Certified roster hints shipped alongside block sync payloads.
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+    pub struct RosterMetadata {
+        /// Optional commit certificate for the block.
+        pub commit_certificate: Option<CommitCertificate>,
+        /// Optional validator checkpoint for the block.
+        pub validator_checkpoint: Option<ValidatorSetCheckpoint>,
+    }
+
+    impl RosterMetadata {
+        #[cfg(test)]
+        pub(crate) fn roster_snapshot(&self) -> Option<Vec<PeerId>> {
+            self.commit_certificate
+                .as_ref()
+                .map(|cert| cert.validator_set.clone())
+                .or_else(|| {
+                    self.validator_checkpoint
+                        .as_ref()
+                        .map(|chkpt| chkpt.validator_set.clone())
+                })
+        }
+    }
+
+    /// Get blocks after some block.
+    #[derive(Debug, Clone, Encode)]
+    pub struct GetBlocksAfter {
+        /// Peer id
+        pub peer_id: PeerId,
+        /// Hash of second to latest block
+        pub prev_hash: Option<HashOf<BlockHeader>>,
+        /// Hash of latest available block
+        pub latest_hash: Option<HashOf<BlockHeader>>,
+        /// The block hashes already seen
+        pub seen_blocks: BTreeSet<HashOf<BlockHeader>>,
+    }
+
+    // Derive Encode/Decode above
+
+    impl GetBlocksAfter {
+        /// Construct [`GetBlocksAfter`].
+        pub const fn new(
+            peer_id: PeerId,
+            prev_hash: Option<HashOf<BlockHeader>>,
+            latest_hash: Option<HashOf<BlockHeader>>,
+            seen_blocks: BTreeSet<HashOf<BlockHeader>>,
+        ) -> Self {
+            Self {
+                peer_id,
+                prev_hash,
+                latest_hash,
+                seen_blocks,
+            }
+        }
+    }
+
+    /// Message used to share blocks to a peer.
+    #[derive(Debug, Clone, Encode)]
+    pub struct ShareBlocks {
+        /// Peer id
+        pub peer_id: PeerId,
+        /// Blocks
+        pub blocks: Vec<SignedBlock>,
+        /// Optional precommit QCs for the blocks, best-effort.
+        pub qcs: Vec<Option<Qc>>,
+        /// Optional roster metadata for each shared block.
+        pub rosters: Vec<RosterMetadata>,
+    }
+
+    impl ShareBlocks {
+        /// Construct [`ShareBlocks`].
+        pub const fn new(
+            blocks: Vec<SignedBlock>,
+            peer_id: PeerId,
+            qcs: Vec<Option<Qc>>,
+            rosters: Vec<RosterMetadata>,
+        ) -> Self {
+            Self {
+                peer_id,
+                blocks,
+                qcs,
+                rosters,
+            }
+        }
+    }
+
+    // Derive Encode/Decode above
+
+    /// Messages used by peers to communicate during block synchronization.
+    #[derive(Debug, Clone, Decode, Encode, FromVariant)]
+    pub enum Message {
+        /// Request for blocks after the block with `Hash` for the peer with `PeerId`.
+        GetBlocksAfter(GetBlocksAfter),
+        /// The response to `GetBlocksAfter`. Contains the requested blocks and the id of the peer who shared them.
+        ShareBlocks(ShareBlocks),
+    }
+
+    // Derive Encode/Decode above
+
+    pub(super) fn roster_metadata_from_state(
+        state: &State,
+        kura: &Kura,
+        block_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<RosterMetadata> {
+        if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
+            return Some(RosterMetadata {
+                commit_certificate: Some(snapshot.commit_certificate),
+                validator_checkpoint: Some(snapshot.validator_checkpoint),
+            });
+        }
+
+        if let Some(meta) = kura.read_roster_metadata(block_height).and_then(|meta| {
+            if meta.block_hash == block_hash {
+                Some(meta)
+            } else {
+                warn!(
+                    expected = %block_hash,
+                    stored = %meta.block_hash,
+                    height = block_height,
+                    "ignoring roster sidecar with mismatched hash"
+                );
+                None
+            }
+        }) {
+            return Some(RosterMetadata {
+                commit_certificate: meta.commit_certificate,
+                validator_checkpoint: meta.validator_checkpoint,
+            });
+        }
+
+        if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
+            return Some(RosterMetadata {
+                commit_certificate: Some(snapshot.commit_certificate),
+                validator_checkpoint: Some(snapshot.validator_checkpoint),
+            });
+        }
+
+        let commit_certificate = status::commit_certificate_history()
+            .into_iter()
+            .find(|cert| cert.height == block_height && cert.block_hash == block_hash);
+        let validator_checkpoint = status::validator_checkpoint_history()
+            .into_iter()
+            .find(|chk| chk.height == block_height && chk.block_hash == block_hash);
+
+        match (commit_certificate, validator_checkpoint) {
+            (Some(cert), checkpoint) => Some(RosterMetadata {
+                commit_certificate: Some(cert),
+                validator_checkpoint: checkpoint,
+            }),
+            (None, Some(checkpoint)) => Some(RosterMetadata {
+                commit_certificate: None,
+                validator_checkpoint: Some(checkpoint),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Choose roster metadata to attach to block sync updates.
+    pub(super) fn effective_roster_metadata(
+        incoming: Option<&RosterMetadata>,
+        fallback: Option<RosterMetadata>,
+    ) -> Option<RosterMetadata> {
+        let incoming_present = incoming.is_some_and(|meta| {
+            meta.commit_certificate.is_some() || meta.validator_checkpoint.is_some()
+        });
+        if incoming_present {
+            incoming.cloned()
+        } else {
+            fallback
+        }
+    }
+
+    struct BlockSyncValidationContext {
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view_idx: u32,
+        block_view: u64,
+        signature_topology: Topology,
+        commit_quorum: usize,
+        commit_signer_count: usize,
+        topology_len: usize,
+    }
+
+    fn prf_seed_for_block_sync(
+        mode_tag: &str,
+        state_view: &StateView<'_>,
+        block_height: u64,
+    ) -> Option<[u8; 32]> {
+        (mode_tag == NPOS_TAG)
+            .then(|| crate::sumeragi::npos_seed_for_height(state_view, block_height))
+    }
+
+    impl BlockSyncValidationContext {
+        fn new(
+            block: &SignedBlock,
+            topology: &Topology,
+            state_view: &StateView<'_>,
+            mode_tag: &str,
+        ) -> Self {
+            let block_hash = block.hash();
+            let block_height = block.header().height().get();
+            let block_view_idx = block.header().view_change_index();
+            let block_view = u64::from(block_view_idx);
+            let prf_seed = prf_seed_for_block_sync(mode_tag, state_view, block_height);
+            let signature_topology =
+                align_topology_for_block_signatures(mode_tag, topology, block, prf_seed);
+            let commit_quorum = topology.min_votes_for_commit().max(1);
+            let commit_signer_count = signature_topology
+                .filter_signatures_by_roles(
+                    &[
+                        Role::Leader,
+                        Role::ValidatingPeer,
+                        Role::SetBValidator,
+                        Role::ProxyTail,
+                    ],
+                    block.signatures(),
+                )
+                .count();
+            Self {
+                block_hash,
+                block_height,
+                block_view_idx,
+                block_view,
+                signature_topology,
+                commit_quorum,
+                commit_signer_count,
+                topology_len: topology.as_ref().len(),
+            }
+        }
+    }
+
+    fn sanitize_block_sync_qc(
+        block: &SignedBlock,
+        incoming: Option<Qc>,
+        context: &BlockSyncValidationContext,
+    ) -> Option<Qc> {
+        let derived_qc = BlockSynchronizer::block_sync_qc_for(block);
+        match (incoming, derived_qc) {
+            (Some(incoming), Some(derived)) if incoming == derived => Some(incoming),
+            (Some(_incoming), Some(derived)) => {
+                status::inc_block_sync_qc_replaced();
+                warn!(
+                    height = context.block_height,
+                    view = context.block_view,
+                    hash = %context.block_hash,
+                    "replacing block sync QC that does not match cached aggregate"
+                );
+                Some(derived)
+            }
+            (Some(incoming), None) => {
+                status::inc_block_sync_qc_derive_failed();
+                let incoming_qc_signers = qc_signer_count(&incoming);
+                warn!(
+                    height = context.block_height,
+                    view = context.block_view,
+                    hash = %context.block_hash,
+                    block_signers = context.commit_signer_count,
+                    commit_quorum = context.commit_quorum,
+                    incoming_qc_signers,
+                    "keeping incoming block sync QC; no cached precommit signer record"
+                );
+                Some(incoming)
+            }
+            (None, derived) => derived,
+        }
+    }
+
+    fn should_drop_block_sync_entry(
+        block: &SignedBlock,
+        context: &BlockSyncValidationContext,
+        signature_check: Result<(), crate::block::SignatureVerificationError>,
+        sanitized_qc: Option<&Qc>,
+    ) -> bool {
+        if let Err(err) = signature_check {
+            if sanitized_qc.is_none() {
+                status::inc_block_sync_drop_invalid_signatures();
+                warn!(
+                    ?err,
+                    height = context.block_height,
+                    view = context.block_view_idx,
+                    hash = %context.block_hash,
+                    signatures = block.signatures().count(),
+                    topology_len = context.topology_len,
+                    "dropping block sync update with invalid signatures"
+                );
+                return true;
+            }
+            warn!(
+                ?err,
+                height = context.block_height,
+                view = context.block_view_idx,
+                hash = %context.block_hash,
+                signatures = block.signatures().count(),
+                topology_len = context.topology_len,
+                "accepting block sync update based on QC despite invalid block signatures"
+            );
+        }
+
+        let has_commit_signatures =
+            crate::block::ValidBlock::is_commit(block, &context.signature_topology).is_ok();
+        if !has_commit_signatures && sanitized_qc.is_none() {
+            status::inc_block_sync_drop_invalid_signatures();
+            warn!(
+                height = context.block_height,
+                view = context.block_view,
+                hash = %context.block_hash,
+                signatures = block.signatures().count(),
+                "dropping block sync update without quorum evidence"
+            );
+            return true;
+        }
+
+        false
+    }
+
+    impl Message {
+        #[allow(dead_code)]
+        fn commit_role_signers(
+            block: &SignedBlock,
+            topology: &Topology,
+        ) -> Option<BTreeSet<ValidatorIndex>> {
+            let mut signers = BTreeSet::new();
+            for signature in topology.filter_signatures_by_roles(
+                &[
+                    Role::Leader,
+                    Role::ValidatingPeer,
+                    Role::SetBValidator,
+                    Role::ProxyTail,
+                ],
+                block.signatures(),
+            ) {
+                let signer = ValidatorIndex::try_from(signature.index()).ok()?;
+                signers.insert(signer);
+            }
+            let quorum = topology.min_votes_for_commit().max(1);
+            (signers.len() >= quorum).then_some(signers)
+        }
+
+        fn filter_blocks_with_valid_signatures(
+            entries: Vec<(SignedBlock, Option<Qc>)>,
+            topology: &Topology,
+            state_view: &StateView<'_>,
+            mode_tag: &str,
+        ) -> (Vec<(SignedBlock, Option<Qc>)>, usize) {
+            let mut dropped = 0usize;
+            let filtered = entries
+                .into_iter()
+                .filter_map(|(block, qc)| {
+                    let context =
+                        BlockSyncValidationContext::new(&block, topology, state_view, mode_tag);
+                    let sanitized_qc = sanitize_block_sync_qc(&block, qc, &context);
+                    let signature_check = BlockSynchronizer::block_signatures_valid(
+                        &block,
+                        &context.signature_topology,
+                        state_view,
+                    );
+                    if should_drop_block_sync_entry(
+                        &block,
+                        &context,
+                        signature_check,
+                        sanitized_qc.as_ref(),
+                    ) {
+                        dropped += 1;
+                        return None;
+                    }
+
+                    Some((block, sanitized_qc))
+                })
+                .collect();
+            (filtered, dropped)
+        }
+
+        /// Handles the incoming message.
+        #[iroha_futures::telemetry_future]
+        pub(super) async fn handle_message(&self, block_sync: &mut BlockSynchronizer) {
+            match self {
+                Message::GetBlocksAfter(GetBlocksAfter {
+                    peer_id,
+                    prev_hash,
+                    latest_hash,
+                    ..
+                }) => {
+                    let local_latest_block_hash = block_sync.state.view().latest_block_hash();
+
+                    if *latest_hash == local_latest_block_hash
+                        || *prev_hash == local_latest_block_hash
+                    {
+                        return;
+                    }
+
+                    let start_height = if let Some(hash) = *prev_hash {
+                        if let Some(height) = block_sync.kura.get_block_height_by_hash(hash) {
+                            height
+                                .checked_add(1)
+                                .expect("INTERNAL BUG: Blockchain height overflow")
+                        } else {
+                            warn!(
+                                peer=%block_sync.peer,
+                                block=%hash,
+                                "Block hash not found; sending full chain from genesis and requesting latest from requester"
+                            );
+                            block_sync
+                                .request_latest_blocks_from_peer(peer_id.clone())
+                                .await;
+                            nonzero_ext::nonzero!(1_usize)
+                        }
+                    } else {
+                        nonzero_ext::nonzero!(1_usize)
+                    };
+
+                    let blocks = block_sync
+                        .state
+                        .view()
+                        .all_blocks(start_height)
+                        .skip_while(|block| Some(block.hash()) == *latest_hash)
+                        .take(block_sync.gossip_size.get() as usize)
+                        .map(|block| (*block).clone())
+                        .collect::<Vec<_>>();
+
+                    if !blocks.is_empty() {
+                        trace!(hash=?prev_hash, "Sharing blocks after hash");
+
+                        let qcs: Vec<Option<Qc>> = blocks
+                            .iter()
+                            .map(BlockSynchronizer::block_sync_qc_for)
+                            .collect();
+                        let rosters: Vec<RosterMetadata> = blocks
+                            .iter()
+                            .map(|block| {
+                                let height = block.header().height().get();
+                                let hash = block.hash();
+                                roster_metadata_from_state(
+                                    &block_sync.state,
+                                    &block_sync.kura,
+                                    height,
+                                    hash,
+                                )
+                                .unwrap_or(RosterMetadata {
+                                    commit_certificate: None,
+                                    validator_checkpoint: None,
+                                })
+                            })
+                            .collect();
+                        Message::ShareBlocks(ShareBlocks::new(
+                            blocks,
+                            block_sync.peer.id().clone(),
+                            qcs,
+                            rosters,
+                        ))
+                        .send_to(&block_sync.network, peer_id.clone())
+                        .await;
+                    }
+                }
+                Message::ShareBlocks(ShareBlocks {
+                    blocks,
+                    qcs,
+                    rosters,
+                    ..
+                }) => {
+                    use crate::sumeragi::message::BlockSyncUpdate;
+
+                    let total = blocks.len();
+                    let roster_by_hash: BTreeMap<_, _> = blocks
+                        .iter()
+                        .zip(rosters.iter())
+                        .map(|(block, roster)| (block.hash(), roster.clone()))
+                        .collect();
+                    let paired: Vec<_> = blocks.iter().cloned().zip(qcs.iter().cloned()).collect();
+                    let (filtered_blocks, dropped) = {
+                        let state_view = block_sync.state.view();
+                        let commit_topology: Vec<_> =
+                            state_view.commit_topology().iter().cloned().collect();
+                        if commit_topology.is_empty() {
+                            (paired, 0)
+                        } else {
+                            let topology = Topology::new(commit_topology);
+                            Self::filter_blocks_with_valid_signatures(
+                                paired,
+                                &topology,
+                                &state_view,
+                                &block_sync.mode_tag,
+                            )
+                        }
+                    };
+                    if dropped > 0 {
+                        warn!(
+                            dropped,
+                            total, "filtered invalid blocks from block sync batch"
+                        );
+                    }
+
+                    for (block, incoming_qc) in filtered_blocks {
+                        let block_height = block.header().height().get();
+                        let height = usize::try_from(block_height)
+                            .expect("INTERNAL BUG: block height exceeds usize::MAX");
+                        let block_hash = block.hash();
+                        if let Some(nz_height) = NonZeroUsize::new(height) {
+                            block_sync.seen_blocks.insert((nz_height, block_hash));
+                        } else {
+                            warn!(
+                                block_height,
+                                "skipping block sync update with zero block height"
+                            );
+                            continue;
+                        }
+                        let mut msg = BlockSyncUpdate::from(&block);
+                        let incoming_roster = roster_by_hash.get(&block_hash);
+                        let fallback = roster_metadata_from_state(
+                            &block_sync.state,
+                            &block_sync.kura,
+                            block_height,
+                            block_hash,
+                        );
+                        if let Some(metadata) = effective_roster_metadata(incoming_roster, fallback)
+                        {
+                            msg.commit_certificate
+                                .clone_from(&metadata.commit_certificate);
+                            msg.validator_checkpoint
+                                .clone_from(&metadata.validator_checkpoint);
+                        }
+                        msg.qc =
+                            incoming_qc.or_else(|| BlockSynchronizer::block_sync_qc_for(&block));
+                        block_sync.sumeragi.incoming_block_message(
+                            crate::sumeragi::message::BlockMessage::BlockSyncUpdate(msg),
+                        );
+                    }
+                }
+            }
+        }
+
+        /// Send this message over the network to the specified `peer`.
+        #[iroha_futures::telemetry_future]
+        #[log("TRACE")]
+        pub(super) async fn send_to(self, network: &IrohaNetwork, peer: PeerId) {
+            let data = NetworkMessage::BlockSync(Box::new(self));
+            network.post(iroha_p2p::Post {
+                data,
+                peer_id: peer.clone(),
+                priority: iroha_p2p::Priority::Low,
+            });
+        }
+    }
+
+    mod candidate {
+        use super::*;
+
+        #[derive(Decode)]
+        struct GetBlocksAfterCandidate {
+            peer: PeerId,
+            prev_hash: Option<HashOf<BlockHeader>>,
+            latest_hash: Option<HashOf<BlockHeader>>,
+            seen_blocks: BTreeSet<HashOf<BlockHeader>>,
+        }
+
+        #[derive(Decode)]
+        struct ShareBlocksCandidate {
+            peer: PeerId,
+            blocks: Vec<SignedBlock>,
+            qcs: Vec<Option<Qc>>,
+            rosters: Vec<RosterMetadata>,
+        }
+
+        #[derive(Debug)]
+        enum ShareBlocksError {
+            HeightMissed,
+            PrevBlockHashMismatch,
+            Empty,
+            QcLengthMismatch,
+            RosterLengthMismatch,
+        }
+
+        impl GetBlocksAfterCandidate {
+            fn validate(self) -> Result<GetBlocksAfter, norito::codec::Error> {
+                if self.prev_hash.is_some() && self.latest_hash.is_none() {
+                    return Err(norito::codec::Error::from(
+                        "Latest hash must be defined if previous hash is",
+                    ));
+                }
+
+                Ok(GetBlocksAfter {
+                    peer_id: self.peer,
+                    prev_hash: self.prev_hash,
+                    latest_hash: self.latest_hash,
+                    seen_blocks: self.seen_blocks,
+                })
+            }
+        }
+
+        impl From<ShareBlocksError> for norito::codec::Error {
+            fn from(value: ShareBlocksError) -> Self {
+                match value {
+                    ShareBlocksError::Empty => "Blocks are empty",
+                    ShareBlocksError::HeightMissed => "There is a gap between blocks",
+                    ShareBlocksError::PrevBlockHashMismatch => {
+                        "Mismatch between previous block in the header and actual hash"
+                    }
+                    ShareBlocksError::QcLengthMismatch => "Blocks and QCs lengths differ",
+                    ShareBlocksError::RosterLengthMismatch => "Blocks and rosters lengths differ",
+                }
+                .into()
+            }
+        }
+
+        impl ShareBlocksCandidate {
+            fn validate(self) -> Result<ShareBlocks, ShareBlocksError> {
+                if self.blocks.is_empty() {
+                    return Err(ShareBlocksError::Empty);
+                }
+                if self.blocks.len() != self.qcs.len() {
+                    return Err(ShareBlocksError::QcLengthMismatch);
+                }
+                if self.blocks.len() != self.rosters.len() {
+                    return Err(ShareBlocksError::RosterLengthMismatch);
+                }
+
+                self.blocks.windows(2).try_for_each(|wnd| {
+                    if wnd[1].header().height().get() != wnd[0].header().height().get() + 1 {
+                        return Err(ShareBlocksError::HeightMissed);
+                    }
+                    if wnd[1].header().prev_block_hash() != Some(wnd[0].hash()) {
+                        return Err(ShareBlocksError::PrevBlockHashMismatch);
+                    }
+                    Ok(())
+                })?;
+
+                Ok(ShareBlocks {
+                    peer_id: self.peer,
+                    blocks: self.blocks,
+                    qcs: self.qcs,
+                    rosters: self.rosters,
+                })
+            }
+        }
+
+        impl<'de> norito::NoritoDeserialize<'de> for GetBlocksAfter {
+            fn deserialize(archived: &'de norito::Archived<GetBlocksAfter>) -> Self {
+                let candidate = <GetBlocksAfterCandidate as norito::NoritoDeserialize>::deserialize(
+                    archived.cast(),
+                );
+                candidate.validate().expect("invalid GetBlocksAfter")
+            }
+        }
+
+        impl<'de> norito::NoritoDeserialize<'de> for ShareBlocks {
+            fn deserialize(archived: &'de norito::Archived<ShareBlocks>) -> Self {
+                let candidate = <ShareBlocksCandidate as norito::NoritoDeserialize>::deserialize(
+                    archived.cast(),
+                );
+                candidate.validate().expect("invalid ShareBlocks")
+            }
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use iroha_crypto::{Hash, HashOf, KeyPair};
+
+            use super::*;
+            use crate::block::ValidBlock;
+
+            #[test]
+            fn candidate_empty() {
+                let (leader_public_key, _) = KeyPair::random().into_parts();
+                let leader_peer = PeerId::new(leader_public_key);
+                let candidate = ShareBlocksCandidate {
+                    blocks: Vec::new(),
+                    peer: leader_peer,
+                    qcs: Vec::new(),
+                    rosters: Vec::new(),
+                };
+                assert!(matches!(candidate.validate(), Err(ShareBlocksError::Empty)))
+            }
+
+            #[test]
+            fn candidate_height_missed() {
+                let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
+                let leader_peer_id = PeerId::new(leader_public_key);
+                let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
+                let block1 =
+                    ValidBlock::new_dummy_and_modify_header(&leader_private_key, |header| {
+                        header.set_height(block0.header().height().checked_add(2).unwrap());
+                    })
+                    .into();
+                let candidate = ShareBlocksCandidate {
+                    blocks: vec![block0, block1],
+                    peer: leader_peer_id,
+                    qcs: vec![None, None],
+                    rosters: vec![
+                        RosterMetadata {
+                            commit_certificate: None,
+                            validator_checkpoint: None,
+                        };
+                        2
+                    ],
+                };
+                assert!(matches!(
+                    candidate.validate(),
+                    Err(ShareBlocksError::HeightMissed)
+                ))
+            }
+
+            #[test]
+            fn candidate_prev_block_hash_mismatch() {
+                let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
+                let leader_peer_id = PeerId::new(leader_public_key);
+                let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
+                let wrong_prev_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
+                let block1 =
+                    ValidBlock::new_dummy_and_modify_header(&leader_private_key, |header| {
+                        header.set_height(block0.header().height().checked_add(1).unwrap());
+                        header.set_prev_block_hash(Some(wrong_prev_hash));
+                    })
+                    .into();
+                let candidate = ShareBlocksCandidate {
+                    blocks: vec![block0, block1],
+                    peer: leader_peer_id,
+                    qcs: vec![None, None],
+                    rosters: vec![
+                        RosterMetadata {
+                            commit_certificate: None,
+                            validator_checkpoint: None,
+                        };
+                        2
+                    ],
+                };
+                assert!(matches!(
+                    candidate.validate(),
+                    Err(ShareBlocksError::PrevBlockHashMismatch)
+                ))
+            }
+
+            #[test]
+            fn candidate_roster_length_mismatch() {
+                let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
+                let leader_peer_id = PeerId::new(leader_public_key);
+                let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
+                let candidate = ShareBlocksCandidate {
+                    blocks: vec![block0],
+                    peer: leader_peer_id,
+                    qcs: vec![None],
+                    rosters: Vec::new(),
+                };
+                assert!(matches!(
+                    candidate.validate(),
+                    Err(ShareBlocksError::RosterLengthMismatch)
+                ))
+            }
+
+            #[test]
+            fn candidate_ok() {
+                let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
+                let leader_peer_id = PeerId::new(leader_public_key);
+                let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
+                let block1 =
+                    ValidBlock::new_dummy_and_modify_header(&leader_private_key, |header| {
+                        header.set_height(block0.header().height().checked_add(1).unwrap());
+                        header.set_prev_block_hash(Some(block0.hash()));
+                    })
+                    .into();
+                let candidate = ShareBlocksCandidate {
+                    blocks: vec![block0, block1],
+                    peer: leader_peer_id,
+                    qcs: vec![None, None],
+                    rosters: vec![
+                        RosterMetadata {
+                            commit_certificate: None,
+                            validator_checkpoint: None,
+                        };
+                        2
+                    ],
+                };
+                assert!(candidate.validate().is_ok())
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod filter_tests {
+        use std::{collections::BTreeSet, str::FromStr};
+
+        use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature, SignatureOf};
+        use iroha_data_model::block::BlockSignature;
+        use iroha_data_model::consensus::{
+            ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
+        };
+        use iroha_data_model::parameter::Parameters;
+        use iroha_data_model::peer::PeerId;
+        use iroha_schema::Ident;
+
+        use super::*;
+        use crate::{
+            block::ValidBlock,
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+            sumeragi::consensus::ValidatorIndex,
+            sumeragi::network_topology::Topology,
+        };
+
+        fn test_chain_config() -> (ChainId, String) {
+            (ChainId::from("test-chain"), "test-mode".to_owned())
+        }
+
+        fn state_with_consensus_keys(
+            peers: &[(PublicKey, &str)],
+            activation_height: u64,
+            expiry_height: Option<u64>,
+            status: ConsensusKeyStatus,
+            overlap_grace: u64,
+            expiry_grace: u64,
+        ) -> State {
+            let mut world = World::new();
+            let mut params = Parameters::default();
+            params.sumeragi.key_overlap_grace_blocks = overlap_grace;
+            params.sumeragi.key_expiry_grace_blocks = expiry_grace;
+            world.parameters = mv::cell::Cell::new(params);
+            for (pk, name) in peers {
+                let id = ConsensusKeyId::new(
+                    ConsensusKeyRole::Validator,
+                    Ident::from_str(name).expect("consensus key name parses"),
+                );
+                let record = ConsensusKeyRecord {
+                    id: id.clone(),
+                    public_key: pk.clone(),
+                    activation_height,
+                    expiry_height,
+                    hsm: None,
+                    replaces: None,
+                    status,
+                };
+                world.consensus_keys.insert(id.clone(), record.clone());
+                world.consensus_keys_by_pk.insert(pk.to_string(), vec![id]);
+            }
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            State::new_for_testing(world, kura, query)
+        }
+
+        fn qc_preimage(
+            chain_id: &ChainId,
+            mode_tag: &str,
+            phase: Phase,
+            block_hash: HashOf<BlockHeader>,
+            height: u64,
+            view: u64,
+            epoch: u64,
+        ) -> Vec<u8> {
+            if phase == Phase::Available {
+                let vote = crate::sumeragi::consensus::AvailableVote {
+                    block_hash,
+                    height,
+                    view,
+                    epoch,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                    signature: Vec::new(),
+                };
+                crate::sumeragi::consensus::available_vote_preimage(chain_id, mode_tag, &vote)
+            } else {
+                let vote = crate::sumeragi::consensus::Vote {
+                    phase,
+                    block_hash,
+                    height,
+                    view,
+                    epoch,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                    signature: Vec::new(),
+                };
+                crate::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote)
+            }
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn aggregate_signature_for_signers(
+            chain_id: &ChainId,
+            mode_tag: &str,
+            phase: Phase,
+            block_hash: HashOf<BlockHeader>,
+            height: u64,
+            view: u64,
+            epoch: u64,
+            signers: &BTreeSet<ValidatorIndex>,
+            topology: &Topology,
+            keypairs: &[KeyPair],
+        ) -> Vec<u8> {
+            if signers.is_empty() {
+                return Vec::new();
+            }
+            let preimage = qc_preimage(chain_id, mode_tag, phase, block_hash, height, view, epoch);
+            let mut signatures = Vec::with_capacity(signers.len());
+            for signer in signers {
+                let idx = usize::try_from(*signer).expect("signer fits usize");
+                let peer = topology.as_ref().get(idx).expect("signer in topology");
+                let kp = keypairs
+                    .iter()
+                    .find(|kp| kp.public_key() == peer.public_key())
+                    .expect("matching keypair");
+                let sig = Signature::new(kp.private_key(), &preimage);
+                signatures.push(sig.payload().to_vec());
+            }
+            let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+            iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signature")
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn qc_from_signers_with_aggregate(
+            chain_id: &ChainId,
+            mode_tag: &str,
+            block_hash: HashOf<BlockHeader>,
+            height: u64,
+            view: u64,
+            epoch: u64,
+            signers: BTreeSet<ValidatorIndex>,
+            topology: &Topology,
+            keypairs: &[KeyPair],
+        ) -> Qc {
+            let aggregate_signature = aggregate_signature_for_signers(
+                chain_id,
+                mode_tag,
+                Phase::Precommit,
+                block_hash,
+                height,
+                view,
+                epoch,
+                &signers,
+                topology,
+                keypairs,
+            );
+            BlockSynchronizer::qc_from_signers(
+                block_hash,
+                height,
+                view,
+                epoch,
+                topology.as_ref().len(),
+                signers,
+                aggregate_signature,
+            )
+            .expect("QC should build from signers")
+        }
+
+        #[test]
+        fn validation_context_captures_commit_signers() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+
+            let mut block =
+                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(2_u64));
+                });
+            block.sign(&kp_validator, &topology);
+            let block: SignedBlock = block.into();
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+            let context =
+                super::BlockSyncValidationContext::new(&block, &topology, &state_view, &mode_tag);
+
+            assert_eq!(context.commit_quorum, 2);
+            assert_eq!(context.commit_signer_count, 2);
+            assert_eq!(context.topology_len, 2);
+            assert_eq!(context.block_height, 2);
+            assert_eq!(context.block_view_idx, 0);
+        }
+
+        #[test]
+        fn sanitize_block_sync_qc_keeps_incoming_without_cached_signers() {
+            crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+
+            let mut block = ValidBlock::new_dummy(kp_leader.private_key());
+            block.sign(&kp_validator, &topology);
+            let block: SignedBlock = block.into();
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+            let signers = super::Message::commit_role_signers(&block, &topology)
+                .expect("commit quorum should be met");
+            let qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                u64::from(block.header().view_change_index()),
+                0,
+                signers,
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone()],
+            );
+            let context =
+                super::BlockSyncValidationContext::new(&block, &topology, &state_view, &mode_tag);
+            let sanitized = super::sanitize_block_sync_qc(&block, Some(qc.clone()), &context);
+
+            assert_eq!(sanitized, Some(qc));
+        }
+
+        #[test]
+        fn block_sync_keeps_qc_on_bad_signatures() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_wrong = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+
+            let mut block =
+                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(2_u64));
+                });
+            block.sign(&kp_validator, &topology);
+            let block: SignedBlock = block.into();
+
+            let mut invalid_block = block.clone();
+            let mut signatures = BTreeSet::new();
+            signatures.insert(BlockSignature::new(
+                0,
+                SignatureOf::from_hash(kp_wrong.private_key(), invalid_block.hash()),
+            ));
+            invalid_block
+                .replace_signatures(signatures)
+                .expect("signature replacement succeeds");
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+            let signers = super::Message::commit_role_signers(&block, &topology)
+                .expect("commit quorum should be met");
+            let qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                u64::from(block.header().view_change_index()),
+                0,
+                signers,
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone()],
+            );
+            let context = super::BlockSyncValidationContext::new(
+                &invalid_block,
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+            let signature_check = BlockSynchronizer::block_signatures_valid(
+                &invalid_block,
+                &context.signature_topology,
+                &state_view,
+            );
+
+            assert!(
+                !super::should_drop_block_sync_entry(
+                    &invalid_block,
+                    &context,
+                    signature_check,
+                    Some(&qc),
+                ),
+                "QC should keep the block sync update despite invalid signatures"
+            );
+        }
+
+        #[test]
+        fn filter_blocks_drops_blocks_without_quorum_or_qc() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+
+            let mut valid_block =
+                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(2_u64));
+                });
+            valid_block.sign(&kp_validator, &topology);
+            let valid_block: SignedBlock = valid_block.into();
+
+            let insufficient_block: SignedBlock =
+                ValidBlock::new_dummy(kp_leader.private_key()).into();
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(insufficient_block, None), (valid_block.clone(), None)],
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+
+            assert_eq!(dropped, 1);
+            assert_eq!(filtered, vec![(valid_block, None)]);
+        }
+
+        #[test]
+        fn filter_blocks_rejects_tampered_signature() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_wrong = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(kp_leader.public_key().clone())]);
+
+            let valid_block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(3_u64));
+                })
+                .into();
+            let mut invalid_block = valid_block.clone();
+
+            let mut signatures = BTreeSet::new();
+            signatures.insert(BlockSignature::new(
+                0,
+                SignatureOf::from_hash(kp_wrong.private_key(), invalid_block.hash()),
+            ));
+            invalid_block
+                .replace_signatures(signatures)
+                .expect("signature replacement succeeds");
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(invalid_block, None), (valid_block.clone(), None)],
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+
+            assert_eq!(dropped, 1);
+            assert_eq!(filtered, vec![(valid_block, None)]);
+        }
+
+        #[test]
+        fn filter_blocks_rotates_topology_for_permissioned_view() {
+            let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_a.public_key().clone()),
+                PeerId::new(kp_b.public_key().clone()),
+            ]);
+
+            let mut block = ValidBlock::new_dummy_and_modify_header(kp_b.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+                header.set_view_change_index(1);
+            });
+            let mut rotated = topology.clone();
+            rotated.nth_rotation(1);
+            block.sign(&kp_a, &rotated);
+            let block: SignedBlock = block.into();
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let mode_tag = PERMISSIONED_TAG.to_owned();
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), None)],
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered, vec![(block, None)]);
+        }
+
+        #[test]
+        fn filter_blocks_rejects_expired_consensus_keys() {
+            crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(leader.public_key().clone()),
+                PeerId::new(validator.public_key().clone()),
+                PeerId::new(proxy.public_key().clone()),
+            ]);
+
+            let state = state_with_consensus_keys(
+                &[
+                    (leader.public_key().clone(), "leader"),
+                    (validator.public_key().clone(), "validator"),
+                    (proxy.public_key().clone(), "proxy"),
+                ],
+                1,
+                Some(3),
+                ConsensusKeyStatus::Active,
+                0,
+                0,
+            );
+            let mut expired_block =
+                ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(4_u64));
+                });
+            expired_block.sign(&validator, &topology);
+            expired_block.sign(&proxy, &topology);
+            let expired_block: SignedBlock = expired_block.into();
+
+            let mut fresh_block =
+                ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(2_u64));
+                });
+            fresh_block.sign(&validator, &topology);
+            fresh_block.sign(&proxy, &topology);
+            let fresh_block: SignedBlock = fresh_block.into();
+
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(expired_block, None), (fresh_block.clone(), None)],
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+
+            assert_eq!(dropped, 1, "expired keys should be rejected");
+            assert_eq!(filtered, vec![(fresh_block, None)]);
+        }
+
+        #[test]
+        fn commit_role_signers_require_proxy_tail_quorum() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+
+            // Block only carries the leader signature; commit quorum not satisfied.
+            let block: SignedBlock = ValidBlock::new_dummy(kp_leader.private_key()).into();
+
+            let signers = super::Message::commit_role_signers(&block, &topology);
+            assert!(
+                signers.is_none(),
+                "commit-role quorum must require leader + proxy-tail signatures"
+            );
+        }
+
+        #[test]
+        fn commit_role_signers_accept_set_b_quorum() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_set_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+                PeerId::new(kp_proxy.public_key().clone()),
+                PeerId::new(kp_set_b.public_key().clone()),
+            ]);
+
+            let mut block = ValidBlock::new_dummy(kp_leader.private_key());
+            block.sign(&kp_validator, &topology);
+            block.sign(&kp_set_b, &topology);
+            let block: SignedBlock = block.into();
+
+            let signers = super::Message::commit_role_signers(&block, &topology)
+                .expect("set B quorum should be accepted");
+            assert_eq!(signers.len(), 3);
+            assert!(signers.contains(&ValidatorIndex::try_from(3u32).expect("index")));
+        }
+
+        #[test]
+        fn filter_blocks_replaces_qc_using_cached_signers() {
+            crate::sumeragi::status::reset_block_sync_counters_for_tests();
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_proxy.public_key().clone()),
+            ]);
+            let mut block = ValidBlock::new_dummy(kp_leader.private_key());
+            block.sign(&kp_proxy, &topology);
+            let block: SignedBlock = block.into();
+            let block_hash = block.hash();
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+
+            let commit_signers = super::Message::commit_role_signers(&block, &topology)
+                .expect("commit-role quorum available");
+            let aggregate_signature = aggregate_signature_for_signers(
+                &chain_id,
+                &mode_tag,
+                Phase::Precommit,
+                block_hash,
+                block.header().height().get(),
+                u64::from(block.header().view_change_index()),
+                0,
+                &commit_signers,
+                &topology,
+                &[kp_leader.clone(), kp_proxy.clone()],
+            );
+            crate::sumeragi::status::record_precommit_signers(
+                crate::sumeragi::status::PrecommitSignerRecord {
+                    block_hash,
+                    height: block.header().height().get(),
+                    view: u64::from(block.header().view_change_index()),
+                    epoch: 0,
+                    signers: commit_signers.clone(),
+                    roster_len: topology.as_ref().len(),
+                    bls_aggregate_signature: aggregate_signature.clone(),
+                },
+            );
+            let derived_qc =
+                BlockSynchronizer::block_sync_qc_for(&block).expect("cached QC available");
+
+            // Forge a mismatched bitmap to force replacement.
+            let mut forged_qc = derived_qc.clone();
+            forged_qc.aggregate.signers_bitmap = vec![0b0000_0001];
+
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), Some(forged_qc))],
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered, vec![(block, Some(derived_qc))]);
+        }
+
+        #[test]
+        fn filter_blocks_replaces_mismatched_qc_with_local_aggregate() {
+            crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+            crate::sumeragi::status::reset_block_sync_counters_for_tests();
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+
+            let mut block =
+                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(10_u64));
+                });
+            block.sign(&kp_validator, &topology);
+            let block: SignedBlock = block.into();
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+            let mut recorded_signers = BTreeSet::new();
+            recorded_signers
+                .insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
+            recorded_signers
+                .insert(ValidatorIndex::try_from(1u32).expect("validator index parses"));
+            let aggregate_signature = aggregate_signature_for_signers(
+                &chain_id,
+                &mode_tag,
+                Phase::Precommit,
+                block.hash(),
+                block.header().height().get(),
+                u64::from(block.header().view_change_index()),
+                0,
+                &recorded_signers,
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone()],
+            );
+            crate::sumeragi::status::record_precommit_signers(
+                crate::sumeragi::status::PrecommitSignerRecord {
+                    block_hash: block.hash(),
+                    height: block.header().height().get(),
+                    view: u64::from(block.header().view_change_index()),
+                    epoch: 0,
+                    signers: recorded_signers,
+                    roster_len: topology.as_ref().len(),
+                    bls_aggregate_signature: aggregate_signature.clone(),
+                },
+            );
+            assert!(
+                crate::sumeragi::status::precommit_signers_for(block.hash()).is_some(),
+                "precommit signer record should be visible to block sync QC builder"
+            );
+            let derived_qc = BlockSynchronizer::block_sync_qc_for(&block)
+                .expect("derived QC should be available for valid block");
+
+            let mut forged_qc = derived_qc.clone();
+            forged_qc.aggregate.bls_aggregate_signature = vec![0xFF; 48];
+
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), Some(forged_qc))],
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered, vec![(block, Some(derived_qc))]);
+            let snapshot = crate::sumeragi::status::snapshot();
+            assert_eq!(snapshot.block_sync_qc_replaced_total, 1);
+            assert_eq!(snapshot.block_sync_drop_invalid_signatures_total, 0);
+        }
+
+        #[test]
+        fn filter_blocks_replaces_qc_with_wrong_signer_bitmap() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_extra = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+                PeerId::new(kp_proxy.public_key().clone()),
+                PeerId::new(kp_extra.public_key().clone()),
+            ]);
+
+            let mut block =
+                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(11_u64));
+                });
+            block.sign(&kp_validator, &topology);
+            let block: SignedBlock = block.into();
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+            let mut recorded_signers = BTreeSet::new();
+            recorded_signers
+                .insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
+            recorded_signers
+                .insert(ValidatorIndex::try_from(1u32).expect("validator index parses"));
+            recorded_signers
+                .insert(ValidatorIndex::try_from(2u32).expect("validator index parses"));
+            let aggregate_signature = aggregate_signature_for_signers(
+                &chain_id,
+                &mode_tag,
+                Phase::Precommit,
+                block.hash(),
+                block.header().height().get(),
+                u64::from(block.header().view_change_index()),
+                0,
+                &recorded_signers,
+                &topology,
+                &[
+                    kp_leader.clone(),
+                    kp_validator.clone(),
+                    kp_proxy.clone(),
+                    kp_extra.clone(),
+                ],
+            );
+            crate::sumeragi::status::record_precommit_signers(
+                crate::sumeragi::status::PrecommitSignerRecord {
+                    block_hash: block.hash(),
+                    height: block.header().height().get(),
+                    view: u64::from(block.header().view_change_index()),
+                    epoch: 0,
+                    signers: recorded_signers,
+                    roster_len: topology.as_ref().len(),
+                    bls_aggregate_signature: aggregate_signature.clone(),
+                },
+            );
+            assert!(
+                crate::sumeragi::status::precommit_signers_for(block.hash()).is_some(),
+                "precommit signer record should be visible to block sync QC builder"
+            );
+            let derived_qc = BlockSynchronizer::block_sync_qc_for(&block)
+                .expect("derived QC should be available for valid block");
+
+            let mut forged_signers = BTreeSet::new();
+            forged_signers.insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
+            forged_signers.insert(ValidatorIndex::try_from(1u32).expect("validator index parses"));
+            forged_signers.insert(ValidatorIndex::try_from(3u32).expect("validator index parses"));
+            let forged_qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                u64::from(block.header().view_change_index()),
+                0,
+                forged_signers,
+                &topology,
+                &[
+                    kp_leader.clone(),
+                    kp_validator.clone(),
+                    kp_proxy.clone(),
+                    kp_extra.clone(),
+                ],
+            );
+
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), Some(forged_qc))],
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered, vec![(block, Some(derived_qc))]);
+        }
+
+        #[test]
+        fn filter_blocks_accepts_qc_without_commit_signatures() {
+            crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+            crate::sumeragi::status::reset_block_sync_counters_for_tests();
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+
+            // Block only carries the leader signature, so it fails commit validation.
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(6_u64));
+                })
+                .into();
+            let mut signers = BTreeSet::new();
+            signers.insert(ValidatorIndex::try_from(0).expect("validator index parses"));
+            signers.insert(ValidatorIndex::try_from(1).expect("validator index parses"));
+
+            let (chain_id, mode_tag) = test_chain_config();
+            let qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                u64::from(block.header().view_change_index()),
+                0,
+                signers,
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone()],
+            );
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), Some(qc.clone()))],
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered, vec![(block, Some(qc))]);
+            let snapshot = crate::sumeragi::status::snapshot();
+            assert_eq!(snapshot.block_sync_drop_invalid_signatures_total, 0);
+            assert_eq!(snapshot.block_sync_qc_replaced_total, 0);
+        }
+
+        #[test]
+        fn filter_blocks_accepts_missing_proxy_tail_with_qc() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+                PeerId::new(kp_proxy.public_key().clone()),
+            ]);
+
+            let mut block =
+                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(7_u64));
+                });
+            block.sign(&kp_validator, &topology);
+            let block: SignedBlock = block.into();
+
+            let mut signers = BTreeSet::new();
+            signers.insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
+            signers.insert(ValidatorIndex::try_from(1u32).expect("validator index parses"));
+            signers.insert(ValidatorIndex::try_from(2u32).expect("validator index parses"));
+            let (chain_id, mode_tag) = test_chain_config();
+            let forged_qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                u64::from(block.header().view_change_index()),
+                0,
+                signers,
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone(), kp_proxy.clone()],
+            );
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block, Some(forged_qc))],
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered.len(), 1);
+        }
+
+        #[test]
+        fn filter_blocks_retains_cached_qc_even_with_signer_mismatch() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_extra = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+                PeerId::new(kp_proxy.public_key().clone()),
+                PeerId::new(kp_extra.public_key().clone()),
+            ]);
+
+            let mut block =
+                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(12_u64));
+                });
+            block.sign(&kp_validator, &topology);
+            block.sign(&kp_proxy, &topology);
+            let block: SignedBlock = block.into();
+
+            let (chain_id, mode_tag) = test_chain_config();
+            let mut recorded_signers = BTreeSet::new();
+            recorded_signers
+                .insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
+            recorded_signers
+                .insert(ValidatorIndex::try_from(1u32).expect("validator index parses"));
+            recorded_signers
+                .insert(ValidatorIndex::try_from(3u32).expect("validator index parses"));
+            let aggregate_signature = aggregate_signature_for_signers(
+                &chain_id,
+                &mode_tag,
+                Phase::Precommit,
+                block.hash(),
+                block.header().height().get(),
+                u64::from(block.header().view_change_index()),
+                0,
+                &recorded_signers,
+                &topology,
+                &[
+                    kp_leader.clone(),
+                    kp_validator.clone(),
+                    kp_proxy.clone(),
+                    kp_extra.clone(),
+                ],
+            );
+            crate::sumeragi::status::record_precommit_signers(
+                crate::sumeragi::status::PrecommitSignerRecord {
+                    block_hash: block.hash(),
+                    height: block.header().height().get(),
+                    view: u64::from(block.header().view_change_index()),
+                    epoch: 0,
+                    signers: recorded_signers,
+                    roster_len: topology.as_ref().len(),
+                    bls_aggregate_signature: aggregate_signature,
+                },
+            );
+            assert!(
+                crate::sumeragi::status::precommit_signers_for(block.hash()).is_some(),
+                "precommit signer record should be visible to block sync QC builder"
+            );
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), None)],
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered.len(), 1);
+            let (_, qc) = filtered
+                .into_iter()
+                .next()
+                .expect("block should be retained");
+            assert!(qc.is_some(), "cached QC should be attached for block sync");
+        }
+    }
+}
