@@ -1,0 +1,18 @@
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/source/ministry/impact_assessment_tooling.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 89be62d7bb2bb79fd994d207489d310ef4c997be53447fbee8ac1f7b758d3beb
+source_last_modified: "2025-12-14T12:10:36.666055+00:00"
+translation_last_reviewed: null
+---
+
+# Traduction en cours
+
+Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+
+Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.

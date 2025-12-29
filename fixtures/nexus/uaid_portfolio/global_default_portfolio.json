@@ -1,0 +1,39 @@
+{
+  "uaid": [
+    "hash:5B19D94748E8629E1000C18EE0D6C5CBA3F3F51CB293F262E345F65B6B01BD99#FA04"
+  ],
+  "dataspaces": [
+    {
+      "dataspace_id": 0,
+      "dataspace_alias": "global",
+      "accounts": [
+        {
+          "account_id": "34mSYn1E6gFyP5RsCgfyH1bMjVYMhmP2n1Q1epwJ27XfY5WzP7VkgQMCRKS1ktRQ9R2Enz2kz@portfolio_fixture",
+          "label": null,
+          "assets": [
+            {
+              "asset_definition_id": "cash#portfolio_fixture",
+              "asset_id": "cash##34mSYn1E6gFyP5RsCgfyH1bMjVYMhmP2n1Q1epwJ27XfY5WzP7VkgQMCRKS1ktRQ9R2Enz2kz@portfolio_fixture",
+              "quantity": "320"
+            }
+          ]
+        },
+        {
+          "account_id": "34mSYn1E6gFyP5RsCgfyH1bMjVZ4AxtSjevDx8rvsCgwwg4rRs8vSpeyTXiPqbCuQzk7oZLpG@portfolio_fixture",
+          "label": null,
+          "assets": [
+            {
+              "asset_definition_id": "cash#portfolio_fixture",
+              "asset_id": "cash##34mSYn1E6gFyP5RsCgfyH1bMjVZ4AxtSjevDx8rvsCgwwg4rRs8vSpeyTXiPqbCuQzk7oZLpG@portfolio_fixture",
+              "quantity": "875"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "accounts": 2,
+    "positions": 2
+  }
+}

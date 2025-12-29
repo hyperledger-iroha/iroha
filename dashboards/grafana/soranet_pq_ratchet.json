@@ -1,0 +1,122 @@
+{
+  "title": "SoraNet PQ Ratchet Drill",
+  "uid": "soranet-pq-ratchet",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["soranet", "pq", "ratchet"],
+  "templating": {
+    "list": [
+      {
+        "name": "region",
+        "label": "Region",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sorafs_orchestrator_policy_events_total, region)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      },
+      {
+        "name": "stage",
+        "label": "Stage",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sorafs_orchestrator_policy_events_total{region=~\"$region\"}, stage)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Policy Events per Outcome",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (outcome) (rate(sorafs_orchestrator_policy_events_total{region=~\"$region\", stage=~\"$stage\"}[5m]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "1/min",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Brownout Rate",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(sorafs_orchestrator_brownouts_total{region=~\"$region\", stage=~\"$stage\"}[5m]))",
+          "legendFormat": "brownouts",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "1/min",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "PQ Ratio Mean (5m)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(sorafs_orchestrator_pq_ratio_sum{region=~\"$region\", stage=~\"$stage\"}[5m])) / sum(rate(sorafs_orchestrator_pq_ratio_count{region=~\"$region\", stage=~\"$stage\"}[5m]))",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "text",
+      "title": "Rollout Plan",
+      "id": 4,
+      "options": {
+        "mode": "markdown",
+        "content": "### Rollout Phase Guidance\n\nConsult `docs/source/soranet/pq_rollout_plan.md` for the canary → ramp → default promotion checklist. Keep configuration knobs (`sorafs.gateway.rollout_phase`, `sorafs.rollout_phase`) aligned with the phase shown here.\n\nPhase labels are derived from the orchestrator config; update this panel when the playbook changes."
+      }
+    }
+  ]
+}

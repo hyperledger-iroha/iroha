@@ -1,0 +1,87 @@
+# Torii Endpoints — Operator Aids (Quick Reference)
+
+日本語の概要は [`operator_aids.ja.md`](./operator_aids.ja.md) を参照してください。
+
+This page lists non-consensus, operator-facing endpoints that help with visibility and troubleshooting. Responses are JSON unless noted.
+
+Consensus (Sumeragi)
+- GET `/v1/sumeragi/new_view`
+  - Snapshot of NEW_VIEW receipt counts per `(height, view)`.
+  - Shape: `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
+  - Example:
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/new_view | jq .`
+- GET `/v1/sumeragi/new_view/sse` (SSE)
+  - Periodic stream (≈1s) of the same payload for dashboards.
+  - Example:
+    - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
+- Metrics: `sumeragi_new_view_receipts_by_hv{height,view}` gauges mirror the counts.
+- GET `/v1/sumeragi/status`
+  - Snapshot of leader index, HighestQC/LockedQC (heights, views, subject hashes), collector/VRF counters, pacemaker deferrals, tx queue depth, and RBC store health (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+- GET `/v1/sumeragi/status/sse`
+  - SSE stream (≈1s) of the same payload as `/v1/sumeragi/status` for live dashboards.
+- GET `/v1/sumeragi/qc`
+  - Snapshot of HighestQC and LockedQC; includes `subject_block_hash` for HighestQC when known.
+- GET `/v1/sumeragi/pacemaker`
+  - Pacemaker timers/config: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
+- GET `/v1/sumeragi/leader`
+  - Leader index snapshot. In NPoS mode, includes PRF context: `{ height, view, epoch_seed }`.
+- GET `/v1/sumeragi/collectors`
+  - Deterministic collector plan derived from the committed topology and on-chain parameters: exports `mode`, plan `(height, view)` (with `height` equal to the current chain height), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, the ordered collector list, and `epoch_seed` (hex) when NPoS is active.
+- GET `/v1/sumeragi/params`
+  - Snapshot of on-chain Sumeragi parameters `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
+  - When `da_enabled` is true, availability evidence (`AvailabilityQC` or RBC `READY`) is tracked but commit does not wait on it; local RBC `DELIVER` is also not a requirement. Operators can confirm payload transport health via the RBC endpoints below.
+- GET `/v1/sumeragi/rbc`
+  - Aggregate Reliable Broadcast counters: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
+- GET `/v1/sumeragi/rbc/sessions`
+  - Snapshot of per-session state (block hash, height/view, chunk counts, delivered flag, `invalid` marker, payload hash, recovered boolean) to troubleshoot stalled RBC deliveries and highlight recovered sessions after restart.
+  - CLI shortcut: `iroha sumeragi rbc sessions --summary` prints `hash`, `height/view`, chunk progress, ready count, and invalid/delivered flags.
+
+Evidence (audit; non-consensus)
+- GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
+- GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
+  - Includes basic fields (e.g., DoublePrevote/Precommit, InvalidQC, InvalidProposal) for inspection.
+  - Examples:
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
+- POST `/v1/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
+  - CLI helpers:
+    - `iroha sumeragi evidence list --summary`
+    - `iroha sumeragi evidence count --summary`
+    - `iroha sumeragi evidence submit --evidence-hex <hex>` (or `--evidence-hex-file <path>`)
+
+Notes
+- These endpoints are node‑local views (in‑memory where noted) and do not affect consensus or persistence.
+- Access may be guarded by API tokens and rate limits depending on your Torii configuration.
+
+CLI watch snippets (bash)
+
+- Poll JSON snapshot every 2s (prints the latest 10 entries):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+TORII="${TORII:-http://127.0.0.1:8080}"
+INTERVAL="${INTERVAL:-2}"
+TOKEN="${TOKEN:-}"
+HDR=()
+if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
+while true; do
+  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new_view" \
+    | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
+  sleep "$INTERVAL"
+done
+```
+
+- Follow the SSE stream and pretty‑print (latest 10 entries):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+TORII="${TORII:-http://127.0.0.1:8080}"
+TOKEN="${TOKEN:-}"
+HDR=()
+if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
+curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new_view/sse" \
+  | awk '/^data:/{sub(/^data: /,"\"); print}' \
+  | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
+```

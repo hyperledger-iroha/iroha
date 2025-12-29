@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Bienvenue à Hyperledger Iroha!",
+  "error.trace_config_setup": "Impossible de configurer le traçage de configuration",
+  "error.config": "Erreur de configuration",
+  "error.logger": "Impossible d'initialiser l'enregistrement",
+  "error.start": "Échec du démarrage de l'Iroha",
+  "error.run": "L'erreur s'est produite lors de l'exécution d'Iroha",
+  "error.start_p2p": "Impossible de démarrer un réseau d'égal à peer",
+  "error.init_kura": "Impossible d'initialiser Kura (stockage de blocs)",
+  "error.start_dev_telemetry": "Impossible de démarrer le service de télémétrie Dev",
+  "error.start_telemetry": "Impossible de commencer le service de télémétrie",
+  "error.listen_os_signal": "Impossible de configurer l'écoute pour les signaux OS",
+  "error.start_torii": "Impossible de commencer Torii (passerelle API Iroha HTTP)"
+}

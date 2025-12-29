@@ -1,0 +1,66 @@
+{
+  "code_hash": "hash:F1FA9210F10924AEC9DF8B0EF6DFF3B9FEF31E731D3400941CF27B9FF2737C85#1FF8",
+  "abi_hash": "hash:377F7125A0F20D40F65ED5E3A179BC5E04D68A385570B54D67D961861E8D9F83#1C50",
+  "compiler_fingerprint": null,
+  "features_bitmap": 1,
+  "access_set_hints": null,
+  "entrypoints": [
+    {
+      "name": "init_pool",
+      "kind": {
+        "kind": "Public",
+        "value": null
+      },
+      "permission": "Admin",
+      "read_keys": [
+        
+      ],
+      "write_keys": [
+        
+      ]
+    },
+    {
+      "name": "deposit_liquidity",
+      "kind": {
+        "kind": "Public",
+        "value": null
+      },
+      "permission": "Admin",
+      "read_keys": [
+        
+      ],
+      "write_keys": [
+        
+      ]
+    },
+    {
+      "name": "withdraw_liquidity",
+      "kind": {
+        "kind": "Public",
+        "value": null
+      },
+      "permission": "Admin",
+      "read_keys": [
+        
+      ],
+      "write_keys": [
+        
+      ]
+    },
+    {
+      "name": "swap",
+      "kind": {
+        "kind": "Public",
+        "value": null
+      },
+      "permission": "Admin",
+      "read_keys": [
+        
+      ],
+      "write_keys": [
+        
+      ]
+    }
+  ],
+  "provenance": null
+}

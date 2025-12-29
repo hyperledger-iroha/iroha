@@ -1,0 +1,30 @@
+{
+  "title": {
+    "message": "פורטל המפתחים של SORA Nexus",
+    "description": "The title in the navbar"
+  },
+  "logo.alt": {
+    "message": "SORA Nexus emblem",
+    "description": "The alt text of navbar logo"
+  },
+  "item.label.Overview": {
+    "message": "סקירה כללית",
+    "description": "Navbar item with label Overview"
+  },
+  "item.label.Norito": {
+    "message": "Norito",
+    "description": "Navbar item with label Norito"
+  },
+  "item.label.SDKs": {
+    "message": "‏SDK-ים",
+    "description": "Navbar item with label SDKs"
+  },
+  "item.label.Reference": {
+    "message": "מקורות",
+    "description": "Navbar item with label Reference"
+  },
+  "item.label.GitHub": {
+    "message": "GitHub",
+    "description": "Navbar item with label GitHub"
+  }
+}

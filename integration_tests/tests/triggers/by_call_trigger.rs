@@ -1,0 +1,1128 @@
+//! Tests for executing triggers directly
+
+use eyre::{Result, WrapErr};
+use futures_util::StreamExt as _;
+use iroha::{
+    crypto::KeyPair,
+    data_model::{
+        ValidationFail,
+        isi::{
+            Instruction,
+            error::{InstructionExecutionError, InvalidParameterError},
+        },
+        prelude::*,
+        query::{error::FindError, trigger::FindTriggers},
+        transaction::Executable,
+    },
+};
+use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+use iroha_test_network::*;
+use iroha_test_samples::{ALICE_ID, load_sample_ivm};
+use mint_rose_trigger_data_model::MintRoseArgs;
+use tokio::{task::spawn_blocking, time::timeout};
+
+use integration_tests::sandbox;
+
+use crate::triggers::get_asset_value;
+
+const TRIGGER_NAME: &str = "mint_rose";
+
+async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
+    sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
+}
+
+async fn run_or_skip<F, Fut>(context: &'static str, test: F) -> Result<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    if sandbox::handle_result(test().await, context)?.is_none() {
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn call_execute_trigger() -> Result<()> {
+    let Some(network) = start_network(stringify!(call_execute_trigger)).await? else {
+        return Ok(());
+    };
+    let test_client = network.client();
+
+    network.ensure_blocks_with(|h| h.total >= 1).await?;
+
+    run_or_skip(stringify!(call_execute_trigger), || async {
+        let asset_definition_id = "rose#wonderland".parse()?;
+        let account_id = ALICE_ID.clone();
+        let asset_id = AssetId::new(asset_definition_id, account_id);
+        let prev_value = spawn_blocking({
+            let client = test_client.clone();
+            let asset_id = asset_id.clone();
+            move || get_asset_value(&client, &asset_id)
+        })
+        .await??;
+
+        let instruction = Mint::asset_numeric(1u32, asset_id.clone());
+        let register_trigger = build_register_trigger_isi(
+            asset_id.account(),
+            vec![Instruction::into_instruction_box(Box::new(instruction))],
+        );
+        spawn_blocking({
+            let client = test_client.clone();
+            move || client.submit_blocking(register_trigger)
+        })
+        .await??;
+
+        let trigger_id = TRIGGER_NAME.parse()?;
+        let call_trigger = ExecuteTrigger::new(trigger_id);
+        spawn_blocking({
+            let client = test_client.clone();
+            move || {
+                client.submit_blocking(Instruction::into_instruction_box(Box::new(call_trigger)))
+            }
+        })
+        .await??;
+
+        let new_value = spawn_blocking({
+            let client = test_client.clone();
+            let asset_id = asset_id.clone();
+            move || get_asset_value(&client, &asset_id)
+        })
+        .await??;
+        assert_eq!(new_value, prev_value.checked_add(Numeric::one()).unwrap());
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_trigger_should_produce_event() -> Result<()> {
+    let Some(network) = start_network(stringify!(execute_trigger_should_produce_event)).await?
+    else {
+        return Ok(());
+    };
+    let test_client = network.client();
+
+    run_or_skip(
+        stringify!(execute_trigger_should_produce_event),
+        move || async move {
+            let asset_definition_id = "rose#wonderland".parse()?;
+            let account_id = ALICE_ID.clone();
+            let asset_id = AssetId::new(asset_definition_id, account_id.clone());
+
+            let instruction = Mint::asset_numeric(1u32, asset_id.clone());
+            let register_trigger = build_register_trigger_isi(
+                asset_id.account(),
+                vec![Instruction::into_instruction_box(Box::new(instruction))],
+            );
+            spawn_blocking({
+                let client = test_client.clone();
+                move || client.submit_blocking(register_trigger)
+            })
+            .await??;
+
+            let trigger_id = TRIGGER_NAME.parse::<TriggerId>()?;
+            let call_trigger = ExecuteTrigger::new(trigger_id.clone());
+
+            let filter = ExecuteTriggerEventFilter::new()
+                .for_trigger(trigger_id)
+                .under_authority(account_id);
+            let mut events = test_client.listen_for_events_async([filter]).await?;
+
+            spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    client
+                        .submit_blocking(Instruction::into_instruction_box(Box::new(call_trigger)))
+                }
+            })
+            .await??;
+
+            let next_event = timeout(network.sync_timeout(), events.next())
+                .await
+                .wrap_err("Timed out waiting for ExecuteTrigger event")?;
+            let event =
+                next_event.ok_or_else(|| eyre::eyre!("Execute trigger event stream closed"))?;
+            event
+                .wrap_err("ExecuteTrigger event listener returned an error")
+                .map(|_| ())?;
+            Ok(())
+        },
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<()> {
+    let Some(network) = start_network(stringify!(
+        trigger_failure_should_not_cancel_other_triggers_execution
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+    let test_client = network.client();
+
+    run_or_skip(
+        stringify!(trigger_failure_should_not_cancel_other_triggers_execution),
+        || async {
+            let asset_definition_id = "rose#wonderland".parse()?;
+            let account_id = ALICE_ID.clone();
+            let asset_id = AssetId::new(asset_definition_id, account_id.clone());
+
+            let bad_trigger_id = "bad_trigger".parse::<TriggerId>()?;
+            let fail_isi = Unregister::domain("dummy".parse()?);
+            let register_bad_trigger = Register::trigger(Trigger::new(
+                bad_trigger_id.clone(),
+                Action::new(
+                    vec![fail_isi],
+                    Repeats::Indefinitely,
+                    account_id.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(bad_trigger_id.clone())
+                        .under_authority(account_id.clone()),
+                ),
+            ));
+            spawn_blocking({
+                let client = test_client.clone();
+                move || client.submit_blocking(register_bad_trigger)
+            })
+            .await??;
+
+            let trigger_id = TRIGGER_NAME.parse()?;
+            let register_trigger = Register::trigger(Trigger::new(
+                trigger_id,
+                Action::new(
+                    vec![Mint::asset_numeric(1u32, asset_id.clone())],
+                    Repeats::Indefinitely,
+                    account_id.clone(),
+                    TimeEventFilter::new(ExecutionTime::PreCommit),
+                ),
+            ));
+            spawn_blocking({
+                let client = test_client.clone();
+                move || client.submit_blocking(register_trigger)
+            })
+            .await??;
+
+            let prev_asset_value = spawn_blocking({
+                let client = test_client.clone();
+                let asset_id = asset_id.clone();
+                move || get_asset_value(&client, &asset_id)
+            })
+            .await??;
+
+            let err = spawn_blocking({
+                let client = test_client.clone();
+                let bad_trigger_id = bad_trigger_id.clone();
+                move || {
+                    client.submit_blocking(Instruction::into_instruction_box(Box::new(
+                        ExecuteTrigger::new(bad_trigger_id),
+                    )))
+                }
+            })
+            .await?
+            .expect_err("should immediately result in error");
+            let Some(InstructionExecutionError::Find(FindError::Domain(_))) =
+                err.root_cause().downcast_ref::<InstructionExecutionError>()
+            else {
+                return Err(err);
+            };
+
+            spawn_blocking({
+                let client = test_client.clone();
+                move || client.submit_blocking(Log::new(Level::INFO, "trigger probe".to_string()))
+            })
+            .await??;
+
+            let new_asset_value = spawn_blocking({
+                let client = test_client.clone();
+                let asset_id = asset_id.clone();
+                move || get_asset_value(&client, &asset_id)
+            })
+            .await??;
+            assert!(
+                new_asset_value >= prev_asset_value.checked_add(numeric!(1)).unwrap(),
+                "expected pre-commit trigger to execute despite failing trigger"
+            );
+            Ok(())
+        },
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> {
+    let Some(network) = start_network(stringify!(
+        trigger_should_not_be_executed_with_zero_repeats_count
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+    let test_client = network.client();
+
+    network.ensure_blocks_with(|h| h.total >= 1).await?;
+
+    run_or_skip(
+        stringify!(trigger_should_not_be_executed_with_zero_repeats_count),
+        || async {
+            let asset_definition_id = "rose#wonderland".parse()?;
+            let account_id = ALICE_ID.clone();
+            let asset_id = AssetId::new(asset_definition_id, account_id.clone());
+            let trigger_id = "self_modifying_trigger".parse::<TriggerId>()?;
+
+            let trigger_instructions = vec![Mint::asset_numeric(1u32, asset_id.clone())];
+            let register_trigger = Register::trigger(Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    trigger_instructions,
+                    1_u32,
+                    account_id.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(account_id),
+                ),
+            ));
+            spawn_blocking({
+                let client = test_client.clone();
+                move || client.submit_blocking(register_trigger)
+            })
+            .await??;
+
+            // Saving current asset value
+            let prev_asset_value = spawn_blocking({
+                let client = test_client.clone();
+                let asset_id = asset_id.clone();
+                move || get_asset_value(&client, &asset_id)
+            })
+            .await??;
+
+            // Executing trigger first time
+            let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
+            let execute_trigger_first = execute_trigger.clone();
+            spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    client.submit_blocking(Instruction::into_instruction_box(Box::new(
+                        execute_trigger_first,
+                    )))
+                }
+            })
+            .await??;
+
+            // Executing trigger second time
+            let error = spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    client.submit_blocking(Instruction::into_instruction_box(Box::new(
+                        execute_trigger,
+                    )))
+                }
+            })
+            .await?
+            .expect_err("Error expected");
+            let downcasted_error = error
+                .chain()
+                .last()
+                .expect("At least two error causes expected")
+                .downcast_ref::<FindError>();
+            assert!(
+                matches!(
+                    downcasted_error,
+                    Some(FindError::Trigger(id)) if *id == trigger_id
+                ),
+                "Unexpected error received: {error:?}",
+            );
+
+            // Checking results
+            let new_asset_value = spawn_blocking({
+                let client = test_client.clone();
+                let asset_id = asset_id.clone();
+                move || get_asset_value(&client, &asset_id)
+            })
+            .await??;
+            assert_eq!(
+                new_asset_value,
+                prev_asset_value.checked_add(Numeric::one()).unwrap()
+            );
+
+            Ok(())
+        },
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> {
+    let Some(network) = start_network(stringify!(
+        trigger_should_be_able_to_modify_its_own_repeats_count
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+    let test_client = network.client();
+
+    network.ensure_blocks_with(|h| h.total >= 1).await?;
+
+    run_or_skip(
+        stringify!(trigger_should_be_able_to_modify_its_own_repeats_count),
+        || async {
+            let asset_definition_id = "rose#wonderland".parse()?;
+            let account_id = ALICE_ID.clone();
+            let asset_id = AssetId::new(asset_definition_id, account_id.clone());
+            let trigger_id = "self_modifying_trigger".parse::<TriggerId>()?;
+            let permission_on_registration = CanRegisterTrigger {
+                authority: account_id.clone(),
+            };
+
+            // Ensure the caller explicitly has permission to register the trigger on their own behalf.
+            let target_height = spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    client
+                        .get_status()
+                        .map(|status| status.blocks.saturating_add(1))
+                }
+            })
+            .await??;
+            spawn_blocking({
+                let client = test_client.clone();
+                let permission_on_registration = permission_on_registration.clone();
+                let account_id = account_id.clone();
+                move || {
+                    client.submit_blocking(Grant::account_permission(
+                        permission_on_registration,
+                        account_id,
+                    ))
+                }
+            })
+            .await??;
+
+            network
+                .ensure_blocks_with(|h| h.total >= target_height)
+                .await?;
+
+            let trigger_instructions: Vec<InstructionBox> = vec![
+                Mint::trigger_repetitions(1_u32, trigger_id.clone()).into(),
+                Mint::asset_numeric(1u32, asset_id.clone()).into(),
+            ];
+            let register_trigger = Register::trigger(Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    trigger_instructions,
+                    1_u32,
+                    account_id.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(account_id),
+                ),
+            ));
+            spawn_blocking({
+                let client = test_client.clone();
+                move || client.submit_blocking(register_trigger)
+            })
+            .await??;
+
+            // Saving current asset value
+            let prev_asset_value = spawn_blocking({
+                let client = test_client.clone();
+                let asset_id = asset_id.clone();
+                move || get_asset_value(&client, &asset_id)
+            })
+            .await??;
+
+            // Executing trigger first time
+            let execute_trigger = ExecuteTrigger::new(trigger_id);
+            let execute_trigger_first = execute_trigger.clone();
+            spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    client.submit_blocking(Instruction::into_instruction_box(Box::new(
+                        execute_trigger_first,
+                    )))
+                }
+            })
+            .await??;
+
+            // Executing trigger second time
+            spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    client.submit_blocking(Instruction::into_instruction_box(Box::new(
+                        execute_trigger,
+                    )))
+                }
+            })
+            .await??;
+
+            // Checking results
+            let new_asset_value = spawn_blocking({
+                let client = test_client.clone();
+                let asset_id = asset_id.clone();
+                move || get_asset_value(&client, &asset_id)
+            })
+            .await??;
+            assert_eq!(
+                new_asset_value,
+                prev_asset_value.checked_add(numeric!(2)).unwrap()
+            );
+
+            Ok(())
+        },
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_account_with_permission_can_register_trigger() -> Result<()> {
+    let Some(network) = start_network(stringify!(
+        only_account_with_permission_can_register_trigger
+    ))
+    .await?
+    else {
+        return Ok(());
+    };
+    let test_client = network.client();
+
+    run_or_skip(
+        stringify!(only_account_with_permission_can_register_trigger),
+        || async {
+            let domain_id = ALICE_ID.domain().clone();
+            let alice_account_id = ALICE_ID.clone();
+            let rabbit_keys = KeyPair::random();
+            let rabbit_account_id = AccountId::new(domain_id, rabbit_keys.public_key().clone());
+            let rabbit_account = Account::new(rabbit_account_id.clone());
+
+            let rabbit_client = {
+                let mut client = test_client.clone();
+                client.account = rabbit_account_id.clone();
+                client.key_pair = rabbit_keys;
+                client
+            };
+
+            // Permission for the trigger registration on behalf of alice
+            let permission_on_registration = CanRegisterTrigger {
+                authority: ALICE_ID.clone(),
+            };
+
+            // Trigger with 'alice' as authority
+            let trigger_id = "alice_trigger".parse::<TriggerId>()?;
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Vec::<InstructionBox>::new(),
+                    Repeats::Indefinitely,
+                    alice_account_id.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(alice_account_id.clone()),
+                ),
+            );
+
+            spawn_blocking({
+                let client = test_client.clone();
+                move || client.submit_blocking(Register::account(rabbit_account))
+            })
+            .await??;
+
+            spawn_blocking({
+                let client = test_client.clone();
+                let rabbit_account_id = rabbit_account_id.clone();
+                move || -> Result<()> {
+                    client
+                        .query(FindAccounts::new())
+                        .execute_all()
+                        .expect("Account not found")
+                        .into_iter()
+                        .find(|account| account.id() == &rabbit_account_id)
+                        .expect("Account not found");
+                    Ok(())
+                }
+            })
+            .await??;
+            println!("Rabbit is found.");
+
+            // Trying register the trigger without permissions
+            let err = spawn_blocking({
+                let client = rabbit_client.clone();
+                let trigger = trigger.clone();
+                move || client.submit_blocking(Register::trigger(trigger))
+            })
+            .await?
+            .expect_err("Trigger should not be registered!");
+            let Some(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(msg),
+            )) = err
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<InstructionExecutionError>())
+            else {
+                panic!("Unexpected error: {err:?}");
+            };
+            assert!(msg.contains("CanRegisterTrigger"));
+            println!("Rabbit couldn't register the trigger");
+
+            // Give permissions to the rabbit
+            let target_height = spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    client
+                        .get_status()
+                        .map(|status| status.blocks.saturating_add(1))
+                }
+            })
+            .await??;
+            spawn_blocking({
+                let client = test_client.clone();
+                let permission_on_registration = permission_on_registration.clone();
+                let rabbit_account_id = rabbit_account_id.clone();
+                move || {
+                    client.submit_blocking(Grant::account_permission(
+                        permission_on_registration,
+                        rabbit_account_id,
+                    ))
+                }
+            })
+            .await??;
+            network
+                .ensure_blocks_with(|h| h.total >= target_height)
+                .await?;
+            println!("Rabbit has got the permission");
+
+            // Trying register the trigger with permissions
+            spawn_blocking({
+                let client = rabbit_client.clone();
+                move || client.submit_blocking(Register::trigger(trigger))
+            })
+            .await??;
+
+            let found_trigger = spawn_blocking({
+                let client = test_client.clone();
+                let trigger_id = trigger_id.clone();
+                move || {
+                    client
+                        .query(FindTriggers::new())
+                        .execute_all()
+                        .unwrap()
+                        .into_iter()
+                        .find(|trigger| trigger.id() == &trigger_id)
+                        .expect("trigger not found")
+                }
+            })
+            .await?;
+
+            assert_eq!(*found_trigger.id(), trigger_id);
+
+            Ok(())
+        },
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unregister_trigger() -> Result<()> {
+    let Some(network) = start_network(stringify!(unregister_trigger)).await? else {
+        return Ok(());
+    };
+    let test_client = network.client();
+
+    run_or_skip(stringify!(unregister_trigger), || async {
+        let account_id = ALICE_ID.clone();
+
+        // Registering trigger
+        let trigger_id = "empty_trigger".parse::<TriggerId>()?;
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Indefinitely,
+                account_id.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(account_id),
+            ),
+        );
+        let register_trigger = Register::trigger(trigger.clone());
+        spawn_blocking({
+            let client = test_client.clone();
+            move || client.submit_blocking(register_trigger)
+        })
+        .await??;
+
+        // Finding trigger
+        let found_trigger = spawn_blocking({
+            let client = test_client.clone();
+            let trigger_id = trigger_id.clone();
+            move || {
+                client
+                    .query(FindTriggers::new())
+                    .execute_all()
+                    .unwrap()
+                    .into_iter()
+                    .find(|trigger| trigger.id() == &trigger_id)
+                    .expect("trigger not found")
+            }
+        })
+        .await?;
+        let found_action = found_trigger.action();
+        let Executable::Instructions(found_instructions) = found_action.executable() else {
+            panic!("Expected instructions");
+        };
+        let found_trigger = Trigger::new(
+            found_trigger.id().clone(),
+            Action::new(
+                Executable::Instructions(found_instructions.to_owned()),
+                found_action.repeats(),
+                found_action.authority().clone(),
+                found_action.filter().clone(),
+            ),
+        );
+        assert_eq!(found_trigger, trigger);
+
+        // Unregistering trigger
+        let unregister_trigger = Unregister::trigger(trigger_id.clone());
+        spawn_blocking({
+            let client = test_client.clone();
+            move || client.submit_blocking(unregister_trigger)
+        })
+        .await??;
+
+        // Checking result
+        let still_present = spawn_blocking({
+            let client = test_client.clone();
+            let trigger_id = trigger_id.clone();
+            move || {
+                client
+                    .query(FindTriggers::new())
+                    .execute_all()
+                    .unwrap()
+                    .into_iter()
+                    .any(|trigger| trigger.id() == &trigger_id)
+            }
+        })
+        .await?;
+        assert!(!still_present);
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trigger_in_genesis() -> Result<()> {
+    let bytecode = load_sample_ivm("mint_rose_trigger");
+    let account_id = ALICE_ID.clone();
+    let trigger_id = "genesis_trigger".parse::<TriggerId>()?;
+
+    let trigger = Trigger::new(
+        trigger_id.clone(),
+        Action::new(
+            bytecode,
+            Repeats::Indefinitely,
+            account_id.clone(),
+            ExecuteTriggerEventFilter::new()
+                .for_trigger(trigger_id.clone())
+                .under_authority(account_id.clone()),
+        ),
+    );
+
+    let Some(network) = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new().with_genesis_instruction(Register::trigger(trigger)),
+        stringify!(trigger_in_genesis),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    network.ensure_blocks_with(|h| h.total >= 1).await?;
+    let test_client = network.client();
+
+    run_or_skip(stringify!(trigger_in_genesis), || async {
+        let asset_definition_id = "rose#wonderland".parse()?;
+        let asset_id = AssetId::new(asset_definition_id, account_id);
+        let prev_value = spawn_blocking({
+            let client = test_client.clone();
+            let asset_id = asset_id.clone();
+            move || get_asset_value(&client, &asset_id)
+        })
+        .await??;
+
+        // Executing trigger
+        spawn_blocking({
+            let client = test_client.clone();
+            let trigger_id = trigger_id.clone();
+            move || client.submit_blocking(SetKeyValue::trigger(trigger_id, "VAL".parse()?, 1_u32))
+        })
+        .await??;
+        let call_trigger = ExecuteTrigger::new(trigger_id).with_args(MintRoseArgs { val: 1 });
+        spawn_blocking({
+            let client = test_client.clone();
+            move || {
+                client.submit_blocking(Instruction::into_instruction_box(Box::new(call_trigger)))
+            }
+        })
+        .await??;
+
+        // Checking result
+        let new_value = spawn_blocking({
+            let client = test_client.clone();
+            let asset_id = asset_id.clone();
+            move || get_asset_value(&client, &asset_id)
+        })
+        .await??;
+        assert_eq!(new_value, prev_value.checked_add(Numeric::one()).unwrap());
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
+    let Some(network) =
+        start_network(stringify!(trigger_should_be_able_to_modify_other_trigger)).await?
+    else {
+        return Ok(());
+    };
+    let test_client = network.client();
+
+    network.ensure_blocks_with(|h| h.total >= 1).await?;
+
+    run_or_skip(
+        stringify!(trigger_should_be_able_to_modify_other_trigger),
+        || async {
+            let asset_definition_id = "rose#wonderland".parse()?;
+            let account_id = ALICE_ID.clone();
+            let asset_id = AssetId::new(asset_definition_id, account_id.clone());
+            let trigger_id_unregister = "unregister_other_trigger".parse::<TriggerId>()?;
+            let trigger_id_to_be_unregistered =
+                "should_be_unregistered_trigger".parse::<TriggerId>()?;
+
+            let trigger_unregister_instructions =
+                vec![Unregister::trigger(trigger_id_to_be_unregistered.clone())];
+            let register_trigger = Register::trigger(Trigger::new(
+                trigger_id_unregister.clone(),
+                Action::new(
+                    trigger_unregister_instructions,
+                    1_u32,
+                    account_id.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id_unregister.clone())
+                        .under_authority(account_id.clone()),
+                ),
+            ));
+            spawn_blocking({
+                let client = test_client.clone();
+                move || client.submit_blocking(register_trigger)
+            })
+            .await??;
+
+            let trigger_should_be_unregistered_instructions =
+                vec![Mint::asset_numeric(1u32, asset_id.clone())];
+            let register_trigger = Register::trigger(Trigger::new(
+                trigger_id_to_be_unregistered.clone(),
+                Action::new(
+                    trigger_should_be_unregistered_instructions,
+                    1_u32,
+                    account_id.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id_to_be_unregistered.clone())
+                        .under_authority(account_id),
+                ),
+            ));
+            spawn_blocking({
+                let client = test_client.clone();
+                move || client.submit_blocking(register_trigger)
+            })
+            .await??;
+
+            // Saving current asset value
+            let prev_asset_value = spawn_blocking({
+                let client = test_client.clone();
+                let asset_id = asset_id.clone();
+                move || get_asset_value(&client, &asset_id)
+            })
+            .await??;
+
+            // Executing triggers
+            let execute_trigger_unregister = ExecuteTrigger::new(trigger_id_unregister);
+            let execute_trigger_should_be_unregistered =
+                ExecuteTrigger::new(trigger_id_to_be_unregistered.clone());
+            let err = spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    client.submit_all_blocking([
+                        Instruction::into_instruction_box(Box::new(execute_trigger_unregister)),
+                        Instruction::into_instruction_box(Box::new(
+                            execute_trigger_should_be_unregistered,
+                        )),
+                    ])
+                }
+            })
+            .await?
+            .expect_err("should immediately result in error");
+            // The by-call execution now surfaces as a validation failure; accept either the
+            // original `FindError::Trigger` or a `ValidationFail::NotPermitted` wrapper.
+            if let Some(FindError::Trigger(not_found_trigger)) = err
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<FindError>())
+            {
+                assert_eq!(*not_found_trigger, trigger_id_to_be_unregistered);
+            } else if let Some(ValidationFail::NotPermitted(msg)) = err
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<ValidationFail>())
+            {
+                assert!(
+                    msg.contains(&trigger_id_to_be_unregistered.to_string()),
+                    "expected missing-trigger message, got: {msg}"
+                );
+            } else {
+                panic!("unexpected error: {err:?}");
+            }
+
+            // Checking results
+            // First trigger should cancel second one, so value should stay the same
+            let new_asset_value = spawn_blocking({
+                let client = test_client.clone();
+                let asset_id = asset_id.clone();
+                move || get_asset_value(&client, &asset_id)
+            })
+            .await??;
+            assert_eq!(new_asset_value, prev_asset_value);
+
+            Ok(())
+        },
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trigger_burn_repetitions() -> Result<()> {
+    let Some(network) = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new(),
+        stringify!(trigger_burn_repetitions),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    let test_client = network.client();
+
+    run_or_skip(stringify!(trigger_burn_repetitions), || async {
+        // Explicitly allow Alice to register by-call triggers.
+        spawn_blocking({
+            let client = test_client.clone();
+            move || {
+                client.submit_blocking(Grant::account_permission(
+                    CanRegisterTrigger {
+                        authority: ALICE_ID.clone(),
+                    },
+                    ALICE_ID.clone(),
+                ))
+            }
+        })
+        .await??;
+
+        let asset_definition_id = "rose#wonderland".parse()?;
+        let account_id = ALICE_ID.clone();
+        let asset_id = AssetId::new(asset_definition_id, account_id.clone());
+        let trigger_id = "trigger".parse::<TriggerId>()?;
+
+        let trigger_instructions = vec![Mint::asset_numeric(1u32, asset_id)];
+        let register_trigger = Register::trigger(Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                trigger_instructions,
+                1_u32,
+                account_id.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(account_id),
+            ),
+        ));
+        spawn_blocking({
+            let client = test_client.clone();
+            move || client.submit_blocking(register_trigger)
+        })
+        .await??;
+
+        spawn_blocking({
+            let client = test_client.clone();
+            let trigger_id = trigger_id.clone();
+            move || client.submit_blocking(Burn::trigger_repetitions(1_u32, trigger_id))
+        })
+        .await??;
+
+        // Executing trigger
+        let execute_trigger = ExecuteTrigger::new(trigger_id);
+        let _err = spawn_blocking({
+            let client = test_client.clone();
+            move || {
+                client.submit_blocking(Instruction::into_instruction_box(Box::new(execute_trigger)))
+            }
+        })
+        .await?
+        .expect_err("Should fail without repetitions");
+
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss()
+-> Result<()> {
+    let Some(network) =
+        start_network(stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss))
+            .await?
+    else {
+        return Ok(());
+    };
+    let test_client = network.client();
+
+    run_or_skip(
+        stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss),
+        || async {
+            let account_id = ALICE_ID.clone();
+            let first_trigger_id = "mint_rose_1".parse::<TriggerId>()?;
+            let second_trigger_id = "mint_rose_2".parse::<TriggerId>()?;
+
+            let build_trigger = |trigger_id: TriggerId| {
+                Trigger::new(
+                    trigger_id.clone(),
+                    Action::new(
+                        load_sample_ivm("mint_rose_trigger"),
+                        Repeats::Indefinitely,
+                        account_id.clone(),
+                        ExecuteTriggerEventFilter::new()
+                            .for_trigger(trigger_id)
+                            .under_authority(account_id.clone()),
+                    ),
+                )
+            };
+
+            let first_trigger = build_trigger(first_trigger_id.clone());
+            let second_trigger = build_trigger(second_trigger_id.clone());
+            let second_trigger_for_register = second_trigger.clone();
+
+            spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    client.submit_all_blocking([
+                        Register::trigger(first_trigger),
+                        Register::trigger(second_trigger_for_register),
+                    ])
+                }
+            })
+            .await??;
+
+            spawn_blocking({
+                let client = test_client.clone();
+                let first_trigger_id = first_trigger_id.clone();
+                move || client.submit_blocking(Unregister::trigger(first_trigger_id))
+            })
+            .await??;
+            let got_second_trigger = spawn_blocking({
+                let client = test_client.clone();
+                let second_trigger_id = second_trigger_id.clone();
+                move || {
+                    client
+                        .query(FindTriggers::new())
+                        .execute_all()
+                        .unwrap()
+                        .into_iter()
+                        .find(|trigger| trigger.id() == &second_trigger_id)
+                        .expect("trigger not found")
+                }
+            })
+            .await?;
+
+            assert_eq!(got_second_trigger, second_trigger);
+
+            Ok(())
+        },
+    )
+    .await
+}
+
+fn build_register_trigger_isi(
+    account_id: &AccountId,
+    trigger_instructions: Vec<InstructionBox>,
+) -> Register<Trigger> {
+    let trigger_id: TriggerId = TRIGGER_NAME.parse().expect("Valid");
+
+    Register::trigger(Trigger::new(
+        trigger_id.clone(),
+        Action::new(
+            trigger_instructions,
+            Repeats::Indefinitely,
+            account_id.clone(),
+            ExecuteTriggerEventFilter::new()
+                .for_trigger(trigger_id)
+                .under_authority(account_id.clone()),
+        ),
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn call_execute_trigger_with_args() -> Result<()> {
+    let Some(network) = start_network(stringify!(call_execute_trigger_with_args)).await? else {
+        return Ok(());
+    };
+    let test_client = network.client();
+    network.ensure_blocks_with(|h| h.total >= 1).await?;
+
+    run_or_skip(stringify!(call_execute_trigger_with_args), || async {
+        let asset_definition_id = "rose#wonderland".parse()?;
+        let account_id = ALICE_ID.clone();
+        let asset_id = AssetId::new(asset_definition_id, account_id.clone());
+        let prev_value = spawn_blocking({
+            let client = test_client.clone();
+            let asset_id = asset_id.clone();
+            move || get_asset_value(&client, &asset_id)
+        })
+        .await??;
+
+        let trigger_id = TRIGGER_NAME.parse::<TriggerId>()?;
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                load_sample_ivm("mint_rose_trigger"),
+                Repeats::Indefinitely,
+                account_id.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(account_id.clone()),
+            ),
+        );
+
+        spawn_blocking({
+            let client = test_client.clone();
+            move || client.submit_blocking(Register::trigger(trigger))
+        })
+        .await??;
+
+        let args = MintRoseArgs { val: 42 };
+        let call_trigger = ExecuteTrigger::new(trigger_id).with_args(args);
+        spawn_blocking({
+            let client = test_client.clone();
+            move || {
+                client.submit_blocking(Instruction::into_instruction_box(Box::new(call_trigger)))
+            }
+        })
+        .await??;
+
+        let new_value = spawn_blocking({
+            let client = test_client.clone();
+            let asset_id = asset_id.clone();
+            move || get_asset_value(&client, &asset_id)
+        })
+        .await??;
+        assert_eq!(new_value, prev_value.checked_add(numeric!(42)).unwrap());
+
+        Ok(())
+    })
+    .await
+}

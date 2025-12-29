@@ -1,0 +1,23 @@
+error: Trigger `main()` function must not have a return type
+ --> tests/ui/fail/main_with_return.rs:6:40
+  |
+6 | fn main(host: Iroha, context: Context) -> u32 {
+  |                                        ^^^^^^
+
+error[E0277]: `main` has invalid return type `u32`
+ --> tests/ui/fail/main_with_return.rs:6:43
+  |
+6 | fn main(host: Iroha, context: Context) -> u32 {
+  |                                           ^^^ `main` can only return types that implement `Termination`
+  |
+  = help: consider using `()`, or a `Result`
+
+error[E0308]: mismatched types
+ --> tests/ui/fail/main_with_return.rs:5:1
+  |
+5 | #[main]
+  | ^^^^^^^- help: try adding a return type: `-> u32`
+  | |
+  | expected `()`, found `u32`
+  |
+  = note: this error originates in the attribute macro `main` (in Nightly builds, run with -Z macro-backtrace for more info)

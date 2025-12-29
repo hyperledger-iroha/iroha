@@ -1,0 +1,32 @@
+//! Regression tests for `ArchiveView` validation behaviour.
+
+use iroha_schema::IntoSchema;
+use norito::core::{DecodeFromSlice, Error, from_bytes_view, to_bytes};
+use norito::{NoritoDeserialize, NoritoSerialize};
+
+#[derive(IntoSchema, NoritoSerialize, NoritoDeserialize)]
+struct DummyPayload(Vec<u8>);
+
+#[derive(Debug)]
+struct TrailingDecoder;
+
+impl<'a> DecodeFromSlice<'a> for TrailingDecoder {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
+        assert!(
+            !bytes.is_empty(),
+            "fixture should produce non-empty payload"
+        );
+        Ok((Self, bytes.len() - 1))
+    }
+}
+
+#[test]
+fn archive_view_rejects_trailing_bytes() {
+    let payload = DummyPayload(vec![1, 2, 3, 4]);
+    let bytes = to_bytes(&payload).expect("serialize payload");
+    let view = from_bytes_view(&bytes).expect("view");
+    let err = view
+        .decode::<TrailingDecoder>()
+        .expect_err("trailing bytes must error");
+    assert!(matches!(err, Error::LengthMismatch));
+}

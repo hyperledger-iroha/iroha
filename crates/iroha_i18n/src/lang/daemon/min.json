@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Salam datang ka Hyperledger Iroha!",
+  "error.trace_config_setup": "Indak dapek manyato jo palacakan konfigurasi",
+  "error.config": "Kesalahan konfigurasi!",
+  "error.logger": "Indak dapek manjalankan sistem log",
+  "error.start": "Iroha indak dapek dimulai",
+  "error.run": "Kesalahan terjadi pas Iroha dijalankan",
+  "error.start_p2p": "Jaringan P2P indak bisa dimulai",
+  "error.init_kura": "Kura (penyimpanan blok) indak bisa dimulai",
+  "error.start_dev_telemetry": "Layanan telemetri pengembangan indak bisa dimulai",
+  "error.start_telemetry": "Layanan telemetri indak bisa dimulai",
+  "error.listen_os_signal": "Indak dapek manyato dangakan sinyal sistem operasi",
+  "error.start_torii": "Torii (gerbang Iroha HTTP API) indak bisa dimulai"
+}

@@ -1,0 +1,22 @@
+groups:
+  - name: soradns-transparency
+    interval: 1m
+    rules:
+      - alert: SoradnsProofAgeExceeded
+        expr: max_over_time(soradns_bundle_proof_age_seconds[5m]) > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraDNS proof age exceeded"
+          description: |
+            Resolver {{ $labels.resolver_id }} served bundles older than one hour (age {{ printf "%.0f" $value }}s). Investigate Signed Tree Head ingestion and transparency tailer pipelines.
+      - alert: SoradnsCidDriftDetected
+        expr: increase(soradns_bundle_cid_drift_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraDNS CID drift detected"
+          description: |
+            Resolver {{ $labels.resolver_id }} observed CID drift for {{ $labels.namehash }} within the last 10 minutes. Validate GAR approvals and confirm bundle provenance.

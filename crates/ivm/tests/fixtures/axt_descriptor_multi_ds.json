@@ -1,0 +1,34 @@
+{
+  "descriptor": {
+    "dsids": [1, 7],
+    "touches": [
+      {
+        "dsid": 1,
+        "read": ["accounts/", "reports/agg/"],
+        "write": ["reports/out/"]
+      },
+      {
+        "dsid": 7,
+        "read": ["da/", "manifests/", "proofs/"],
+        "write": ["proofs/"]
+      }
+    ]
+  },
+  "touch_manifests": [
+    {
+      "dsid": 1,
+      "manifest": {
+        "read": ["reports/agg/q1"],
+        "write": ["reports/out/q2"]
+      }
+    },
+    {
+      "dsid": 7,
+      "manifest": {
+        "read": ["manifests/root"],
+        "write": ["proofs/slot"]
+      }
+    }
+  ],
+  "binding_hex": "a0b976cadd383c0f05583dc710d8d749a52ce3ad0933094c9336f16067ccd001"
+}

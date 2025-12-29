@@ -1,0 +1,22 @@
+error: Trigger `main()` function must not have a return type
+ --> tests/ui/fail/return_type_forbidden.rs:6:48
+  |
+6 | fn trigger_main(host: Iroha, context: Context) -> Result {
+  |                                                ^^^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/fail/return_type_forbidden.rs:9:2
+  |
+9 | }
+  |  ^ consider adding a `main` function to `$DIR/tests/ui/fail/return_type_forbidden.rs`
+
+error[E0107]: missing generics for enum `Result`
+ --> tests/ui/fail/return_type_forbidden.rs:6:51
+  |
+6 | fn trigger_main(host: Iroha, context: Context) -> Result {
+  |                                                   ^^^^^^ expected 2 generic arguments
+  |
+help: add missing generic arguments
+  |
+6 | fn trigger_main(host: Iroha, context: Context) -> Result<T, E> {
+  |                                                         ++++++

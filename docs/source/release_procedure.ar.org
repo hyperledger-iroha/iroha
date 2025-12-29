@@ -1,0 +1,18 @@
+#+COMMENT: Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation.
+
+#+LANGUAGE: ar
+#+DIRECTION: rtl
+#+SOURCE: docs/source/release_procedure.org
+#+STATUS: needs-translation
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: 82936055bafd33d2237b4b103ac3acd8fc87a5c546b5b0c0388b43e2d8ece1ab
+#+SOURCE_LAST_MODIFIED: 2025-10-25T15:23:17.003683+00:00
+#+TRANSLATION_LAST_REVIEWED: 
+
+#+HTML: <div dir="rtl">
+* قيد الترجمة
+
+هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث قيمة `#+STATUS` بما يناسب.
+
+استبدل هذا القسم بالنص المترجَم الكامل وحدث `#+STATUS` إلى `complete` بعد الانتهاء من العمل. يجب أن يعكس `#+LAST_REVIEWED` تاريخ آخر مراجعة للنص مقابل النسخة الإنجليزية.
+#+HTML: </div>

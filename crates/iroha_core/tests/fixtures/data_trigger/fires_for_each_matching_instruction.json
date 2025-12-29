@@ -1,0 +1,126 @@
+[
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##alice@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##bob@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##alice@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##bob@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##bob@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##carol@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "TriggerCompleted": {
+      "trigger_id": "data-bob-carol-0",
+      "outcome": "Success"
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Removed": {
+              "asset": "rose##bob@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Domain": {
+        "Account": {
+          "Asset": {
+            "Added": {
+              "asset": "rose##carol@wonderland",
+              "amount": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "TriggerCompleted": {
+      "trigger_id": "data-bob-carol-0",
+      "outcome": "Success"
+    }
+  }
+]

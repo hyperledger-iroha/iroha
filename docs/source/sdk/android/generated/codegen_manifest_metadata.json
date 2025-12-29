@@ -1,0 +1,14 @@
+{
+  "instruction_manifest": {
+    "sha256": "1d14214994b2875e3942ca1218074dcac04f64f0788b62fe57f3a2b44fdf9182",
+    "entry_count": 104,
+    "generated_at": "2025-11-22T10:13:44.078245Z",
+    "norito_instruction_changes_ref": "2025-11-22"
+  },
+  "builder_index": {
+    "sha256": "3abebececbf9636ea2a131a1b94bd9f391776275c97b824dd7f3bdef69c4d048",
+    "entry_count": 104,
+    "generated_at": "2025-11-22T10:13:44.078245Z",
+    "norito_instruction_changes_ref": "2025-11-22"
+  }
+}

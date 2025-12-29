@@ -1,0 +1,94 @@
+{
+  "$schema": "https://grafana.com/docs/grafana/latest/dashboards/reference/json-model/",
+  "title": "SoraFS Pin Registry Overview",
+  "timezone": "",
+  "editable": false,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Manifest Lifecycle Totals",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "torii_sorafs_registry_manifests_total",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Alias Catalogue",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "torii_sorafs_registry_aliases_total",
+          "legendFormat": "aliases"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Replication Orders by Status",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "torii_sorafs_registry_orders_total",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Backlog vs Expired Orders",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "torii_sorafs_replication_backlog_total",
+          "legendFormat": "backlog"
+        },
+        {
+          "expr": "torii_sorafs_registry_orders_total{status=\"expired\"}",
+          "legendFormat": "expired"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "SLA Success Ratio",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(torii_sorafs_replication_sla_total{outcome=\"met\"}) / clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~\"met|missed\"}), 1)",
+          "legendFormat": "sla_ratio"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency vs Slack (epochs)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "torii_sorafs_replication_completion_latency_epochs{stat=\"p95\"}",
+          "legendFormat": "p95_latency"
+        },
+        {
+          "expr": "torii_sorafs_replication_deadline_slack_epochs{stat=\"avg\"}",
+          "legendFormat": "avg_slack"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Missed Orders (1h rate)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(increase(torii_sorafs_replication_sla_total{outcome=\"missed\"}[1h]))",
+          "legendFormat": "missed_per_hour"
+        }
+      ]
+    }
+  ]
+}

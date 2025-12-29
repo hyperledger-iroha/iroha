@@ -1,0 +1,14 @@
+{
+  "info.welcome": "\u2066Hyperledger Iroha\u2069 ته ښه راغلاست!",
+  "error.trace_config_setup": "د ترتیب څارنه تنظیم نه شوه",
+  "error.config": "د ترتیب تېروتنه!",
+  "error.logger": "د لاګ کولو سیستم پیل نه شو",
+  "error.start": "\u2066Iroha\u2069 پیل نه شو",
+  "error.run": "\u2066Iroha\u2069 چلولو پر مهال تېروتنه رامنځته شوه",
+  "error.start_p2p": "د \u2066P2P\u2069 شبکه پیل نه شوه",
+  "error.init_kura": "\u2066Kura\u2069 (د بلاک زېرمه) پیل نه شوه",
+  "error.start_dev_telemetry": "د پرمختیا ټیلي مېټري خدمت پیل نه شو",
+  "error.start_telemetry": "ټیلي مېټري خدمت پیل نه شو",
+  "error.listen_os_signal": "د OS اشارو اورېدو لپاره اماده کول ناممکن شول",
+  "error.start_torii": "\u2066Torii\u2069 (\u2066Iroha HTTP API\u2069 ګېټ وې) پیل نه شو"
+}

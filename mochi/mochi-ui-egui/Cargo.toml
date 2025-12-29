@@ -1,0 +1,27 @@
+[package]
+name = "mochi-ui-egui"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "egui desktop shell for the MOCHI local Iroha network supervisor."
+
+[[bin]]
+name = "mochi"
+path = "src/main.rs"
+
+[dependencies]
+mochi-core = { path = "../mochi-core" }
+eframe = { workspace = true }
+egui_plot = { version = "0.34.0" }
+tokio = { workspace = true }
+toml = { workspace = true }
+hex = { workspace = true }
+norito = { workspace = true }
+iroha_data_model = { path = "../../crates/iroha_data_model" }
+iroha_executor_data_model = { path = "../../crates/iroha_executor_data_model" }
+
+[dev-dependencies]
+iroha_test_samples = { path = "../../crates/iroha_test_samples" }
+iroha_telemetry = { path = "../../crates/iroha_telemetry" }
+tempfile = { workspace = true }

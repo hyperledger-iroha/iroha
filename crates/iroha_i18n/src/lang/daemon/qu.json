@@ -1,0 +1,14 @@
+{
+  "info.welcome": "¡Allin hamusqayki Hyperledger Iroha nisqaman!",
+  "error.trace_config_setup": "Mana atirqanchu wakichiy qatiyta churayta",
+  "error.config": "Configuración pantasqa",
+  "error.logger": "Mana atirqanchu registrador qallariyta",
+  "error.start": "Iroha qallariyta mana atirqanchu",
+  "error.run": "Iroha purichichkaspa pantasqa karqan",
+  "error.start_p2p": "Mana atispa masipura llika qallariyta",
+  "error.init_kura": "Mana atispa Kura (bloque waqaychay) qallariyta .",
+  "error.start_dev_telemetry": "Mana dev telemetría yanapakuyta qallariyta atispa",
+  "error.start_telemetry": "Mana telemetría serviciota qallariyta atispa",
+  "error.listen_os_signal": "OS señalkunapaq uyariyta mana churayta atispa",
+  "error.start_torii": "Mana Torii (Iroha HTTP API Punku) qallariyta atispa ."
+}

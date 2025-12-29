@@ -1,0 +1,442 @@
+//! Pending-RBC stash (chunks/ready/deliver seen before INIT).
+
+use std::{
+    collections::{BTreeMap, VecDeque},
+    time::{Duration, Instant},
+};
+
+use eyre::Result;
+use iroha_logger::prelude::*;
+
+use crate::sumeragi::{
+    consensus::{RbcChunk, RbcDeliver, RbcReady},
+    rbc_store::SessionKey,
+    status,
+};
+
+use super::Actor;
+
+#[derive(Debug)]
+pub(super) struct PendingRbcMessages {
+    pub(super) chunks: VecDeque<RbcChunk>,
+    pub(super) ready: Vec<RbcReady>,
+    pub(super) deliver: Vec<RbcDeliver>,
+    pending_bytes: usize,
+    dropped_chunks: u64,
+    dropped_bytes: u64,
+    dropped_ready: u64,
+    dropped_deliver: u64,
+    first_seen: Instant,
+}
+
+#[derive(Debug)]
+pub(super) enum PendingChunkOutcome {
+    Inserted {
+        pending_chunks: usize,
+        pending_bytes: usize,
+        evicted_chunks: u64,
+        evicted_bytes: u64,
+    },
+    Dropped {
+        dropped_bytes: u64,
+        evicted_chunks: u64,
+        evicted_bytes: u64,
+    },
+}
+
+impl PendingRbcMessages {
+    pub(super) fn new(now: Instant) -> Self {
+        Self {
+            chunks: VecDeque::new(),
+            ready: Vec::new(),
+            deliver: Vec::new(),
+            pending_bytes: 0,
+            dropped_chunks: 0,
+            dropped_bytes: 0,
+            dropped_ready: 0,
+            dropped_deliver: 0,
+            first_seen: now,
+        }
+    }
+
+    pub(super) fn touch(&mut self, _now: Instant) {
+        // TTL is anchored to `first_seen` to avoid unbounded retention when INIT never appears.
+    }
+
+    pub(super) fn pending_bytes(&self) -> usize {
+        self.pending_bytes
+    }
+
+    pub(super) fn pending_chunks(&self) -> usize {
+        self.chunks.len()
+    }
+
+    pub(super) fn dropped_counts(&self) -> (u64, u64) {
+        (self.dropped_chunks, self.dropped_bytes)
+    }
+
+    pub(super) fn drop_breakdown(&self) -> (u64, u64, u64, u64) {
+        (
+            self.dropped_chunks,
+            self.dropped_ready,
+            self.dropped_deliver,
+            self.dropped_bytes,
+        )
+    }
+
+    pub(super) fn age_ms(&self, now: Instant) -> u64 {
+        u64::try_from(
+            now.saturating_duration_since(self.first_seen)
+                .as_millis()
+                .min(u128::from(u64::MAX)),
+        )
+        .unwrap_or(u64::MAX)
+    }
+
+    pub(super) fn first_seen(&self) -> Instant {
+        self.first_seen
+    }
+
+    pub(super) fn expired(&self, ttl: Duration, now: Instant) -> bool {
+        ttl > Duration::ZERO && now.saturating_duration_since(self.first_seen) > ttl
+    }
+
+    fn record_drop(&mut self, bytes: usize, now: Instant) {
+        self.dropped_chunks = self.dropped_chunks.saturating_add(1);
+        self.dropped_bytes = self
+            .dropped_bytes
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        self.touch(now);
+    }
+
+    fn record_ready_drop(&mut self, bytes: usize, now: Instant) {
+        self.dropped_ready = self.dropped_ready.saturating_add(1);
+        self.dropped_bytes = self
+            .dropped_bytes
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        self.touch(now);
+    }
+
+    fn record_deliver_drop(&mut self, bytes: usize, now: Instant) {
+        self.dropped_deliver = self.dropped_deliver.saturating_add(1);
+        self.dropped_bytes = self
+            .dropped_bytes
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        self.touch(now);
+    }
+
+    /// Attempts to stash a chunk respecting per-session caps.
+    pub(super) fn push_chunk_capped(
+        &mut self,
+        chunk: RbcChunk,
+        max_chunks: usize,
+        max_bytes: usize,
+        now: Instant,
+    ) -> PendingChunkOutcome {
+        if max_chunks == 0 || max_bytes == 0 {
+            self.record_drop(chunk.bytes.len(), now);
+            return PendingChunkOutcome::Dropped {
+                evicted_chunks: 0,
+                evicted_bytes: 0,
+                dropped_bytes: u64::try_from(chunk.bytes.len()).unwrap_or(u64::MAX),
+            };
+        }
+
+        let mut evicted_chunks = 0u64;
+        let mut evicted_bytes = 0u64;
+        let chunk_len = chunk.bytes.len();
+        while (self.chunks.len().saturating_add(1) > max_chunks)
+            || (self.pending_bytes.saturating_add(chunk_len) > max_bytes)
+        {
+            if let Some(evicted) = self.chunks.pop_front() {
+                evicted_chunks = evicted_chunks.saturating_add(1);
+                let evicted_len = evicted.bytes.len();
+                evicted_bytes =
+                    evicted_bytes.saturating_add(u64::try_from(evicted_len).unwrap_or(u64::MAX));
+                self.pending_bytes = self.pending_bytes.saturating_sub(evicted_len);
+                self.record_drop(evicted_len, now);
+            } else {
+                break;
+            }
+        }
+
+        let would_exceed_chunks = self.chunks.len().saturating_add(1) > max_chunks;
+        let would_exceed_bytes = self.pending_bytes.saturating_add(chunk_len) > max_bytes;
+        if would_exceed_chunks || would_exceed_bytes {
+            let dropped_bytes = u64::try_from(chunk_len).unwrap_or(u64::MAX);
+            self.record_drop(chunk_len, now);
+            return PendingChunkOutcome::Dropped {
+                evicted_chunks,
+                evicted_bytes,
+                dropped_bytes,
+            };
+        }
+
+        self.touch(now);
+        self.pending_bytes = self.pending_bytes.saturating_add(chunk_len);
+        self.chunks.push_back(chunk);
+        PendingChunkOutcome::Inserted {
+            pending_chunks: self.chunks.len(),
+            pending_bytes: self.pending_bytes,
+            evicted_chunks,
+            evicted_bytes,
+        }
+    }
+
+    pub(super) fn push_ready_capped(
+        &mut self,
+        ready: RbcReady,
+        max_bytes: usize,
+        now: Instant,
+    ) -> (bool, usize) {
+        let size = rbc_ready_stash_bytes(&ready);
+        if size == 0 || self.pending_bytes.saturating_add(size) > max_bytes {
+            if size > 0 {
+                self.record_ready_drop(size, now);
+            }
+            return (false, size);
+        }
+        self.touch(now);
+        self.pending_bytes = self.pending_bytes.saturating_add(size);
+        self.ready.push(ready);
+        (true, 0)
+    }
+
+    pub(super) fn push_deliver_capped(
+        &mut self,
+        deliver: RbcDeliver,
+        max_bytes: usize,
+        now: Instant,
+    ) -> (bool, usize) {
+        let size = rbc_deliver_stash_bytes(&deliver);
+        if size == 0 || self.pending_bytes.saturating_add(size) > max_bytes {
+            if size > 0 {
+                self.record_deliver_drop(size, now);
+            }
+            return (false, size);
+        }
+        self.touch(now);
+        self.pending_bytes = self.pending_bytes.saturating_add(size);
+        self.deliver.push(deliver);
+        (true, 0)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum PendingRbcDropReason {
+    Cap,
+    Ttl,
+    SessionLimit,
+}
+
+impl PendingRbcDropReason {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cap => "cap",
+            Self::SessionLimit => "session_cap",
+            Self::Ttl => "ttl",
+        }
+    }
+}
+
+pub(super) struct PendingRbcEviction {
+    pub(super) key: SessionKey,
+    pub(super) reason: PendingRbcDropReason,
+    pub(super) removed: PendingRbcMessages,
+}
+
+impl core::fmt::Debug for PendingRbcEviction {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PendingRbcEviction")
+            .field("key", &self.key)
+            .field("reason", &self.reason.as_str())
+            .field("pending_chunks", &self.removed.pending_chunks())
+            .field("pending_bytes", &self.removed.pending_bytes())
+            .finish()
+    }
+}
+
+impl Actor {
+    pub(super) fn apply_pending_rbc_housekeeping(
+        pending: &mut BTreeMap<SessionKey, PendingRbcMessages>,
+        key: SessionKey,
+        session_cap: usize,
+        ttl: Duration,
+        now: Instant,
+    ) -> Vec<PendingRbcEviction> {
+        let mut evictions = Vec::new();
+        if ttl > Duration::ZERO && !pending.is_empty() {
+            let expired: Vec<_> = pending
+                .iter()
+                .filter(|(_, entry)| entry.expired(ttl, now))
+                .map(|(session_key, _)| *session_key)
+                .collect();
+            for session_key in expired {
+                if let Some(removed) = pending.remove(&session_key) {
+                    evictions.push(PendingRbcEviction {
+                        key: session_key,
+                        reason: PendingRbcDropReason::Ttl,
+                        removed,
+                    });
+                }
+            }
+        }
+
+        if session_cap > 0 && pending.len() >= session_cap && !pending.contains_key(&key) {
+            if let Some(oldest) = pending
+                .iter()
+                .min_by_key(|(_, entry)| entry.first_seen())
+                .map(|(session_key, _)| *session_key)
+            {
+                if let Some(removed) = pending.remove(&oldest) {
+                    evictions.push(PendingRbcEviction {
+                        key: oldest,
+                        reason: PendingRbcDropReason::SessionLimit,
+                        removed,
+                    });
+                }
+            }
+        }
+
+        evictions
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(super) fn take_pending_rbc_slot(
+        pending: &mut BTreeMap<SessionKey, PendingRbcMessages>,
+        key: SessionKey,
+        session_cap: usize,
+        ttl: Duration,
+        now: Instant,
+    ) -> (&mut PendingRbcMessages, Vec<PendingRbcEviction>) {
+        let evictions = Self::apply_pending_rbc_housekeeping(pending, key, session_cap, ttl, now);
+        let pending_slot = pending
+            .entry(key)
+            .or_insert_with(|| PendingRbcMessages::new(now));
+        pending_slot.touch(now);
+        (pending_slot, evictions)
+    }
+
+    pub(super) fn pending_rbc_slot(&mut self, key: SessionKey) -> &mut PendingRbcMessages {
+        let now = Instant::now();
+        let ttl = self.config.rbc_pending_ttl;
+        let evictions = Self::apply_pending_rbc_housekeeping(
+            &mut self.rbc.pending,
+            key,
+            PENDING_RBC_STASH_LIMIT,
+            ttl,
+            now,
+        );
+
+        if !evictions.is_empty() {
+            for eviction in evictions {
+                match eviction.reason {
+                    PendingRbcDropReason::SessionLimit => warn!(
+                        ?eviction.key,
+                        limit = PENDING_RBC_STASH_LIMIT,
+                        pending_chunks = eviction.removed.pending_chunks(),
+                        pending_bytes = eviction.removed.pending_bytes(),
+                        "dropping oldest pending RBC stash to enforce limit"
+                    ),
+                    PendingRbcDropReason::Ttl => warn!(
+                        ?eviction.key,
+                        ttl_ms = ttl.as_millis(),
+                        pending_chunks = eviction.removed.pending_chunks(),
+                        pending_bytes = eviction.removed.pending_bytes(),
+                        "evicting pending RBC stash after TTL elapsed without INIT"
+                    ),
+                    PendingRbcDropReason::Cap => {}
+                }
+                Self::record_pending_drop(
+                    self.telemetry_handle(),
+                    eviction.reason,
+                    &eviction.removed,
+                );
+            }
+            self.publish_rbc_backlog_snapshot();
+        }
+
+        let pending_entry = self
+            .rbc
+            .pending
+            .entry(key)
+            .or_insert_with(|| PendingRbcMessages::new(now));
+        pending_entry.touch(now);
+        pending_entry
+    }
+
+    pub(super) fn clear_pending_rbc(&mut self, key: &SessionKey) {
+        self.rbc.pending.remove(key);
+    }
+
+    pub(super) fn flush_pending_rbc(&mut self, key: SessionKey) -> Result<()> {
+        let Some(pending) = self.rbc.pending.remove(&key) else {
+            return Ok(());
+        };
+
+        for chunk in pending.chunks {
+            self.handle_rbc_chunk(chunk)?;
+        }
+        for ready in pending.ready {
+            self.handle_rbc_ready(ready)?;
+        }
+        for deliver in pending.deliver {
+            self.handle_rbc_deliver(deliver)?;
+        }
+
+        Ok(())
+    }
+
+    fn record_pending_drop(
+        telemetry: Option<&crate::telemetry::Telemetry>,
+        reason: PendingRbcDropReason,
+        removed: &PendingRbcMessages,
+    ) {
+        let dropped_frames = removed
+            .pending_chunks()
+            .saturating_add(removed.ready.len())
+            .saturating_add(removed.deliver.len());
+        let dropped_chunks = u64::try_from(dropped_frames).unwrap_or(u64::MAX);
+        let dropped_bytes = u64::try_from(removed.pending_bytes()).unwrap_or(u64::MAX);
+        Self::record_pending_drop_counts(telemetry, reason, dropped_chunks, dropped_bytes);
+        status::inc_pending_rbc_evicted(1);
+        if let Some(telemetry) = telemetry {
+            telemetry.inc_rbc_pending_evicted(1);
+        }
+    }
+
+    pub(super) fn record_pending_drop_counts(
+        telemetry: Option<&crate::telemetry::Telemetry>,
+        reason: PendingRbcDropReason,
+        dropped_chunks: u64,
+        dropped_bytes: u64,
+    ) {
+        status::inc_rbc_pending_drop(reason.as_str(), dropped_chunks, dropped_bytes);
+        if let Some(telemetry) = telemetry {
+            telemetry.inc_rbc_pending_drop(reason.as_str(), dropped_chunks, dropped_bytes);
+        }
+    }
+}
+
+fn rbc_ready_stash_bytes(ready: &RbcReady) -> usize {
+    ready
+        .signature
+        .len()
+        .saturating_add(ready.chunk_root.as_ref().len())
+        .saturating_add(ready.block_hash.as_ref().as_ref().len())
+        .saturating_add(std::mem::size_of::<u64>() * 3)
+        .saturating_add(std::mem::size_of::<u32>())
+}
+
+fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
+    deliver
+        .signature
+        .len()
+        .saturating_add(deliver.chunk_root.as_ref().len())
+        .saturating_add(deliver.block_hash.as_ref().as_ref().len())
+        .saturating_add(std::mem::size_of::<u64>() * 3)
+        .saturating_add(std::mem::size_of::<u32>())
+}
+
+/// Hard cap on how many pending RBC sessions we will buffer before INIT is seen.
+pub(super) const PENDING_RBC_STASH_LIMIT: usize = 256;

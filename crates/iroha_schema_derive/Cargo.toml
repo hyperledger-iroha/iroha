@@ -1,0 +1,30 @@
+[package]
+name = "iroha_schema_derive"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+trybuild-tests = []
+
+[lib]
+proc-macro = true
+
+[dependencies]
+iroha_derive = { workspace = true }
+
+syn = { workspace = true, features = ["default", "full", "visit"] }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+manyhow = { workspace = true, features = ["darling"] }
+darling = { workspace = true }
+
+[dev-dependencies]
+iroha_schema = { workspace = true }
+trybuild = { workspace = true }

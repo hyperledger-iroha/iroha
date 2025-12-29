@@ -1,0 +1,22 @@
+{
+  "providers": [
+    {
+      "provider_id": "alpha",
+      "qos_score": 92.0,
+      "latency_p95_ms": 120.0,
+      "failure_rate_ewma": 0.03,
+      "token_health": 0.95,
+      "staking_weight": 1.5,
+      "last_updated_unix": 1700000000
+    },
+    {
+      "provider_id": "beta",
+      "qos_score": 78.0,
+      "latency_p95_ms": 850.0,
+      "failure_rate_ewma": 0.12,
+      "token_health": 0.7,
+      "staking_weight": 0.9,
+      "last_updated_unix": 1700000000
+    }
+  ]
+}

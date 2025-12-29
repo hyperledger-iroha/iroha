@@ -1,0 +1,19 @@
+import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+
+# Torii API (RapiDoc)
+
+`RapiDoc` offers a compact, documentation-first rendering of the same Torii
+OpenAPI document. Use it when you need a denser overview or read-only review of
+request/response models.
+
+## Usage tips
+
+- Enter a bearer token to enable interactive calls. The value is applied as an
+  `Authorization` header.
+- RapiDoc shares the same OpenAPI snapshot (`/openapi/torii.json`) generated via
+  `cargo xtask openapi`.
+- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
+  working against staged gateways requiring the proxy.
+
+<RapiDocPanel />
+

@@ -1,0 +1,23 @@
+error: Smart contract entrypoint must not have a return type
+ --> tests/ui/fail/return_type_forbidden.rs:6:1
+  |
+6 | #[main]
+  | ^^^^^^^
+  |
+  = note: this error originates in the attribute macro `main` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0601]: `main` function not found in crate `$CRATE`
+  --> tests/ui/fail/return_type_forbidden.rs:10:2
+   |
+10 | }
+   |  ^ consider adding a `main` function to `$DIR/tests/ui/fail/return_type_forbidden.rs`
+
+error[E0308]: mismatched types
+ --> tests/ui/fail/return_type_forbidden.rs:6:1
+  |
+6 | #[main]
+  | ^^^^^^^- help: try adding a return type: `-> i32`
+  | |
+  | expected `()`, found `i32`
+  |
+  = note: this error originates in the attribute macro `main` (in Nightly builds, run with -Z macro-backtrace for more info)

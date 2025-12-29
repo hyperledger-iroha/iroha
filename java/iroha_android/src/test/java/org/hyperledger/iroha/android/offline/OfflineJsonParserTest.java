@@ -1,0 +1,207 @@
+package org.hyperledger.iroha.android.offline;
+
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+public final class OfflineJsonParserTest {
+
+  private OfflineJsonParserTest() {}
+
+  public static void main(final String[] args) {
+    parsesAllowancePayload();
+    parsesTransferPayload();
+    handlesOptionalAssetId();
+    extractsReceiptSummary();
+    parsesRevocationPayload();
+    System.out.println("[IrohaAndroid] OfflineJsonParserTest passed.");
+  }
+
+  private static void parsesAllowancePayload() {
+    final String json =
+        """
+        {
+          "total": 1,
+          "items": [
+            {
+              "certificate_id_hex": "deadbeef",
+              "controller_id": "alice@wonderland",
+              "controller_display": "alice@wonderland",
+              "asset_id": "usd#wonderland",
+              "registered_at_ms": 1700000000000,
+              "expires_at_ms": 1700500000000,
+              "policy_expires_at_ms": 1700600000000,
+              "refresh_at_ms": 1700400000000,
+              "verdict_id_hex": "feedface",
+              "attestation_nonce_hex": "1234abcd",
+              "remaining_amount": "42",
+              "record": { "policy": { "max_tx_value": "10" } }
+            }
+          ]
+        }
+        """;
+    final OfflineAllowanceList list =
+        OfflineJsonParser.parseAllowances(json.getBytes(StandardCharsets.UTF_8));
+    assert list.total() == 1 : "total mismatch";
+    assert list.items().size() == 1 : "items size mismatch";
+    final OfflineAllowanceList.OfflineAllowanceItem item = list.items().get(0);
+    assert "deadbeef".equals(item.certificateIdHex()) : "certificate id mismatch";
+    assert "alice@wonderland".equals(item.controllerId()) : "controller mismatch";
+    assert "usd#wonderland".equals(item.assetId()) : "asset mismatch";
+    assert item.registeredAtMs() == 1_700_000_000_000L : "timestamp mismatch";
+    assert item.certificateExpiresAtMs() == 1_700_500_000_000L : "certificate expiry mismatch";
+    assert item.policyExpiresAtMs() == 1_700_600_000_000L : "policy expiry mismatch";
+    assert item.refreshAtMs() == 1_700_400_000_000L : "refresh mismatch";
+    assert "feedface".equals(item.verdictIdHex()) : "verdict mismatch";
+    assert "1234abcd".equals(item.attestationNonceHex()) : "nonce mismatch";
+    assert "42".equals(item.remainingAmount()) : "remaining mismatch";
+    assert item.recordAsMap().containsKey("policy") : "record missing policy";
+  }
+
+  private static void parsesTransferPayload() {
+    final String json =
+        """
+        {
+          "total": 1,
+          "items": [
+            {
+              "bundle_id_hex": "cafebabe",
+              "receiver_id": "merchant@wonderland",
+              "receiver_display": "merchant@wonderland",
+              "deposit_account_id": "merchant@wonderland",
+              "deposit_account_display": "merchant@wonderland",
+              "asset_id": "usd#wonderland",
+              "receipt_count": 2,
+              "total_amount": "15",
+              "claimed_delta": "15",
+              "platform_policy": "play_integrity",
+              "platform_token_snapshot": {
+                "policy": "play_integrity",
+                "attestation_jws_b64": "token"
+              },
+              "transfer": { "bundle": "payload" }
+            }
+          ]
+        }
+        """;
+    final OfflineTransferList list =
+        OfflineJsonParser.parseTransfers(json.getBytes(StandardCharsets.UTF_8));
+    assert list.total() == 1 : "transfer total mismatch";
+    final List<OfflineTransferList.OfflineTransferItem> items = list.items();
+    assert items.size() == 1 : "transfer size mismatch";
+    final OfflineTransferList.OfflineTransferItem item = items.get(0);
+    assert "cafebabe".equals(item.bundleIdHex()) : "bundle id mismatch";
+    assert "merchant@wonderland".equals(item.receiverId()) : "receiver mismatch";
+    assert item.receiptCount() == 2 : "receipt count mismatch";
+    assert "15".equals(item.totalAmount()) : "total amount mismatch";
+    assert "15".equals(item.claimedDelta()) : "claimed delta mismatch";
+    assert "play_integrity".equals(item.platformPolicy()) : "platform policy mismatch";
+    assert item.platformTokenSnapshot() != null : "snapshot missing";
+    assert "token".equals(item.platformTokenSnapshot().attestationJwsB64())
+        : "snapshot token mismatch";
+    assert item.transferAsMap() != null : "transfer map missing";
+  }
+
+  private static void handlesOptionalAssetId() {
+    final String json =
+        """
+        {
+          "total": 1,
+          "items": [
+            {
+              "bundle_id_hex": "feedface",
+              "receiver_id": "bob@wonderland",
+              "receiver_display": "bob@wonderland",
+              "deposit_account_id": "bob@wonderland",
+              "deposit_account_display": "bob@wonderland",
+              "receipt_count": 1,
+              "total_amount": "5",
+              "claimed_delta": "5",
+              "transfer": {}
+            }
+          ]
+        }
+        """;
+    final OfflineTransferList list =
+        OfflineJsonParser.parseTransfers(json.getBytes(StandardCharsets.UTF_8));
+    final OfflineTransferList.OfflineTransferItem item = list.items().get(0);
+    assert item.assetId() == null : "asset should be null when field omitted";
+  }
+
+  private static void extractsReceiptSummary() {
+    final String json =
+        """
+        {
+          "total": 1,
+          "items": [
+            {
+              "bundle_id_hex": "c0ffee",
+              "receiver_id": "merchant@wonderland",
+              "receiver_display": "merchant@wonderland",
+              "deposit_account_id": "merchant@wonderland",
+              "deposit_account_display": "merchant@wonderland",
+              "asset_id": "usd#wonderland",
+              "receipt_count": 1,
+              "total_amount": "7.5",
+              "claimed_delta": "7.5",
+              "transfer": {
+                "receipts": [
+                  {
+                    "tx_id": "offline-tx-1",
+                    "from": "alice@wonderland",
+                    "to": "merchant@wonderland",
+                    "asset": "usd#wonderland#merchant@wonderland",
+                    "amount": "7.5"
+                  }
+                ],
+                "balance_proof": {
+                  "claimed_delta": "7.5"
+                }
+              }
+            }
+          ]
+        }
+        """;
+    final OfflineTransferList list =
+        OfflineJsonParser.parseTransfers(json.getBytes(StandardCharsets.UTF_8));
+    final OfflineTransferList.OfflineTransferItem item = list.items().get(0);
+    final var summary = item.firstReceiptSummary();
+    assert summary.isPresent() : "receipt summary missing";
+    assert "alice@wonderland".equals(summary.get().senderId()) : "sender mismatch";
+    assert "merchant@wonderland".equals(summary.get().receiverId()) : "receiver mismatch";
+    assert "usd#wonderland#merchant@wonderland".equals(summary.get().assetId())
+        : "asset mismatch";
+    assert "7.5".equals(summary.get().amount()) : "amount mismatch";
+  }
+
+  private static void parsesRevocationPayload() {
+    final String json =
+        """
+        {
+          "total": 1,
+          "items": [
+            {
+              "verdict_id_hex": "ABCD",
+              "issuer_id": "ops@wonderland",
+              "issuer_display": "ops@wonderland",
+              "revoked_at_ms": 1730314876000,
+              "reason": "compromised_key",
+              "note": "hardware breach",
+              "metadata": { "jurisdiction": "eu" },
+              "record": { "verdict_id": "ABCD" }
+            }
+          ]
+        }
+        """;
+    final OfflineRevocationList list =
+        OfflineJsonParser.parseRevocations(json.getBytes(StandardCharsets.UTF_8));
+    assert list.total() == 1 : "revocation total mismatch";
+    final OfflineRevocationList.OfflineRevocationItem item = list.items().get(0);
+    assert "ABCD".equals(item.verdictIdHex()) : "verdict id mismatch";
+    assert "ops@wonderland".equals(item.issuerId()) : "issuer mismatch";
+    assert item.revokedAtMs() == 1_730_314_876_000L : "revoked timestamp mismatch";
+    assert "compromised_key".equals(item.reason()) : "reason mismatch";
+    assert "hardware breach".equals(item.note()) : "note mismatch";
+    assert "eu".equals(item.metadataAsMap().get("jurisdiction")) : "metadata mismatch";
+    assert item.recordAsMap().containsKey("verdict_id") : "record JSON missing";
+  }
+}

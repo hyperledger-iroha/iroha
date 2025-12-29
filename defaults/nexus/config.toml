@@ -1,0 +1,132 @@
+# Sora Nexus profile example.
+# Run the daemon with `irohad --sora --config defaults/nexus/config.toml`.
+chain = "00000000-0000-0000-0000-000000000000"
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201ca347641228c3b79aa43839dedc85fa51c0e8b9b6a00f6b0d6b0423e902973f"
+
+trusted_peers = [
+  "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@127.0.0.1:1337",
+  "ea0130A7E9D016D723F72942FCF4B988FB599EA0E092F73C8B68E69F4E8B3FE542A3F7E48AD6CD15F3EB484E45F79399071F77@127.0.0.1:1338",
+]
+
+[ivm.banner]
+show = true
+beep = true
+
+[network]
+address = "addr:0.0.0.0:1337#BF18"
+public_address = "addr:127.0.0.1:1337#8F78"
+
+[torii]
+address = "addr:0.0.0.0:8080#B922"
+
+[sorafs.storage]
+enabled = true
+
+[sorafs.discovery]
+discovery_enabled = true
+known_capabilities = ["torii_gateway", "chunk_range_fetch"]
+
+[sorafs.discovery.admission]
+envelopes_dir = "defaults/nexus/sorafs_admission"
+
+[genesis]
+public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+[streaming]
+# Advertise support for feedback hints and privacy overlay provider
+feature_bits = 0b11
+
+[streaming.soranet]
+# Auto-provision manifests onto SoraNet circuits using the default Torii egress.
+enabled = true
+exit_multiaddr = "/dns/torii/udp/9443/quic"
+padding_budget_ms = 25
+access_kind = "authenticated"
+provision_spool_dir = "./storage/streaming/soranet_routes"
+
+[nexus]
+enabled = true
+lane_count = 3
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "core"
+description = "Primary execution lane"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 1
+alias = "governance"
+description = "Governance & parliament traffic"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "zk"
+description = "Zero-knowledge attachments"
+metadata = {}
+
+[[nexus.dataspace_catalog]]
+alias = "global"
+id = 0
+description = "Single-lane data space"
+
+[[nexus.dataspace_catalog]]
+alias = "governance"
+id = 1
+description = "Governance proposals & manifests"
+
+[[nexus.dataspace_catalog]]
+alias = "zk"
+id = 2
+description = "Zero-knowledge proofs and attachments"
+
+[nexus.routing_policy]
+default_lane = 0
+default_dataspace = "global"
+
+[[nexus.routing_policy.rules]]
+lane = 1
+dataspace = "governance"
+[nexus.routing_policy.rules.matcher]
+instruction = "governance"
+description = "Route governance instructions to the governance lane"
+
+[[nexus.routing_policy.rules]]
+lane = 2
+dataspace = "zk"
+[nexus.routing_policy.rules.matcher]
+instruction = "smartcontract::deploy"
+description = "Route contract deployments to the zk lane for proof tracking"
+
+[nexus.fusion]
+floor_teu = 4000
+exit_teu = 6000
+observation_slots = 2
+max_window_slots = 16
+
+[nexus.commit]
+window_slots = 2
+
+[nexus.da]
+q_in_slot_total = 2048
+q_in_slot_per_ds_min = 8
+sample_size_base = 64
+sample_size_max = 96
+threshold_base = 43
+per_attester_shards = 25
+
+[nexus.da.audit]
+sample_size = 32
+window_count = 20
+interval_ms = 600000
+
+[nexus.da.recovery]
+request_timeout_ms = 86400000
+
+[nexus.da.rotation]
+max_hits_per_window = 4
+window_slots = 64
+seed_tag = "iroha:da:rotate:v1\u0000"
+latency_decay = 0.25

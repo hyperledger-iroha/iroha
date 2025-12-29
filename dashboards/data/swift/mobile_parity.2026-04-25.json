@@ -1,0 +1,50 @@
+{
+  "generated_at": "2026-04-25T09:00:00Z",
+  "fixtures": {
+    "outstanding_diffs": 0,
+    "oldest_diff_hours": 0,
+    "details": []
+  },
+  "pipeline": {
+    "last_run": "2026-04-25T08:44:00Z",
+    "status": "green",
+    "failed_tests": []
+  },
+  "regen_sla": {
+    "last_success": "2026-04-24T01:35:00Z",
+    "hours_since_success": 31.4,
+    "breach": false
+  },
+  "acceleration": {
+    "metal": {
+      "enabled": true,
+      "parity": "pass",
+      "perf_delta_pct": -13.2
+    },
+    "neon": {
+      "enabled": true,
+      "parity": "pass"
+    },
+    "strongbox": {
+      "enabled": false,
+      "parity": "pending"
+    }
+  },
+  "telemetry": {
+    "salt_epoch": "2026Q2",
+    "salt_rotation_age_hours": 36,
+    "overrides_open": 1,
+    "device_profile_alignment": "ok",
+    "schema_version": "ios_metrics/v1",
+    "notes": [
+      "Rotation queued for Apr 29 cutover window.",
+      "Override tracks Connect queue drop monitors."
+    ]
+  },
+  "alerts": [
+    {
+      "message": "Connect queue instrumentation still pending (CR-2); keep queue-depth alerts manual until telemetry lands.",
+      "severity": "info"
+    }
+  ]
+}

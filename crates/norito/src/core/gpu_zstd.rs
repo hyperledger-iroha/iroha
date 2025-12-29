@@ -1,0 +1,618 @@
+//! GPU-accelerated zstd compression utilities.
+//!
+//! The functions in this module detect the available GPU backend at runtime and
+//! currently fall back to the CPU implementation if no supported accelerator is
+//! present. They are structured so that true GPU offloading can be added later
+//! without changing the public API.
+
+#[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
+use std::ffi::CStr;
+#[cfg(windows)]
+use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr};
+use std::{
+    ffi::c_void,
+    io::{self, Read},
+    mem,
+    sync::OnceLock,
+};
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+use std::process::{Command, Stdio};
+
+#[cfg(unix)]
+use std::ffi::{c_char, c_int};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[link(name = "objc")]
+unsafe extern "C" {
+    fn objc_autoreleasePoolPush() -> *mut c_void;
+    fn objc_autoreleasePoolPop(pool: *mut c_void);
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn dlclose(handle: *mut c_void) -> c_int;
+}
+#[cfg(windows)]
+extern "system" {
+    fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+    fn LoadLibraryExW(
+        lp_lib_file_name: *const u16,
+        h_file: *mut c_void,
+        dw_flags: u32,
+    ) -> *mut c_void;
+    fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
+    fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
+}
+
+#[cfg(windows)]
+const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+#[cfg(windows)]
+const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
+
+#[cfg(unix)]
+const RTLD_LAZY: c_int = 1;
+
+type CompressFn = unsafe extern "C" fn(
+    src: *const u8,
+    src_len: usize,
+    level: i32,
+    dst: *mut u8,
+    dst_len: *mut usize,
+) -> i32;
+type DecompressFn =
+    unsafe extern "C" fn(src: *const u8, src_len: usize, dst: *mut u8, dst_len: *mut usize) -> i32;
+
+enum Backend {
+    Cpu,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    Metal {
+        compress: CompressFn,
+        decompress: DecompressFn,
+    },
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    Cuda {
+        compress: CompressFn,
+        decompress: DecompressFn,
+    },
+}
+
+static BACKEND: OnceLock<Backend> = OnceLock::new();
+#[cfg(windows)]
+static DLL_DIRECTORY_SETUP: OnceLock<Result<(), String>> = OnceLock::new();
+
+#[cfg(windows)]
+fn report_gpu_load_failure(message: impl AsRef<str>) {
+    eprintln!(
+        "[norito::gpu_zstd] {}. Falling back to the CPU backend.",
+        message.as_ref()
+    );
+}
+
+#[cfg(windows)]
+fn ensure_secure_dll_search_path() -> Result<(), String> {
+    DLL_DIRECTORY_SETUP
+        .get_or_init(|| unsafe {
+            let flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_SYSTEM32;
+            if SetDefaultDllDirectories(flags) == 0 {
+                Err(format!(
+                    "SetDefaultDllDirectories failed: {}",
+                    io::Error::last_os_error()
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .clone()
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+fn cuda_available() -> bool {
+    Command::new("nvidia-smi")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> bool {
+    const SAMPLE: &[u8] = b"norito gpu roundtrip parity check v1";
+    // GPU encode the sample payload.
+    let mut gpu_encoded = vec![0u8; SAMPLE.len().saturating_mul(4).saturating_add(512)];
+    let mut gpu_len = gpu_encoded.len();
+    let rc = unsafe {
+        compress(
+            SAMPLE.as_ptr(),
+            SAMPLE.len(),
+            1,
+            gpu_encoded.as_mut_ptr(),
+            &mut gpu_len,
+        )
+    };
+    if rc != 0 || gpu_len == 0 || gpu_len > gpu_encoded.len() {
+        return false;
+    }
+    gpu_encoded.truncate(gpu_len);
+    // Ensure CPU zstd can decode the GPU output.
+    let decoded_cpu = match zstd::decode_all(std::io::Cursor::new(&gpu_encoded)) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    if decoded_cpu != SAMPLE {
+        return false;
+    }
+    // Ensure the GPU decoder can roundtrip CPU-compressed bytes.
+    let cpu_encoded = match zstd::encode_all(std::io::Cursor::new(SAMPLE), 1) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    let mut gpu_decoded = vec![0u8; SAMPLE.len().saturating_mul(2).saturating_add(256)];
+    let mut gpu_decoded_len = gpu_decoded.len();
+    let rc = unsafe {
+        decompress(
+            cpu_encoded.as_ptr(),
+            cpu_encoded.len(),
+            gpu_decoded.as_mut_ptr(),
+            &mut gpu_decoded_len,
+        )
+    };
+    if rc != 0 || gpu_decoded_len == 0 || gpu_decoded_len > gpu_decoded.len() {
+        return false;
+    }
+    gpu_decoded.truncate(gpu_decoded_len);
+    if gpu_decoded != SAMPLE {
+        return false;
+    }
+    // Full GPU roundtrip for good measure.
+    let mut gpu_roundtrip = vec![0u8; SAMPLE.len().saturating_mul(4).saturating_add(512)];
+    let mut gpu_roundtrip_len = gpu_roundtrip.len();
+    let rc = unsafe {
+        compress(
+            SAMPLE.as_ptr(),
+            SAMPLE.len(),
+            1,
+            gpu_roundtrip.as_mut_ptr(),
+            &mut gpu_roundtrip_len,
+        )
+    };
+    if rc != 0 || gpu_roundtrip_len == 0 || gpu_roundtrip_len > gpu_roundtrip.len() {
+        return false;
+    }
+    gpu_roundtrip.truncate(gpu_roundtrip_len);
+    let mut gpu_roundtrip_out = vec![0u8; SAMPLE.len().saturating_mul(2).saturating_add(256)];
+    let mut gpu_roundtrip_out_len = gpu_roundtrip_out.len();
+    let rc = unsafe {
+        decompress(
+            gpu_roundtrip.as_ptr(),
+            gpu_roundtrip.len(),
+            gpu_roundtrip_out.as_mut_ptr(),
+            &mut gpu_roundtrip_out_len,
+        )
+    };
+    if rc != 0 || gpu_roundtrip_out_len == 0 || gpu_roundtrip_out_len > gpu_roundtrip_out.len() {
+        return false;
+    }
+    gpu_roundtrip_out.truncate(gpu_roundtrip_out_len);
+    gpu_roundtrip_out == SAMPLE
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+unsafe fn init_backend() -> Option<Backend> {
+    #[link(name = "Metal", kind = "framework")]
+    unsafe extern "C" {
+        fn MTLCreateSystemDefaultDevice() -> *mut c_void;
+    }
+    let pool = unsafe { objc_autoreleasePoolPush() };
+    let device = unsafe { MTLCreateSystemDefaultDevice() };
+    let has_device = !device.is_null();
+    unsafe {
+        objc_autoreleasePoolPop(pool);
+    }
+    if !has_device {
+        return None;
+    }
+    let lib = unsafe { dlopen(c"libgpuzstd_metal.dylib".as_ptr(), RTLD_LAZY) };
+    if lib.is_null() {
+        return None;
+    }
+    let compress = unsafe { dlsym(lib, c"gpu_zstd_compress".as_ptr()) };
+    let decompress = unsafe { dlsym(lib, c"gpu_zstd_decompress".as_ptr()) };
+    if compress.is_null() || decompress.is_null() {
+        let _ = unsafe { dlclose(lib) };
+        return None;
+    }
+    let compress_fn: CompressFn = unsafe { mem::transmute(compress) };
+    let decompress_fn: DecompressFn = unsafe { mem::transmute(decompress) };
+    if !gpu_self_test(compress_fn, decompress_fn) {
+        let _ = unsafe { dlclose(lib) };
+        eprintln!(
+            "[norito::gpu_zstd] Metal backend failed self-test; falling back to CPU implementation"
+        );
+        return None;
+    }
+    Some(Backend::Metal {
+        compress: compress_fn,
+        decompress: decompress_fn,
+    })
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+unsafe fn init_backend() -> Option<Backend> {
+    if !cuda_available() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        let lib = unsafe {
+            dlopen(
+                CStr::from_bytes_with_nul(b"libgpuzstd_cuda.so\0")
+                    .unwrap()
+                    .as_ptr(),
+                RTLD_LAZY,
+            )
+        };
+        if lib.is_null() {
+            return None;
+        }
+        let compress = unsafe {
+            dlsym(
+                lib,
+                CStr::from_bytes_with_nul(b"gpu_zstd_compress\0")
+                    .unwrap()
+                    .as_ptr(),
+            )
+        };
+        let decompress = unsafe {
+            dlsym(
+                lib,
+                CStr::from_bytes_with_nul(b"gpu_zstd_decompress\0")
+                    .unwrap()
+                    .as_ptr(),
+            )
+        };
+        if compress.is_null() || decompress.is_null() {
+            let _ = unsafe { dlclose(lib) };
+            return None;
+        }
+        let compress_fn: CompressFn = unsafe { mem::transmute(compress) };
+        let decompress_fn: DecompressFn = unsafe { mem::transmute(decompress) };
+        if !gpu_self_test(compress_fn, decompress_fn) {
+            let _ = unsafe { dlclose(lib) };
+            eprintln!(
+                "[norito::gpu_zstd] CUDA backend failed self-test; falling back to CPU implementation"
+            );
+            return None;
+        }
+        return Some(Backend::Cuda {
+            compress: compress_fn,
+            decompress: decompress_fn,
+        });
+    }
+    #[cfg(windows)]
+    {
+        if let Err(err) = ensure_secure_dll_search_path() {
+            report_gpu_load_failure(err);
+            return None;
+        }
+        let dll_name: Vec<u16> = OsStr::new("gpuzstd_cuda.dll")
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let search_flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_SYSTEM32;
+        let lib = LoadLibraryExW(dll_name.as_ptr(), ptr::null_mut(), search_flags);
+        if lib.is_null() {
+            report_gpu_load_failure(format!(
+                "LoadLibraryExW failed for gpuzstd_cuda.dll: {}",
+                io::Error::last_os_error()
+            ));
+            return None;
+        }
+        let compress = GetProcAddress(lib, b"gpu_zstd_compress\0".as_ptr());
+        let decompress = GetProcAddress(lib, b"gpu_zstd_decompress\0".as_ptr());
+        if compress.is_null() || decompress.is_null() {
+            let _ = FreeLibrary(lib);
+            report_gpu_load_failure(format!(
+                "GetProcAddress failed for CUDA gpu_zstd symbols: {}",
+                io::Error::last_os_error()
+            ));
+            return None;
+        }
+        let compress_fn: CompressFn = mem::transmute(compress);
+        let decompress_fn: DecompressFn = mem::transmute(decompress);
+        if !gpu_self_test(compress_fn, decompress_fn) {
+            let _ = FreeLibrary(lib);
+            report_gpu_load_failure("CUDA backend failed self-test; using CPU fallback instead");
+            return None;
+        }
+        return Some(Backend::Cuda {
+            compress: compress_fn,
+            decompress: decompress_fn,
+        });
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+fn backend() -> &'static Backend {
+    BACKEND.get_or_init(|| unsafe { init_backend().unwrap_or(Backend::Cpu) })
+}
+
+/// Returns `true` if a supported GPU backend (CUDA or Metal) is available.
+pub fn available() -> bool {
+    if !super::hw::gpu_policy_allowed() {
+        return false;
+    }
+    !matches!(backend(), Backend::Cpu)
+}
+
+pub fn encode_all(payload: Vec<u8>, level: i32) -> io::Result<Vec<u8>> {
+    match backend() {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        Backend::Metal { compress, .. } => {
+            // Try with a conservative buffer first, then grow if needed.
+            let mut cap = payload.len().saturating_mul(2) + 128;
+            for _ in 0..5 {
+                let mut out = vec![0; cap];
+                let mut out_len = out.len();
+                let rc = unsafe {
+                    compress(
+                        payload.as_ptr(),
+                        payload.len(),
+                        level,
+                        out.as_mut_ptr(),
+                        &mut out_len,
+                    )
+                };
+                if rc == 0 {
+                    out.truncate(out_len);
+                    return Ok(out);
+                }
+                cap = cap.saturating_mul(2);
+            }
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        Backend::Cuda { compress, .. } => {
+            // Try with a conservative buffer first, then grow if needed.
+            let mut cap = payload.len().saturating_mul(2) + 128;
+            for _ in 0..5 {
+                let mut out = vec![0; cap];
+                let mut out_len = out.len();
+                let rc = unsafe {
+                    compress(
+                        payload.as_ptr(),
+                        payload.len(),
+                        level,
+                        out.as_mut_ptr(),
+                        &mut out_len,
+                    )
+                };
+                if rc == 0 {
+                    out.truncate(out_len);
+                    return Ok(out);
+                }
+                cap = cap.saturating_mul(2);
+            }
+        }
+        Backend::Cpu => {}
+    }
+
+    // CPU fallback
+    zstd::encode_all(std::io::Cursor::new(payload), level)
+}
+
+pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, super::Error> {
+    let target_len = super::payload_len_to_usize(uncompressed_size)?;
+    match backend() {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        Backend::Metal { decompress, .. } => {
+            let mut out = vec![0; target_len];
+            let mut out_len = out.len();
+            let rc = unsafe {
+                decompress(
+                    compressed.as_ptr(),
+                    compressed.len(),
+                    out.as_mut_ptr(),
+                    &mut out_len,
+                )
+            };
+            if rc == 0 {
+                out.truncate(out_len);
+                return Ok(out);
+            }
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        Backend::Cuda { decompress, .. } => {
+            let mut out = vec![0; target_len];
+            let mut out_len = out.len();
+            let rc = unsafe {
+                decompress(
+                    compressed.as_ptr(),
+                    compressed.len(),
+                    out.as_mut_ptr(),
+                    &mut out_len,
+                )
+            };
+            if rc == 0 {
+                out.truncate(out_len);
+                return Ok(out);
+            }
+        }
+        Backend::Cpu => {}
+    }
+
+    // CPU fallback
+    let mut decoder = zstd::Decoder::new(compressed)?;
+    let mut out = Vec::with_capacity(target_len);
+    decoder.read_to_end(&mut out)?;
+    Ok(out)
+}
+
+#[cfg(all(test, feature = "gpu-compression"))]
+mod tests {
+    use super::*;
+    use crate::core::hw;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    #[test]
+    fn raw_roundtrip() {
+        let data = b"hello world".to_vec();
+        let encoded = encode_all(data.clone(), 1).expect("encode");
+        let decoded = decode_all(&encoded, data.len() as u64).expect("decode");
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn availability_probe_runs() {
+        // Should simply return a boolean without panicking
+        let _ = available();
+    }
+
+    #[test]
+    fn gpu_roundtrip_if_available() {
+        if !available() {
+            // Skip when no GPU backend is present
+            return;
+        }
+        let data = b"gpu roundtrip".to_vec();
+        let encoded = encode_all(data.clone(), 1).expect("encode");
+        let decoded = decode_all(&encoded, data.len() as u64).expect("decode");
+        assert_eq!(decoded, data);
+    }
+
+    fn sample_payload() -> Vec<u8> {
+        let mut rng = StdRng::seed_from_u64(0xDEADBEEF);
+        let mut payload = vec![0u8; 64 * 1024];
+        rng.fill(payload.as_mut_slice());
+        payload
+    }
+
+    #[test]
+    fn gpu_encode_matches_cpu_when_available() {
+        if !available() {
+            eprintln!("GPU backend unavailable; skipping encode parity test");
+            return;
+        }
+        let payload = sample_payload();
+        let baseline_policy = hw::gpu_policy_allowed();
+        hw::set_gpu_compression_allowed(false);
+        let cpu_encoded =
+            zstd::encode_all(std::io::Cursor::new(payload.clone()), 1).expect("cpu encode");
+        hw::set_gpu_compression_allowed(true);
+        let gpu_encoded = encode_all(payload.clone(), 1).expect("gpu encode");
+        hw::set_gpu_compression_allowed(baseline_policy);
+        let gpu_decoded = decode_all(&gpu_encoded, payload.len() as u64).expect("gpu decode");
+        assert_eq!(
+            gpu_decoded, payload,
+            "GPU roundtrip must match original payload"
+        );
+        let cpu_decoded = decode_all(&cpu_encoded, payload.len() as u64).expect("cpu decode");
+        assert_eq!(
+            cpu_decoded, payload,
+            "CPU roundtrip must match original payload"
+        );
+        assert_eq!(
+            gpu_encoded.len(),
+            cpu_encoded.len(),
+            "GPU and CPU encoded outputs should match in length"
+        );
+    }
+
+    #[test]
+    fn gpu_decode_matches_cpu_when_available() {
+        if !available() {
+            eprintln!("GPU backend unavailable; skipping decode parity test");
+            return;
+        }
+        let payload = sample_payload();
+        let cpu_encoded =
+            zstd::encode_all(std::io::Cursor::new(payload.clone()), 3).expect("cpu encode");
+        let baseline_policy = hw::gpu_policy_allowed();
+        hw::set_gpu_compression_allowed(true);
+        let gpu_decoded = decode_all(&cpu_encoded, payload.len() as u64).expect("gpu decode");
+        hw::set_gpu_compression_allowed(false);
+        let cpu_decoded = decode_all(&cpu_encoded, payload.len() as u64).expect("cpu decode");
+        hw::set_gpu_compression_allowed(baseline_policy);
+        assert_eq!(gpu_decoded, payload, "GPU decode must match CPU reference");
+        assert_eq!(
+            cpu_decoded, payload,
+            "CPU decode must match original payload"
+        );
+    }
+}
+
+#[cfg(test)]
+mod self_test {
+    use super::*;
+    use std::{io, ptr, slice};
+
+    unsafe extern "C" fn compress_stub(
+        src: *const u8,
+        src_len: usize,
+        level: i32,
+        dst: *mut u8,
+        dst_len: *mut usize,
+    ) -> i32 {
+        let input = unsafe { slice::from_raw_parts(src, src_len) };
+        let encoded = zstd::encode_all(io::Cursor::new(input), level).expect("cpu encode");
+        let capacity = unsafe { *dst_len };
+        if encoded.len() > capacity {
+            return 1;
+        }
+        unsafe {
+            ptr::copy_nonoverlapping(encoded.as_ptr(), dst, encoded.len());
+            *dst_len = encoded.len();
+        }
+        0
+    }
+
+    unsafe extern "C" fn decompress_stub(
+        src: *const u8,
+        src_len: usize,
+        dst: *mut u8,
+        dst_len: *mut usize,
+    ) -> i32 {
+        let input = unsafe { slice::from_raw_parts(src, src_len) };
+        let decoded =
+            zstd::decode_all(io::Cursor::new(input)).expect("cpu decode in stub should succeed");
+        let capacity = unsafe { *dst_len };
+        if decoded.len() > capacity {
+            return 1;
+        }
+        unsafe {
+            ptr::copy_nonoverlapping(decoded.as_ptr(), dst, decoded.len());
+            *dst_len = decoded.len();
+        }
+        0
+    }
+
+    #[test]
+    fn gpu_self_test_passes_for_cpu_stubs() {
+        assert!(gpu_self_test(compress_stub, decompress_stub));
+    }
+
+    unsafe extern "C" fn compress_corrupt(
+        _src: *const u8,
+        _src_len: usize,
+        _level: i32,
+        dst: *mut u8,
+        dst_len: *mut usize,
+    ) -> i32 {
+        let capacity = unsafe { *dst_len };
+        if capacity == 0 {
+            return 1;
+        }
+        let bytes = 8.min(capacity);
+        unsafe {
+            ptr::write_bytes(dst, 0xA5, bytes);
+            *dst_len = bytes;
+        }
+        0
+    }
+
+    #[test]
+    fn gpu_self_test_detects_corruption() {
+        assert!(!gpu_self_test(compress_corrupt, decompress_stub));
+    }
+}

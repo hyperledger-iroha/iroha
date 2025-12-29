@@ -1,0 +1,207 @@
+mod monitor;
+
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    net::SocketAddr,
+    str::FromStr,
+    sync::Arc,
+};
+
+use crate::{
+    explorer::ExplorerDurationDto,
+    json_macros::{JsonDeserialize, JsonSerialize},
+};
+use iroha_config::client_api::ConfigGetDTO;
+use iroha_crypto::PublicKey;
+use iroha_logger::prelude::*;
+use tokio::sync::RwLock;
+use url::Url;
+
+pub use monitor::Update;
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub struct GeoLocation {
+    pub lat: f64,
+    pub lon: f64,
+    pub country: String,
+    pub city: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub struct PeerConfigDto {
+    pub public_key: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub queue_capacity: Option<u32>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub network_block_gossip_size: Option<u32>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub network_block_gossip_period: Option<ExplorerDurationDto>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub network_tx_gossip_size: Option<u32>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub network_tx_gossip_period: Option<ExplorerDurationDto>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub struct PeerInfoDto {
+    pub url: String,
+    pub connected: bool,
+    pub telemetry_unsupported: bool,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub config: Option<PeerConfigDto>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub location: Option<GeoLocation>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub connected_peers: Option<Vec<String>>,
+}
+
+pub struct PeerTelemetryService {
+    peers: RwLock<BTreeMap<ToriiUrl, PeerState>>,
+}
+
+impl PeerTelemetryService {
+    pub fn new(peer_urls: Vec<ToriiUrl>) -> Arc<Self> {
+        let service = Arc::new(Self {
+            peers: RwLock::new(BTreeMap::new()),
+        });
+        for url in BTreeSet::from_iter(peer_urls) {
+            service.spawn_monitor(url);
+        }
+        service
+    }
+
+    fn spawn_monitor(self: &Arc<Self>, url: ToriiUrl) {
+        let service = Arc::clone(self);
+        tokio::spawn(async move {
+            let (mut rx, fut) = monitor::run(url.clone());
+            tokio::spawn(fut);
+            while let Some(update) = rx.recv().await {
+                service.apply_update(url.clone(), update).await;
+            }
+        });
+    }
+
+    async fn apply_update(&self, url: ToriiUrl, update: Update) {
+        let mut guard = self.peers.write().await;
+        let state = guard
+            .entry(url.clone())
+            .or_insert_with(|| PeerState::new(url.clone()));
+        match update {
+            Update::Connected(config) => {
+                state.connected = true;
+                state.telemetry_unsupported = false;
+                state.config = Some(*config);
+            }
+            Update::Disconnected => {
+                state.connected = false;
+            }
+            Update::TelemetryUnsupported => {
+                state.telemetry_unsupported = true;
+            }
+            Update::Geo(geo) => {
+                state.geo = Some(geo);
+            }
+            Update::Peers(peers) => {
+                let list = peers
+                    .into_iter()
+                    .map(|pk| pk.to_string())
+                    .collect::<Vec<_>>();
+                state.connected_peers = Some(list);
+            }
+            Update::Metrics(_) => {
+                // Peer metrics are used by `/v1/telemetry/live`; explorer only needs metadata.
+            }
+        }
+    }
+
+    pub async fn peers_info(&self) -> Vec<PeerInfoDto> {
+        let guard = self.peers.read().await;
+        guard.values().map(PeerState::info).collect()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct ToriiUrl(Url);
+
+impl ToriiUrl {
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn host_str(&self) -> Option<&str> {
+        self.0.host_str()
+    }
+}
+
+impl fmt::Display for ToriiUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for ToriiUrl {
+    type Err = url::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Url::parse(s).map(Self)
+    }
+}
+
+impl TryFrom<SocketAddr> for ToriiUrl {
+    type Error = url::ParseError;
+
+    fn try_from(addr: SocketAddr) -> Result<Self, Self::Error> {
+        Url::parse(&format!("http://{}", addr)).map(Self)
+    }
+}
+
+struct PeerState {
+    url: ToriiUrl,
+    connected: bool,
+    telemetry_unsupported: bool,
+    config: Option<ConfigGetDTO>,
+    geo: Option<GeoLocation>,
+    connected_peers: Option<Vec<String>>,
+}
+
+impl PeerState {
+    fn new(url: ToriiUrl) -> Self {
+        Self {
+            url,
+            connected: false,
+            telemetry_unsupported: false,
+            config: None,
+            geo: None,
+            connected_peers: None,
+        }
+    }
+
+    fn info(&self) -> PeerInfoDto {
+        PeerInfoDto {
+            url: self.url.as_str().to_string(),
+            connected: self.connected,
+            telemetry_unsupported: self.telemetry_unsupported,
+            config: self.config.as_ref().map(PeerConfigDto::from_config),
+            location: self.geo.clone(),
+            connected_peers: self.connected_peers.clone(),
+        }
+    }
+}
+
+impl PeerConfigDto {
+    fn from_config(cfg: &ConfigGetDTO) -> Self {
+        Self {
+            public_key: cfg.public_key.to_string(),
+            queue_capacity: cfg.queue.capacity.get().try_into().ok(),
+            network_block_gossip_size: Some(cfg.network.block_gossip_size.get()),
+            network_block_gossip_period: Some(ExplorerDurationDto {
+                ms: cfg.network.block_gossip_period_ms.into(),
+            }),
+            network_tx_gossip_size: Some(cfg.network.transaction_gossip_size.get()),
+            network_tx_gossip_period: Some(ExplorerDurationDto {
+                ms: cfg.network.transaction_gossip_period_ms.into(),
+            }),
+        }
+    }
+}

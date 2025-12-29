@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Tervetuloa Hyperledger Irohaan!",
+  "error.trace_config_setup": "Konfiguraation jäljitystä ei voitu määrittää",
+  "error.config": "Konfigurointivirhe",
+  "error.logger": "Lokitusjärjestelmää ei voitu alustaa",
+  "error.start": "Irohan käynnistäminen epäonnistui",
+  "error.run": "Virhe suoritettaessa Irohaa",
+  "error.start_p2p": "Vertaisverkkoa ei voida käynnistää",
+  "error.init_kura": "KURAa ei voida alustaa (lohkotallennus)",
+  "error.start_dev_telemetry": "Kehittäjien telemetriapalvelua ei voitu käynnistää",
+  "error.start_telemetry": "Kaukomittauspalvelua ei voida käynnistää",
+  "error.listen_os_signal": "OS-signaalien kuuntelua ei voida määrittää",
+  "error.start_torii": "Torii (Iroha HTTP API -yhdyskäytävä) ei voitu käynnistää"
+}

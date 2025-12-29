@@ -1,0 +1,7 @@
+{
+  "council_signature_count": 1,
+  "envelope_digest_hex": "25741a0e70302a8af6bfe59f13544ce8ee6dc8f29eddf07781c308e19f3f05c5",
+  "reason": "endpoint compromise",
+  "revocation_digest_hex": "d706ec5b0da1627a696ee68ea0400e446b658cd82c669e4e6e5a094cbb57be02",
+  "revoked_at": 970
+}

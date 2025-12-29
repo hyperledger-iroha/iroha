@@ -1,0 +1,16 @@
+#+COMMENT: Auto-generated stub for Russian (ru) translation. Replace this content with the full translation.
+
+#+LANGUAGE: ru
+#+DIRECTION: ltr
+#+SOURCE: docs/source/lts_selection.org
+#+STATUS: needs-translation
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: ab2409dcdcd5174e23fabef84d9af5556ca8087f7db450eac68650a1777307bc
+#+SOURCE_LAST_MODIFIED: 2025-10-08T11:49:57+00:00
+#+TRANSLATION_LAST_REVIEWED: 
+
+* Перевод в процессе
+
+Этот файл является заготовкой для русскоязычного перевода английского документа. После завершения перевода обновите значение `#+STATUS`.
+
+Замените этот раздел полным переводом и установите `#+STATUS` в `complete` после завершения работы. `#+LAST_REVIEWED` должен отражать дату последней сверки с оригиналом на английском языке.

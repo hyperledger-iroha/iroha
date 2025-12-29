@@ -1,0 +1,118 @@
+{
+  "suite": "Wycheproof GOST subset",
+  "messageEncoding": "hex",
+  "signatureEncoding": "hex",
+  "keyEncoding": "hex",
+  "testGroups": [
+    {
+      "algorithm": "Gost3410_2012_256ParamSetA",
+      "public": "03667c7af2037dc56ee52740205c20d2394254b4558d637e70353cfbe8b47afc769d75d83669e3b4ce080c92543d39d33de35a851f9ed2c13761680627505272",
+      "tests": [
+        {
+          "tcId": 1,
+          "comment": "deterministic seed wycheproof-gost-256-a",
+          "msg": "577963686570726f6f662064657465726d696e6973746963206d657373616765",
+          "sig": "52febfedfae4a1361ee274039ca033e412c911e6b0071957482323b4dd19b535ee2a6adc69f8bd93b9e63791e564523ed5589309af619c8adf8f84b002725563",
+          "result": "valid",
+          "flags": []
+        },
+        {
+          "tcId": 2,
+          "comment": "flipped signature LSB",
+          "msg": "577963686570726f6f662064657465726d696e6973746963206d657373616765",
+          "sig": "53febfedfae4a1361ee274039ca033e412c911e6b0071957482323b4dd19b535ee2a6adc69f8bd93b9e63791e564523ed5589309af619c8adf8f84b002725563",
+          "result": "invalid",
+          "flags": ["ModifiedSignature"]
+        }
+      ]
+    },
+    {
+      "algorithm": "Gost3410_2012_256ParamSetB",
+      "public": "6638c1a1a0eec6a9ac0033fe701a35820a95d19ccc51329826a640f4c9148a44022203ae9e5ef4159e01531ebb3240f9518d35495e0695dca6f1e4fc54ae4a12",
+      "tests": [
+        {
+          "tcId": 3,
+          "comment": "deterministic seed wycheproof-gost-256-b",
+          "msg": "577963686570726f6f662064657465726d696e6973746963206d657373616765",
+          "sig": "e58e883c37726634cbc3f31360ba5fa1e3b118e2ff2844ffe7a85d8dee5c1f474dd6a379fca2bf3285fef2637f86ce245d3599cefa4bacdfaea4fe76e99edb21",
+          "result": "valid",
+          "flags": []
+        },
+        {
+          "tcId": 4,
+          "comment": "flipped signature LSB",
+          "msg": "577963686570726f6f662064657465726d696e6973746963206d657373616765",
+          "sig": "e48e883c37726634cbc3f31360ba5fa1e3b118e2ff2844ffe7a85d8dee5c1f474dd6a379fca2bf3285fef2637f86ce245d3599cefa4bacdfaea4fe76e99edb21",
+          "result": "invalid",
+          "flags": ["ModifiedSignature"]
+        }
+      ]
+    },
+    {
+      "algorithm": "Gost3410_2012_256ParamSetC",
+      "public": "9dd5772fb08a9a443559c18da9c5b092ab743ef8c3f7b7e9f1d8e07fa7c45483afa7188931551f62344fc86e36741b39769fa15485577967f14697895ac2774c",
+      "tests": [
+        {
+          "tcId": 5,
+          "comment": "deterministic seed wycheproof-gost-256-c",
+          "msg": "577963686570726f6f662064657465726d696e6973746963206d657373616765",
+          "sig": "fa1a0e1111bbea6bffddff0ed64e0ef988dc2dc7355b9817c00e28b0eed2d233299329d23a6780f0983d13612beffce517c1f44d63dd3f97e6f3083347c77319",
+          "result": "valid",
+          "flags": []
+        },
+        {
+          "tcId": 6,
+          "comment": "flipped signature LSB",
+          "msg": "577963686570726f6f662064657465726d696e6973746963206d657373616765",
+          "sig": "fb1a0e1111bbea6bffddff0ed64e0ef988dc2dc7355b9817c00e28b0eed2d233299329d23a6780f0983d13612beffce517c1f44d63dd3f97e6f3083347c77319",
+          "result": "invalid",
+          "flags": ["ModifiedSignature"]
+        }
+      ]
+    },
+    {
+      "algorithm": "Gost3410_2012_512ParamSetA",
+      "public": "2cf6a5a52bb11ba78194f8c9ba50af10fcbd415c269e54a8f6965be3ba4126ae0f1dc646ba74e50e102e324ad4552d45831b35f8d5d179fd9e7d4ef8371e96a3d29c8e2e53a1dec574d43e405d8e81a998bbe44d4d3347208a5ad7dc2da6656f8ea835b289707d620b806f812f22c9b7e51198d1f41ae92ad1954049d71c5da4",
+      "tests": [
+        {
+          "tcId": 7,
+          "comment": "deterministic seed wycheproof-gost-512-a",
+          "msg": "577963686570726f6f662064657465726d696e6973746963206d657373616765",
+          "sig": "3ae56e43c0a1d42277c4003f49371070602f857f40db6eff3fad769f20d259eae6b24b64f69a560ba70e91b1e5aeec73f09eafc9e6ced1e572e66b0b98ac1539fd5ad297ac2e292249a933cb2f5373c1726d935dcecc1edad0ea2bce1e646a04564f4fc2f64b9c913f4dce4a7e8fefcf38de037586940846903a369afa13a2ee",
+          "result": "valid",
+          "flags": []
+        },
+        {
+          "tcId": 8,
+          "comment": "flipped signature LSB",
+          "msg": "577963686570726f6f662064657465726d696e6973746963206d657373616765",
+          "sig": "3be56e43c0a1d42277c4003f49371070602f857f40db6eff3fad769f20d259eae6b24b64f69a560ba70e91b1e5aeec73f09eafc9e6ced1e572e66b0b98ac1539fd5ad297ac2e292249a933cb2f5373c1726d935dcecc1edad0ea2bce1e646a04564f4fc2f64b9c913f4dce4a7e8fefcf38de037586940846903a369afa13a2ee",
+          "result": "invalid",
+          "flags": ["ModifiedSignature"]
+        }
+      ]
+    },
+    {
+      "algorithm": "Gost3410_2012_512ParamSetB",
+      "public": "cdf6b8f4561fd4eaa5bbe3a04e61d3dcc1f2042c5ca60e07854baba0759ffefefb23961578705b300455e9fdfb3cf20ee05e336cec898d11dda6f191600baf318eee439b435fc87b822dec8d87eaa2d753eff2687125abd67f533d264be72f89f0d9e996b822d799f35fc382bc39c97e6ce72a30d5fd074625b5245cf51ab25b",
+      "tests": [
+        {
+          "tcId": 9,
+          "comment": "deterministic seed wycheproof-gost-512-b",
+          "msg": "577963686570726f6f662064657465726d696e6973746963206d657373616765",
+          "sig": "9d95fd8d6d66d0ceb2d5f538ccb8e1e6184aaadd6213a9a2f2a2845be17209bc3b5fd5c0bf6ca93687c05913e110b601bb60deb6d6b9e5edd686f429b08eb43aa9a63b5a546195e637aab92410999e526b2386e69992cf15a007362c9928de53d8733b55254acc6995148a2c8d4ef4b9870a15e36716388281a13231a6a1d426",
+          "result": "valid",
+          "flags": []
+        },
+        {
+          "tcId": 10,
+          "comment": "flipped signature LSB",
+          "msg": "577963686570726f6f662064657465726d696e6973746963206d657373616765",
+          "sig": "9c95fd8d6d66d0ceb2d5f538ccb8e1e6184aaadd6213a9a2f2a2845be17209bc3b5fd5c0bf6ca93687c05913e110b601bb60deb6d6b9e5edd686f429b08eb43aa9a63b5a546195e637aab92410999e526b2386e69992cf15a007362c9928de53d8733b55254acc6995148a2c8d4ef4b9870a15e36716388281a13231a6a1d426",
+          "result": "invalid",
+          "flags": ["ModifiedSignature"]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+# Prometheus alert rules for soranet-pop-m0 (SN15-M0-10/11)
+groups:
+- name: soranet-gateway-m0
+  rules:
+    - alert: GatewayScrapeMissing
+      expr: up{job="gateway",pop="soranet-pop-m0"} == 0
+      for: 2m
+      labels:
+        severity: critical
+        pop: soranet-pop-m0
+      annotations:
+        summary: "Gateway scrape missing at soranet-pop-m0"
+        description: "Prometheus cannot reach the gateway metrics endpoint; check PoP health and firewall."
+    - alert: CacheHitRateDrop
+      expr: (sum(rate(sorafs_gateway_cache_hits_total{pop="soranet-pop-m0"}[5m])) / sum(rate(sorafs_gateway_cache_requests_total{pop="soranet-pop-m0"}[5m]))) < 0.89
+      for: 10m
+      labels:
+        severity: warning
+        pop: soranet-pop-m0
+      annotations:
+        summary: "Cache hit rate below 89%"
+        description: "Investigate resolver health, origin latency, or cache eviction bursts before making the orchestrator default-on."
+    - alert: ResolverProofStale
+      expr: max_over_time(soradns_rad_proof_age_seconds{pop="soranet-pop-m0"}[15m]) > 900
+      for: 1m
+      labels:
+        severity: critical
+        pop: soranet-pop-m0
+      annotations:
+        summary: "RAD proof age exceeding 15 minutes"
+        description: "Refresh SoraDNS sync and verify GAR bindings; stale proofs block GAR enforcement checks."
+    - alert: BgpSessionFlap
+      expr: changes(soranet_bgp_session_up{pop="soranet-pop-m0"}[10m]) > 2
+      for: 0m
+      labels:
+        severity: warning
+        pop: soranet-pop-m0
+      annotations:
+        summary: "BGP session flapping"
+        description: "Coordinate with edge on-call to confirm drain/withdraw workflows and capture evidence for SN15-M0 drills."
+    - alert: TailSamplingBackpressure
+      expr: sum(rate(otel_tail_sample_dropped_spans{pop="soranet-pop-m0"}[5m])) > 0
+      for: 5m
+      labels:
+        severity: warning
+        pop: soranet-pop-m0
+      annotations:
+        summary: "Tail sampling is dropping spans"
+        description: "Tune sampling percentage or Kafka throughput; span loss invalidates change packets for observability GA."

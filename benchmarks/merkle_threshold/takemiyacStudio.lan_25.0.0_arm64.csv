@@ -1,0 +1,7 @@
+profile,metal_available,leaves,cpu_ms,metal_ms,speedup
+takemiyacStudio.lan_25.0.0_arm64,true,1024,23.007417,19.68975,1.168497
+takemiyacStudio.lan_25.0.0_arm64,true,4096,50.867,62.117042,0.81889
+takemiyacStudio.lan_25.0.0_arm64,true,8192,95.772625,96.573792,0.991704
+takemiyacStudio.lan_25.0.0_arm64,true,16384,64.481542,58.978542,1.093305
+takemiyacStudio.lan_25.0.0_arm64,true,32768,109.489959,87.67875,1.248763
+takemiyacStudio.lan_25.0.0_arm64,true,65536,177.719958,137.933667,1.288445

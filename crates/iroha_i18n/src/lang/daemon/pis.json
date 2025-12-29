@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Welkam long Hyperledger Iroha!",
+  "error.trace_config_setup": "No save setemap tracing blong config",
+  "error.config": "Problem long config",
+  "error.logger": "No save statem logger",
+  "error.start": "Fail long statem Iroha",
+  "error.run": "Mistek happen taem Iroha i ran",
+  "error.start_p2p": "No save statem peer-to-peer network",
+  "error.init_kura": "No save statem Kura (block storage)",
+  "error.start_dev_telemetry": "No save statem dev telemetry service",
+  "error.start_telemetry": "No save statem telemetry service",
+  "error.listen_os_signal": "No save mekem listen long OS signals",
+  "error.start_torii": "No save statem Torii (Iroha HTTP API Gateway)"
+}

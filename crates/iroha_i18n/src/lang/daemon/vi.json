@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Chào mừng đến với Hyperledger Iroha!",
+  "error.trace_config_setup": "Không thể cấu hình theo dõi thiết lập",
+  "error.config": "Đã xảy ra lỗi cấu hình!",
+  "error.logger": "Không thể khởi tạo hệ thống ghi log",
+  "error.start": "Không thể khởi động Iroha",
+  "error.run": "Đã xảy ra lỗi trong quá trình chạy Iroha",
+  "error.start_p2p": "Không thể khởi động mạng P2P",
+  "error.init_kura": "Không thể khởi tạo Kura (kho lưu trữ khối)",
+  "error.start_dev_telemetry": "Không thể khởi chạy dịch vụ telemetry cho môi trường phát triển",
+  "error.start_telemetry": "Không thể khởi chạy dịch vụ telemetry",
+  "error.listen_os_signal": "Không thể cấu hình để lắng nghe tín hiệu từ hệ điều hành",
+  "error.start_torii": "Không thể khởi động Torii (cổng Iroha HTTP API)"
+}

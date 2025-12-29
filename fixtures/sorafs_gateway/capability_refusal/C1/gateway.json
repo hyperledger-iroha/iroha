@@ -1,0 +1,15 @@
+{
+  "base_fixture": "../1.0.0",
+  "mutations": {
+    "manifest.chunking.namespace": "unsupported",
+    "manifest.chunking.name": "sf9",
+    "manifest.chunking.aliases": [
+      "unsupported.sf9@1.0.0"
+    ],
+    "challenge.chunking_profile": "unsupported.sf9@1.0.0"
+  },
+  "notes": [
+    "Start from the canonical fixture bundle and drop the `sorafs.sf1@1.0.0` profile from the gateway allowlist.",
+    "The mutated manifest and challenge match the values returned by the conformance harness for scenario C1."
+  ]
+}

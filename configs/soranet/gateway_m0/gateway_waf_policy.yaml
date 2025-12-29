@@ -1,0 +1,42 @@
+# WAF + rate policy pack for SN15-M0
+metadata:
+  name: soranet-waf-m0
+  version: 2
+  rollout:
+    shadow_mode_seconds: 300
+    rollback_playbook: docs/source/sorafs_gateway_deployment_handbook.md
+    fp_harness: ci/check_sorafs_gateway_conformance.sh
+rules:
+  - id: owasp-top10
+    stage: request
+    action: block
+    notes: "Baseline OWASP checks for H3 ingress"
+  - id: adaptive-rate-limit
+    stage: request
+    action: throttle
+    limit_rps: 200
+    burst: 50
+    interval_seconds: 10
+    soak_seconds: 120
+    notes: "Rate cap with soft soak window for FP drills"
+  - id: bot-heuristics
+    stage: request
+    action: challenge
+    signals:
+      - header: user-agent
+      - header: x-forwarded-for
+      - header: x-client-trace
+    notes: "Challenge suspicious automation before origin dispatch"
+  - id: json-parser-anomaly
+    stage: request
+    action: block
+    notes: "Reject malformed JSON and oversize bodies before origin dispatch"
+  - id: fp-harness
+    stage: response
+    action: allow
+    probes:
+      - path: /healthz
+        expect_status: 200
+      - path: /metrics
+        expect_status: 200
+    notes: "False-positive harness kept in the pack so rollbacks are validated automatically"

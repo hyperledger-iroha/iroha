@@ -1,0 +1,14 @@
+error: Trigger `main()` function must not have a return type
+ --> tests/ui/fail/main_with_return_type.rs:6:40
+  |
+6 | fn main(host: Iroha, context: Context) -> () {
+  |                                        ^^^^^
+
+error[E0580]: `main` function has wrong type
+ --> tests/ui/fail/main_with_return_type.rs:6:1
+  |
+6 | fn main(host: Iroha, context: Context) -> () {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ incorrect number of function parameters
+  |
+  = note: expected signature `fn()`
+             found signature `fn(iroha_trigger::Iroha, TriggerContext)`

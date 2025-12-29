@@ -1,0 +1,42 @@
+[
+  {
+    "provider_id": "fixture-provider-0",
+    "qos_score": 95.0,
+    "latency_p95_ms": 120.0,
+    "failure_rate_ewma": 0.0,
+    "token_health": 0.9,
+    "staking_weight": 1.0,
+    "penalty": false,
+    "last_updated_unix": 1724999880
+  },
+  {
+    "provider_id": "fixture-provider-1",
+    "qos_score": 94.0,
+    "latency_p95_ms": 135.0,
+    "failure_rate_ewma": 0.02,
+    "token_health": 0.9,
+    "staking_weight": 1.0,
+    "penalty": false,
+    "last_updated_unix": 1724999880
+  },
+  {
+    "provider_id": "fixture-provider-2",
+    "qos_score": 93.0,
+    "latency_p95_ms": 150.0,
+    "failure_rate_ewma": 0.04,
+    "token_health": 0.9,
+    "staking_weight": 1.0,
+    "penalty": false,
+    "last_updated_unix": 1724999880
+  },
+  {
+    "provider_id": "fixture-provider-3",
+    "qos_score": 92.0,
+    "latency_p95_ms": 165.0,
+    "failure_rate_ewma": 0.06,
+    "token_health": 0.9,
+    "staking_weight": 1.0,
+    "penalty": false,
+    "last_updated_unix": 1724999880
+  }
+]

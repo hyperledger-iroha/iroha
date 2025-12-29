@@ -1,0 +1,79 @@
+[package]
+name = "norito-fuzz"
+version = "2.0.0-rc.2.0"
+publish = false
+edition = "2024"
+
+[package.metadata.cargo-fuzz]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4.10", features = ["arbitrary-derive"] }
+arbitrary = { version = "1.4.2", features = ["derive"] }
+norito = {path = ".."}
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "json_parse_string"
+path = "fuzz_targets/json_parse_string.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_parse_string_ref"
+path = "fuzz_targets/json_parse_string_ref.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_skip_value"
+path = "fuzz_targets/json_skip_value.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_from_json_equiv"
+path = "fuzz_targets/json_from_json_equiv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aos_view_optstr_equiv"
+path = "fuzz_targets/aos_view_optstr_equiv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aos_view_optu32_equiv"
+path = "fuzz_targets/aos_view_optu32_equiv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aos_view_enum_equiv"
+path = "fuzz_targets/aos_view_enum_equiv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aos_ncb_equiv_str_u32"
+path = "fuzz_targets/aos_ncb_equiv_str_u32.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aos_ncb_equiv_bytes_u32"
+path = "fuzz_targets/aos_ncb_equiv_bytes_u32.rs"
+test = false
+doc = false
+bench = false

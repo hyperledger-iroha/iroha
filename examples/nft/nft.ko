@@ -1,0 +1,18 @@
+// NFT example: mints and transfers an NFT
+
+seiyaku NftDemo {
+  kotoage fn create() {
+    nft_mint_asset(
+      nft_id!("dragon#demo"),
+      account!("alice@wonderland")
+    );
+  }
+
+  kotoage fn transfer() {
+    nft_transfer_asset(
+      account!("alice@wonderland"),
+      nft_id!("dragon#demo"),
+      account!("bob@wonderland")
+    );
+  }
+}

@@ -1,0 +1,21 @@
++----------------------------------------------------------------------------------------------------+
+| IROHA MONITOR :: Overview                               uptime 00:00:08   refresh 500 ms       |
+| Peers: 03 online   Focus: p0   CRT: off   Auto-rotate: off                                     |
+|----------------------------------------------------------------------------------------------------|
+| PEER  | ROLE    | HEIGHT | FINAL | TX OK/REJ | LAT | GAS LIM | NOTES                            |
+| p0    | leader  | #042   | ✓     | 112 / 0   |128ms| 2.00 M  | healthy                          |
+| p1    | backup  | #042   | ✓     | 110 / 0   |134ms| 2.00 M  | healthy                          |
+| p2    | backup  | #042   | ✓     | 111 / 0   |139ms| 2.00 M  | healthy                          |
+|----------------------------------------------------------------------------------------------------|
+| PIPELINE SNAPSHOT                         | ALERTS (0 active)                                   |
+| Layer width: 04   DAG depth: 02           | - no alerts                                          |
+| Tx queue: 03     Verified: 03             |                                                      |
+| Finality lag: 0 blocks                    |                                                      |
+|----------------------------------------------------------------------------------------------------|
+| THROUGHPUT (per 5s)   | PARTITIONS | GAS (recent)      | SPARKLINES                             |
+| blocks: 4             | active: 1  | avg: 1.30 M       | p0 ▄▆█▇▇▅▂                             |
+| tx: 56                | lagged: 0 | max: 1.95 M       | p1 ▃▅▇██▆▄                             |
+| rejected: 0           | stalled: 0| trend: steady      | p2 ▂▄▆██▇▄                             |
+|----------------------------------------------------------------------------------------------------|
+| QUICK ACTIONS (Tab)  auto-rotate [ ]   beep [ ]   CRT [ ]   CRT★ [ ]   help [?]                   |
++----------------------------------------------------------------------------------------------------+

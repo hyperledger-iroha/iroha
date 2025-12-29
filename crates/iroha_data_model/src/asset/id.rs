@@ -1,0 +1,178 @@
+//! Asset identifiers.
+
+use std::{fmt, str::FromStr};
+use std::{format, string::String};
+
+use derive_more::Constructor;
+use getset::Getters;
+use iroha_data_model_derive::model;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+
+pub use self::model::*;
+
+use crate::{
+    Name, account::prelude::*, common::split_nonempty, domain::prelude::*, error::ParseError,
+};
+
+#[model]
+mod model {
+    use super::*;
+
+    /// Identification of an Asset Definition. Consists of Asset name and Domais name.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use iroha_data_model::asset::id::AssetDefinitionId;
+    ///
+    /// let definition_id = "xor#soramitsu".parse::<AssetDefinitionId>().expect("Valid");
+    /// ```
+    #[derive(
+        derive_more::Debug,
+        Clone,
+        derive_more::Display,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Hash,
+        Constructor,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+    )]
+    #[display("{name}#{domain}")]
+    #[debug("{name}#{domain}")]
+    #[getset(get = "pub")]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct AssetDefinitionId {
+        /// Domain id.
+        pub domain: DomainId,
+        /// Asset name.
+        pub name: Name,
+    }
+
+    /// Identification of an asset combines the entity identifier ([`AssetId`]) with the owner [`AccountId`].
+    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Decode, Encode, IntoSchema)]
+    #[getset(get = "pub")]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct AssetId {
+        /// Account Identification.
+        pub account: AccountId,
+        /// Entity Identification.
+        pub definition: AssetDefinitionId,
+    }
+}
+
+string_id!(AssetDefinitionId, AssetId);
+
+impl AssetId {
+    /// Create a new [`AssetId`]
+    pub fn new(definition: AssetDefinitionId, account: AccountId) -> Self {
+        Self {
+            account,
+            definition,
+        }
+    }
+
+    /// Convenience alias for [`Self::new`]
+    pub fn of(definition: AssetDefinitionId, account: AccountId) -> Self {
+        Self::new(definition, account)
+    }
+}
+
+impl AssetDefinitionId {
+    /// Convenience alias for [`Self::new`]
+    pub fn of(domain: DomainId, name: Name) -> Self {
+        Self::new(domain, name)
+    }
+}
+
+/// Asset Definition Identification is represented by `name#domain_name` string.
+impl FromStr for AssetDefinitionId {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (name_candidate, domain_id_candidate) = split_nonempty(
+            s,
+            '#',
+            "Asset Definition ID should have format `name#domain`",
+            "Empty `name` part in `name#domain`",
+            "Empty `domain` part in `name#domain`",
+        )?;
+        let name = name_candidate.parse().map_err(|_| ParseError {
+            reason: "Failed to parse `name` part in `name#domain`",
+        })?;
+        let domain_id = domain_id_candidate.parse().map_err(|_| ParseError {
+            reason: "Failed to parse `domain` part in `name#domain`",
+        })?;
+        Ok(Self::new(domain_id, name))
+    }
+}
+
+impl fmt::Display for AssetId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.definition.domain == self.account.domain {
+            write!(f, "{}##{}", self.definition.name, self.account)
+        } else {
+            write!(f, "{}#{}", self.definition, self.account)
+        }
+    }
+}
+
+impl fmt::Debug for AssetId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Avoid relying on the Debug formatter for `self` to prevent any
+        // accidental recursive formatting. Mirror the Display output explicitly.
+        if self.definition.domain == self.account.domain {
+            write!(f, "{}##{}", self.definition.name, self.account)
+        } else {
+            write!(f, "{}#{}", self.definition, self.account)
+        }
+    }
+}
+
+impl FromStr for AssetId {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (definition_id_candidate, account_id_candidate) =
+            s.rsplit_once('#').ok_or(ParseError {
+                reason: "Asset ID should have format `asset#domain#account@domain`, or `asset##account@domain` for the same domains",
+            })?;
+        let account_id = account_id_candidate.parse::<AccountId>().map_err(|_| ParseError {
+            reason: "Failed to parse `account@domain` part in `asset#domain#account@domain`. `account` should have multihash format e.g. `ed0120...`",
+        })?;
+        let domain_complement = if definition_id_candidate.ends_with('#') {
+            account_id.domain.name.as_ref()
+        } else {
+            ""
+        };
+        let definition_id = format!("{definition_id_candidate}{domain_complement}").parse().map_err(|_| ParseError {
+            reason: "Failed to parse `asset#domain` (or `asset#`) part in `asset#domain#account@domain` (or `asset##account@domain`)",
+        })?;
+        Ok(Self::new(definition_id, account_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::account::AccountId;
+    use iroha_crypto::KeyPair;
+
+    #[test]
+    fn debug_formats_without_recursion() {
+        let kp = KeyPair::random();
+        let domain: DomainId = "domain".parse().unwrap();
+        let account: AccountId = AccountId::new(domain.clone(), kp.public_key().clone());
+        let def: AssetDefinitionId = "xor#domain".parse().unwrap();
+        let id = AssetId::new(def, account);
+        let s = format!("{id:?}");
+        // Should contain the account and asset parts and not crash
+        assert!(s.contains("xor"));
+        assert!(s.contains("@domain"));
+    }
+}

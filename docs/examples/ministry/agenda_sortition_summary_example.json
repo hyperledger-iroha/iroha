@@ -1,0 +1,60 @@
+{
+  "format_version": 1,
+  "algorithm": "agenda-sortition-blake3-v1",
+  "roster_path": "docs/examples/ministry/agenda_council_roster.json",
+  "roster_digest": {
+    "blake3_hex": "7c6f6cbfbcb8eec595655ffb5f84355a84772b65d741f6a53fb966ab0c4b5858",
+    "sha256_hex": "1ecf1fd54548617b7329627221dfe9af0ef23e704cd9c4235d2ff8ce6f8c2cdf"
+  },
+  "seed_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "slots": 3,
+  "eligible_members": 4,
+  "merkle_root_hex": "c9c5d48ebf297d73195dd73cdca3b02283d47fac5beb8a2f0f4cf7d4cf5a3b77",
+  "selected": [
+    {
+      "member_id": "citizen:dora",
+      "role": "citizen",
+      "organization": "Artemis Cooperative",
+      "weight": 3,
+      "eligible_index": 3,
+      "original_index": 3,
+      "draw_position": 0,
+      "draw_entropy_hex": "a7e8ee16b74a6ed6c5043621f0ee82e9a2bd69882bff572b7fc608bec3e9a9ef",
+      "leaf_hash_hex": "bfa2d4c8b94e51a9f5d46abcf6deca26f94f16e903d148f0b89ca0675db5c346",
+      "merkle_proof": [
+        "7eb0ec24bbce9215ea4ed6f0f9059ecb8ecde25d3672f7c002848631186c34b4",
+        "d5850df94543f1ef9e2cb84660b1c3d93b5a2f8bd92afc6f7cc0260f2fa7089b"
+      ]
+    },
+    {
+      "member_id": "citizen:ada",
+      "role": "citizen",
+      "organization": "Artemis Cooperative",
+      "weight": 2,
+      "eligible_index": 0,
+      "original_index": 0,
+      "draw_position": 1,
+      "draw_entropy_hex": "1c16c9f8e03ffb16245f463f6443223d3f7df807317756c38b2db43fbcbcc3b6",
+      "leaf_hash_hex": "4a807d728c14b2a0f1cb42a8e96ad0b7d5e2f7d37973062dbf8f5eeeed2d2aeb",
+      "merkle_proof": [
+        "ed7941cb505dbb09c059bdec9f2acefe8237b3356f5b10d2b3a5c51c88629875",
+        "d5850df94543f1ef9e2cb84660b1c3d93b5a2f8bd92afc6f7cc0260f2fa7089b"
+      ]
+    },
+    {
+      "member_id": "citizen:cath",
+      "role": "observer",
+      "organization": "Inspectorate",
+      "weight": 1,
+      "eligible_index": 2,
+      "original_index": 2,
+      "draw_position": 2,
+      "draw_entropy_hex": "4c5e7a0f36de9974ee5d8b848b0f916d3c2a39b38a4a48dcdc2805326b0bd708",
+      "leaf_hash_hex": "a0ffca1a26d57fd65b746d4b97a2fc836df7c5e353788f62c7568b5c4b0a5d88",
+      "merkle_proof": [
+        "7eb0ec24bbce9215ea4ed6f0f9059ecb8ecde25d3672f7c002848631186c34b4",
+        "d5850df94543f1ef9e2cb84660b1c3d93b5a2f8bd92afc6f7cc0260f2fa7089b"
+      ]
+    }
+  ]
+}

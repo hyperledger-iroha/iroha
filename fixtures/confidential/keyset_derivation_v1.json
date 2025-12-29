@@ -1,0 +1,65 @@
+{
+  "format_version": 1,
+  "notes": [
+    "Deterministic wallet derivation vectors for confidential keysets (M1 rollout). Each case feeds the 32-byte spend key into the hkdf(hmac-sha3-512) ladder used by Torii/SDKs and records the derived keys in both hex and base64 so Swift/JS/Python/Rust bindings can assert parity."
+  ],
+  "cases": {
+    "positive": [
+      {
+        "case_id": "seed-all-zero",
+        "seed_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "seed_base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "derived": {
+          "nullifier_key_hex": "982df44a1f2e7f1d914e3da70f745f56d7f1652ab2c82186277e09e454aab32a",
+          "nullifier_key_base64": "mC30Sh8ufx2RTj2nD3RfVtfxZSqyyCGGJ34J5FSqsyo=",
+          "incoming_view_key_hex": "4aef3f316cc4e294a8dde5dedb06207e5005d0acd4dca0f10e5ed1a814ff9896",
+          "incoming_view_key_base64": "Su8/MWzE4pSo3eXe2wYgflAF0KzU3KDxDl7RqBT/mJY=",
+          "outgoing_view_key_hex": "b7b2d192766f3603954b5e794ff83bd3bfec022e46bd924c1a1e0ff48a43c676",
+          "outgoing_view_key_base64": "t7LRknZvNgOVS155T/g707/sAi5GvZJMGh4P9IpDxnY=",
+          "full_view_key_hex": "45cff7ac6465b7a162de9e43fb8d5bd1bd1d2deb8818a088f7654b9081587006",
+          "full_view_key_base64": "Rc/3rGRlt6Fi3p5D+41b0b0dLeuIGKCI92VLkIFYcAY="
+        }
+      },
+      {
+        "case_id": "seed-0x42",
+        "seed_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+        "seed_base64": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+        "derived": {
+          "nullifier_key_hex": "cb7149cc545b97fe5ab1ffe85550f9b0146f3dbff7cf9d2921b9432b641bf0dc",
+          "nullifier_key_base64": "y3FJzFRbl/5asf/oVVD5sBRvPb/3z50pIblDK2Qb8Nw=",
+          "incoming_view_key_hex": "fc0f3bf333d454923522f723ef589e0ca31ac1206724b1cd607e41ef0d4230f7",
+          "incoming_view_key_base64": "/A878zPUVJI1Ivcj71ieDKMawSBnJLHNYH5B7w1CMPc=",
+          "outgoing_view_key_hex": "5dc50806af739fa5577484268fd77c4e2345c70dae5b55a132b4f9b1a3e00c4c",
+          "outgoing_view_key_base64": "XcUIBq9zn6VXdIQmj9d8TiNFxw2uW1WhMrT5saPgDEw=",
+          "full_view_key_hex": "9a0fe79f768aeb440e07751dbddfa17ac97cbf21f3e79c2e0206e56b3c2629af",
+          "full_view_key_base64": "mg/nn3aK60QOB3Udvd+hesl8vyHz55wuAgblazwmKa8="
+        }
+      },
+      {
+        "case_id": "seed-0x24",
+        "seed_hex": "2424242424242424242424242424242424242424242424242424242424242424",
+        "seed_base64": "JCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ=",
+        "derived": {
+          "nullifier_key_hex": "785754db963806ff10fc8784e934858f6d4e4730cf4f58aa3a4c358969e0413e",
+          "nullifier_key_base64": "eFdU25Y4Bv8Q/IeE6TSFj21ORzDPT1iqOkw1iWngQT4=",
+          "incoming_view_key_hex": "4992b9030eec19fdfb285fb89de439ebb6bba23037669815bc09084f4d665605",
+          "incoming_view_key_base64": "SZK5Aw7sGf37KF+4neQ567a7ojA3ZpgVvAkIT01mVgU=",
+          "outgoing_view_key_hex": "90bed31f44f61df11aabba6c507155ea3367b3eb43ca73c19cb221b901023940",
+          "outgoing_view_key_base64": "kL7TH0T2HfEaq7psUHFV6jNns+tDynPBnLIhuQECOUA=",
+          "full_view_key_hex": "c23158b8081c780dee750b25ce50a1726b8348184c9bce5b5b93915578adcf2f",
+          "full_view_key_base64": "wjFYuAgceA3udQslzlChcmuDSBhMm85bW5ORVXitzy8="
+        }
+      }
+    ],
+    "negative": [
+      {
+        "case_id": "seed-too-short",
+        "seed_hex": "abcd",
+        "expected_error": {
+          "kind": "invalid_length",
+          "length_bytes": 2
+        }
+      }
+    ]
+  }
+}

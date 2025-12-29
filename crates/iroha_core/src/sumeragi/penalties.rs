@@ -1,0 +1,885 @@
+//! Penalty enforcement for `NPoS`: VRF non-participation and consensus evidence slashing.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use eyre::Result;
+use iroha_config::parameters::actual::{ConsensusMode, Sumeragi as SumeragiConfig};
+use iroha_crypto::Hash;
+use iroha_data_model::{
+    block::consensus::{Evidence, EvidencePayload, EvidenceRecord},
+    consensus::VrfEpochRecord,
+    nexus::{LaneId, PublicLaneValidatorStatus},
+    prelude::AccountId,
+};
+use iroha_primitives::numeric::Numeric;
+use mv::storage::StorageReadOnly;
+
+#[cfg(feature = "telemetry")]
+use crate::telemetry::StateTelemetry;
+use crate::{
+    smartcontracts::isi::staking::{apply_slash_to_validator, max_slash_amount},
+    state::{State, WorldReadOnly, WorldTransaction},
+    sumeragi::consensus::ValidatorIndex,
+};
+
+#[derive(Clone, Copy, Default)]
+pub struct PenaltyOutcome {
+    pub applied: u64,
+    pub pending: u64,
+    pub slashed: u64,
+    pub jailed: u64,
+}
+
+#[derive(Clone)]
+struct ValidatorLocator {
+    lane_id: LaneId,
+    validator: AccountId,
+}
+
+pub struct PenaltyApplier<'a> {
+    state: &'a State,
+    config: &'a SumeragiConfig,
+    #[cfg(feature = "telemetry")]
+    telemetry: Option<&'a StateTelemetry>,
+    #[cfg(not(feature = "telemetry"))]
+    #[allow(dead_code)]
+    telemetry: Option<()>,
+}
+
+impl<'a> PenaltyApplier<'a> {
+    pub(crate) fn new(
+        state: &'a State,
+        config: &'a SumeragiConfig,
+        #[cfg(feature = "telemetry")] telemetry: Option<&'a StateTelemetry>,
+        #[cfg(not(feature = "telemetry"))] telemetry: Option<()>,
+    ) -> Self {
+        Self {
+            state,
+            config,
+            telemetry,
+        }
+    }
+
+    pub(crate) fn apply_vrf_penalties(&self, current_height: u64) -> PenaltyOutcome {
+        let mut outcome = PenaltyOutcome::default();
+        let activation_lag = self.config.npos.reconfig.activation_lag_blocks;
+        let view = self.state.world.vrf_epochs.view();
+        let mut due_records: Vec<VrfEpochRecord> = Vec::new();
+        for (_epoch, record) in view.iter() {
+            if !record.finalized || record.penalties_applied {
+                continue;
+            }
+            if record.updated_at_height.saturating_add(activation_lag) > current_height {
+                outcome.pending = outcome.pending.saturating_add(1);
+                continue;
+            }
+            due_records.push(record.clone());
+        }
+        drop(view);
+
+        let lane_config = self.state.nexus_snapshot().lane_config.clone();
+
+        for record in due_records {
+            let offenders: BTreeSet<u32> = record
+                .committed_no_reveal
+                .iter()
+                .chain(record.no_participation.iter())
+                .copied()
+                .collect();
+            // Resolve validators before opening a write transaction to avoid re-entrant locks.
+            let mut applied_here = offenders.is_empty();
+            let mut unmapped_offenders = false;
+            let mut locators = Vec::new();
+            for signer in offenders {
+                if let Some(locator) = self.locate_validator(signer) {
+                    locators.push(locator);
+                } else {
+                    unmapped_offenders = true;
+                }
+            }
+            let mut block = self.state.world.block();
+            #[cfg(feature = "telemetry")]
+            let mut tx = block.trasaction(self.telemetry, lane_config.clone(), current_height);
+            #[cfg(not(feature = "telemetry"))]
+            let mut tx = block.trasaction(lane_config.clone(), current_height);
+            for locator in locators {
+                if jail_in_transaction(
+                    &mut tx,
+                    &locator,
+                    &format!("vrf_penalty_epoch_{}", record.epoch),
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry,
+                    #[cfg(not(feature = "telemetry"))]
+                    None,
+                ) {
+                    outcome.applied = outcome.applied.saturating_add(1);
+                    outcome.jailed = outcome.jailed.saturating_add(1);
+                    applied_here = true;
+                }
+            }
+
+            let mut updated = record.clone();
+            if applied_here || unmapped_offenders {
+                updated.penalties_applied = true;
+                updated.penalties_applied_at_height = Some(current_height);
+            }
+            tx.vrf_epochs.insert(updated.epoch, updated);
+            tx.apply();
+            block.commit();
+        }
+
+        outcome
+    }
+
+    pub(crate) fn apply_consensus_penalties(&self, current_height: u64) -> Result<PenaltyOutcome> {
+        let mut outcome = PenaltyOutcome::default();
+        let activation_lag = self.config.npos.reconfig.activation_lag_blocks;
+        let evidence_view = self.state.world.consensus_evidence.view();
+        let mut pending: Vec<(Vec<u8>, EvidenceRecord)> = Vec::new();
+        for (key, record) in evidence_view.iter() {
+            if record.penalty_applied {
+                continue;
+            }
+            if record.recorded_at_height.saturating_add(activation_lag) > current_height {
+                outcome.pending = outcome.pending.saturating_add(1);
+                continue;
+            }
+            pending.push((key.clone(), record.clone()));
+        }
+        drop(evidence_view);
+
+        if pending.is_empty() {
+            return Ok(outcome);
+        }
+
+        let (topology_len, consensus_mode) = {
+            let view = self.state.view();
+            let topology_len = view.commit_topology().len();
+            let consensus_mode =
+                crate::sumeragi::effective_consensus_mode(&view, self.config.consensus_mode);
+            (topology_len, consensus_mode)
+        };
+        let epoch_seeds = if matches!(consensus_mode, ConsensusMode::Npos) {
+            let view = self.state.world.vrf_epochs.view();
+            let mut map = BTreeMap::new();
+            for (epoch, record) in view.iter() {
+                map.insert(*epoch, record.seed);
+            }
+            map
+        } else {
+            BTreeMap::new()
+        };
+
+        let staking_cfg = {
+            let view = self.state.view();
+            view.nexus.staking.clone()
+        };
+
+        let lane_config = self.state.nexus_snapshot().lane_config.clone();
+
+        for (key, mut record) in pending {
+            let prf_seed = match consensus_mode {
+                ConsensusMode::Permissioned => None,
+                ConsensusMode::Npos => epoch_seeds.get(&evidence_epoch(&record.evidence)).copied(),
+            };
+            let offenders =
+                offender_indices(&record.evidence, topology_len, consensus_mode, prf_seed);
+            let slash_id = Hash::new(key.clone());
+            // Resolve validators before opening a write transaction to avoid re-entrant locks.
+            let mut applied_here = offenders.is_empty();
+            let mut locators = Vec::new();
+            for signer in offenders {
+                if let Some(locator) = self.locate_validator(signer) {
+                    locators.push(locator);
+                }
+            }
+            let mut block = self.state.world.block();
+            #[cfg(feature = "telemetry")]
+            let mut tx = block.trasaction(self.telemetry, lane_config.clone(), current_height);
+            #[cfg(not(feature = "telemetry"))]
+            let mut tx = block.trasaction(lane_config.clone(), current_height);
+            for locator in locators {
+                if let Some(amount) =
+                    max_slash_amount_for_validator(&tx, &locator, staking_cfg.max_slash_bps)?
+                {
+                    apply_slash_to_validator(
+                        &mut tx,
+                        &staking_cfg,
+                        locator.lane_id,
+                        &locator.validator,
+                        slash_id,
+                        &amount,
+                        #[cfg(feature = "telemetry")]
+                        self.telemetry,
+                        #[cfg(not(feature = "telemetry"))]
+                        None,
+                    )?;
+                    outcome.applied = outcome.applied.saturating_add(1);
+                    outcome.slashed = outcome.slashed.saturating_add(1);
+                    applied_here = true;
+                }
+            }
+            if applied_here {
+                record.penalty_applied = true;
+                record.penalty_applied_at_height = Some(current_height);
+            }
+            tx.consensus_evidence.insert(key, record);
+            tx.apply();
+            block.commit();
+        }
+
+        Ok(outcome)
+    }
+
+    fn locate_validator(&self, signer: ValidatorIndex) -> Option<ValidatorLocator> {
+        let signer_idx = usize::try_from(signer).ok()?;
+        let view = self.state.view();
+        let peer = view.commit_topology().get().get(signer_idx)?.clone();
+        let target_key = peer.public_key.clone();
+        let mut candidates: Vec<ValidatorLocator> = view
+            .world
+            .public_lane_validators()
+            .iter()
+            .filter_map(|((lane_id, validator_id), record)| {
+                let pk = record.validator.try_signatory()?;
+                if pk == &target_key {
+                    Some(ValidatorLocator {
+                        lane_id: *lane_id,
+                        validator: validator_id.clone(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        candidates.sort_by(|lhs, rhs| {
+            lhs.lane_id
+                .cmp(&rhs.lane_id)
+                .then_with(|| lhs.validator.cmp(&rhs.validator))
+        });
+        candidates.into_iter().next()
+    }
+}
+
+fn npos_leader_index(seed: [u8; 32], height: u64, view: u64, topology_len: usize) -> Option<usize> {
+    use iroha_crypto::blake2::{Blake2b512, Digest as _};
+
+    if topology_len == 0 {
+        return None;
+    }
+    let mut hasher = Blake2b512::new();
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, &seed);
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, &height.to_be_bytes());
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, &view.to_be_bytes());
+    let digest = iroha_crypto::blake2::Digest::finalize(hasher);
+    let mut w = [0u8; 8];
+    w.copy_from_slice(&digest[..8]);
+    let modulus = u128::try_from(topology_len).ok()?;
+    Some((u128::from(u64::from_be_bytes(w)) % modulus) as usize)
+}
+
+fn canonicalize_index_for_view(
+    signer: ValidatorIndex,
+    height: u64,
+    view: u64,
+    topology_len: usize,
+    consensus_mode: ConsensusMode,
+    prf_seed: Option<[u8; 32]>,
+) -> Option<ValidatorIndex> {
+    if topology_len == 0 {
+        return None;
+    }
+    let idx = usize::try_from(signer).ok()?;
+    if idx >= topology_len {
+        return None;
+    }
+    let rotation = match consensus_mode {
+        ConsensusMode::Permissioned => {
+            if view == 0 {
+                return Some(signer);
+            }
+            (view % topology_len as u64) as usize
+        }
+        ConsensusMode::Npos => {
+            let seed = prf_seed?;
+            npos_leader_index(seed, height, view, topology_len)?
+        }
+    };
+    let canonical_idx = (idx + rotation) % topology_len;
+    ValidatorIndex::try_from(canonical_idx).ok()
+}
+
+fn canonicalize_indices_for_view(
+    indices: impl IntoIterator<Item = ValidatorIndex>,
+    height: u64,
+    view: u64,
+    topology_len: usize,
+    consensus_mode: ConsensusMode,
+    prf_seed: Option<[u8; 32]>,
+) -> Vec<ValidatorIndex> {
+    let mut out = BTreeSet::new();
+    for signer in indices {
+        if let Some(canonical) = canonicalize_index_for_view(
+            signer,
+            height,
+            view,
+            topology_len,
+            consensus_mode,
+            prf_seed,
+        ) {
+            out.insert(canonical);
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn evidence_epoch(evidence: &Evidence) -> u64 {
+    match &evidence.payload {
+        EvidencePayload::DoubleVote { v1, .. } => v1.epoch,
+        EvidencePayload::DoubleExecVote { v1, .. } => v1.epoch,
+        EvidencePayload::InvalidProposal { proposal, .. } => proposal.header.epoch,
+        EvidencePayload::InvalidQc { qc, .. } => qc.epoch,
+    }
+}
+
+fn offender_indices(
+    evidence: &Evidence,
+    topology_len: usize,
+    consensus_mode: ConsensusMode,
+    prf_seed: Option<[u8; 32]>,
+) -> Vec<ValidatorIndex> {
+    match &evidence.payload {
+        EvidencePayload::DoubleVote { v1, .. } => canonicalize_indices_for_view(
+            [v1.signer],
+            v1.height,
+            v1.view,
+            topology_len,
+            consensus_mode,
+            prf_seed,
+        ),
+        EvidencePayload::DoubleExecVote { v1, .. } => canonicalize_indices_for_view(
+            [v1.signer],
+            v1.height,
+            v1.view,
+            topology_len,
+            consensus_mode,
+            prf_seed,
+        ),
+        EvidencePayload::InvalidProposal { proposal, .. } => canonicalize_indices_for_view(
+            [proposal.header.proposer],
+            proposal.header.height,
+            proposal.header.view,
+            topology_len,
+            consensus_mode,
+            prf_seed,
+        ),
+        EvidencePayload::InvalidQc { qc, .. } => canonicalize_indices_for_view(
+            bitmap_indices(&qc.aggregate.signers_bitmap),
+            qc.height,
+            qc.view,
+            topology_len,
+            consensus_mode,
+            prf_seed,
+        ),
+    }
+}
+
+fn bitmap_indices(bitmap: &[u8]) -> Vec<ValidatorIndex> {
+    let mut indices = Vec::new();
+    for (byte_idx, byte) in bitmap.iter().enumerate() {
+        for bit in 0..8 {
+            if byte & (1 << bit) != 0 {
+                if let Ok(idx) = u32::try_from(byte_idx * 8 + bit) {
+                    indices.push(idx);
+                }
+            }
+        }
+    }
+    indices
+}
+
+fn max_slash_amount_for_validator(
+    tx: &WorldTransaction<'_, '_>,
+    locator: &ValidatorLocator,
+    max_bps: u16,
+) -> Result<Option<Numeric>> {
+    let Some(record) = tx
+        .public_lane_validators
+        .get(&(locator.lane_id, locator.validator.clone()))
+    else {
+        return Ok(None);
+    };
+    let amount = max_slash_amount(&record.total_stake, max_bps)?;
+    if amount.is_zero() {
+        return Ok(None);
+    }
+    Ok(Some(amount))
+}
+
+fn jail_in_transaction(
+    tx: &mut WorldTransaction<'_, '_>,
+    locator: &ValidatorLocator,
+    reason: &str,
+    #[cfg(feature = "telemetry")] telemetry: Option<&StateTelemetry>,
+    #[cfg(not(feature = "telemetry"))] _telemetry: Option<()>,
+) -> bool {
+    let Some(record) = tx
+        .public_lane_validators
+        .get_mut(&(locator.lane_id, locator.validator.clone()))
+    else {
+        return false;
+    };
+    let should_update = matches!(
+        record.status,
+        PublicLaneValidatorStatus::Active | PublicLaneValidatorStatus::PendingActivation(_)
+    );
+    if !should_update {
+        return false;
+    }
+    #[cfg(feature = "telemetry")]
+    let previous_status = Some(record.status.clone());
+    record.status = PublicLaneValidatorStatus::Jailed(reason.to_string());
+    #[cfg(feature = "telemetry")]
+    if let Some(t) = telemetry {
+        t.record_public_lane_validator_status(
+            locator.lane_id,
+            previous_status.as_ref(),
+            &record.status,
+        );
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::telemetry::StateTelemetry;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+        sumeragi::evidence::evidence_key,
+    };
+    use eyre::Result;
+    use iroha_config::parameters::actual::{
+        ConsensusMode, NodeRole, ProofPolicy, Sumeragi as SumeragiConfig, SumeragiNpos,
+        SumeragiNposReconfig, SumeragiNposTimeouts, SumeragiNposVrf,
+    };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        block::consensus::{
+            Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, Phase, Qc, QcAggregate, Vote,
+        },
+        consensus::VrfEpochRecord,
+        prelude::{BlockHeader, DomainId, PeerId},
+    };
+    use iroha_primitives::numeric::Numeric;
+    use std::{collections::BTreeSet, time::Duration};
+
+    fn fresh_state() -> State {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        State::with_telemetry(World::default(), kura, query, StateTelemetry::default())
+    }
+
+    fn test_sumeragi_config() -> SumeragiConfig {
+        SumeragiConfig {
+            debug_force_soft_fork: false,
+            debug_disable_background_worker: false,
+            debug_rbc_drop_every_nth_chunk: None,
+            debug_rbc_shuffle_chunks: false,
+            debug_rbc_duplicate_inits: false,
+            debug_rbc_corrupt_witness_ack: false,
+            debug_rbc_corrupt_ready_signature: false,
+            debug_rbc_drop_validator_mask: 0,
+            debug_rbc_equivocate_chunk_mask: 0,
+            debug_rbc_equivocate_validator_mask: 0,
+            debug_rbc_conflicting_ready_mask: 0,
+            debug_rbc_partial_chunk_mask: 0,
+            role: NodeRole::Validator,
+            allow_view0_slack: false,
+            collectors_k: 1,
+            collectors_redundant_send_r: 1,
+            block_max_transactions: None,
+            block_max_payload_bytes: None,
+            msg_channel_cap: None,
+            msg_channel_cap_votes:
+                iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
+            msg_channel_cap_block_payload:
+                iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
+            msg_channel_cap_rbc_chunks:
+                iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS,
+            msg_channel_cap_blocks:
+                iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
+            control_msg_channel_cap:
+                iroha_config::parameters::defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP,
+            consensus_mode: ConsensusMode::Npos,
+            mode_flip_enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
+            da_enabled: false,
+            da_quorum_timeout_multiplier:
+                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+            da_availability_timeout_multiplier:
+                iroha_config::parameters::defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
+            da_availability_timeout_floor: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_FLOOR_MS,
+            ),
+            kura_store_retry_interval: Duration::from_millis(1),
+            kura_store_retry_max_attempts: 1,
+            commit_inflight_timeout: Duration::from_millis(5_000),
+            missing_block_signer_fallback_attempts:
+                iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+            da_max_commitments_per_block: 0,
+            da_max_proof_openings_per_block: 0,
+            proof_policy: ProofPolicy::Off,
+            commit_cert_history_cap: 0,
+            zk_finality_k: 0,
+            require_execution_qc: false,
+            require_precommit_qc: false,
+            require_wsv_exec_qc: false,
+            rbc_chunk_max_bytes: 0,
+            rbc_pending_max_chunks: 0,
+            rbc_pending_max_bytes: 0,
+            rbc_pending_ttl: Duration::from_secs(0),
+            rbc_session_ttl: Duration::from_secs(0),
+            rbc_store_max_sessions: 0,
+            rbc_store_soft_sessions: 0,
+            rbc_store_max_bytes: 0,
+            rbc_store_soft_bytes: 0,
+            rbc_disk_store_ttl: Duration::from_secs(0),
+            rbc_disk_store_max_bytes: 0,
+            key_activation_lead_blocks: 0,
+            key_overlap_grace_blocks: 0,
+            key_expiry_grace_blocks: 0,
+            key_require_hsm: false,
+            key_allowed_algorithms: BTreeSet::from([Algorithm::BlsNormal]),
+            key_allowed_hsm_providers: BTreeSet::new(),
+            npos: SumeragiNpos {
+                block_time: Duration::from_secs(1),
+                timeouts: SumeragiNposTimeouts::default(),
+                pacemaker_backoff_multiplier: 1,
+                pacemaker_rtt_floor_multiplier: 1,
+                pacemaker_max_backoff: Duration::from_secs(0),
+                pacemaker_jitter_frac_permille: 0,
+                k_aggregators: 1,
+                redundant_send_r: 1,
+                vrf: SumeragiNposVrf::default(),
+                reconfig: SumeragiNposReconfig::default(),
+                election: iroha_config::parameters::actual::SumeragiNposElection::default(),
+            },
+            use_stake_snapshot_roster: false,
+            epoch_length_blocks: 0,
+            vrf_commit_deadline_offset: 0,
+            vrf_reveal_deadline_offset: 0,
+            pacemaker_backoff_multiplier: 1,
+            pacemaker_rtt_floor_multiplier: 1,
+            pacemaker_max_backoff: Duration::from_secs(0),
+            pacemaker_jitter_frac_permille: 0,
+            adaptive_observability:
+                iroha_config::parameters::actual::AdaptiveObservability::default(),
+            enable_bls: true,
+        }
+    }
+
+    #[test]
+    fn offender_indices_canonicalize_view_rotation_in_permissioned_mode() {
+        let parent_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32]));
+        let proposal = iroha_data_model::block::consensus::Proposal {
+            header: iroha_data_model::block::consensus::ConsensusBlockHeader {
+                parent_hash,
+                tx_root: Hash::prehashed([0xA2; 32]),
+                state_root: Hash::prehashed([0xA3; 32]),
+                proposer: 0,
+                height: 2,
+                view: 1,
+                epoch: 0,
+                highest_qc: iroha_data_model::block::consensus::QcHeaderRef {
+                    height: 1,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: parent_hash,
+                    phase: Phase::Precommit,
+                },
+                avail_qc_ref: None,
+            },
+            payload_hash: Hash::prehashed([0xA4; 32]),
+        };
+        let proposal_height = proposal.header.height;
+        let proposal_view = proposal.header.view;
+        let evidence = Evidence {
+            kind: EvidenceKind::InvalidProposal,
+            payload: EvidencePayload::InvalidProposal {
+                proposal,
+                reason: "test".to_owned(),
+            },
+        };
+
+        let offenders = super::offender_indices(&evidence, 4, ConsensusMode::Permissioned, None);
+        assert_eq!(offenders, vec![1]);
+
+        let seed = [0x11_u8; 32];
+        let leader = super::npos_leader_index(seed, proposal_height, proposal_view, 4)
+            .expect("leader index should resolve");
+        let offenders_npos = super::offender_indices(&evidence, 4, ConsensusMode::Npos, Some(seed));
+        let expected = ValidatorIndex::try_from(leader).expect("leader index fits validator index");
+        assert_eq!(offenders_npos, vec![expected]);
+    }
+
+    #[test]
+    fn vrf_penalties_jail_offenders_and_mark_record() {
+        let state = fresh_state();
+        let mut config = test_sumeragi_config();
+        config.npos.reconfig.activation_lag_blocks = 0;
+
+        // Topology with one validator
+        let kp = KeyPair::random();
+        let peer = PeerId::from(kp.public_key().clone());
+        {
+            let mut block = state.commit_topology.block();
+            block.get_mut().push(peer.clone());
+            block.commit();
+        }
+
+        // Public lane validator with matching signatory
+        let domain: DomainId = "test".parse().expect("domain id");
+        let validator: AccountId = AccountId::new(domain.clone(), kp.public_key().clone());
+        let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
+            lane_id: LaneId::new(1),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            total_stake: Numeric::new(100, 0),
+            self_stake: Numeric::new(50, 0),
+            metadata: iroha_data_model::metadata::Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        };
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert((record.lane_id, validator.clone()), record);
+            block.commit();
+        }
+
+        // VRF epoch record with one offender (index 0)
+        let vrf_record = VrfEpochRecord {
+            epoch: 1,
+            seed: [0xAA; 32],
+            epoch_length: 10,
+            commit_deadline_offset: 3,
+            reveal_deadline_offset: 6,
+            roster_len: 1,
+            finalized: true,
+            updated_at_height: 1,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: vec![0],
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+        {
+            let mut block = state.world.vrf_epochs.block();
+            block.insert(vrf_record.epoch, vrf_record.clone());
+            block.commit();
+        }
+
+        let applier = PenaltyApplier::new(
+            &state,
+            &config,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let outcome = applier.apply_vrf_penalties(5);
+
+        assert_eq!(outcome.applied, 1);
+        assert_eq!(outcome.jailed, 1);
+        assert_eq!(outcome.pending, 0);
+
+        let view = state.world.vrf_epochs.view();
+        let updated = view.get(&vrf_record.epoch).expect("vrf record present");
+        assert!(updated.penalties_applied);
+        assert_eq!(updated.penalties_applied_at_height, Some(5));
+
+        let validators = state.world.public_lane_validators.view();
+        let jailed = validators
+            .get(&(LaneId::new(1), validator.clone()))
+            .expect("validator present");
+        matches!(jailed.status, PublicLaneValidatorStatus::Jailed(_));
+    }
+
+    #[test]
+    fn vrf_penalties_marked_when_offenders_missing_from_topology() {
+        let state = fresh_state();
+        let mut config = test_sumeragi_config();
+        config.npos.reconfig.activation_lag_blocks = 0;
+
+        let vrf_record = VrfEpochRecord {
+            epoch: 2,
+            seed: [0xBB; 32],
+            epoch_length: 4,
+            commit_deadline_offset: 2,
+            reveal_deadline_offset: 3,
+            roster_len: 1,
+            finalized: true,
+            updated_at_height: 1,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: vec![3], // No corresponding validator index in topology
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+        {
+            let mut block = state.world.vrf_epochs.block();
+            block.insert(vrf_record.epoch, vrf_record.clone());
+            block.commit();
+        }
+
+        let applier = PenaltyApplier::new(
+            &state,
+            &config,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let outcome = applier.apply_vrf_penalties(5);
+
+        assert_eq!(outcome.applied, 0, "no validator located to jail");
+        assert_eq!(outcome.pending, 0, "record should not remain pending");
+
+        let view = state.world.vrf_epochs.view();
+        let updated = view.get(&vrf_record.epoch).expect("vrf record present");
+        assert!(updated.penalties_applied);
+        assert_eq!(updated.penalties_applied_at_height, Some(5));
+    }
+
+    #[test]
+    fn consensus_penalties_mark_records_when_due() -> Result<()> {
+        let state = fresh_state();
+        let mut config = test_sumeragi_config();
+        config.npos.reconfig.activation_lag_blocks = 0;
+
+        // Evidence with empty signer bitmap (no offenders but should mark applied)
+        let qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Prevote,
+            subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x11; Hash::LENGTH],
+            )),
+            height: 1,
+            view: 1,
+            epoch: 0,
+            aggregate: QcAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
+        };
+        let evidence = Evidence {
+            kind: EvidenceKind::InvalidQC,
+            payload: EvidencePayload::InvalidQc {
+                qc,
+                reason: "empty bitmap".to_owned(),
+            },
+        };
+        let record = EvidenceRecord {
+            evidence,
+            recorded_at_height: 1,
+            recorded_at_view: 1,
+            recorded_at_ms: 123,
+            penalty_applied: false,
+            penalty_applied_at_height: None,
+        };
+        let key = evidence_key(&record.evidence);
+        {
+            let mut block = state.world.consensus_evidence.block();
+            block.insert(key.clone(), record.clone());
+            block.commit();
+        }
+
+        let applier = PenaltyApplier::new(
+            &state,
+            &config,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let outcome = applier.apply_consensus_penalties(5)?;
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.slashed, 0);
+        assert_eq!(outcome.pending, 0);
+
+        let view = state.world.consensus_evidence.view();
+        let updated = view.get(&key).expect("evidence present");
+        assert!(updated.penalty_applied);
+        assert_eq!(updated.penalty_applied_at_height, Some(5));
+
+        Ok(())
+    }
+
+    #[test]
+    fn consensus_penalties_skip_unmapped_offender() -> Result<()> {
+        let state = fresh_state();
+        let mut config = test_sumeragi_config();
+        config.npos.reconfig.activation_lag_blocks = 0;
+
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+        let v1 = Vote {
+            phase: Phase::Prevote,
+            block_hash,
+            height: 2,
+            view: 1,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        };
+        let mut v2 = v1.clone();
+        v2.block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; Hash::LENGTH]));
+        let evidence = Evidence {
+            kind: EvidenceKind::DoublePrevote,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let record = EvidenceRecord {
+            evidence,
+            recorded_at_height: 2,
+            recorded_at_view: 1,
+            recorded_at_ms: 456,
+            penalty_applied: false,
+            penalty_applied_at_height: None,
+        };
+        let key = evidence_key(&record.evidence);
+        {
+            let mut block = state.world.consensus_evidence.block();
+            block.insert(key.clone(), record.clone());
+            block.commit();
+        }
+
+        let applier = PenaltyApplier::new(
+            &state,
+            &config,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let outcome = applier.apply_consensus_penalties(5)?;
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.slashed, 0);
+
+        let view = state.world.consensus_evidence.view();
+        let updated = view.get(&key).expect("evidence present");
+        assert!(!updated.penalty_applied);
+        assert_eq!(updated.penalty_applied_at_height, None);
+
+        Ok(())
+    }
+}

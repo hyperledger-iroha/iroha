@@ -1,0 +1,528 @@
+use core::marker::PhantomData;
+use std::{borrow::ToOwned as _, string::ToString as _, sync::Mutex, vec, vec::Vec};
+
+use sha2::Sha256;
+use w3f_bls::Signature as BlsSignature;
+use w3f_bls::{
+    EngineBLS, PublicKey, SecretKey as W3fSecretKey, SecretKeyVT, SerializableToBytes as _,
+};
+use zeroize::Zeroize as _;
+
+pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
+
+/// Thread-safe wrapper around the w3f `SecretKey` that allows interior mutability.
+pub struct ManagedSecretKey<C: BlsConfiguration + ?Sized> {
+    inner: Mutex<W3fSecretKey<C::Engine>>,
+}
+
+impl<C: BlsConfiguration + ?Sized> Clone for ManagedSecretKey<C> {
+    fn clone(&self) -> Self {
+        let guard = self.lock();
+        Self {
+            inner: Mutex::new(guard.clone()),
+        }
+    }
+}
+
+impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
+    fn new(secret: W3fSecretKey<C::Engine>) -> Self {
+        Self {
+            inner: Mutex::new(secret),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, W3fSecretKey<C::Engine>> {
+        self.inner
+            .lock()
+            .expect("BLS secret key mutex should not be poisoned")
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let guard = self.lock();
+        guard.clone().into_vartime().to_bytes()
+    }
+
+    pub fn to_fixed_bytes(&self) -> [u8; 32] {
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&self.to_bytes());
+        arr
+    }
+
+    pub fn public_key(&self) -> PublicKey<C::Engine> {
+        let guard = self.lock();
+        guard.clone().into_public()
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
+        let secret = W3fSecretKey::<C::Engine>::from_bytes(bytes)
+            .map_err(|err| ParseError(err.to_string()))?;
+        Ok(Self::new(secret))
+    }
+
+    fn sign_bytes(&self, message: &[u8]) -> Vec<u8> {
+        let mut guard = self.lock();
+        let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+        #[cfg(feature = "rand")]
+        {
+            guard.sign(&msg, os_rng()).to_bytes()
+        }
+        #[cfg(not(feature = "rand"))]
+        {
+            guard.sign_once(&msg).to_bytes()
+        }
+    }
+}
+
+impl<C: BlsConfiguration + ?Sized> zeroize::Zeroize for ManagedSecretKey<C> {
+    fn zeroize(&mut self) {
+        let mut guard = self.lock();
+        let mut zero_seed = vec![0u8; C::Engine::SECRET_KEY_SIZE];
+        let new_secret = W3fSecretKey::from_seed(&zero_seed);
+        zero_seed.zeroize();
+        *guard = new_secret;
+    }
+}
+
+#[cfg(feature = "rand")]
+use crate::rng::os_rng;
+use crate::{Algorithm, Error, KeyGenOption, ParseError};
+
+pub trait BlsConfiguration {
+    const ALGORITHM: Algorithm;
+    type Engine: w3f_bls::EngineBLS;
+}
+
+pub struct BlsImpl<C: BlsConfiguration + ?Sized>(PhantomData<C>);
+
+impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
+    // the names are from an RFC, not a good idea to change them
+    #[allow(clippy::similar_names)]
+    pub fn keypair(
+        mut option: KeyGenOption<ManagedSecretKey<C>>,
+    ) -> (PublicKey<C::Engine>, ManagedSecretKey<C>) {
+        let private_key = match option {
+            #[cfg(feature = "rand")]
+            KeyGenOption::Random => {
+                let mut rng = os_rng();
+                let secret_vt = SecretKeyVT::<C::Engine>::generate(&mut rng);
+                let secret = secret_vt.into_split(&mut rng);
+                ManagedSecretKey::new(secret)
+            }
+            KeyGenOption::UseSeed(ref mut seed) => {
+                let salt = b"BLS-SIG-KEYGEN-SALT-";
+                let info = [0u8, C::Engine::SECRET_KEY_SIZE.try_into().unwrap()];
+                let mut ikm = vec![0u8; seed.len() + 1];
+                ikm[..seed.len()].copy_from_slice(seed);
+                seed.zeroize();
+                let mut okm = vec![0u8; C::Engine::SECRET_KEY_SIZE];
+                let h = hkdf::Hkdf::<Sha256>::new(Some(&salt[..]), &ikm);
+                h.expand(&info[..], &mut okm)
+                    .expect("`okm` has the correct length");
+                ikm.zeroize();
+
+                let deterministic_rng = crate::rng::rng_from_seed(okm.clone());
+                let secret =
+                    SecretKeyVT::<C::Engine>::from_seed(&okm).into_split(deterministic_rng);
+                okm.zeroize();
+                ManagedSecretKey::new(secret)
+            }
+            KeyGenOption::FromPrivateKey(key) => key,
+        };
+        let public_key = private_key.public_key();
+        (public_key, private_key)
+    }
+
+    pub fn sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Vec<u8> {
+        sk.sign_bytes(message)
+    }
+
+    pub fn verify(
+        message: &[u8],
+        signature: &[u8],
+        pk: &PublicKey<C::Engine>,
+    ) -> Result<(), Error> {
+        let signature = w3f_bls::Signature::<C::Engine>::from_bytes(signature)
+            .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
+        let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+
+        if !signature.verify(&message, pk) {
+            return Err(Error::BadSignature);
+        }
+
+        Ok(())
+    }
+
+    /// Aggregate-style verification for the case where all signers signed the same message.
+    /// Performs deterministic aggregate verification for the case where all signers share the
+    /// same message. When the optimized multi-pairing backend is unavailable this falls back to
+    /// w3f's POP-aware aggregator, so callers still pay only a single pairing check.
+    pub fn verify_aggregate_same_message(
+        message: &[u8],
+        signatures: &[&[u8]],
+        public_keys: &[&[u8]],
+    ) -> Result<(), Error> {
+        use core::ops::AddAssign as _;
+        if signatures.is_empty() || signatures.len() != public_keys.len() {
+            return Err(Error::BadSignature);
+        }
+        // Parse and aggregate signatures
+        let mut sig_it = signatures.iter();
+        let first_sig_bytes = sig_it.next().ok_or(Error::BadSignature)?;
+        let first_sig = BlsSignature::<C::Engine>::from_bytes(first_sig_bytes)
+            .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+        let mut agg_sig_group = first_sig.0;
+        for s in sig_it {
+            let sig = BlsSignature::<C::Engine>::from_bytes(s)
+                .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+            agg_sig_group.add_assign(&sig.0);
+        }
+
+        // Parse and aggregate public keys
+        let mut pk_it = public_keys.iter();
+        let first_pk_bytes = pk_it.next().ok_or(Error::BadSignature)?;
+        let first_pk = PublicKey::<C::Engine>::from_bytes(first_pk_bytes)
+            .map_err(|e| ParseError(e.to_string()))?;
+        let mut agg_pk_group = first_pk.0;
+        for pk in pk_it {
+            let pk =
+                PublicKey::<C::Engine>::from_bytes(pk).map_err(|e| ParseError(e.to_string()))?;
+            agg_pk_group.add_assign(&pk.0);
+        }
+
+        let agg_sig = BlsSignature::<C::Engine>(agg_sig_group);
+        let agg_pk = PublicKey::<C::Engine>(agg_pk_group);
+        let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+        if !agg_sig.verify(&message, &agg_pk) {
+            return Err(Error::BadSignature);
+        }
+        Ok(())
+    }
+
+    /// Aggregate a sequence of BLS signatures (same-message context) into a single signature.
+    /// The caller is responsible for ensuring all signatures are valid and belong to the same
+    /// scheme/engine variant.
+    pub fn aggregate_signatures(signatures: &[&[u8]]) -> Result<Vec<u8>, Error> {
+        use core::ops::AddAssign as _;
+        if signatures.is_empty() {
+            return Err(Error::BadSignature);
+        }
+        let mut sig_it = signatures.iter();
+        let first_sig_bytes = sig_it.next().ok_or(Error::BadSignature)?;
+        let first_sig = BlsSignature::<C::Engine>::from_bytes(first_sig_bytes)
+            .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+        let mut agg_sig_group = first_sig.0;
+        for s in sig_it {
+            let sig = BlsSignature::<C::Engine>::from_bytes(s)
+                .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+            agg_sig_group.add_assign(&sig.0);
+        }
+        Ok(BlsSignature::<C::Engine>(agg_sig_group).to_bytes())
+    }
+
+    /// Verify a pre-aggregated signature for the case where all signers signed the
+    /// same message. Public keys are aggregated inside this function and a single pairing
+    /// check is performed.
+    pub fn verify_preaggregated_same_message(
+        message: &[u8],
+        aggregated_signature: &[u8],
+        public_keys: &[&[u8]],
+    ) -> Result<(), Error> {
+        use core::ops::AddAssign as _;
+        if public_keys.is_empty() {
+            return Err(Error::BadSignature);
+        }
+        let sig = BlsSignature::<C::Engine>::from_bytes(aggregated_signature)
+            .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+        // Aggregate public keys
+        let mut pk_it = public_keys.iter();
+        let first_pk_bytes = pk_it.next().ok_or(Error::BadSignature)?;
+        let first_pk = PublicKey::<C::Engine>::from_bytes(first_pk_bytes)
+            .map_err(|e| ParseError(e.to_string()))?;
+        let mut agg_pk_group = first_pk.0;
+        for pk in pk_it {
+            let pk =
+                PublicKey::<C::Engine>::from_bytes(pk).map_err(|e| ParseError(e.to_string()))?;
+            agg_pk_group.add_assign(&pk.0);
+        }
+        let agg_pk = PublicKey::<C::Engine>(agg_pk_group);
+        let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+        if !sig.verify(&message, &agg_pk) {
+            return Err(Error::BadSignature);
+        }
+        Ok(())
+    }
+
+    pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey<C::Engine>, ParseError> {
+        PublicKey::from_bytes(payload).map_err(|err| ParseError(err.to_string()))
+    }
+
+    pub fn parse_private_key(payload: &[u8]) -> Result<ManagedSecretKey<C>, ParseError> {
+        ManagedSecretKey::from_bytes(payload)
+    }
+}
+
+impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
+    /// Aggregate verification across distinct messages using a single pairing-product when
+    /// the `bls-multi-pairing` feature is enabled. Otherwise, falls back to per-signature.
+    #[allow(unused_variables)]
+    pub fn verify_aggregate_multi_message(
+        messages: &[&[u8]],
+        signatures: &[&[u8]],
+        public_keys: &[&[u8]],
+    ) -> Result<(), Error>
+    where
+        C::Engine: 'static,
+    {
+        if !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+            || messages.is_empty()
+        {
+            return Err(Error::BadSignature);
+        }
+
+        #[cfg(feature = "bls-multi-pairing")]
+        {
+            // Select implementation by engine (normal vs small)
+            if core::any::TypeId::of::<C::Engine>() == core::any::TypeId::of::<w3f_bls::ZBLS>() {
+                return verify_aggregate_multi_message_normal_blstrs(
+                    messages,
+                    signatures,
+                    public_keys,
+                );
+            }
+            if core::any::TypeId::of::<C::Engine>()
+                == core::any::TypeId::of::<w3f_bls::TinyBLS381>()
+            {
+                return verify_aggregate_multi_message_small_blstrs(
+                    messages,
+                    signatures,
+                    public_keys,
+                );
+            }
+            // Unknown engine; fall back
+        }
+
+        #[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
+        {
+            let mut aggregated_group = <C::Engine as EngineBLS>::SignatureGroup::default();
+            let mut decoded_messages = Vec::with_capacity(messages.len());
+            let mut decoded_public_keys = Vec::with_capacity(messages.len());
+
+            for ((message, signature_bytes), public_key_bytes) in messages
+                .iter()
+                .zip(signatures.iter())
+                .zip(public_keys.iter())
+            {
+                let signature = BlsSignature::<C::Engine>::from_bytes(signature_bytes)
+                    .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
+                aggregated_group += signature.0;
+
+                let public_key = PublicKey::<C::Engine>::from_bytes(public_key_bytes)
+                    .map_err(|err| ParseError(err.to_string()))?;
+                decoded_public_keys.push(public_key);
+                decoded_messages.push(w3f_bls::Message::new(MESSAGE_CONTEXT, message));
+            }
+
+            let batch = MultiMessageBatch {
+                signature: BlsSignature(aggregated_group),
+                messages: decoded_messages,
+                public_keys: decoded_public_keys,
+            };
+
+            if w3f_bls::verifiers::verify_with_distinct_messages(&batch, false) {
+                Ok(())
+            } else {
+                Err(Error::BadSignature)
+            }
+        }
+
+        #[cfg(not(all(feature = "bls", not(feature = "bls-multi-pairing"))))]
+        {
+            // Should be unreachable because the preceding cfg covers all cases,
+            // but keep a fallback to satisfy the type-checker when the feature
+            // set changes.
+            for ((m, s), pk_bytes) in messages
+                .iter()
+                .zip(signatures.iter())
+                .zip(public_keys.iter())
+            {
+                let pk = Self::parse_public_key(pk_bytes)?;
+                Self::verify(m, s, &pk)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+#[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
+struct MultiMessageBatch<E: EngineBLS> {
+    signature: BlsSignature<E>,
+    messages: Vec<w3f_bls::Message>,
+    public_keys: Vec<PublicKey<E>>,
+}
+
+#[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
+impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
+    type E = E;
+    type M = &'a w3f_bls::Message;
+    type PKG = &'a PublicKey<E>;
+    type PKnM = Zip<std::slice::Iter<'a, w3f_bls::Message>, std::slice::Iter<'a, PublicKey<E>>>;
+
+    fn signature(&self) -> BlsSignature<E> {
+        BlsSignature(self.signature.0)
+    }
+
+    fn messages_and_publickeys(self) -> Self::PKnM {
+        self.messages.iter().zip(self.public_keys.iter())
+    }
+}
+
+// Pairing-product helpers (blstrs) for normal/small configurations
+#[cfg(feature = "bls-multi-pairing")]
+pub(super) fn verify_aggregate_multi_message_normal_blstrs(
+    messages: &[&[u8]],
+    signatures: &[&[u8]],
+    public_keys: &[&[u8]],
+) -> Result<(), Error> {
+    use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
+    use group::Curve;
+    use group::Group as _; // for is_identity()
+    use group::prime::PrimeCurveAffine; // for generator()
+    use pairing::MillerLoopResult as _;
+    use pairing::MultiMillerLoop; // for Bls12::multi_miller_loop // bring trait for final_exponentiation()
+
+    // Decompress helpers
+    fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
+        if bytes.len() != 48 {
+            return None;
+        }
+        let mut arr = [0u8; 48];
+        arr.copy_from_slice(bytes);
+        let ct = G1Affine::from_compressed(&arr);
+        if ct.is_some().into() {
+            Some(ct.unwrap())
+        } else {
+            None
+        }
+    }
+    fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
+        if bytes.len() != 96 {
+            return None;
+        }
+        let mut arr = [0u8; 96];
+        arr.copy_from_slice(bytes);
+        let ct = G2Affine::from_compressed(&arr);
+        if ct.is_some().into() {
+            Some(ct.unwrap())
+        } else {
+            None
+        }
+    }
+
+    // Hash-to-curve to G2, using standard IETF ciphersuite with context prefix
+    fn hash_msg_to_g2(msg: &[u8]) -> G2Affine {
+        const DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_";
+        let mut buf = Vec::with_capacity(MESSAGE_CONTEXT.len() + msg.len());
+        buf.extend_from_slice(MESSAGE_CONTEXT);
+        buf.extend_from_slice(msg);
+        // `aug` = empty; we prefix with MESSAGE_CONTEXT for domain separation
+        G2Projective::hash_to_curve(&buf, DST, &[]).to_affine()
+    }
+
+    let mut pairs: Vec<(G1Affine, G2Prepared)> = Vec::with_capacity(messages.len() * 2);
+    let g1 = G1Affine::generator();
+    for ((m, s_bytes), pk_bytes) in messages
+        .iter()
+        .zip(signatures.iter())
+        .zip(public_keys.iter())
+    {
+        let sig = to_g2(s_bytes).ok_or(Error::BadSignature)?;
+        let pk = to_g1(pk_bytes).ok_or(Error::BadSignature)?;
+        let h = hash_msg_to_g2(m);
+
+        pairs.push((g1, G2Prepared::from(sig)));
+        let neg_pk = (-G1Projective::from(pk)).to_affine();
+        pairs.push((neg_pk, G2Prepared::from(h)));
+    }
+
+    let terms: Vec<(&G1Affine, &G2Prepared)> = pairs.iter().map(|(p, q)| (p, q)).collect();
+    let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
+    if gt.is_identity().into() {
+        Ok(())
+    } else {
+        Err(Error::BadSignature)
+    }
+}
+
+#[cfg(feature = "bls-multi-pairing")]
+pub(super) fn verify_aggregate_multi_message_small_blstrs(
+    messages: &[&[u8]],
+    signatures: &[&[u8]],
+    public_keys: &[&[u8]],
+) -> Result<(), Error> {
+    use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared};
+    use group::Curve;
+    use group::Group as _; // for is_identity()
+    use group::prime::PrimeCurveAffine; // for generator()
+    use pairing::MillerLoopResult as _;
+    use pairing::MultiMillerLoop; // for Bls12::multi_miller_loop // bring trait for final_exponentiation()
+
+    fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
+        if bytes.len() != 48 {
+            return None;
+        }
+        let mut arr = [0u8; 48];
+        arr.copy_from_slice(bytes);
+        let ct = G1Affine::from_compressed(&arr);
+        if ct.is_some().into() {
+            Some(ct.unwrap())
+        } else {
+            None
+        }
+    }
+    fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
+        if bytes.len() != 96 {
+            return None;
+        }
+        let mut arr = [0u8; 96];
+        arr.copy_from_slice(bytes);
+        let ct = G2Affine::from_compressed(&arr);
+        if ct.is_some().into() {
+            Some(ct.unwrap())
+        } else {
+            None
+        }
+    }
+
+    // Hash-to-curve to G1 for small variant
+    fn hash_msg_to_g1(msg: &[u8]) -> G1Affine {
+        const DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_";
+        let mut buf = Vec::with_capacity(MESSAGE_CONTEXT.len() + msg.len());
+        buf.extend_from_slice(MESSAGE_CONTEXT);
+        buf.extend_from_slice(msg);
+        G1Projective::hash_to_curve(&buf, DST, &[]).to_affine()
+    }
+
+    let mut pairs: Vec<(G1Affine, G2Prepared)> = Vec::with_capacity(messages.len() * 2);
+    let g2 = blstrs::G2Affine::generator();
+    for ((m, s_bytes), pk_bytes) in messages
+        .iter()
+        .zip(signatures.iter())
+        .zip(public_keys.iter())
+    {
+        let sig = to_g1(s_bytes).ok_or(Error::BadSignature)?;
+        let pk = to_g2(pk_bytes).ok_or(Error::BadSignature)?;
+        let h = hash_msg_to_g1(m);
+
+        pairs.push((sig, blstrs::G2Prepared::from(g2)));
+        let neg_h = (-G1Projective::from(h)).to_affine();
+        pairs.push((neg_h, blstrs::G2Prepared::from(pk)));
+    }
+
+    let terms: Vec<(&G1Affine, &G2Prepared)> = pairs.iter().map(|(p, q)| (p, q)).collect();
+    let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
+    if gt.is_identity().into() {
+        Ok(())
+    } else {
+        Err(Error::BadSignature)
+    }
+}

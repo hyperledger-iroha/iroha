@@ -1,0 +1,537 @@
+{
+  "components": {
+    "schemas": {
+      "AliasResolveIndexRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "description": "Deterministic alias index to look up.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      },
+      "AliasResolveIndexResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Account identifier bound to the alias.",
+            "type": "string"
+          },
+          "alias": {
+            "description": "Canonical alias representation.",
+            "type": "string"
+          },
+          "index": {
+            "description": "Deterministic alias index.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "source": {
+            "description": "Backend source for the alias mapping.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "account_id",
+          "index"
+        ],
+        "type": "object"
+      },
+      "AliasResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Alias string to resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias"
+        ],
+        "type": "object"
+      },
+      "AliasResolveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Account identifier bound to the alias.",
+            "type": "string"
+          },
+          "alias": {
+            "description": "Canonical alias representation.",
+            "type": "string"
+          },
+          "index": {
+            "description": "Deterministic alias index if available.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "source": {
+            "description": "Backend source for the alias mapping.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "account_id"
+        ],
+        "type": "object"
+      },
+      "AliasVoprfEvaluateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "blinded_element_hex": {
+            "description": "Hex-encoded blinded element to evaluate.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "blinded_element_hex"
+        ],
+        "type": "object"
+      },
+      "AliasVoprfEvaluateResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "description": "Name of the evaluator implementation.",
+            "enum": [
+              "blake2b512-mock"
+            ],
+            "type": "string"
+          },
+          "evaluated_element_hex": {
+            "description": "Hex-encoded evaluated element.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evaluated_element_hex",
+          "backend"
+        ],
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "code": {
+            "description": "Application-specific error identifier.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Human readable error message.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "TimeNowResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence_ms": {
+            "description": "Confidence interval (±ms) reported by the network time service.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "now": {
+            "description": "Network time in milliseconds since the UNIX epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "offset_ms": {
+            "description": "Estimated offset from the local clock in milliseconds.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "now",
+          "offset_ms",
+          "confidence_ms"
+        ],
+        "type": "object"
+      },
+      "TimeStatusBucket": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "Number of samples observed in the bucket.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "le": {
+            "description": "Upper bound of the RTT bucket in milliseconds.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "le",
+          "count"
+        ],
+        "type": "object"
+      },
+      "TimeStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "description": "Human-readable status note from the network time service.",
+            "type": "string"
+          },
+          "peers": {
+            "description": "Number of peers reporting time samples.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "rtt": {
+            "$ref": "#/components/schemas/TimeStatusRtt"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/TimeStatusSample"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "peers",
+          "samples",
+          "rtt",
+          "note"
+        ],
+        "type": "object"
+      },
+      "TimeStatusRtt": {
+        "additionalProperties": false,
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/TimeStatusBucket"
+            },
+            "type": "array"
+          },
+          "count": {
+            "description": "Total number of RTT samples captured.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "sum_ms": {
+            "description": "Cumulative RTT sample sum in milliseconds.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "buckets",
+          "sum_ms",
+          "count"
+        ],
+        "type": "object"
+      },
+      "TimeStatusSample": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "Number of samples collected from the peer.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "last_offset_ms": {
+            "description": "Most recent offset measurement in milliseconds.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "last_rtt_ms": {
+            "description": "Most recent round-trip time measurement in milliseconds.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "peer": {
+            "description": "Peer identifier contributing time samples.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "peer",
+          "last_offset_ms",
+          "last_rtt_ms",
+          "count"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "HTTP surface for Torii (pending full endpoint coverage).",
+    "license": {
+      "name": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    "title": "Iroha Torii API",
+    "version": "0.0.0-dev"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "description": "Returns `Healthy` when the node is accepting HTTP requests.",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "example": "Healthy",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Torii node is reachable."
+          }
+        },
+        "summary": "Check Torii liveness.",
+        "tags": [
+          "System"
+        ]
+      }
+    },
+    "/v1/aliases/resolve": {
+      "post": {
+        "description": "Returns the canonical alias spelling, the bound account identifier, and (if known) the deterministic alias index.",
+        "operationId": "aliasResolve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasResolveResponse"
+                }
+              }
+            },
+            "description": "Alias successfully resolved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Malformed request (alias missing or invalid)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Alias not found."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Alias runtime unavailable."
+          }
+        },
+        "summary": "Resolve an alias string into an account and index.",
+        "tags": [
+          "Aliases"
+        ]
+      }
+    },
+    "/v1/aliases/resolve_index": {
+      "post": {
+        "description": "Returns the alias string and account identifier registered under the provided index.",
+        "operationId": "aliasResolveIndex",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasResolveIndexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasResolveIndexResponse"
+                }
+              }
+            },
+            "description": "Alias index successfully resolved."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Alias index not found."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Alias runtime unavailable."
+          }
+        },
+        "summary": "Resolve an alias entry by deterministic index.",
+        "tags": [
+          "Aliases"
+        ]
+      }
+    },
+    "/v1/aliases/voprf/evaluate": {
+      "post": {
+        "description": "Takes a blinded alias element (hex) and returns the deterministically evaluated mock response used by tooling.",
+        "operationId": "aliasVoprfEvaluate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasVoprfEvaluateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasVoprfEvaluateResponse"
+                }
+              }
+            },
+            "description": "Blinded element successfully evaluated."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Malformed request (invalid hex encoding)."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal server error."
+          }
+        },
+        "summary": "Evaluate the mock alias VOPRF helper.",
+        "tags": [
+          "Aliases"
+        ]
+      }
+    },
+    "/v1/time/now": {
+      "get": {
+        "description": "Returns the best-effort network time with offset/confidence relative to UTC.",
+        "operationId": "timeNow",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeNowResponse"
+                }
+              }
+            },
+            "description": "Network time snapshot retrieved."
+          }
+        },
+        "summary": "Fetch the current network time snapshot.",
+        "tags": [
+          "Time"
+        ]
+      }
+    },
+    "/v1/time/status": {
+      "get": {
+        "description": "Provides peer sampling metadata, RTT histogram buckets, and running totals gathered by the network time service.",
+        "operationId": "timeStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeStatusResponse"
+                }
+              }
+            },
+            "description": "Network time diagnostics collected."
+          }
+        },
+        "summary": "Inspect network time diagnostics.",
+        "tags": [
+          "Time"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "Example local node",
+      "url": "http://localhost:8080"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Alias helper endpoints exposed under `/v1/aliases/*`.",
+      "name": "Aliases"
+    },
+    {
+      "description": "Network time service snapshots and diagnostics.",
+      "name": "Time"
+    },
+    {
+      "description": "Node liveness and general system helpers.",
+      "name": "System"
+    }
+  ]
+}

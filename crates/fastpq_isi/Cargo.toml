@@ -1,0 +1,10 @@
+[package]
+name = "fastpq_isi"
+version.workspace = true
+edition = "2024"
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

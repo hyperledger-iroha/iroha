@@ -1,0 +1,10 @@
+{
+  "status": 428,
+  "body": {
+    "error": "unsupported_capability",
+    "reason": "capability tlv vendor_reserved#0xff is not permitted for this profile",
+    "details": {
+      "capability": "vendor_reserved#0xff"
+    }
+  }
+}

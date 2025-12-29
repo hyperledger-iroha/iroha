@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Welcome to Hyperledger Iroha!",
+  "error.trace_config_setup": "Trace configuration could not be initialised",
+  "error.config": "Configuration error encountered!",
+  "error.logger": "Logger subsystem failed to initialise",
+  "error.start": "Iroha failed to start",
+  "error.run": "An error occurred while running Iroha",
+  "error.start_p2p": "Peer-to-peer networking failed to start",
+  "error.init_kura": "Kura (block storage) failed to initialise",
+  "error.start_dev_telemetry": "Developer telemetry service could not be started",
+  "error.start_telemetry": "Telemetry service could not be started",
+  "error.listen_os_signal": "Could not register operating-system signal handler",
+  "error.start_torii": "Torii (HTTP API gateway) failed to start"
+}

@@ -1,0 +1,41 @@
+[[runner]]
+label = "libaom-objective-1-fast"
+command = [
+  "bash",
+  "benchmarks/nsc/run_reference_codec.sh",
+  "--codec", "libaom",
+  "--clip-set", "objective-1-fast",
+  "--clips", "{clips}",
+  "--csv", "{csv}",
+  "--tables", "{tables}",
+  "--output", "{output}/libaom-objective-1-fast",
+  "--bitstreams", "{output}/bitstreams"
+]
+
+[[runner]]
+label = "svt-av1-objective-1-fast"
+command = [
+  "bash",
+  "benchmarks/nsc/run_reference_codec.sh",
+  "--codec", "svt-av1",
+  "--clip-set", "objective-1-fast",
+  "--clips", "{clips}",
+  "--csv", "{csv}",
+  "--tables", "{tables}",
+  "--output", "{output}/svt-av1-objective-1-fast",
+  "--bitstreams", "{output}/bitstreams"
+]
+
+[[runner]]
+label = "dav1d-decode-bitstreams"
+command = [
+  "bash",
+  "benchmarks/nsc/run_reference_codec.sh",
+  "--codec", "dav1d",
+  "--clip-set", "objective-1-fast",
+  "--clips", "{clips}",
+  "--csv", "{csv}",
+  "--tables", "{tables}",
+  "--output", "{output}/dav1d-decode",
+  "--bitstreams", "{output}/bitstreams"
+]

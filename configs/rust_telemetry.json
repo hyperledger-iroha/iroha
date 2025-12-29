@@ -1,0 +1,65 @@
+{
+  "version": "2026-02-02",
+  "signals": [
+    {
+      "name": "torii.http.request",
+      "channel": "trace",
+      "fields": [
+        { "name": "authority", "data_type": "string" },
+        { "name": "status_code", "data_type": "u16" },
+        { "name": "retry_count", "data_type": "u8" }
+      ]
+    },
+    {
+      "name": "torii.http.retry",
+      "channel": "event",
+      "fields": [
+        { "name": "authority", "data_type": "string" },
+        { "name": "route", "data_type": "string" },
+        { "name": "retry_count", "data_type": "u8" },
+        { "name": "error_code", "data_type": "string" },
+        { "name": "backoff_ms", "data_type": "u64" }
+      ]
+    },
+    {
+      "name": "pipeline.pending_queue_depth",
+      "channel": "gauge",
+      "fields": [
+        { "name": "depth", "data_type": "u64" },
+        { "name": "queue", "data_type": "string" }
+      ]
+    },
+    {
+      "name": "telemetry.export.status",
+      "channel": "counter",
+      "fields": [
+        { "name": "status", "data_type": "string" },
+        { "name": "exporter", "data_type": "string" }
+      ]
+    },
+    {
+      "name": "attestation.result",
+      "channel": "event",
+      "fields": [
+        { "name": "alias", "data_type": "string" },
+        { "name": "result", "data_type": "string" },
+        { "name": "device_tier", "data_type": "string" }
+      ]
+    },
+    {
+      "name": "telemetry.config.reload",
+      "channel": "event",
+      "fields": [
+        { "name": "epoch", "data_type": "u64" },
+        { "name": "result", "data_type": "string" }
+      ]
+    },
+    {
+      "name": "hardware.profile",
+      "channel": "gauge",
+      "fields": [
+        { "name": "hardware_tier", "data_type": "string", "representation": "host_metadata" }
+      ]
+    }
+  ]
+}

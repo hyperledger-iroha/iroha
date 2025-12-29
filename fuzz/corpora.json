@@ -1,0 +1,135 @@
+[
+  {
+    "path": "cli_dsl/grant_permission.json",
+    "kind": "cli_dsl",
+    "provenance": "pytests/iroha_cli_tests/common/json_isi_examples/grant_permission.json",
+    "expected_validation_fail": null,
+    "fingerprint": "cf07fd816a5d8855513ec9b16bcb4447dabbd5fd9d2ff34c2537b36a36fec3fa"
+  },
+  {
+    "path": "cli_dsl/revoke_permission.json",
+    "kind": "cli_dsl",
+    "provenance": "pytests/iroha_cli_tests/common/json_isi_examples/revoke_permission.json",
+    "expected_validation_fail": null,
+    "fingerprint": "83befee5d5a8689f3b70e80590afe4360a42c782b0c7cdf2e5f74137660b8dc2"
+  },
+  {
+    "path": "cli_dsl/unregister_asset.json",
+    "kind": "cli_dsl",
+    "provenance": "pytests/iroha_cli_tests/common/json_isi_examples/unregister_asset.json",
+    "expected_validation_fail": null,
+    "fingerprint": "726c2cad68e89c3bde1143f98089b22422cd3b58f2fa1502cca27268f27d845a"
+  },
+  {
+    "path": "cli_dsl/multisig_set_key_value.json",
+    "kind": "cli_dsl",
+    "provenance": "scripts/tests/multisig.instructions.json",
+    "expected_validation_fail": null,
+    "fingerprint": "53db630804f902ec3050b78958d4024482b1a44ee7d88f4c6589d44b909af27b"
+  },
+  {
+    "path": "cli_dsl/transaction_log_message.json",
+    "kind": "cli_dsl",
+    "provenance": "crates/iroha_cli/samples/instructions.json",
+    "expected_validation_fail": null,
+    "fingerprint": "0a9128977f0eab4917f7c9ec1f0da34e0b91bd6aeb7d39d3d9fa5ab6c7c2cc99"
+  },
+  {
+    "path": "cli_dsl/iterable_accounts_query.json",
+    "kind": "cli_dsl",
+    "provenance": "crates/iroha_cli/samples/query.json",
+    "expected_validation_fail": null,
+    "fingerprint": "5b3cd0633558a8a9635b7c37be58e40b58476b0c9d3ac2c68e2389dba84aaad4"
+  },
+  {
+    "path": "cli_dsl/sumeragi_block_time_parameter.json",
+    "kind": "cli_dsl",
+    "provenance": "crates/iroha_cli/samples/parameter.json",
+    "expected_validation_fail": null,
+    "fingerprint": "2ac38a109a5fd1b337d86d53da54835477f55e2e58b176b2cc4ada95a77d6de7"
+  },
+  {
+    "path": "attachments/zk/proof.json",
+    "kind": "attachment",
+    "provenance": "crates/iroha_cli/samples/zk/proof.json",
+    "expected_validation_fail": "ValidationFail::NotPermitted",
+    "fingerprint": "0a74b09139f398c13a5668ce150b166646cf549881fb862e535719a5ca5a5946"
+  },
+  {
+    "path": "attachments/zk/batch_verify_example.json",
+    "kind": "attachment",
+    "provenance": "crates/iroha_cli/samples/zk/batch_verify_example.json",
+    "expected_validation_fail": "ValidationFail::NotPermitted",
+    "fingerprint": "46a8a7ceeb8827ac1b7018a837c5bf4695e5c492c18bdc8615f1aedc8e2ed8b1"
+  },
+  {
+    "path": "attachments/zk/vk_register.json",
+    "kind": "attachment",
+    "provenance": "crates/iroha_cli/samples/zk/vk_register.json",
+    "expected_validation_fail": null,
+    "fingerprint": "48fe3064f01ede60181d28752b1587283f5b88bc69fcabaf43a7d9d70beba0b2"
+  },
+  {
+    "path": "attachments/zk/vk_update.json",
+    "kind": "attachment",
+    "provenance": "crates/iroha_cli/samples/zk/vk_update.json",
+    "expected_validation_fail": null,
+    "fingerprint": "5cb4ca8d1a439f56bff3d925f6421754a70a59d67ca58391bf697bc58f5b6e7c"
+  },
+  {
+    "path": "attachments/zk/vk_deprecate.json",
+    "kind": "attachment",
+    "provenance": "crates/iroha_cli/samples/zk/vk_deprecate.json",
+    "expected_validation_fail": null,
+    "fingerprint": "ec36e4aa9f2b09fe39fff0853a75c21ec66e8267749da82ee9fc028611e67efa"
+  },
+  {
+    "path": "attachments/zk/vk_transfer.sample.json",
+    "kind": "attachment",
+    "provenance": "crates/iroha_cli/samples/zk/vk_transfer.sample.json",
+    "expected_validation_fail": null,
+    "fingerprint": "1c43b201ea8dc4adb2b57c4cebf1391f6daf9f7e6850895c1daeb37533c2a3d4"
+  },
+  {
+    "path": "attachments/zk/vk_unshield.sample.json",
+    "kind": "attachment",
+    "provenance": "crates/iroha_cli/samples/zk/vk_unshield.sample.json",
+    "expected_validation_fail": null,
+    "fingerprint": "83723669487a13cde5d40528a664f198755f3179082431b579f95a0f2b66d2b9"
+  },
+  {
+    "path": "attachments/zk/unshield_proof.sample.json",
+    "kind": "attachment",
+    "provenance": "crates/iroha_cli/samples/zk/unshield_proof.sample.json",
+    "expected_validation_fail": "ValidationFail::NotPermitted",
+    "fingerprint": "6e08868b51e20cf162041a9c184afd2d006850cfc5c720f840a51deebe8a914c"
+  },
+  {
+    "path": "attachments/zk/zk1_min.b64",
+    "kind": "attachment",
+    "provenance": "crates/iroha_cli/samples/zk/zk1_min.b64",
+    "expected_validation_fail": "ValidationFail::IvmAdmission",
+    "fingerprint": "5e46b7fc76769fe3b9b91b79d6e006ec0c70a74b4a02f4f199163a6767c5e4aa"
+  },
+  {
+    "path": "manifests/torii_contract_minimal.json",
+    "kind": "manifest",
+    "provenance": "integration_tests/tests/contracts.rs",
+    "expected_validation_fail": null,
+    "fingerprint": "4eb24efd1cdeb5a43780df7ce18d47ba0a56ff892f3963cef3a3819899803558"
+  },
+  {
+    "path": "sorafs_chunker/sf1_profile_v1_input.bin",
+    "kind": "chunker",
+    "provenance": "crates/sorafs_chunker/src/bin/export_vectors.rs (FixtureProfile::SF1_V1)",
+    "expected_validation_fail": null,
+    "fingerprint": "8c5c2169bed9520c897b3ad252bd78a1bc74deb23033d7282767470fae311373"
+  },
+  {
+    "path": "sorafs_chunker/sf1_profile_v1_backpressure.json",
+    "kind": "chunker",
+    "provenance": "crates/sorafs_chunker/src/bin/export_vectors.rs (FixtureProfile::SF1_V1)",
+    "expected_validation_fail": null,
+    "fingerprint": "32d2db7117888a82d246befacb6887e048eca36c101483e8f83c558ed169934f"
+  }
+]

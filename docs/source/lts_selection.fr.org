@@ -1,0 +1,16 @@
+#+COMMENT: Auto-generated stub for French (fr) translation. Replace this content with the full translation.
+
+#+LANGUAGE: fr
+#+DIRECTION: ltr
+#+SOURCE: docs/source/lts_selection.org
+#+STATUS: needs-translation
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: ab2409dcdcd5174e23fabef84d9af5556ca8087f7db450eac68650a1777307bc
+#+SOURCE_LAST_MODIFIED: 2025-10-08T11:49:57+00:00
+#+TRANSLATION_LAST_REVIEWED: 
+
+* Traduction en cours
+
+Ce fichier sert de modèle pour la traduction française du document anglais. Après avoir terminé la traduction, mettez à jour la valeur de `#+STATUS`.
+
+Remplacez cette section par le texte traduit complet et mettez `#+STATUS` à `complete` une fois la traduction finalisée. Assurez-vous que `#+LAST_REVIEWED` reflète la dernière révision par rapport à l’original anglais.

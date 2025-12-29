@@ -1,0 +1,1 @@
+extends = ["base_gost.toml", "base_trusted_peers_gost.toml"]

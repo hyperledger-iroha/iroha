@@ -1,0 +1,14 @@
+extends = "base_trusted_peers.toml"
+
+chain = "0"
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201ca347641228c3b79aa43839dedc85fa51c0e8b9b6a00f6b0d6b0423e902973f"
+
+[network]
+address = "addr:127.0.0.1:1337#8F78"
+public_address = "addr:127.0.0.1:1337#8F78"
+
+[genesis]
+public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+
+# `torii.address` should be in ENV

@@ -1,0 +1,119 @@
+{
+  "generated_at": "2026-04-05T18:45:00Z",
+  "quarter": "2026-Q1",
+  "suffixes": [
+    {
+      "alerts": [],
+      "incidents": {
+        "guardian_freezes": 0,
+        "pager_incidents": 1
+      },
+      "metrics": {
+        "dispute": {
+          "backlog": 1,
+          "cases_opened": 37,
+          "cases_resolved": 36,
+          "median_resolution_hours": 96,
+          "sla_breaches": 1,
+          "status": "pass",
+          "target_hours": 168
+        },
+        "renewal": {
+          "expiring": 12845,
+          "on_time_rate": 0.8485792137018295,
+          "renewal_rate": 0.9124172829894901,
+          "renewed_late": 820,
+          "renewed_on_time": 10900,
+          "renewed_total": 11720,
+          "status": "pass",
+          "target_rate": 0.55
+        },
+        "support": {
+          "median_resolution_hours": 4.2,
+          "p1_breach_count": 1,
+          "status": "pass",
+          "target_rate": 0.95,
+          "tickets_total": 420,
+          "tickets_within_sla": 410,
+          "within_sla_rate": 0.9761904761904762
+        }
+      },
+      "notes": [
+        "Referral rebates launched mid-quarter; telemetry steady."
+      ],
+      "overall_status": "healthy",
+      "revenue": {
+        "steward_xor": 78320,
+        "treasury_xor": 182540
+      },
+      "rotation": {
+        "level": "none",
+        "reasons": []
+      },
+      "steward": "Sora Foundation Steward Desk",
+      "suffix": ".sora",
+      "suffix_id": 1
+    },
+    {
+      "alerts": [
+        "Renewal retention 53.3% vs 55% target",
+        "Support SLA 80.6% vs 95% target (6 P1 breaches)",
+        "Dispute turnaround 220 h vs 168 h budget",
+        "1 guardian freeze(s) active in quarter"
+      ],
+      "incidents": {
+        "guardian_freezes": 1,
+        "pager_incidents": 3
+      },
+      "metrics": {
+        "dispute": {
+          "backlog": 5,
+          "cases_opened": 22,
+          "cases_resolved": 17,
+          "median_resolution_hours": 220,
+          "sla_breaches": 5,
+          "status": "warning",
+          "target_hours": 168
+        },
+        "renewal": {
+          "expiring": 6000,
+          "on_time_rate": 0.4666666666666667,
+          "renewal_rate": 0.5333333333333333,
+          "renewed_late": 400,
+          "renewed_on_time": 2800,
+          "renewed_total": 3200,
+          "status": "warning",
+          "target_rate": 0.55
+        },
+        "support": {
+          "median_resolution_hours": 16,
+          "p1_breach_count": 6,
+          "status": "breach",
+          "target_rate": 0.95,
+          "tickets_total": 310,
+          "tickets_within_sla": 250,
+          "within_sla_rate": 0.8064516129032258
+        }
+      },
+      "notes": [
+        "Guardian freeze (2026-02-10) pending remediation; staffing ramp in progress."
+      ],
+      "overall_status": "critical",
+      "revenue": {
+        "steward_xor": 23200,
+        "treasury_xor": 54200
+      },
+      "rotation": {
+        "level": "replace",
+        "reasons": [
+          "Single KPI breach recorded",
+          "1 guardian freeze(s) opened"
+        ]
+      },
+      "steward": "DAO Launchpad Guild",
+      "suffix": ".dao",
+      "suffix_id": 2
+    }
+  ],
+  "version": 1
+}

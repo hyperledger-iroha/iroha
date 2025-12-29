@@ -1,0 +1,16 @@
+chain = "00000000-0000-0000-0000-000000000000"
+torii_url = "http://127.0.0.1:18080/"
+
+[transaction]
+time_to_live_ms = 600000
+status_timeout_ms = 240000
+nonce = false
+
+[account]
+domain = "sora"
+private_key = "8026204C2BBE3842D69C0056AAC4AEE7D9FFE7BC24CC31A103477464ECB72691FEB3CE"
+public_key  = "ed0120ED3087AAB496692A600E5735ABCF2DB085FCA63EB9FA86F64061DD18D92041BA"
+
+[basic_auth]
+password  = "ilovetea"
+web_login = "mad_hatter"

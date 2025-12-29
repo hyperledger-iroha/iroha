@@ -1,0 +1,482 @@
+//! Observer/sync-only node catches up behind a small validator swarm.
+
+use eyre::Result;
+use iroha::data_model::prelude::*;
+use iroha_config::base::toml::WriteExt as _;
+use iroha_primitives::unique_vec::UniqueVec;
+use iroha_test_network::{
+    NetworkBuilder, NetworkPeer, NetworkPeerBuilder, init_instruction_registry,
+};
+use iroha_test_samples::ALICE_ID;
+use norito::json::Value as JsonValue;
+use toml::{Table, Value as TomlValue};
+
+use integration_tests::sandbox;
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn observer_node_catches_up() -> Result<()> {
+    init_instruction_registry();
+
+    // Prepare a small validator network.
+    let builder = NetworkBuilder::new().with_peers(1);
+    let (network, rt) = builder.build_blocking();
+
+    // Build observer peer (sync-only) ahead of validator bootstrap so validators trust it.
+    let observer = NetworkPeerBuilder::new()
+        .with_seed(Some(b"observer"))
+        .build(network.env());
+
+    // Start validators with observer in the trusted peers for networking, but filter it out of PoPs.
+    let mut validator_layers: Vec<_> = network
+        .config_layers_with_additional_peers([&observer])
+        .collect();
+    if let Some(observer_bls) = observer.bls_public_key().map(ToString::to_string)
+        && let Some(base_pops) = validator_layers
+            .first()
+            .and_then(|layer| layer.get("trusted_peers_pop"))
+            .and_then(TomlValue::as_array)
+    {
+        let filtered_pops: Vec<_> = base_pops
+            .iter()
+            .filter(|entry| {
+                entry
+                    .as_table()
+                    .and_then(|t| t.get("public_key").and_then(TomlValue::as_str))
+                    .is_none_or(|pk| pk != observer_bls)
+            })
+            .cloned()
+            .collect();
+        validator_layers.push(std::borrow::Cow::Owned(
+            Table::new().write(["trusted_peers_pop"], filtered_pops),
+        ));
+    }
+    let genesis = network.genesis();
+    for peer in network.peers() {
+        sandbox::handle_result(
+            rt.block_on(async {
+                peer.start_checked(validator_layers.iter().cloned(), Some(&genesis))
+                    .await
+            }),
+            "observer_node_catches_up_start_validator",
+        )?;
+    }
+
+    // Prepare a trusted_peers override including existing peers and the observer itself
+    let mut tp: UniqueVec<Peer> = network
+        .peers()
+        .iter()
+        .map(|p| Peer::new(p.p2p_address(), p.id()))
+        .collect();
+    // Add observer itself to trusted peers; ignore duplicates
+    let _ = tp.push(Peer::new(observer.p2p_address(), observer.id()));
+
+    let trusted_peers: Vec<String> = tp.into_iter().map(|peer| peer.to_string()).collect();
+    let override_layer = Table::new()
+        .write(["trusted_peers"], trusted_peers)
+        .write(["sumeragi", "role"], "observer")
+        .write(["logger", "level"], "INFO");
+
+    // Start the observer with role override and extended trusted peers
+    if sandbox::handle_result(
+        rt.block_on(async {
+            observer
+                .start_checked(
+                    network
+                        .config_layers()
+                        .chain(std::iter::once(std::borrow::Cow::Owned(
+                            override_layer.clone(),
+                        ))),
+                    Some(&network.genesis()),
+                )
+                .await
+        }),
+        "observer_node_catches_up_start_observer",
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
+    // Observer should have at least the genesis block
+    rt.block_on(async { observer.once_block(1).await });
+
+    // Produce non-genesis blocks and verify height parity across all peers
+    // Baseline timestamp (ms) to filter POST /v1/accounts/:id/transactions/query later.
+    let now_ms = || -> u64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        u64::try_from(ms).unwrap_or(u64::MAX)
+    };
+    let _t0 = now_ms();
+    let alice = ALICE_ID.clone();
+    let key: Name = "note".parse().unwrap();
+    let mut client = network.peer().client();
+    client.transaction_status_timeout = std::time::Duration::from_millis(180_000);
+
+    // 1st block: set note = "v1"
+    println!("observer_sync: submitting v1");
+    let t1_lo = now_ms();
+    client.submit_blocking(SetKeyValue::account(
+        alice.clone(),
+        key.clone(),
+        norito::json!("v1"),
+    ))?;
+    println!("observer_sync: v1 committed");
+    // Wait until validators reach total >= 2 and observer catches up
+    rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 2).await })?;
+    rt.block_on(async { observer.once_block(2).await });
+
+    // 2nd block: set note = "v2"
+    let _t2_lo = now_ms();
+    println!("observer_sync: submitting v2");
+    client.submit_blocking(SetKeyValue::account(alice, key, norito::json!("v2")))?;
+    println!("observer_sync: v2 committed");
+    // Wait until validators reach total >= 3 and observer catches up
+    rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 3).await })?;
+    rt.block_on(async { observer.once_block(3).await });
+
+    // 3rd block: change some other metadata to ensure another non-genesis block
+    let alice2 = ALICE_ID.clone();
+    let key2: Name = "znote".parse().unwrap();
+    let _t3_lo = now_ms();
+    println!("observer_sync: submitting v3");
+    client.submit_blocking(SetKeyValue::account(alice2, key2, norito::json!("v3")))?;
+    println!("observer_sync: v3 committed");
+
+    // Wait until validators reach total >= 4 and observer catches up
+    rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 4).await })?;
+    rt.block_on(async { observer.once_block(4).await });
+
+    // 4th block: set note = "v4"
+    let t4_lo = now_ms();
+    println!("observer_sync: submitting v4");
+    client.submit_blocking(SetKeyValue::account(
+        ALICE_ID.clone(),
+        "note".parse::<Name>().unwrap(),
+        norito::json!("v4"),
+    ))?;
+    println!("observer_sync: v4 committed");
+    rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 5).await })?;
+    rt.block_on(async { observer.once_block(5).await });
+
+    // 5th block: set znote = "v5"
+    let t5_lo = now_ms();
+    println!("observer_sync: submitting v5");
+    client.submit_blocking(SetKeyValue::account(
+        ALICE_ID.clone(),
+        "znote".parse::<Name>().unwrap(),
+        norito::json!("v5"),
+    ))?;
+    println!("observer_sync: v5 committed");
+    rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 6).await })?;
+    rt.block_on(async { observer.once_block(6).await });
+    let t_hi = now_ms();
+
+    // Verify exact height parity across validators and observer
+    let mut validator_totals = Vec::new();
+    for p in network.peers() {
+        let s = rt
+            .block_on(async { p.status().await })
+            .expect("peer status");
+        validator_totals.push(s.blocks);
+    }
+    let target_height = *validator_totals.iter().max().unwrap_or(&0);
+    rt.block_on(async { observer.once_block(target_height).await });
+
+    let mut all_totals = Vec::new();
+    for p in network.peers() {
+        let s = rt
+            .block_on(async { p.status().await })
+            .expect("peer status");
+        all_totals.push(s.blocks);
+    }
+    let s_obs = rt
+        .block_on(async { observer.status().await })
+        .expect("observer status");
+    all_totals.push(s_obs.blocks);
+    assert!(
+        all_totals.iter().all(|&t| t == all_totals[0]),
+        "heights differ: {all_totals:?}"
+    );
+
+    // Verify state reflects latest metadata values on all peers (validators + observer)
+    let check_peer = |peer: &NetworkPeer| -> Result<()> {
+        let client = peer.client();
+        let accounts = client.query(FindAccounts).execute_all().unwrap();
+        let alice = accounts
+            .into_iter()
+            .find(|a| a.id() == &ALICE_ID.clone())
+            .expect("Alice account must exist");
+        let note = alice
+            .metadata()
+            .get(&"note".parse::<Name>().unwrap())
+            .cloned()
+            .expect("note key should exist");
+        let znote = alice
+            .metadata()
+            .get(&"znote".parse::<Name>().unwrap())
+            .cloned()
+            .expect("znote key should exist");
+        assert_eq!(note.as_ref(), "v4");
+        assert_eq!(znote.as_ref(), "v5");
+        Ok(())
+    };
+
+    for p in network.peers() {
+        check_peer(p)?;
+    }
+    check_peer(&observer)?;
+
+    // Redundant HTTP verification via Torii: fetch last transactions for Alice from each peer
+    let alice_id_str = format!("{}", *ALICE_ID);
+    let fetch_tx_http = |peer: &NetworkPeer, limit: usize| -> Result<(u64, Vec<JsonValue>)> {
+        let url = format!(
+            "{}/v1/accounts/{}/transactions?limit={}",
+            peer.torii_url(),
+            &*ALICE_ID,
+            limit
+        );
+        let body =
+            rt.block_on(async { reqwest::Client::new().get(url).send().await?.text().await })?;
+        let parsed: JsonValue = norito::json::from_str(&body)?;
+        let (items, total) = match parsed {
+            JsonValue::Object(m) => {
+                let total = m
+                    .get("total")
+                    .and_then(norito::json::Value::as_u64)
+                    .unwrap_or_default();
+                let items = m
+                    .get("items")
+                    .and_then(|v| match v {
+                        JsonValue::Array(a) => Some(a.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                (items, total)
+            }
+            _ => (Vec::new(), 0),
+        };
+        Ok((total, items))
+    };
+
+    for p in network.peers() {
+        let (total, items) = fetch_tx_http(p, 5)?;
+        assert!(
+            total >= 5,
+            "expected at least 5 Alice txs via HTTP; got {total}"
+        );
+        assert!(
+            !items.is_empty(),
+            "expected items via HTTP for {}",
+            p.torii_url()
+        );
+    }
+    {
+        let (total, items) = fetch_tx_http(&observer, 5)?;
+        assert!(
+            total >= 5,
+            "observer HTTP must report at least 5 txs; got {total}"
+        );
+        assert!(!items.is_empty(), "expected items via HTTP for observer");
+    }
+
+    // POST /v1/accounts/{alice}/transactions/query with timestamp filter since t0
+    let post_tx_query =
+        |peer: &NetworkPeer, min_ts: u64, max_ts: Option<u64>| -> Result<(u64, Vec<JsonValue>)> {
+            let url = format!(
+                "{}/v1/accounts/{}/transactions/query",
+                peer.torii_url(),
+                &*ALICE_ID,
+            );
+            let mut args = vec![
+                {
+                    let args = norito::json::array([
+                        norito::json::to_value("authority").expect("serialize key"),
+                        norito::json::to_value(alice_id_str.as_str())
+                            .expect("serialize authority value"),
+                    ])
+                    .expect("serialize args array");
+                    norito::json::object([
+                        ("op", norito::json::to_value("eq").expect("serialize op")),
+                        ("args", args),
+                    ])
+                    .expect("serialize equality filter")
+                },
+                norito::json!({"op":"gte","args":["timestamp_ms", min_ts]}),
+            ];
+            if let Some(max_ts) = max_ts {
+                args.push(norito::json!({"op":"lte","args":["timestamp_ms", max_ts]}));
+            }
+            let env = norito::json!({
+                "filter": {"op": "and", "args": args},
+                "pagination": {"limit": 100, "offset": 0}
+            });
+            let body = norito::json::to_json(&env)?;
+            let client = reqwest::Client::new();
+            let resp_txt = rt.block_on(async {
+                client
+                    .post(url)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .body(body)
+                    .send()
+                    .await?
+                    .text()
+                    .await
+            })?;
+            let parsed: JsonValue = norito::json::from_str(&resp_txt)?;
+            let (items, total) = match parsed {
+                JsonValue::Object(m) => {
+                    let total = m
+                        .get("total")
+                        .and_then(norito::json::Value::as_u64)
+                        .unwrap_or_default();
+                    let items = m
+                        .get("items")
+                        .and_then(|v| match v {
+                            JsonValue::Array(a) => Some(a.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
+                    (items, total)
+                }
+                _ => (Vec::new(), 0),
+            };
+            Ok((total, items))
+        };
+
+    // For a narrower window, use [t1_lo, t_hi], expecting exactly 5 Alice txs
+    // Removed unused underscore-prefixed binding _extract_ts
+    // Helpers to extract timestamp and hash
+    let extract_ts = |it: &JsonValue| -> u64 {
+        it.as_object()
+            .and_then(|m| m.get("timestamp_ms").and_then(norito::json::Value::as_u64))
+            .unwrap_or(0)
+    };
+    let extract_hash = |it: &JsonValue| -> String {
+        it.as_object()
+            .and_then(|m| m.get("entrypoint_hash").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .to_string()
+    };
+
+    for p in network.peers() {
+        let (total, mut items) = post_tx_query(p, t1_lo, Some(t_hi))?;
+        assert_eq!(
+            total,
+            5,
+            "expected exactly 5 filtered txs on {}",
+            p.torii_url()
+        );
+        assert_eq!(items.len(), 5, "expected 5 items on {}", p.torii_url());
+        // All items must be authored by Alice
+        for it in &items {
+            let auth = match it {
+                JsonValue::Object(m) => m
+                    .get("authority")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                _ => String::new(),
+            };
+            assert_eq!(auth, alice_id_str);
+        }
+        // Sort by timestamp and check the most recent two correspond to last two updates
+        items.sort_by_key(&extract_ts);
+        let last = items.last().unwrap();
+        let prev = &items[items.len() - 2];
+        let last_ts = extract_ts(last);
+        let prev_ts = extract_ts(prev);
+        assert!(
+            last_ts >= t5_lo,
+            "last tx timestamp {last_ts} < t5_lo {t5_lo}"
+        );
+        assert!(
+            prev_ts >= t4_lo,
+            "prev tx timestamp {prev_ts} < t4_lo {t4_lo}"
+        );
+        // Cross-check entrypoint_hash uniqueness for final two operations
+        let last_hash = extract_hash(last);
+        let prev_hash = extract_hash(prev);
+        assert_ne!(
+            last_hash,
+            prev_hash,
+            "last two entrypoint_hash identical on {}",
+            p.torii_url()
+        );
+    }
+    {
+        let (total, mut items) = post_tx_query(&observer, t1_lo, Some(t_hi))?;
+        assert_eq!(total, 5, "observer expected exactly 5 filtered txs");
+        assert_eq!(items.len(), 5, "observer expected 5 items");
+        items.sort_by_key(&extract_ts);
+        let last = items.last().unwrap();
+        let prev = &items[items.len() - 2];
+        let last_ts = extract_ts(last);
+        let prev_ts = extract_ts(prev);
+        assert!(last_ts >= t5_lo);
+        assert!(prev_ts >= t4_lo);
+        let last_hash = extract_hash(last);
+        let prev_hash = extract_hash(prev);
+        assert_ne!(
+            last_hash, prev_hash,
+            "observer last two entrypoint_hash identical"
+        );
+    }
+
+    // HTTP /status parity snapshot: compare HTTP JSON blocks/non_empty with peer.status()
+    for p in network.peers() {
+        let s = rt
+            .block_on(async { p.status().await })
+            .expect("peer status");
+        let url = format!("{}/status", p.torii_url());
+        let txt = rt.block_on(async { reqwest::get(url).await.unwrap().text().await.unwrap() });
+        let jv: JsonValue = norito::json::from_str(&txt)?;
+        let blocks = jv
+            .as_object()
+            .and_then(|m| m.get("blocks").and_then(norito::json::Value::as_u64))
+            .unwrap_or_default();
+        let non_empty = jv
+            .as_object()
+            .and_then(|m| {
+                m.get("blocks_non_empty")
+                    .and_then(norito::json::Value::as_u64)
+            })
+            .unwrap_or_default();
+        assert_eq!(blocks, s.blocks, "HTTP /status mismatch (blocks)");
+        assert_eq!(
+            non_empty, s.blocks_non_empty,
+            "HTTP /status mismatch (non_empty)"
+        );
+    }
+    {
+        let s = rt
+            .block_on(async { observer.status().await })
+            .expect("observer status");
+        let url = format!("{}/status", observer.torii_url());
+        let txt = rt.block_on(async { reqwest::get(url).await.unwrap().text().await.unwrap() });
+        let jv: JsonValue = norito::json::from_str(&txt)?;
+        let blocks = jv
+            .as_object()
+            .and_then(|m| m.get("blocks").and_then(norito::json::Value::as_u64))
+            .unwrap_or_default();
+        let non_empty = jv
+            .as_object()
+            .and_then(|m| {
+                m.get("blocks_non_empty")
+                    .and_then(norito::json::Value::as_u64)
+            })
+            .unwrap_or_default();
+        assert_eq!(blocks, s.blocks, "Observer HTTP /status mismatch (blocks)");
+        assert_eq!(
+            non_empty, s.blocks_non_empty,
+            "Observer HTTP /status mismatch (non_empty)"
+        );
+    }
+
+    Ok(())
+}

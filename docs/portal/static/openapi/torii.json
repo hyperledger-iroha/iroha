@@ -1,0 +1,2925 @@
+{
+  "components": {
+    "schemas": {
+      "AliasResolveIndexRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "description": "Deterministic alias index to look up.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      },
+      "AliasResolveIndexResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Account identifier bound to the alias.",
+            "type": "string"
+          },
+          "alias": {
+            "description": "Canonical alias representation.",
+            "type": "string"
+          },
+          "index": {
+            "description": "Deterministic alias index.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "source": {
+            "description": "Backend source for the alias mapping.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "account_id",
+          "index"
+        ],
+        "type": "object"
+      },
+      "AliasResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Alias string to resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias"
+        ],
+        "type": "object"
+      },
+      "AliasResolveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Account identifier bound to the alias.",
+            "type": "string"
+          },
+          "alias": {
+            "description": "Canonical alias representation.",
+            "type": "string"
+          },
+          "index": {
+            "description": "Deterministic alias index if available.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "source": {
+            "description": "Backend source for the alias mapping.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "account_id"
+        ],
+        "type": "object"
+      },
+      "AliasVoprfEvaluateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "blinded_element_hex": {
+            "description": "Hex-encoded blinded element to evaluate.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "blinded_element_hex"
+        ],
+        "type": "object"
+      },
+      "AliasVoprfEvaluateResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "description": "Name of the evaluator implementation.",
+            "enum": [
+              "blake2b512-mock"
+            ],
+            "type": "string"
+          },
+          "evaluated_element_hex": {
+            "description": "Hex-encoded evaluated element.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evaluated_element_hex",
+          "backend"
+        ],
+        "type": "object"
+      },
+      "BlockExecutionReceiptProof": {
+        "additionalProperties": false,
+        "properties": {
+          "leaf": {
+            "description": "Execution result hash encoded as lowercase hexadecimal.",
+            "type": "string"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/BlockMerkleProof"
+          }
+        },
+        "required": [
+          "leaf",
+          "proof"
+        ],
+        "type": "object"
+      },
+      "BlockMerkleProof": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_path": {
+            "description": "Sibling nodes from leaf to root; null denotes an absent sibling for balanced padding.",
+            "items": {
+              "description": "Sibling hash encoded as lowercase hexadecimal.",
+              "nullable": true,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "leaf_index": {
+            "description": "Zero-based position of the leaf within the Merkle tree.",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "leaf_index",
+          "audit_path"
+        ],
+        "type": "object"
+      },
+      "BlockProofs": {
+        "additionalProperties": false,
+        "properties": {
+          "block_height": {
+            "description": "Height of the block containing the entrypoint.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "entry_hash": {
+            "description": "Transaction entrypoint hash encoded as lowercase hexadecimal.",
+            "type": "string"
+          },
+          "entry_proof": {
+            "$ref": "#/components/schemas/BlockReceiptProof"
+          },
+          "entry_root": {
+            "description": "Merkle root that authenticates the entrypoint proof (consensus root for external transactions, extended root after time-trigger execution otherwise).",
+            "type": "string"
+          },
+          "result_proof": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlockExecutionReceiptProof"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Execution result proof when the block carries execution results; null otherwise."
+          },
+          "result_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Merkle root that authenticates the execution proof when results are available; null when the block contains no execution results."
+          }
+        },
+        "required": [
+          "block_height",
+          "entry_hash",
+          "entry_root",
+          "entry_proof",
+          "result_root",
+          "result_proof"
+        ],
+        "type": "object"
+      },
+      "BlockReceiptProof": {
+        "additionalProperties": false,
+        "properties": {
+          "leaf": {
+            "description": "Transaction entrypoint hash encoded as lowercase hexadecimal.",
+            "type": "string"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/BlockMerkleProof"
+          }
+        },
+        "required": [
+          "leaf",
+          "proof"
+        ],
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "code": {
+            "description": "Application-specific error identifier.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Human readable error message.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "KaigiId": {
+        "additionalProperties": false,
+        "properties": {
+          "call_name": {
+            "description": "Call name within the domain namespace.",
+            "type": "string"
+          },
+          "domain_id": {
+            "description": "Domain that owns the Kaigi call.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain_id",
+          "call_name"
+        ],
+        "type": "object"
+      },
+      "KaigiRelayDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "hpke_public_key_b64": {
+            "description": "Base64-encoded HPKE public key advertised by the relay.",
+            "type": "string"
+          },
+          "metrics": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KaigiRelayDomainMetrics"
+              }
+            ],
+            "description": "Aggregated counters for the relay's owning domain."
+          },
+          "notes": {
+            "description": "Free-form notes accompanying the latest health report.",
+            "type": "string"
+          },
+          "relay": {
+            "$ref": "#/components/schemas/KaigiRelaySummary"
+          },
+          "reported_by": {
+            "description": "Account identifier that submitted the latest health report.",
+            "type": "string"
+          },
+          "reported_call": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KaigiId"
+              }
+            ],
+            "description": "Kaigi call associated with the latest health report, when available."
+          }
+        },
+        "required": [
+          "relay",
+          "hpke_public_key_b64"
+        ],
+        "type": "object"
+      },
+      "KaigiRelayDomainMetrics": {
+        "additionalProperties": false,
+        "properties": {
+          "domain": {
+            "description": "Domain label for the aggregated counters.",
+            "type": "string"
+          },
+          "failovers_total": {
+            "description": "Total relay failovers observed for the domain.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "health_reports_total": {
+            "description": "Total relay health reports recorded for the domain.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "manifest_updates_total": {
+            "description": "Total relay manifest updates observed for the domain.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "registrations_total": {
+            "description": "Total relay registrations observed for the domain.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "domain",
+          "registrations_total",
+          "manifest_updates_total",
+          "failovers_total",
+          "health_reports_total"
+        ],
+        "type": "object"
+      },
+      "KaigiRelayHealthSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "degraded_total": {
+            "description": "Number of relays currently reported degraded.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "domains": {
+            "description": "Per-domain relay metrics.",
+            "items": {
+              "$ref": "#/components/schemas/KaigiRelayDomainMetrics"
+            },
+            "type": "array"
+          },
+          "failovers_total": {
+            "description": "Total relay failovers observed.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "healthy_total": {
+            "description": "Number of relays currently reported healthy.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "registrations_total": {
+            "description": "Total relay registrations observed.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "reports_total": {
+            "description": "Total relay health reports observed.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "unavailable_total": {
+            "description": "Number of relays currently reported unavailable.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "healthy_total",
+          "degraded_total",
+          "unavailable_total",
+          "reports_total",
+          "registrations_total",
+          "failovers_total",
+          "domains"
+        ],
+        "type": "object"
+      },
+      "KaigiRelayStatus": {
+        "description": "Reported relay health label.",
+        "enum": [
+          "healthy",
+          "degraded",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "KaigiRelaySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "bandwidth_class": {
+            "description": "Advertised bandwidth class (relative scale; larger values indicate higher capacity).",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "domain": {
+            "description": "Domain that registered the relay.",
+            "type": "string"
+          },
+          "hpke_fingerprint_hex": {
+            "description": "Hex-encoded BLAKE3 fingerprint of the relay's HPKE public key.",
+            "type": "string"
+          },
+          "relay_id": {
+            "description": "Relay account identifier (`account@domain`).",
+            "type": "string"
+          },
+          "reported_at_ms": {
+            "description": "Milliseconds since UNIX epoch of the latest health report.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KaigiRelayStatus"
+              }
+            ],
+            "description": "Latest health status when available."
+          }
+        },
+        "required": [
+          "relay_id",
+          "domain",
+          "bandwidth_class",
+          "hpke_fingerprint_hex"
+        ],
+        "type": "object"
+      },
+      "KaigiRelaySummaryList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Relay summaries.",
+            "items": {
+              "$ref": "#/components/schemas/KaigiRelaySummary"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Total number of relay entries returned.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "items"
+        ],
+        "type": "object"
+      },
+      "OfflineAllowanceItem": {
+        "properties": {
+          "asset_id": {
+            "description": "Asset id bound to the allowance.",
+            "type": "string"
+          },
+          "attestation_nonce_hex": {
+            "description": "Nonce bound to the cached verdict rendered as hex.",
+            "nullable": true,
+            "type": "string"
+          },
+          "certificate_id_hex": {
+            "description": "Deterministic certificate hash rendered as lowercase hex.",
+            "type": "string"
+          },
+          "controller_display": {
+            "description": "Controller rendered according to the address_format hint.",
+            "type": "string"
+          },
+          "controller_id": {
+            "description": "Canonical controller account id.",
+            "type": "string"
+          },
+          "deadline_kind": {
+            "description": "Deadline currently tracked for countdown warnings (`refresh`, `policy`, or `certificate`).",
+            "nullable": true,
+            "type": "string"
+          },
+          "deadline_ms": {
+            "description": "Unix millisecond timestamp for the selected deadline.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "deadline_ms_remaining": {
+            "description": "Signed milliseconds remaining until the deadline (negative when already expired).",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "deadline_state": {
+            "description": "Countdown classification (`ok`, `warning`, or `expired`).",
+            "nullable": true,
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "description": "Certificate expiry timestamp (ms).",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "policy_expires_at_ms": {
+            "description": "Policy expiry timestamp (ms) enforced by the issuer.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "record": {
+            "description": "Full OfflineAllowanceRecord JSON payload.",
+            "type": "object"
+          },
+          "refresh_at_ms": {
+            "description": "Next attestation refresh deadline (ms), if provided.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "registered_at_ms": {
+            "description": "Unix timestamp (ms) when the allowance was registered.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "remaining_amount": {
+            "description": "Outstanding allowance amount that has not been reconciled.",
+            "type": "string"
+          },
+          "verdict_id_hex": {
+            "description": "Cached attestation verdict identifier rendered as hex.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "certificate_id_hex",
+          "controller_id",
+          "controller_display",
+          "asset_id",
+          "registered_at_ms",
+          "expires_at_ms",
+          "policy_expires_at_ms",
+          "remaining_amount",
+          "record"
+        ],
+        "type": "object"
+      },
+      "OfflineAllowanceListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineAllowanceItem"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Total number of allowances matching the filter.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "OfflinePlatformTokenSnapshot": {
+        "properties": {
+          "attestation_jws_b64": {
+            "description": "Base64-encoded JWS payload captured at settlement.",
+            "type": "string"
+          },
+          "policy": {
+            "description": "Attestation policy slug (e.g., play_integrity).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy",
+          "attestation_jws_b64"
+        ],
+        "type": "object"
+      },
+      "OfflineQueryEnvelope": {
+        "description": "Superset of Torii's Norito QueryEnvelope structure.",
+        "properties": {
+          "address_format": {
+            "description": "Optional rendering preference for account ids (`ih58` or `compressed`).",
+            "type": "string"
+          },
+          "fetch_size": {
+            "description": "Optional batch fetch size hint.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "filter": {
+            "additionalProperties": true,
+            "description": "Filter expression object expressed in the Torii filter DSL.",
+            "type": "object"
+          },
+          "pagination": {
+            "properties": {
+              "limit": {
+                "format": "uint64",
+                "type": "integer"
+              },
+              "offset": {
+                "format": "uint64",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "query": {
+            "description": "Optional label for the query payload.",
+            "type": "string"
+          },
+          "select": {
+            "additionalProperties": true,
+            "description": "Optional projection selector.",
+            "type": "object"
+          },
+          "sort": {
+            "items": {
+              "additionalProperties": true,
+              "description": "Field/order pair such as {\"key\":\"registered_at_ms\",\"order\":\"desc\"}.",
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "OfflineRejectionItem": {
+        "properties": {
+          "count": {
+            "description": "Number of occurrences recorded for this platform/reason pair.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "platform": {
+            "description": "Platform label (general, apple, android).",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Canonical rejection reason label.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform",
+          "reason",
+          "count"
+        ],
+        "type": "object"
+      },
+      "OfflineRejectionListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineRejectionItem"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Sum of all rejection counters returned in the payload.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "OfflineSummaryItem": {
+        "properties": {
+          "android_series_counters": {
+            "additionalProperties": {
+              "format": "uint64",
+              "type": "integer"
+            },
+            "description": "Per-Android marker series counter checkpoints.",
+            "type": "object"
+          },
+          "apple_key_counters": {
+            "additionalProperties": {
+              "format": "uint64",
+              "type": "integer"
+            },
+            "description": "Per-App Attest key counter checkpoints.",
+            "type": "object"
+          },
+          "certificate_id_hex": {
+            "description": "Deterministic certificate hash rendered as lowercase hex.",
+            "type": "string"
+          },
+          "controller_display": {
+            "description": "Controller rendered according to the address_format hint.",
+            "type": "string"
+          },
+          "controller_id": {
+            "description": "Controller account id bound to the certificate.",
+            "type": "string"
+          },
+          "summary_hash_hex": {
+            "description": "BLAKE2b-256 hash of the counter maps rendered as hex.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "certificate_id_hex",
+          "controller_id",
+          "controller_display",
+          "summary_hash_hex",
+          "apple_key_counters",
+          "android_series_counters"
+        ],
+        "type": "object"
+      },
+      "OfflineSummaryListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineSummaryItem"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Total number of summaries matching the filter.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "OfflineTransferItem": {
+        "properties": {
+          "archived_at_height": {
+            "description": "Optional block height when the bundle was archived.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "asset_id": {
+            "description": "Asset id inferred from receipts, if present.",
+            "type": "string"
+          },
+          "attestation_nonce_hex": {
+            "description": "Cached attestation nonce captured at settlement.",
+            "nullable": true,
+            "type": "string"
+          },
+          "bundle_id_hex": {
+            "description": "Bundle identifier rendered as lowercase hex.",
+            "type": "string"
+          },
+          "certificate_expires_at_ms": {
+            "description": "Certificate expiry timestamp captured at settlement.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "certificate_id_hex": {
+            "description": "Canonical sender certificate identifier (hex).",
+            "nullable": true,
+            "type": "string"
+          },
+          "claimed_delta": {
+            "description": "Claimed delta reported by the balance proof.",
+            "type": "string"
+          },
+          "controller_display": {
+            "description": "Controller rendered with the requested address format.",
+            "type": "string"
+          },
+          "controller_id": {
+            "description": "Controller account id associated with the originating allowance.",
+            "type": "string"
+          },
+          "deposit_account_display": {
+            "description": "Deposit account rendered with requested address format.",
+            "type": "string"
+          },
+          "deposit_account_id": {
+            "description": "Online account that will receive the deposit.",
+            "type": "string"
+          },
+          "platform_policy": {
+            "description": "Platform attestation policy (e.g., play_integrity).",
+            "nullable": true,
+            "type": "string"
+          },
+          "platform_token_snapshot": {
+            "$ref": "#/components/schemas/OfflinePlatformTokenSnapshot",
+            "description": "Snapshot of the attestation token recorded during settlement.",
+            "nullable": true
+          },
+          "policy_expires_at_ms": {
+            "description": "Policy expiry timestamp captured at settlement.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "receipt_count": {
+            "description": "Number of receipts included in the bundle.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "receiver_display": {
+            "description": "Receiver rendered with requested address format.",
+            "type": "string"
+          },
+          "receiver_id": {
+            "description": "Offline receiver account id.",
+            "type": "string"
+          },
+          "recorded_at_height": {
+            "description": "Block height that recorded the bundle.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "recorded_at_ms": {
+            "description": "Unix timestamp (ms) when the bundle settled on-ledger.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "refresh_at_ms": {
+            "description": "Attestation refresh deadline captured at settlement.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "status": {
+            "description": "Lifecycle status enforced for the bundle.",
+            "type": "string"
+          },
+          "status_transitions": {
+            "description": "Ordered lifecycle history for the bundle.",
+            "items": {
+              "$ref": "#/components/schemas/OfflineTransferStatusTransition"
+            },
+            "type": "array"
+          },
+          "total_amount": {
+            "description": "Human-readable total amount aggregated from receipts.",
+            "type": "string"
+          },
+          "transfer": {
+            "description": "Full OfflineToOnlineTransfer payload serialized as JSON.",
+            "type": "object"
+          },
+          "verdict_id_hex": {
+            "description": "Cached attestation verdict identifier.",
+            "nullable": true,
+            "type": "string"
+          },
+          "verdict_snapshot": {
+            "$ref": "#/components/schemas/OfflineVerdictSnapshot",
+            "description": "Snapshot of certificate/verdict metadata captured at settlement.",
+            "nullable": true
+          }
+        },
+        "required": [
+          "bundle_id_hex",
+          "controller_id",
+          "controller_display",
+          "receiver_id",
+          "receiver_display",
+          "deposit_account_id",
+          "deposit_account_display",
+          "receipt_count",
+          "total_amount",
+          "status",
+          "recorded_at_ms",
+          "recorded_at_height",
+          "claimed_delta",
+          "transfer"
+        ],
+        "type": "object"
+      },
+      "OfflineTransferListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineTransferItem"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Total number of transfer bundles matching the filter.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "OfflineTransferStatusTransition": {
+        "properties": {
+          "status": {
+            "description": "Status that became active during this transition.",
+            "type": "string"
+          },
+          "transitioned_at_ms": {
+            "description": "Timestamp when the transition occurred.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "verdict_snapshot": {
+            "$ref": "#/components/schemas/OfflineVerdictSnapshot",
+            "description": "Optional verdict metadata snapshot captured at this transition.",
+            "nullable": true
+          }
+        },
+        "required": [
+          "status",
+          "transitioned_at_ms"
+        ],
+        "type": "object"
+      },
+      "OfflineVerdictSnapshot": {
+        "properties": {
+          "attestation_nonce": {
+            "description": "Cached attestation nonce literal.",
+            "nullable": true,
+            "type": "string"
+          },
+          "certificate_expires_at_ms": {
+            "description": "Certificate expiry timestamp captured at settlement.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "certificate_id": {
+            "description": "Deterministic certificate identifier backing the bundle (`hash:...` literal).",
+            "type": "string"
+          },
+          "policy_expires_at_ms": {
+            "description": "Policy expiry timestamp captured at settlement.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "refresh_at_ms": {
+            "description": "Timestamp when the attestation must be refreshed.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "verdict_id": {
+            "description": "Cached attestation verdict identifier literal.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "certificate_id",
+          "certificate_expires_at_ms",
+          "policy_expires_at_ms"
+        ],
+        "type": "object"
+      },
+      "PublicLaneStakeListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Stake shares for the lane.",
+            "items": {
+              "$ref": "#/components/schemas/PublicLaneStakeShare"
+            },
+            "type": "array"
+          },
+          "lane_id": {
+            "description": "Lane identifier echoed from the request.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Number of stake entries returned.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane_id",
+          "total",
+          "items"
+        ],
+        "type": "object"
+      },
+      "PublicLaneStakeShare": {
+        "additionalProperties": false,
+        "properties": {
+          "bonded": {
+            "description": "Bonded amount for the validator/staker pair.",
+            "type": "string"
+          },
+          "lane_id": {
+            "description": "Lane serviced by the stake entry.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "metadata": {
+            "description": "Optional metadata captured alongside the stake share.",
+            "type": "object"
+          },
+          "pending_unbonds": {
+            "description": "Pending unbonding requests for the stake.",
+            "items": {
+              "$ref": "#/components/schemas/PublicLaneUnbonding"
+            },
+            "type": "array"
+          },
+          "staker": {
+            "description": "Staker account literal rendered per address_format.",
+            "type": "string"
+          },
+          "validator": {
+            "description": "Validator account literal rendered per address_format.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane_id",
+          "validator",
+          "staker",
+          "bonded",
+          "metadata",
+          "pending_unbonds"
+        ],
+        "type": "object"
+      },
+      "PublicLaneUnbonding": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "description": "Amount scheduled for release.",
+            "type": "string"
+          },
+          "release_at_ms": {
+            "description": "Release timestamp (ms).",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "request_id": {
+            "description": "Client-supplied identifier rendered as hex.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "amount",
+          "release_at_ms"
+        ],
+        "type": "object"
+      },
+      "PublicLaneValidatorListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Validator records for the lane.",
+            "items": {
+              "$ref": "#/components/schemas/PublicLaneValidatorRecord"
+            },
+            "type": "array"
+          },
+          "lane_id": {
+            "description": "Lane identifier echoed from the request.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Number of validator entries returned.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane_id",
+          "total",
+          "items"
+        ],
+        "type": "object"
+      },
+      "PublicLaneValidatorRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "lane_id": {
+            "description": "Lane serviced by the validator.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "last_reward_epoch": {
+            "description": "Epoch that last produced a reward payout.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "metadata": {
+            "description": "Optional metadata (commission, endpoints, jurisdiction flags, etc.).",
+            "type": "object"
+          },
+          "self_stake": {
+            "description": "Validator-supplied stake amount.",
+            "type": "string"
+          },
+          "stake_account": {
+            "description": "Account backing the bonded stake.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PublicLaneValidatorStatus"
+          },
+          "total_stake": {
+            "description": "Total bonded stake for the validator.",
+            "type": "string"
+          },
+          "validator": {
+            "description": "Validator account literal rendered per address_format.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane_id",
+          "validator",
+          "stake_account",
+          "total_stake",
+          "self_stake",
+          "status"
+        ],
+        "type": "object"
+      },
+      "PublicLaneValidatorStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "activates_at_epoch": {
+            "description": "Activation epoch when pending.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "reason": {
+            "description": "Jail reason when applicable.",
+            "nullable": true,
+            "type": "string"
+          },
+          "releases_at_ms": {
+            "description": "Release timestamp (ms) when exiting.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "slash_id": {
+            "description": "Slash identifier when slashed.",
+            "nullable": true,
+            "type": "string"
+          },
+          "type": {
+            "description": "Lifecycle status for the validator.",
+            "enum": [
+              "PendingActivation",
+              "Active",
+              "Jailed",
+              "Exiting",
+              "Exited",
+              "Slashed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "RepoAgreement": {
+        "additionalProperties": false,
+        "properties": {
+          "cash_leg": {
+            "$ref": "#/components/schemas/RepoLeg"
+          },
+          "collateral_leg": {
+            "$ref": "#/components/schemas/RepoLeg"
+          },
+          "counterparty": {
+            "type": "string"
+          },
+          "custodian": {
+            "nullable": true,
+            "type": "string"
+          },
+          "governance": {
+            "$ref": "#/components/schemas/RepoGovernance"
+          },
+          "id": {
+            "type": "string"
+          },
+          "initiated_timestamp_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "initiator": {
+            "type": "string"
+          },
+          "last_margin_check_timestamp_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "maturity_timestamp_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "rate_bps": {
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "initiator",
+          "counterparty",
+          "cash_leg",
+          "collateral_leg",
+          "rate_bps",
+          "maturity_timestamp_ms",
+          "initiated_timestamp_ms",
+          "last_margin_check_timestamp_ms",
+          "governance"
+        ],
+        "type": "object"
+      },
+      "RepoAgreementListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RepoAgreement"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "RepoAgreementsQueryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "address_format": {
+            "enum": [
+              "ih58",
+              "compressed"
+            ],
+            "type": "string"
+          },
+          "fetch_size": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "filter": {
+            "description": "Norito filter expression tree.",
+            "type": "object"
+          },
+          "pagination": {
+            "properties": {
+              "limit": {
+                "format": "uint64",
+                "type": "integer"
+              },
+              "offset": {
+                "format": "uint64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "offset"
+            ],
+            "type": "object"
+          },
+          "sort": {
+            "items": {
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "order": {
+                  "default": "asc",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "order"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "pagination"
+        ],
+        "type": "object"
+      },
+      "RepoGovernance": {
+        "additionalProperties": false,
+        "properties": {
+          "haircut_bps": {
+            "description": "Haircut applied to the collateral leg in basis points.",
+            "format": "uint16",
+            "type": "integer"
+          },
+          "margin_frequency_secs": {
+            "description": "Cadence between required margin checks in seconds.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "haircut_bps",
+          "margin_frequency_secs"
+        ],
+        "type": "object"
+      },
+      "RepoLeg": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_definition_id": {
+            "description": "Asset definition identifier associated with the leg.",
+            "type": "string"
+          },
+          "metadata": {
+            "description": "Arbitrary Norito metadata captured alongside the leg.",
+            "type": "object"
+          },
+          "quantity": {
+            "description": "Decimal representation of the leg quantity.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_definition_id",
+          "quantity",
+          "metadata"
+        ],
+        "type": "object"
+      },
+      "TimeNowResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence_ms": {
+            "description": "Confidence interval (±ms) reported by the network time service.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "now": {
+            "description": "Network time in milliseconds since the UNIX epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "offset_ms": {
+            "description": "Estimated offset from the local clock in milliseconds.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "now",
+          "offset_ms",
+          "confidence_ms"
+        ],
+        "type": "object"
+      },
+      "TimeStatusBucket": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "Number of samples observed in the bucket.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "le": {
+            "description": "Upper bound of the RTT bucket in milliseconds.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "le",
+          "count"
+        ],
+        "type": "object"
+      },
+      "TimeStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "description": "Human-readable status note from the network time service.",
+            "type": "string"
+          },
+          "peers": {
+            "description": "Number of peers reporting time samples.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "rtt": {
+            "$ref": "#/components/schemas/TimeStatusRtt"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/TimeStatusSample"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "peers",
+          "samples",
+          "rtt",
+          "note"
+        ],
+        "type": "object"
+      },
+      "TimeStatusRtt": {
+        "additionalProperties": false,
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/TimeStatusBucket"
+            },
+            "type": "array"
+          },
+          "count": {
+            "description": "Total number of RTT samples captured.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "sum_ms": {
+            "description": "Cumulative RTT sample sum in milliseconds.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "buckets",
+          "sum_ms",
+          "count"
+        ],
+        "type": "object"
+      },
+      "TimeStatusSample": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "Number of samples collected from the peer.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "last_offset_ms": {
+            "description": "Most recent offset measurement in milliseconds.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "last_rtt_ms": {
+            "description": "Most recent round-trip time measurement in milliseconds.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "peer": {
+            "description": "Peer identifier contributing time samples.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "peer",
+          "last_offset_ms",
+          "last_rtt_ms",
+          "count"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "HTTP surface for Torii (pending full endpoint coverage).",
+    "license": {
+      "name": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    "title": "Iroha Torii API",
+    "version": "0.0.0-dev"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "description": "Returns `Healthy` when the node is accepting HTTP requests.",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "example": "Healthy",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Torii node is reachable."
+          }
+        },
+        "summary": "Check Torii liveness.",
+        "tags": [
+          "System"
+        ]
+      }
+    },
+    "/v1/aliases/resolve": {
+      "post": {
+        "description": "Returns the canonical alias spelling, the bound account identifier, and (if known) the deterministic alias index.",
+        "operationId": "aliasResolve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasResolveResponse"
+                }
+              }
+            },
+            "description": "Alias successfully resolved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Malformed request (alias missing or invalid)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Alias not found."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Alias runtime unavailable."
+          }
+        },
+        "summary": "Resolve an alias string into an account and index.",
+        "tags": [
+          "Aliases"
+        ]
+      }
+    },
+    "/v1/aliases/resolve_index": {
+      "post": {
+        "description": "Returns the alias string and account identifier registered under the provided index.",
+        "operationId": "aliasResolveIndex",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasResolveIndexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasResolveIndexResponse"
+                }
+              }
+            },
+            "description": "Alias index successfully resolved."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Alias index not found."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Alias runtime unavailable."
+          }
+        },
+        "summary": "Resolve an alias entry by deterministic index.",
+        "tags": [
+          "Aliases"
+        ]
+      }
+    },
+    "/v1/aliases/voprf/evaluate": {
+      "post": {
+        "description": "Takes a blinded alias element (hex) and returns the deterministically evaluated mock response used by tooling.",
+        "operationId": "aliasVoprfEvaluate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasVoprfEvaluateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasVoprfEvaluateResponse"
+                }
+              }
+            },
+            "description": "Blinded element successfully evaluated."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Malformed request (invalid hex encoding)."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal server error."
+          }
+        },
+        "summary": "Evaluate the mock alias VOPRF helper.",
+        "tags": [
+          "Aliases"
+        ]
+      }
+    },
+    "/v1/kaigi/relays": {
+      "get": {
+        "description": "Returns relay identifiers, domains, bandwidth classes, HPKE fingerprints, and the freshest health report (if available).",
+        "operationId": "kaigiRelaysList",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KaigiRelaySummaryList"
+                }
+              }
+            },
+            "description": "Relay summaries retrieved."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Telemetry profile does not permit relay telemetry."
+          }
+        },
+        "summary": "List registered Kaigi relays with their latest health sample.",
+        "tags": [
+          "Kaigi"
+        ]
+      }
+    },
+    "/v1/kaigi/relays/events": {
+      "get": {
+        "description": "Streams relay registration and health events as Server-Sent Events. Optional query parameters filter by domain, relay, or event kind.",
+        "operationId": "kaigiRelayEvents",
+        "parameters": [
+          {
+            "description": "Optional domain filter (case-insensitive).",
+            "in": "query",
+            "name": "domain",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional relay identifier filter.",
+            "in": "query",
+            "name": "relay",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional comma-separated list of event kinds (`registration`, `health`).",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Relay telemetry events stream."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Telemetry profile does not permit relay telemetry."
+          }
+        },
+        "summary": "Subscribe to Kaigi relay telemetry events (SSE).",
+        "tags": [
+          "Kaigi"
+        ]
+      }
+    },
+    "/v1/kaigi/relays/health": {
+      "get": {
+        "description": "Returns totals for healthy/degraded/unavailable relays along with registrations, failovers, and per-domain counters.",
+        "operationId": "kaigiRelayHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KaigiRelayHealthSnapshot"
+                }
+              }
+            },
+            "description": "Relay health snapshot retrieved."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Telemetry profile does not permit relay telemetry."
+          }
+        },
+        "summary": "Aggregate Kaigi relay health counters across the network.",
+        "tags": [
+          "Kaigi"
+        ]
+      }
+    },
+    "/v1/kaigi/relays/{relay_id}": {
+      "get": {
+        "description": "Returns relay registration metadata, base64 HPKE key material, latest health report context, and aggregated per-domain counters.",
+        "operationId": "kaigiRelayDetail",
+        "parameters": [
+          {
+            "description": "Relay account identifier (e.g., `relay@kaigi`).",
+            "in": "path",
+            "name": "relay_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KaigiRelayDetail"
+                }
+              }
+            },
+            "description": "Relay detail retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid relay identifier."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Relay not found."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Telemetry profile does not permit relay telemetry."
+          }
+        },
+        "summary": "Fetch metadata and metrics for a specific Kaigi relay.",
+        "tags": [
+          "Kaigi"
+        ]
+      }
+    },
+    "/v1/ledger/block/{height}/proof/{entry_hash}": {
+      "get": {
+        "description": "Returns the inclusion and execution Merkle proofs for the specified transaction entrypoint within a block.",
+        "operationId": "ledgerBlockProof",
+        "parameters": [
+          {
+            "description": "Block height to inspect (1-indexed).",
+            "in": "path",
+            "name": "height",
+            "required": true,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Transaction entrypoint hash encoded as lowercase hexadecimal.",
+            "in": "path",
+            "name": "entry_hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockProofs"
+                }
+              }
+            },
+            "description": "Merkle proofs for the requested entrypoint."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid block height or entry hash supplied."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Block or entrypoint not found."
+          }
+        },
+        "summary": "Fetch Merkle proofs for a block entrypoint.",
+        "tags": [
+          "Ledger"
+        ]
+      }
+    },
+    "/v1/nexus/public_lanes/{lane_id}/stake": {
+      "get": {
+        "description": "Returns bonded stake per validator/staker pair for the requested public lane. Supports an optional validator filter and renders account literals according to the `address_format` hint (`ih58` or `compressed`).",
+        "operationId": "nexusPublicLaneStake",
+        "parameters": [
+          {
+            "description": "Nexus public lane identifier.",
+            "in": "path",
+            "name": "lane_id",
+            "required": true,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Preferred address format (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "ih58",
+                "compressed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional validator account literal to filter stake entries (IH58/compressed).",
+            "in": "query",
+            "name": "validator",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicLaneStakeListResponse"
+                }
+              }
+            },
+            "description": "Public lane stake entries retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid lane id or validator filter."
+          }
+        },
+        "summary": "List bonded stake shares for a public lane.",
+        "tags": [
+          "Nexus"
+        ]
+      }
+    },
+    "/v1/nexus/public_lanes/{lane_id}/validators": {
+      "get": {
+        "description": "Returns validators servicing the requested public lane with stake metadata and lifecycle status. Account literals honour the optional `address_format` hint (`ih58` or `compressed`).",
+        "operationId": "nexusPublicLaneValidators",
+        "parameters": [
+          {
+            "description": "Nexus public lane identifier.",
+            "in": "path",
+            "name": "lane_id",
+            "required": true,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Preferred address format (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "ih58",
+                "compressed"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicLaneValidatorListResponse"
+                }
+              }
+            },
+            "description": "Public lane validators retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid lane id."
+          }
+        },
+        "summary": "List validators registered for a public lane.",
+        "tags": [
+          "Nexus"
+        ]
+      }
+    },
+    "/v1/offline/allowances": {
+      "get": {
+        "description": "Returns operator-issued offline wallet certificates plus ledger-maintained counter checkpoints. Supports optional filter, pagination, and sort parameters encoded as query arguments.",
+        "operationId": "offlineAllowancesList",
+        "parameters": [
+          {
+            "description": "Optional Norito JSON filter expression encoded as a compact string (see Torii filter DSL).",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional starting offset (default 0).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional CSV sort spec, e.g., `registered_at_ms:desc`.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional rendering for account ids (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter allowances by controller account (accepts IH58/compressed/public-key literals).",
+            "in": "query",
+            "name": "controller_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only include allowances whose certificate expiry is at or before this unix timestamp (ms).",
+            "in": "query",
+            "name": "certificate_expires_before_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only include allowances whose certificate expiry is at or after this unix timestamp (ms).",
+            "in": "query",
+            "name": "certificate_expires_after_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only include allowances whose issuer policy expiry is at or before this unix timestamp (ms).",
+            "in": "query",
+            "name": "policy_expires_before_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only include allowances whose issuer policy expiry is at or after this unix timestamp (ms).",
+            "in": "query",
+            "name": "policy_expires_after_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter to allowances whose attestation refresh deadline is at or before this unix timestamp (ms).",
+            "in": "query",
+            "name": "refresh_before_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter to allowances whose attestation refresh deadline is at or after this unix timestamp (ms).",
+            "in": "query",
+            "name": "refresh_after_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Match allowances whose cached attestation verdict id (hex) equals the provided value (case-insensitive).",
+            "in": "query",
+            "name": "verdict_id_hex",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Match allowances whose attestation nonce (hex) equals the provided value (case-insensitive).",
+            "in": "query",
+            "name": "attestation_nonce_hex",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "When true, only allowances that already have attestation verdict metadata are returned.",
+            "in": "query",
+            "name": "require_verdict",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "When true, only allowances that are missing attestation verdict metadata are returned.",
+            "in": "query",
+            "name": "only_missing_verdict",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Include certificates/policies/refresh windows that have already expired (defaults to false).",
+            "in": "query",
+            "name": "include_expired",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineAllowanceListResponse"
+                }
+              }
+            },
+            "description": "Offline allowances retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid filter or pagination parameters."
+          }
+        },
+        "summary": "List registered offline allowances.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/allowances/query": {
+      "post": {
+        "description": "Accepts the Norito `QueryEnvelope` structure so clients can submit complex filters, selectors, and pagination hints when listing allowances.",
+        "operationId": "offlineAllowancesQuery",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineQueryEnvelope"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineAllowanceListResponse"
+                }
+              }
+            },
+            "description": "Offline allowances retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid filter or pagination parameters."
+          }
+        },
+        "summary": "Query offline allowances with a JSON envelope.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/rejections": {
+      "get": {
+        "description": "Returns aggregated counts grouped by platform and rejection reason so operators can monitor App Attest and KeyMint validation failures.",
+        "operationId": "offlineRejections",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineRejectionListResponse"
+                }
+              }
+            },
+            "description": "Offline rejection counters retrieved."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Telemetry profile forbids exposing metrics."
+          }
+        },
+        "summary": "Report offline transfer rejection counters.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/summaries": {
+      "get": {
+        "description": "Returns controller-facing summaries of the latest App Attest and Android marker counters observed for each allowance certificate.",
+        "operationId": "offlineSummariesList",
+        "parameters": [
+          {
+            "description": "Optional Norito JSON filter expression encoded as a compact string (see Torii filter DSL).",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional starting offset (default 0).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional CSV sort spec, e.g., `registered_at_ms:desc`.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional rendering for account ids (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineSummaryListResponse"
+                }
+              }
+            },
+            "description": "Offline counter summaries retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid filter or pagination parameters."
+          }
+        },
+        "summary": "List hardware counter summaries for offline allowances.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/summaries/query": {
+      "post": {
+        "description": "Accepts the Norito `QueryEnvelope` structure so operators can fetch counter checkpoints with complex filters, selectors, and pagination hints.",
+        "operationId": "offlineSummariesQuery",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineQueryEnvelope"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineSummaryListResponse"
+                }
+              }
+            },
+            "description": "Offline counter summaries retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid filter or pagination parameters."
+          }
+        },
+        "summary": "Query offline counter summaries with a JSON envelope.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/transfers": {
+      "get": {
+        "description": "Returns bundles with their receiver/deposit accounts, receipts, and balance proofs for audit or settlement dashboards.",
+        "operationId": "offlineTransfersList",
+        "parameters": [
+          {
+            "description": "Optional Norito JSON filter expression encoded as a compact string (see Torii filter DSL).",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional starting offset (default 0).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional CSV sort spec, e.g., `registered_at_ms:desc`.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional rendering for account ids (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter bundles by originating controller account (accepts IH58/compressed/public-key literals).",
+            "in": "query",
+            "name": "controller_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter bundles by receiver account (accepts IH58/compressed/public-key literals).",
+            "in": "query",
+            "name": "receiver_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter bundles by deposit account (accepts IH58/compressed/public-key literals).",
+            "in": "query",
+            "name": "deposit_account_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Match bundles whose originating certificate id (hex) equals the provided value (case-insensitive).",
+            "in": "query",
+            "name": "certificate_id_hex",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only include bundles whose originating certificate expiry is at or before this unix timestamp (ms).",
+            "in": "query",
+            "name": "certificate_expires_before_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only include bundles whose originating certificate expiry is at or after this unix timestamp (ms).",
+            "in": "query",
+            "name": "certificate_expires_after_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only include bundles whose policy expiry is at or before this unix timestamp (ms).",
+            "in": "query",
+            "name": "policy_expires_before_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only include bundles whose policy expiry is at or after this unix timestamp (ms).",
+            "in": "query",
+            "name": "policy_expires_after_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter to bundles whose attestation refresh deadline is at or before this unix timestamp (ms).",
+            "in": "query",
+            "name": "refresh_before_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter to bundles whose attestation refresh deadline is at or after this unix timestamp (ms).",
+            "in": "query",
+            "name": "refresh_after_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Match bundles whose attestation verdict id (hex) equals the provided value (case-insensitive).",
+            "in": "query",
+            "name": "verdict_id_hex",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Match bundles whose attestation nonce (hex) equals the provided value (case-insensitive).",
+            "in": "query",
+            "name": "attestation_nonce_hex",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Restrict settled bundles to a specific Android attestation policy (use `play_integrity` or `hms_safety_detect`).",
+            "in": "query",
+            "name": "platform_policy",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "When true, only bundles that already have attestation verdict metadata are returned.",
+            "in": "query",
+            "name": "require_verdict",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "When true, only bundles missing attestation verdict metadata are returned.",
+            "in": "query",
+            "name": "only_missing_verdict",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineTransferListResponse"
+                }
+              }
+            },
+            "description": "Offline transfer bundles retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid filter or pagination parameters."
+          }
+        },
+        "summary": "List pending offline-to-online transfer bundles.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/transfers/query": {
+      "post": {
+        "description": "Supports the Norito `QueryEnvelope` body to paginate and filter bundle records, enabling regulator views or PSP dashboards.",
+        "operationId": "offlineTransfersQuery",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineQueryEnvelope"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineTransferListResponse"
+                }
+              }
+            },
+            "description": "Offline transfer bundles retrieved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid filter or pagination parameters."
+          }
+        },
+        "summary": "Query offline transfer bundles via JSON envelope.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/repo/agreements": {
+      "get": {
+        "description": "Returns the active repo agreements recorded on-chain with optional pagination, filtering, and account address formatting.",
+        "parameters": [
+          {
+            "description": "Optional maximum number of entries to return.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Zero-based pagination offset (default 0).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional comma-separated sort expression (e.g., `id:asc,maturity_timestamp_ms:desc`).",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "JSON-encoded FilterExpr limiting results (fields: id, initiator, counterparty, custodian).",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Preferred address format (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoAgreementListResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List active repo agreements",
+        "tags": [
+          "Settlement"
+        ]
+      }
+    },
+    "/v1/repo/agreements/query": {
+      "post": {
+        "description": "Structured query endpoint accepting a JSON envelope with pagination, sort, filter, and address_format fields.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepoAgreementsQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoAgreementListResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Query repo agreements with JSON envelope",
+        "tags": [
+          "Settlement"
+        ]
+      }
+    },
+    "/v1/time/now": {
+      "get": {
+        "description": "Returns the best-effort network time with offset/confidence relative to UTC.",
+        "operationId": "timeNow",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeNowResponse"
+                }
+              }
+            },
+            "description": "Network time snapshot retrieved."
+          }
+        },
+        "summary": "Fetch the current network time snapshot.",
+        "tags": [
+          "Time"
+        ]
+      }
+    },
+    "/v1/time/status": {
+      "get": {
+        "description": "Provides peer sampling metadata, RTT histogram buckets, and running totals gathered by the network time service.",
+        "operationId": "timeStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeStatusResponse"
+                }
+              }
+            },
+            "description": "Network time diagnostics collected."
+          }
+        },
+        "summary": "Inspect network time diagnostics.",
+        "tags": [
+          "Time"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "Example local node",
+      "url": "http://localhost:8080"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Alias helper endpoints exposed under `/v1/aliases/*`.",
+      "name": "Aliases"
+    },
+    {
+      "description": "Network time service snapshots and diagnostics.",
+      "name": "Time"
+    },
+    {
+      "description": "Ledger helpers for block inclusion and execution proofs.",
+      "name": "Ledger"
+    },
+    {
+      "description": "Offline allowances and transfer bundles under `/v1/offline/*`.",
+      "name": "Offline"
+    },
+    {
+      "description": "Kaigi relay telemetry endpoints under `/v1/kaigi/*`.",
+      "name": "Kaigi"
+    },
+    {
+      "description": "Nexus public lane staking snapshots under `/v1/nexus/public_lanes/*`.",
+      "name": "Nexus"
+    },
+    {
+      "description": "Node liveness and general system helpers.",
+      "name": "System"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Tere tulemast Hyperledger Irohasse!",
+  "error.trace_config_setup": "Konfiguratsiooni jälgimist ei saanud seadistada",
+  "error.config": "Konfiguratsiooni viga",
+  "error.logger": "Logimissüsteemi ei saanud lähtestada",
+  "error.start": "Iroha käivitamine nurjus",
+  "error.run": "Iroha käitamisel ilmnes tõrge",
+  "error.start_p2p": "Võrdõigusvõrku ei saa käivitada",
+  "error.init_kura": "Kura lähtestamine nurjus (ploki salvestusruum)",
+  "error.start_dev_telemetry": "Arendaja telemeetriateenust ei saanud käivitada",
+  "error.start_telemetry": "Telemeetriateenust ei saa käivitada",
+  "error.listen_os_signal": "OS-i signaalide kuulamist ei saa seadistada",
+  "error.start_torii": "Torii (Iroha HTTP API lüüs) ei saanud käivitada"
+}

@@ -1,0 +1,26 @@
+{
+  "entries": [
+    {
+      "file": "benchmarks/poseidon/poseidon_microbench_debug.json",
+      "bundle": "fastpq_metal_bench_debug.json",
+      "capture_timestamp": "2025-11-09T06:11:01Z",
+      "execution_mode": "gpu",
+      "gpu_backend": "metal",
+      "host": null,
+      "default_mean_ms": 2167.663,
+      "scalar_mean_ms": 2152.176,
+      "speedup_vs_scalar": 0.993
+    },
+    {
+      "file": "benchmarks/poseidon/poseidon_microbench_full.json",
+      "bundle": "fastpq_metal_bench_full.json",
+      "capture_timestamp": "2025-11-09T06:04:07Z",
+      "execution_mode": "gpu",
+      "gpu_backend": "metal",
+      "host": null,
+      "default_mean_ms": 1990.492,
+      "scalar_mean_ms": 1994.534,
+      "speedup_vs_scalar": 1.002
+    }
+  ]
+}

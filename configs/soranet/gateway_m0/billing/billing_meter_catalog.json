@@ -1,0 +1,279 @@
+{
+  "version": 2,
+  "billing_period": "2026-11",
+  "period_days": 30,
+  "grace_days": 7,
+  "currency": "XOR",
+  "meters": [
+    {
+      "id": "http.request",
+      "category": "edge",
+      "unit": "request",
+      "description": "Ingress HTTP/3 requests processed by the SoraGlobal Gateway data plane.",
+      "price_micros": 5,
+      "included_units": 500000,
+      "burst_cap": 2500000,
+      "quantum": null,
+      "tiers": [
+        {
+          "label": "base",
+          "upto": null,
+          "rate_micros": 5
+        }
+      ],
+      "discount_tiers": [
+        {
+          "threshold": 1000000,
+          "discount_bps": 500
+        },
+        {
+          "threshold": 5000000,
+          "discount_bps": 900
+        }
+      ],
+      "region_multipliers_bps": {
+        "APAC": 11000,
+        "EU": 9500,
+        "LATAM": 10250,
+        "NA": 10000
+      },
+      "dimensions": [
+        "tenant",
+        "region",
+        "path_class"
+      ],
+      "notes": [
+        "Counts cache hits and misses after WAF policy.",
+        "Traffic served through SoraNet and direct edges shares the allowance."
+      ]
+    },
+    {
+      "id": "http.egress_gib",
+      "category": "egress",
+      "unit": "gibibyte",
+      "description": "Egress bandwidth served from the gateway cache/origin, measured in GiB.",
+      "price_micros": 250000,
+      "included_units": 0,
+      "burst_cap": 520,
+      "quantum": null,
+      "tiers": [
+        {
+          "label": "first_100_gib",
+          "upto": 100,
+          "rate_micros": 250000
+        },
+        {
+          "label": "next_200_gib",
+          "upto": 300,
+          "rate_micros": 225000
+        },
+        {
+          "label": "over_300_gib",
+          "upto": null,
+          "rate_micros": 210000
+        }
+      ],
+      "discount_tiers": [
+        {
+          "threshold": 100,
+          "discount_bps": 300
+        },
+        {
+          "threshold": 300,
+          "discount_bps": 1000
+        }
+      ],
+      "region_multipliers_bps": {
+        "APAC": 11000,
+        "EU": 9500,
+        "LATAM": 10250,
+        "NA": 10000
+      },
+      "dimensions": [
+        "tenant",
+        "region",
+        "cache_tier"
+      ],
+      "notes": [
+        "Rate applies after dedupe/compression and excludes trustless verification burn.",
+        "Manifest-driven pulls count against the same meter as cache hits."
+      ]
+    },
+    {
+      "id": "dns.doh_query",
+      "category": "dns",
+      "unit": "request",
+      "description": "DNS-over-HTTPS/QUIC queries relayed by the gateway resolver layer.",
+      "price_micros": 3,
+      "included_units": 200000,
+      "burst_cap": 1000000,
+      "quantum": null,
+      "tiers": [
+        {
+          "label": "base",
+          "upto": null,
+          "rate_micros": 3
+        }
+      ],
+      "discount_tiers": [
+        {
+          "threshold": 2000000,
+          "discount_bps": 1000
+        }
+      ],
+      "region_multipliers_bps": {
+        "APAC": 10500,
+        "EU": 9800,
+        "LATAM": 10000,
+        "NA": 10000
+      },
+      "dimensions": [
+        "tenant",
+        "pop",
+        "resolver_path"
+      ],
+      "notes": [
+        "Serve-stale responses are billed once per stale window.",
+        "DoH/DoT/DoQ/ODoH share the same allowance."
+      ]
+    },
+    {
+      "id": "waf.decision",
+      "category": "security",
+      "unit": "decision",
+      "description": "WAF enforcement decisions (block/challenge/allow) evaluated on ingress traffic.",
+      "price_micros": 20,
+      "included_units": 10000,
+      "burst_cap": 240000,
+      "quantum": null,
+      "tiers": [
+        {
+          "label": "base",
+          "upto": null,
+          "rate_micros": 20
+        }
+      ],
+      "discount_tiers": [
+        
+      ],
+      "region_multipliers_bps": {
+        "GLOBAL": 10000
+      },
+      "dimensions": [
+        "tenant",
+        "rule_id"
+      ],
+      "notes": [
+        "Monitoring-only rules are zero rated.",
+        "Duplicate rule_ids across tenants are considered independent meters."
+      ]
+    },
+    {
+      "id": "car.verification_ms",
+      "category": "trustless",
+      "unit": "ms",
+      "description": "Aggregated milliseconds spent verifying trustless CAR payloads (Merkle/KZG/SDR).",
+      "price_micros": 10,
+      "included_units": 80000,
+      "burst_cap": 1200000,
+      "quantum": 10,
+      "tiers": [
+        {
+          "label": "base",
+          "upto": null,
+          "rate_micros": 10
+        }
+      ],
+      "discount_tiers": [
+        {
+          "threshold": 500000,
+          "discount_bps": 1500
+        }
+      ],
+      "region_multipliers_bps": {
+        "GLOBAL": 10000
+      },
+      "dimensions": [
+        "tenant",
+        "proof_kind"
+      ],
+      "notes": [
+        "Meter ticks in 10 ms quantums to align with CPU buckets.",
+        "Cache-binding checks and proof verification share the same meter."
+      ]
+    },
+    {
+      "id": "storage.gib_month",
+      "category": "storage",
+      "unit": "gib-month",
+      "description": "Pinned storage billed in GiB-month with SoraNS anchor retention.",
+      "price_micros": 180000,
+      "included_units": 20,
+      "burst_cap": 600,
+      "quantum": null,
+      "tiers": [
+        {
+          "label": "base",
+          "upto": null,
+          "rate_micros": 180000
+        }
+      ],
+      "discount_tiers": [
+        {
+          "threshold": 50,
+          "discount_bps": 500
+        },
+        {
+          "threshold": 200,
+          "discount_bps": 1000
+        }
+      ],
+      "region_multipliers_bps": {
+        "APAC": 11000,
+        "EU": 9500,
+        "LATAM": 10250,
+        "NA": 10000
+      },
+      "dimensions": [
+        "tenant",
+        "storage_class"
+      ],
+      "notes": [
+        "Retention class tags must match SoraNS anchors.",
+        "Billing rolls forward based on mid-cycle usage snapshots."
+      ]
+    }
+  ],
+  "regions": [
+    {
+      "id": "NA",
+      "name": "North America",
+      "billing_multiplier_bps": 10000,
+      "storage_class": "standard"
+    },
+    {
+      "id": "EU",
+      "name": "Europe",
+      "billing_multiplier_bps": 9500,
+      "storage_class": "standard"
+    },
+    {
+      "id": "APAC",
+      "name": "Asia Pacific",
+      "billing_multiplier_bps": 11000,
+      "storage_class": "standard"
+    },
+    {
+      "id": "LATAM",
+      "name": "Latin America",
+      "billing_multiplier_bps": 10250,
+      "storage_class": "regional-cache"
+    }
+  ],
+  "notes": [
+    "Basis points (bps) use 10_000 = 1.0 multiplier to avoid float rounding.",
+    "Meters assume anonymised SoraNet transport unless an explicit direct mode is declared in the manifest.",
+    "CAR verification time is measured per request after cache binding, not per chunk.",
+    "CSV/Parquet exports flatten tiers x regions for deterministic reconciliation."
+  ]
+}

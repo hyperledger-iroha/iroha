@@ -1,0 +1,16 @@
+[package]
+name = "iroha_audio"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = []
+libopus = ["dep:opus"]
+schema-structural = ["dep:iroha_schema"]
+
+[dependencies]
+thiserror.workspace = true
+opus = { version = "0.3", optional = true }
+iroha_schema = { workspace = true, optional = true }

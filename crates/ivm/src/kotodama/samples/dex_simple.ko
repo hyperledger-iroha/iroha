@@ -1,0 +1,35 @@
+// Simple constant-product DEX helpers (no persistent state yet).
+// Demonstrates arithmetic, conditionals, returns, and syscalls.
+seiyaku DexSimple {
+  // Quote output amount for selling `amount_in` of input into output reserves.
+  fn quote_sell(reserve_in: int, reserve_out: int, amount_in: int) -> int {
+    // apply 0.3% fee
+    let effective = (amount_in * 997) / 1000;
+    let numerator = reserve_out * effective;
+    let denominator = reserve_in + effective;
+    let out = numerator / denominator;
+    return out;
+  }
+
+  // Perform a swap by moving tokens between trader and a pool account.
+  // In a full implementation, `pool_account` would be derived from contract state.
+  kotoage fn swap(trader: AccountId,
+                  pool_account: AccountId,
+                  input_asset: AssetDefinitionId,
+                  output_asset: AssetDefinitionId,
+                  amount_in: int,
+                  reserve_in: int,
+                  reserve_out: int) -> int permission(Admin) {
+    let out = quote_sell(reserve_in, reserve_out, amount_in);
+    // move input from trader to pool, and output from pool to trader
+    transfer_asset(trader, pool_account, input_asset, amount_in);
+    transfer_asset(pool_account, trader, output_asset, out);
+    return out;
+  }
+
+  // Deterministic order id using a Poseidon hash of (trader, salt).
+  kotoage fn order_id(trader: int, salt: int) -> int {
+    let h = poseidon2(trader, salt);
+    return h;
+  }
+}

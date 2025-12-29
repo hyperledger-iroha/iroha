@@ -1,0 +1,25 @@
+{
+  "payload": "fixtures/sample_segment_audio_0001.m4s",
+  "event_id": "global-keynote",
+  "stream_id": "stage-a",
+  "rendition_id": "audio-stereo",
+  "track": {
+    "kind": "audio",
+    "codec": "opus",
+    "bitrate_kbps": 192,
+    "audio_layout": "stereo"
+  },
+  "segment": {
+    "sequence": 44,
+    "start_pts": 3604000,
+    "duration": 960000,
+    "wallclock_unix_ms": 1702560000900
+  },
+  "ingest": {
+    "manifest_hash": "38d4268d5e84926c15c990c5a3212004388f5248011bdaa6c9481005bba29b63",
+    "storage_ticket": "698ad9d4633ff566fcf3f3297927d8d975adaa9766904fa7b919bded2b21e984",
+    "ingest_latency_ms": 205,
+    "live_edge_drift_ms": 12,
+    "ingest_node_id": "ingest-node-audio"
+  }
+}

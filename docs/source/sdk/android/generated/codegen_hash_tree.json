@@ -1,0 +1,156 @@
+{
+  "root": "docs/source/sdk/android/generated",
+  "tree_sha256": "64050058edfbd43142e36fab7c1ba040d489ac5ce9b317aff12595e158c639ff",
+  "files": [
+    {
+      "path": "docs/source/sdk/android/generated/builders.ar.md",
+      "sha256": "07f1d75d46f9f9ca7cb558b6dc2afbcce1c7f4dea010e40f8313757823cf976c",
+      "size": 1033
+    },
+    {
+      "path": "docs/source/sdk/android/generated/builders.es.md",
+      "sha256": "71a0e33be393be5b5b190167891c7eec064b2b8bc099a146d543ec7061c67cbb",
+      "size": 903
+    },
+    {
+      "path": "docs/source/sdk/android/generated/builders.fr.md",
+      "sha256": "b4fad2636187c5c869a9f7e7714816db4726392ae3ccd387f96f41d5986711b5",
+      "size": 909
+    },
+    {
+      "path": "docs/source/sdk/android/generated/builders.he.md",
+      "sha256": "e9647a87b1e7fdf62b294e5263dd499d235d5491cdb8c0b92408fd2a5e745107",
+      "size": 925
+    },
+    {
+      "path": "docs/source/sdk/android/generated/builders.ja.md",
+      "sha256": "6663668064d1a85b6bc396ca7f1af26b80f7bb79bbfac4c70630528f48eaa483",
+      "size": 854
+    },
+    {
+      "path": "docs/source/sdk/android/generated/builders.md",
+      "sha256": "331fb41dcde032722cce87da29ed6bcda524c7c1bf99f5acdcdec1e5de001a79",
+      "size": 40686
+    },
+    {
+      "path": "docs/source/sdk/android/generated/builders.pt.md",
+      "sha256": "aae06351a7887fb924c9e6a629b3169a6cf698d0b1939dfd642e2be7d3662571",
+      "size": 877
+    },
+    {
+      "path": "docs/source/sdk/android/generated/builders.ru.md",
+      "sha256": "cb195777c913f5da2b17e1ba080a1b95d7bff27e33af9c42c87b8e8e5265b712",
+      "size": 1133
+    },
+    {
+      "path": "docs/source/sdk/android/generated/builders.ur.md",
+      "sha256": "69dc1990e45b52450918c6dc3d7525f1d992e33004830e132038fd9bf311f0bc",
+      "size": 1106
+    },
+    {
+      "path": "docs/source/sdk/android/generated/codegen_hash_tree.json",
+      "sha256": "5747dfc3e51c278bb750c41f2f06e9dc049c2ac50d6446c5545c051618da672d",
+      "size": 5771
+    },
+    {
+      "path": "docs/source/sdk/android/generated/codegen_manifest_metadata.json",
+      "sha256": "16f64449c50dfbac888ba0152c0763b7b0144d520ce0c99047a4ce746c70b0d7",
+      "size": 478
+    },
+    {
+      "path": "docs/source/sdk/android/generated/fixtures/sorafs_register_pin_manifest_multi_peer_parity_v1.json",
+      "sha256": "8983e8f08b3ca94fbbec77668d29bfea3ba7c81be08794c9afca13aedca8a0f1",
+      "size": 1344
+    },
+    {
+      "path": "docs/source/sdk/android/generated/instructions.ar.md",
+      "sha256": "b09ce583c66fe58026203793398fc3bd87c03e28d2c0c59aaba1b23ac71ca8fe",
+      "size": 1037
+    },
+    {
+      "path": "docs/source/sdk/android/generated/instructions.es.md",
+      "sha256": "705a22d00bf42aeb6ede6da25e051c000c775c64a0bc49f624f29610b04cc291",
+      "size": 907
+    },
+    {
+      "path": "docs/source/sdk/android/generated/instructions.fr.md",
+      "sha256": "9d53038507d42ed0a0839547fb0aaa796e8afd0e7ed3db677040c4ce40221937",
+      "size": 913
+    },
+    {
+      "path": "docs/source/sdk/android/generated/instructions.he.md",
+      "sha256": "6a8d2bea241851d84d3957471231bc5502ac7d5ee6d90dfa77a0f01e53037b15",
+      "size": 929
+    },
+    {
+      "path": "docs/source/sdk/android/generated/instructions.ja.md",
+      "sha256": "110a762b5fe8c4f85b601fed0f360e402a39927ad6d4e15438d6d9cfbe76c8ef",
+      "size": 858
+    },
+    {
+      "path": "docs/source/sdk/android/generated/instructions.md",
+      "sha256": "b44b31295d8e6da717790a7b613709a1b525e3023c48f3ade60fac07fc0533ba",
+      "size": 53113
+    },
+    {
+      "path": "docs/source/sdk/android/generated/instructions.pt.md",
+      "sha256": "796a78973f5df555f15926c5fb867f6f0ea4ba662ab930d848f02e3bacab9086",
+      "size": 881
+    },
+    {
+      "path": "docs/source/sdk/android/generated/instructions.ru.md",
+      "sha256": "05b062f32e1a355f2fa2270ade1e293768e3d3687743efd7052659e1b8fe0dc7",
+      "size": 1137
+    },
+    {
+      "path": "docs/source/sdk/android/generated/instructions.ur.md",
+      "sha256": "1ffe3aa5df1c52c06a5cd9772b84bde6dc13b68bdce8fcc2a2e88318de36b5f9",
+      "size": 1110
+    },
+    {
+      "path": "docs/source/sdk/android/generated/manifest_catalog.ar.md",
+      "sha256": "14e88f795a3d71ef3948bf1bcbc91be8da5a0d217eb0dcbaa8cbaaf97793c44a",
+      "size": 1041
+    },
+    {
+      "path": "docs/source/sdk/android/generated/manifest_catalog.es.md",
+      "sha256": "3f23d3a083b4a5e4aecefa48190dd05133c9801ead5974654b642909057e9e6b",
+      "size": 911
+    },
+    {
+      "path": "docs/source/sdk/android/generated/manifest_catalog.fr.md",
+      "sha256": "941a401578909e9fba7e31008eff141b014b7b2ccb637e46d8b9cf6e3db2b6f4",
+      "size": 917
+    },
+    {
+      "path": "docs/source/sdk/android/generated/manifest_catalog.he.md",
+      "sha256": "d0fb84abad3500070f02b930349e9bcbd09023204573e14d124c15c0828863e8",
+      "size": 933
+    },
+    {
+      "path": "docs/source/sdk/android/generated/manifest_catalog.ja.md",
+      "sha256": "64fe08862dbc99c2b751e3a578bc7d2c8d2dcc90b84b1e4778256c045b835ccb",
+      "size": 862
+    },
+    {
+      "path": "docs/source/sdk/android/generated/manifest_catalog.md",
+      "sha256": "a4f6385e5f4a0d874fb8d52618787389a27c2e0c9fa6ba0718e97f3b5bd5a067",
+      "size": 53527
+    },
+    {
+      "path": "docs/source/sdk/android/generated/manifest_catalog.pt.md",
+      "sha256": "981bb1047bf6f0a785fbd2043a4d1a1ea5b2c1b2f05e8a583ed0d9250815645a",
+      "size": 885
+    },
+    {
+      "path": "docs/source/sdk/android/generated/manifest_catalog.ru.md",
+      "sha256": "897b7b7620e9e59e20a3d5fcb016760a82a4c17132a3a52edb214c0335208555",
+      "size": 1141
+    },
+    {
+      "path": "docs/source/sdk/android/generated/manifest_catalog.ur.md",
+      "sha256": "9d7f57ba3780fcdd171e04c8458985b4eee33f2089fe6da797ebbab8d06e8a71",
+      "size": 1114
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+# Example data set for the Local → Global toolkit script.
+# Addresses may include comments and blank lines.
+
+# Local-domain selector (treasury digest example from docs/account_structure.md §2.2)
+0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8
+
+# Canonical IH58 reference (non-Local) to show mixed inputs are accepted.
+ih1qzg6w6qfqeel6gmyaeel2fvf9ut3khkmragesw0n4jzkf9qt2u85xrdcy3vpsl337y0@wonderland

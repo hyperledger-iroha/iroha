@@ -1,0 +1,113 @@
+import XCTest
+@testable import IrohaSwift
+
+final class ConnectFramesTests: XCTestCase {
+    func testFrameRoundTrip() throws {
+        let frame = ConnectFrame(sessionID: Data(repeating: 0x01, count: 32),
+                                 direction: .appToWallet,
+                                 sequence: 42,
+                                 kind: .ciphertext(ConnectCiphertext(payload: Data([0xAA]))))
+        let encoded = try ConnectCodec.encode(frame)
+        let decoded = try ConnectCodec.decode(encoded)
+        XCTAssertEqual(decoded.sessionID, frame.sessionID)
+        XCTAssertEqual(decoded.direction, frame.direction)
+        XCTAssertEqual(decoded.sequence, frame.sequence)
+        if case let .ciphertext(ct) = decoded.kind {
+            XCTAssertEqual(ct.payload, Data([0xAA]))
+        } else {
+            XCTFail("expected ciphertext")
+        }
+    }
+
+    func testPermissionsJSONRoundTrip() throws {
+        let permissions = ConnectPermissions(methods: ["sign"], events: ["event"], resources: ["accounts"])
+        let data = ConnectCodec.encodePermissionsJSON(permissions)
+        let decoded = data.flatMap { ConnectCodec.decodePermissionsJSON($0) }
+        XCTAssertEqual(decoded, permissions)
+    }
+
+    func testProofJSONRoundTrip() throws {
+        let proof = ConnectSignInProof(domain: "example.com",
+                                       uri: "https://example.com",
+                                       statement: "Sign in",
+                                       issuedAt: "now",
+                                       nonce: "123")
+        let data = ConnectCodec.encodeProofJSON(proof)
+        let decoded = data.flatMap { ConnectCodec.decodeProofJSON($0) }
+        XCTAssertEqual(decoded, proof)
+    }
+
+    func testRejectFrameRoundTrip() throws {
+        let frame = ConnectFrame(sessionID: Data(repeating: 0xAA, count: 32),
+                                 direction: .walletToApp,
+                                 sequence: 7,
+                                 kind: .control(.reject(ConnectReject(code: 42,
+                                                                      codeID: "USER_DENIED",
+                                                                      reason: "nope"))))
+        let encoded = try ConnectCodec.encode(frame)
+        let decoded = try ConnectCodec.decode(encoded)
+        XCTAssertEqual(decoded.kind, frame.kind)
+    }
+
+    func testCloseFrameRoundTrip() throws {
+        let close = ConnectClose(role: .app, code: 1000, reason: "done", retryable: false)
+        let frame = ConnectFrame(sessionID: Data(repeating: 0xBB, count: 32),
+                                 direction: .appToWallet,
+                                 sequence: 9,
+                                 kind: .control(.close(close)))
+        let encoded = try ConnectCodec.encode(frame)
+        let decoded = try ConnectCodec.decode(encoded)
+        XCTAssertEqual(decoded.kind, frame.kind)
+    }
+
+    func testPingPongRoundTrip() throws {
+        let ping = ConnectFrame(sessionID: Data(repeating: 0xCC, count: 32),
+                                direction: .appToWallet,
+                                sequence: 11,
+                                kind: .control(.ping(ConnectPing(nonce: 55))))
+        let pong = ConnectFrame(sessionID: Data(repeating: 0xCC, count: 32),
+                                direction: .walletToApp,
+                                sequence: 12,
+                                kind: .control(.pong(ConnectPong(nonce: 56))))
+        XCTAssertEqual(try ConnectCodec.decode(ConnectCodec.encode(ping)).kind, ping.kind)
+        XCTAssertEqual(try ConnectCodec.decode(ConnectCodec.encode(pong)).kind, pong.kind)
+    }
+}
+
+final class ConnectCodecBridgeAvailabilityTests: XCTestCase {
+    override func tearDown() {
+        NoritoNativeBridge.shared.overrideConnectCodecAvailabilityForTests(nil)
+        super.tearDown()
+    }
+
+    func testEncodeThrowsWhenBridgeDisabled() {
+        NoritoNativeBridge.shared.overrideConnectCodecAvailabilityForTests(false)
+        let frame = ConnectFrame(sessionID: Data(repeating: 0x11, count: 32),
+                                 direction: .appToWallet,
+                                 sequence: 0,
+                                 kind: .control(.ping(ConnectPing(nonce: 1))))
+        XCTAssertThrowsError(try ConnectCodec.encode(frame)) { error in
+            XCTAssertEqual(error as? ConnectCodecError, .bridgeUnavailable)
+        }
+    }
+
+    func testDecodeThrowsWhenBridgeDisabled() {
+        NoritoNativeBridge.shared.overrideConnectCodecAvailabilityForTests(false)
+        XCTAssertThrowsError(try ConnectCodec.decode(Data())) { error in
+            XCTAssertEqual(error as? ConnectCodecError, .bridgeUnavailable)
+        }
+    }
+
+    func testDecodeFailsOnInvalidBytes() throws {
+        let sessionID = Data(repeating: 0x22, count: 32)
+        let frame = ConnectFrame(sessionID: sessionID,
+                                 direction: .appToWallet,
+                                 sequence: 1,
+                                 kind: .control(.ping(ConnectPing(nonce: 1))))
+        let encoded = try ConnectCodec.encode(frame)
+        let truncated = encoded.prefix(max(encoded.count / 2, 1))
+        XCTAssertThrowsError(try ConnectCodec.decode(Data(truncated))) { error in
+            XCTAssertEqual(error as? ConnectCodecError, .decodeFailed)
+        }
+    }
+}

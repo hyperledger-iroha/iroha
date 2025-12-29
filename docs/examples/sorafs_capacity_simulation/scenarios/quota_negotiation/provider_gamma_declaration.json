@@ -1,0 +1,44 @@
+{
+  "provider_id_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+  "stake": {
+    "pool_id_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "stake_amount": "4500"
+  },
+  "committed_capacity_gib": 240,
+  "chunker_commitments": [
+    {
+      "profile_handle": "sorafs.sf1@1.0.0",
+      "profile_aliases": [
+        "sorafs.sf1@1.0.0"
+      ],
+      "committed_gib": 240,
+      "capability_refs": [
+        "torii_gateway",
+        "chunk_range_fetch"
+      ]
+    }
+  ],
+  "lane_commitments": [
+    {
+      "lane_id": "archive",
+      "max_gib": 180
+    }
+  ],
+  "pricing": {
+    "currency": "xor",
+    "rate_per_gib_hour_milliu": 7,
+    "min_commitment_hours": 72,
+    "notes": "cold storage tranche"
+  },
+  "valid_from": 1700500000,
+  "valid_until": 1701104800,
+  "metadata": {
+    "region": "apac",
+    "tier": "standby"
+  },
+  "record_window": {
+    "registered_epoch": 1700500000,
+    "valid_from_epoch": 1700500000,
+    "valid_until_epoch": 1701104800
+  }
+}

@@ -1,0 +1,493 @@
+//! Storage configuration helpers for the embedded SoraFS worker.
+
+use std::path::PathBuf;
+
+use iroha_config::parameters::actual;
+
+use crate::metering::SmoothingConfig;
+
+/// Convenience wrapper around the Torii-level SoraFS storage configuration.
+#[derive(Debug, Clone)]
+pub struct StorageConfig {
+    enabled: bool,
+    data_dir: PathBuf,
+    max_capacity_bytes: iroha_config::base::util::Bytes<u64>,
+    max_parallel_fetches: usize,
+    max_pins: usize,
+    por_sample_interval_secs: u64,
+    alias: Option<String>,
+    adverts: AdvertOverrides,
+    metering_smoothing: MeteringSmoothingConfig,
+    governance_dir: Option<PathBuf>,
+    penalty: PenaltySettings,
+}
+
+impl StorageConfig {
+    /// Returns a builder initialised with the Torii defaults.
+    #[must_use]
+    pub fn builder() -> StorageConfigBuilder {
+        StorageConfigBuilder::new()
+    }
+
+    /// Whether the storage worker should be active.
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Directory where chunk data and metadata are stored.
+    #[must_use]
+    pub fn data_dir(&self) -> &PathBuf {
+        &self.data_dir
+    }
+
+    /// Maximum allowed on-disk footprint (bytes).
+    #[must_use]
+    pub fn max_capacity_bytes(&self) -> iroha_config::base::util::Bytes<u64> {
+        self.max_capacity_bytes
+    }
+
+    /// Maximum number of concurrent fetch streams.
+    #[must_use]
+    pub fn max_parallel_fetches(&self) -> usize {
+        self.max_parallel_fetches
+    }
+
+    /// Maximum number of manifests the node accepts before back-pressure.
+    #[must_use]
+    pub fn max_pins(&self) -> usize {
+        self.max_pins
+    }
+
+    /// Cadence for Proof-of-Retrievability sampling (seconds).
+    #[must_use]
+    pub fn por_sample_interval_secs(&self) -> u64 {
+        self.por_sample_interval_secs
+    }
+
+    /// Optional human-friendly alias reported in telemetry.
+    #[must_use]
+    pub fn alias(&self) -> Option<&String> {
+        self.alias.as_ref()
+    }
+
+    /// Advert telemetry overrides emitted by the storage worker.
+    #[must_use]
+    pub fn adverts(&self) -> &AdvertOverrides {
+        &self.adverts
+    }
+
+    /// Smoothing configuration for metering snapshots.
+    #[must_use]
+    pub fn metering_smoothing(&self) -> &MeteringSmoothingConfig {
+        &self.metering_smoothing
+    }
+
+    /// Optional directory used to materialise governance artefacts.
+    #[must_use]
+    pub fn governance_dir(&self) -> Option<&PathBuf> {
+        self.governance_dir.as_ref()
+    }
+
+    /// Penalty policy applied to PoR failures.
+    #[must_use]
+    pub fn penalty(&self) -> &PenaltySettings {
+        &self.penalty
+    }
+
+    /// Convenience helper that converts the stored smoothing parameters
+    /// into the runtime [`SmoothingConfig`].
+    #[must_use]
+    pub fn smoothing_config(&self) -> SmoothingConfig {
+        self.metering_smoothing.to_metering_config()
+    }
+}
+
+impl From<actual::SorafsStorage> for StorageConfig {
+    fn from(value: actual::SorafsStorage) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&actual::SorafsStorage> for StorageConfig {
+    fn from(value: &actual::SorafsStorage) -> Self {
+        Self::from_storage_and_penalty(value, &actual::SorafsPenaltyPolicy::default())
+    }
+}
+
+impl StorageConfig {
+    /// Construct a storage configuration using storage + penalty policy inputs.
+    #[must_use]
+    pub fn from_storage_and_penalty(
+        storage: &actual::SorafsStorage,
+        penalty: &actual::SorafsPenaltyPolicy,
+    ) -> Self {
+        Self {
+            enabled: storage.enabled,
+            data_dir: storage.data_dir.clone(),
+            max_capacity_bytes: storage.max_capacity_bytes,
+            max_parallel_fetches: storage.max_parallel_fetches,
+            max_pins: storage.max_pins,
+            por_sample_interval_secs: storage.por_sample_interval_secs,
+            alias: storage.alias.clone(),
+            adverts: AdvertOverrides::from(&storage.adverts),
+            metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
+            governance_dir: storage.governance_dag_dir.clone(),
+            penalty: PenaltySettings::from_policy(penalty),
+        }
+    }
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self::from(actual::SorafsStorage::default())
+    }
+}
+
+/// Builder for [`StorageConfig`].
+#[derive(Debug, Clone)]
+pub struct StorageConfigBuilder {
+    inner: StorageConfig,
+}
+
+impl StorageConfigBuilder {
+    fn new() -> Self {
+        Self {
+            inner: StorageConfig::default(),
+        }
+    }
+
+    /// Enable or disable the storage worker.
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.inner.enabled = enabled;
+        self
+    }
+
+    /// Override the storage data directory.
+    #[must_use]
+    pub fn data_dir(mut self, data_dir: PathBuf) -> Self {
+        self.inner.data_dir = data_dir;
+        self
+    }
+
+    /// Set the capacity ceiling (bytes).
+    #[must_use]
+    pub fn max_capacity_bytes(mut self, bytes: iroha_config::base::util::Bytes<u64>) -> Self {
+        self.inner.max_capacity_bytes = bytes;
+        self
+    }
+
+    /// Set the fetch concurrency budget.
+    #[must_use]
+    pub fn max_parallel_fetches(mut self, fetches: usize) -> Self {
+        self.inner.max_parallel_fetches = fetches;
+        self
+    }
+
+    /// Set the pin limit before back-pressure.
+    #[must_use]
+    pub fn max_pins(mut self, pins: usize) -> Self {
+        self.inner.max_pins = pins;
+        self
+    }
+
+    /// Set the PoR sampling cadence (seconds).
+    #[must_use]
+    pub fn por_sample_interval_secs(mut self, interval: u64) -> Self {
+        self.inner.por_sample_interval_secs = interval;
+        self
+    }
+
+    /// Override the telemetry alias.
+    #[must_use]
+    pub fn alias<S: Into<Option<String>>>(mut self, alias: S) -> Self {
+        self.inner.alias = alias.into();
+        self
+    }
+
+    /// Override advert telemetry data.
+    #[must_use]
+    pub fn adverts(mut self, adverts: AdvertOverrides) -> Self {
+        self.inner.adverts = adverts;
+        self
+    }
+
+    /// Override the metering smoothing parameters.
+    #[must_use]
+    pub fn metering_smoothing(mut self, smoothing: MeteringSmoothingConfig) -> Self {
+        self.inner.metering_smoothing = smoothing;
+        self
+    }
+
+    /// Override the governance artefact directory.
+    #[must_use]
+    pub fn governance_dir<P: Into<Option<PathBuf>>>(mut self, dir: P) -> Self {
+        self.inner.governance_dir = dir.into();
+        self
+    }
+
+    /// Override the strike threshold applied to consecutive PoR failures before slashing.
+    #[must_use]
+    pub fn penalty_strike_threshold(mut self, threshold: u32) -> Self {
+        self.inner.penalty.strike_threshold = threshold;
+        self
+    }
+
+    /// Override the bond percentage slashed when the strike threshold is exceeded (basis points).
+    #[must_use]
+    pub fn penalty_bond_bps(mut self, bps: u16) -> Self {
+        self.inner.penalty.penalty_bond_bps = bps.min(10_000);
+        self
+    }
+
+    /// Override the cooldown window (seconds) enforced between slashes.
+    #[must_use]
+    pub fn penalty_cooldown_secs(mut self, cooldown_secs: u64) -> Self {
+        self.inner.penalty.cooldown_secs = cooldown_secs;
+        self
+    }
+
+    /// Finalise the builder into a configuration.
+    #[must_use]
+    pub fn build(self) -> StorageConfig {
+        self.inner
+    }
+}
+
+/// Optional overrides for provider advert telemetry.
+#[derive(Debug, Clone)]
+pub struct AdvertOverrides {
+    stake_pointer: Option<String>,
+    availability: String,
+    max_latency_ms: u32,
+    topics: Vec<String>,
+}
+
+impl AdvertOverrides {
+    /// Construct overrides from individual fields.
+    #[must_use]
+    pub fn new(
+        stake_pointer: Option<String>,
+        availability: impl Into<String>,
+        max_latency_ms: u32,
+        topics: Vec<String>,
+    ) -> Self {
+        Self {
+            stake_pointer,
+            availability: availability.into(),
+            max_latency_ms,
+            topics,
+        }
+    }
+
+    /// Stake pointer advertised alongside provider metadata.
+    #[must_use]
+    pub fn stake_pointer(&self) -> Option<&String> {
+        self.stake_pointer.as_ref()
+    }
+
+    /// Availability tier advertised by the provider.
+    #[must_use]
+    pub fn availability(&self) -> &str {
+        &self.availability
+    }
+
+    /// Maximum advertised retrieval latency (milliseconds).
+    #[must_use]
+    pub fn max_latency_ms(&self) -> u32 {
+        self.max_latency_ms
+    }
+
+    /// Rendezvous topics published for discovery.
+    #[must_use]
+    pub fn topics(&self) -> &[String] {
+        &self.topics
+    }
+}
+
+/// Per-metric smoothing configuration used by the embedded capacity meter.
+#[derive(Debug, Clone, Default)]
+pub struct MeteringSmoothingConfig {
+    gib_hours_alpha: Option<f64>,
+    por_success_alpha: Option<f64>,
+}
+
+impl MeteringSmoothingConfig {
+    /// Construct a configuration from optional alpha values.
+    #[must_use]
+    pub fn new(gib_hours_alpha: Option<f64>, por_success_alpha: Option<f64>) -> Self {
+        Self {
+            gib_hours_alpha: Self::sanitize_alpha(gib_hours_alpha),
+            por_success_alpha: Self::sanitize_alpha(por_success_alpha),
+        }
+    }
+
+    /// Set the GiB·hour smoothing alpha (values <= 0 disable smoothing).
+    #[must_use]
+    pub fn with_gib_hours_alpha(mut self, alpha: f64) -> Self {
+        self.gib_hours_alpha = Self::sanitize_alpha(Some(alpha));
+        self
+    }
+
+    /// Set the PoR success smoothing alpha (values <= 0 disable smoothing).
+    #[must_use]
+    pub fn with_por_success_alpha(mut self, alpha: f64) -> Self {
+        self.por_success_alpha = Self::sanitize_alpha(Some(alpha));
+        self
+    }
+
+    /// Return the configured GiB·hour smoothing alpha, if any.
+    #[must_use]
+    pub fn gib_hours_alpha(&self) -> Option<f64> {
+        self.gib_hours_alpha
+    }
+
+    /// Return the configured PoR success smoothing alpha, if any.
+    #[must_use]
+    pub fn por_success_alpha(&self) -> Option<f64> {
+        self.por_success_alpha
+    }
+
+    /// Convert into the runtime smoothing configuration used by the meter.
+    #[must_use]
+    pub fn to_metering_config(&self) -> SmoothingConfig {
+        SmoothingConfig::from_optional_alphas(self.gib_hours_alpha, self.por_success_alpha)
+    }
+
+    fn sanitize_alpha(alpha: Option<f64>) -> Option<f64> {
+        alpha.and_then(|value| {
+            if value <= 0.0 {
+                None
+            } else {
+                Some(value.min(1.0))
+            }
+        })
+    }
+}
+
+impl From<&actual::SorafsMeteringSmoothing> for MeteringSmoothingConfig {
+    fn from(value: &actual::SorafsMeteringSmoothing) -> Self {
+        Self::new(value.gib_hours_alpha, value.por_success_alpha)
+    }
+}
+
+impl Default for AdvertOverrides {
+    fn default() -> Self {
+        let defaults = actual::SorafsAdvertOverrides::default();
+        Self {
+            stake_pointer: None,
+            availability: defaults.availability,
+            max_latency_ms: defaults.max_latency_ms,
+            topics: defaults.topics,
+        }
+    }
+}
+
+impl From<actual::SorafsAdvertOverrides> for AdvertOverrides {
+    fn from(value: actual::SorafsAdvertOverrides) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&actual::SorafsAdvertOverrides> for AdvertOverrides {
+    fn from(value: &actual::SorafsAdvertOverrides) -> Self {
+        Self {
+            stake_pointer: value.stake_pointer.clone(),
+            availability: value.availability.clone(),
+            max_latency_ms: value.max_latency_ms,
+            topics: value.topics.clone(),
+        }
+    }
+}
+
+/// Penalty policy controlling PoR failure escalation and slashing.
+#[derive(Debug, Clone, Copy)]
+pub struct PenaltySettings {
+    /// Consecutive PoR failures required to trigger a slash.
+    pub strike_threshold: u32,
+    /// Bond percentage slashed when the strike threshold is exceeded.
+    pub penalty_bond_bps: u16,
+    /// Cooldown (seconds) enforced between slashes.
+    pub cooldown_secs: u64,
+}
+
+impl Default for PenaltySettings {
+    fn default() -> Self {
+        let defaults = actual::SorafsPenaltyPolicy::default();
+        Self {
+            strike_threshold: defaults.strike_threshold,
+            penalty_bond_bps: defaults.penalty_bond_bps,
+            // Cooldown windows are expressed in settlement windows (hours); default to hourly cadence.
+            cooldown_secs: u64::from(defaults.cooldown_windows).saturating_mul(60 * 60),
+        }
+    }
+}
+
+impl PenaltySettings {
+    /// Construct settings from the configured penalty policy.
+    pub fn from_policy(policy: &actual::SorafsPenaltyPolicy) -> Self {
+        Self {
+            strike_threshold: policy.strike_threshold,
+            penalty_bond_bps: policy.penalty_bond_bps,
+            cooldown_secs: u64::from(policy.cooldown_windows).saturating_mul(60 * 60),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversion_from_actual_preserves_fields() {
+        let mut actual = actual::SorafsStorage::default();
+        actual.enabled = true;
+        actual.data_dir = PathBuf::from("/tmp/sorafs");
+        actual.max_capacity_bytes = iroha_config::base::util::Bytes(1_024);
+        actual.max_parallel_fetches = 99;
+        actual.max_pins = 1_001;
+        actual.por_sample_interval_secs = 42;
+        actual.alias = Some("tenant.alpha".into());
+        actual.adverts = actual::SorafsAdvertOverrides {
+            stake_pointer: Some("stake.pool:abcd".into()),
+            availability: "warm".into(),
+            max_latency_ms: 750,
+            topics: vec![
+                "sorafs.sf1.primary:global".into(),
+                "sorafs.sf1.backup:eu".into(),
+            ],
+        };
+
+        let cfg = StorageConfig::from(&actual);
+        assert!(cfg.enabled());
+        assert_eq!(cfg.data_dir(), &PathBuf::from("/tmp/sorafs"));
+        assert_eq!(cfg.max_capacity_bytes().0, 1_024);
+        assert_eq!(cfg.max_parallel_fetches(), 99);
+        assert_eq!(cfg.max_pins(), 1_001);
+        assert_eq!(cfg.por_sample_interval_secs(), 42);
+        assert_eq!(cfg.alias(), Some(&"tenant.alpha".to_string()));
+        let adverts = cfg.adverts();
+        assert_eq!(
+            adverts.stake_pointer(),
+            Some(&"stake.pool:abcd".to_string())
+        );
+        assert_eq!(adverts.availability(), "warm");
+        assert_eq!(adverts.max_latency_ms(), 750);
+        assert_eq!(
+            adverts.topics(),
+            &[
+                "sorafs.sf1.primary:global".to_string(),
+                "sorafs.sf1.backup:eu".to_string()
+            ]
+        );
+        let penalty = cfg.penalty();
+        let defaults = actual::SorafsPenaltyPolicy::default();
+        assert_eq!(penalty.strike_threshold, defaults.strike_threshold);
+        assert_eq!(penalty.penalty_bond_bps, defaults.penalty_bond_bps);
+        assert_eq!(
+            penalty.cooldown_secs,
+            u64::from(defaults.cooldown_windows).saturating_mul(60 * 60)
+        );
+    }
+}

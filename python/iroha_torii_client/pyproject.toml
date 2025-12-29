@@ -1,0 +1,15 @@
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+ignore = ["E203", "E501"]
+
+[tool.mypy]
+python_version = "3.9"
+strict = false
+warn_unused_ignores = true
+show_error_codes = true
+ignore_missing_imports = true
+files = ["iroha_torii_client", "tests"]

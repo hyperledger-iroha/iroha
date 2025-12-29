@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Üdvözli a Hyperledger Iroha!",
+  "error.trace_config_setup": "Nem sikerült beállítani a konfigurációkövetést",
+  "error.config": "Konfigurációs hiba",
+  "error.logger": "Nem sikerült inicializálni a naplózási rendszert",
+  "error.start": "Iroha indítása sikertelen",
+  "error.run": "Hiba történt az Iroha futtatása közben",
+  "error.start_p2p": "Nem lehet elindítani a peer-to-peer hálózatot",
+  "error.init_kura": "Nem lehet inicializálni a Kura-t (blokktárolás)",
+  "error.start_dev_telemetry": "A fejlesztői telemetria szolgáltatást nem sikerült elindítani",
+  "error.start_telemetry": "Nem sikerült elindítani a szolgáltatást.",
+  "error.listen_os_signal": "Nem lehet beállítani az operációs rendszer jeleinek figyelését",
+  "error.start_torii": "Nem sikerült elindítani a Torii-t (Iroha HTTP API átjáró)"
+}

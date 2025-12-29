@@ -1,0 +1,15 @@
+extends = "minimal_with_trusted_peers.toml"
+
+[nexus]
+enabled = false
+lane_count = 2
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "core"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 1
+alias = "governance"
+metadata = {}

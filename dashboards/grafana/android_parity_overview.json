@@ -1,0 +1,202 @@
+{
+  "title": "Android Parity Overview",
+  "uid": "android-parity-overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "tags": ["android", "parity", "and3"],
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(android_parity_error_count, cluster)",
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Parity Errors (latest run)",
+      "id": 1,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "max(android_parity_error_count{cluster=~\"$cluster\"})",
+          "legendFormat": "errors",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 1}
+            ]
+          },
+          "custom": {
+            "metric_id": "android_parity_errors"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "alert": {
+        "name": "Android Parity Errors",
+        "message": "Android Norito parity job detected fixture errors.",
+        "frequency": "1m",
+        "handler": 1,
+        "noDataState": "no_data",
+        "executionErrorState": "alerting",
+        "conditions": [
+          {
+            "type": "query",
+            "query": {"params": ["A", "5m", "now"]},
+            "reducer": {"type": "last"},
+            "evaluator": {"type": "gt", "params": [0]},
+            "operator": {"type": "and"}
+          }
+        ]
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Hours Since Last Regen",
+      "id": 2,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
+      "targets": [
+        {
+          "expr": "max(android_parity_regen_hours_since_success{cluster=~\"$cluster\"})",
+          "legendFormat": "regen_age",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 24},
+              {"color": "red", "value": 48}
+            ]
+          },
+          "custom": {
+            "metric_id": "android_parity_regen_age"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "alert": {
+        "name": "Android Parity Regen SLA Breach",
+        "message": "Android fixture rotations exceeded the 48h SLA.",
+        "frequency": "5m",
+        "handler": 1,
+        "noDataState": "no_data",
+        "executionErrorState": "alerting",
+        "conditions": [
+          {
+            "type": "query",
+            "query": {"params": ["A", "5m", "now"]},
+            "reducer": {"type": "last"},
+            "evaluator": {"type": "gt", "params": [48]},
+            "operator": {"type": "and"}
+          }
+        ]
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Rotation Owner Heatmap",
+      "id": 3,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 10, "w": 8, "x": 16, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (rotation_owner) (android_parity_rotation_owner_info{cluster=~\"$cluster\"})",
+          "legendFormat": "{{rotation_owner}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "metric_id": "android_parity_rotation_owner"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true
+      }
+    },
+    {
+      "type": "table",
+      "title": "Recent Summary Snapshots",
+      "id": 4,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 6},
+      "targets": [
+        {
+          "expr": "topk(5, android_parity_summary_timestamp_seconds{cluster=~\"$cluster\"})",
+          "legendFormat": "{{cluster}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "custom": {
+            "metric_id": "android_parity_summary_timestamp"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": ["last"],
+          "fields": ""
+        }
+      }
+    }
+  ]
+}

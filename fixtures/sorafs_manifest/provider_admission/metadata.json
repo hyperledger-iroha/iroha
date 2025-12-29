@@ -1,0 +1,7 @@
+{
+  "envelope_digest_hex": "25741a0e70302a8af6bfe59f13544ce8ee6dc8f29eddf07781c308e19f3f05c5",
+  "notes": "Deterministic fixtures for tests",
+  "proposal_digest_hex": "ca8e73a1f319ae83d7bd958ccb143f9b790c7e4d9c8dfe1f6ad37fa29facf936",
+  "renewal_envelope_digest_hex": "6f539600bbf619c93d424936def6eecded8249cd56c4546aac17029a33a0c459",
+  "revocation_digest_hex": "d706ec5b0da1627a696ee68ea0400e446b658cd82c669e4e6e5a094cbb57be02"
+}

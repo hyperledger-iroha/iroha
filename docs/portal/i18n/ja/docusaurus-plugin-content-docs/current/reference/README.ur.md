@@ -1,0 +1,20 @@
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/reference/README.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: c82723b3555009a3348e409e0614e7cf2dde682b74cc7bf116be05885e65a691
+source_last_modified: "2025-11-04T12:12:47.580487+00:00"
+translation_last_reviewed: null
+---
+
+# ترجمہ جاری ہے
+
+<div dir="rtl">
+یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+
+یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
+</div>

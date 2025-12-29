@@ -1,0 +1,80 @@
+package org.hyperledger.iroha.android.tx;
+
+import java.util.Arrays;
+import java.util.Map;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+
+public final class SignedTransactionHasherTests {
+
+  private SignedTransactionHasherTests() {}
+
+  public static void main(final String[] args) throws Exception {
+    hashHexMatchesCanonicalBytes();
+    hashIgnoresExportedKeyBundle();
+    hashFallsBackForInvalidPayload();
+    System.out.println("[IrohaAndroid] Signed transaction hasher tests passed.");
+  }
+
+  private static void hashHexMatchesCanonicalBytes() throws Exception {
+    final SignedTransaction transaction = newTransaction((byte) 0x11);
+    final byte[] canonical = SignedTransactionHasher.canonicalBytes(transaction);
+    final String hashFromTransaction = SignedTransactionHasher.hashHex(transaction);
+    final String hashFromCanonical = SignedTransactionHasher.hashCanonicalHex(canonical);
+    assert hashFromTransaction.equals(hashFromCanonical)
+        : "Hash computed from transaction must match canonical bytes hash";
+  }
+
+  private static void hashIgnoresExportedKeyBundle() throws Exception {
+    final SignedTransaction base = newTransaction((byte) 0x42);
+    final byte[] exported = new byte[48];
+    Arrays.fill(exported, (byte) 0x7A);
+    final SignedTransaction withBundle =
+        new SignedTransaction(
+            base.encodedPayload(),
+            base.signature(),
+            base.publicKey(),
+            base.schemaName(),
+            base.keyAlias().orElse("alias-bundle"),
+            exported);
+    final String baseHash = SignedTransactionHasher.hashHex(base);
+    final String bundleHash = SignedTransactionHasher.hashHex(withBundle);
+    assert baseHash.equals(bundleHash)
+        : "Exported key bundles must not affect canonical signed transaction hash";
+  }
+
+  private static void hashFallsBackForInvalidPayload() {
+    final SignedTransaction invalid =
+        new SignedTransaction(
+            new byte[] {0x01, 0x02, 0x03},
+            new byte[64],
+            new byte[32],
+            "iroha.android.transaction.Payload.v1");
+    final String hash = SignedTransactionHasher.hashHex(invalid);
+    final String hashAgain = SignedTransactionHasher.hashHex(invalid);
+    assert hash.equals(hashAgain)
+        : "Invalid payloads should still hash deterministically via the fallback path";
+  }
+
+  private static SignedTransaction newTransaction(final byte seed) throws NoritoException {
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId(String.format("%08x", seed))
+            .setAuthority("alice@wonderland")
+            .setCreationTimeMs(1_700_000_000_000L + seed)
+            .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
+            .setTimeToLiveMs(5_000L)
+            .setNonce(99)
+            .setMetadata(Map.of("note", "txn-" + seed))
+            .build();
+    final byte[] encodedPayload = codec.encodeTransaction(payload);
+    final byte[] signature = new byte[64];
+    Arrays.fill(signature, (byte) (seed + 2));
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(publicKey, (byte) (seed + 3));
+    return new SignedTransaction(
+        encodedPayload, signature, publicKey, codec.schemaName(), "alias-" + seed);
+  }
+}

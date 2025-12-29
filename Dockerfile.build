@@ -1,0 +1,39 @@
+FROM archlinux:base-devel
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH \
+    POETRY_HOME=/opt/poetry \
+    TORII_API_PORT_MIN=8080 \
+    TORII_API_PORT_MAX=8083
+
+ENV PATH=$POETRY_HOME/bin:$PATH
+
+RUN pacman -Syu rustup mold openssl libgit2 jq unzip \
+    git docker docker-buildx docker-compose \
+    python python-pip --noconfirm --disable-download-timeout && \
+    curl -sSL https://install.python-poetry.org | python3 -
+RUN rustup component add --toolchain stable \
+    llvm-tools-preview clippy rust-src rustfmt
+RUN cargo install grcov
+
+ARG BUILDER_USER=iroha
+ARG BUILDER_UID=1000
+ARG BUILDER_GID=1000
+
+RUN groupadd --gid "${BUILDER_GID}" "${BUILDER_USER}" \
+    && useradd --uid "${BUILDER_UID}" \
+        --gid "${BUILDER_GID}" \
+        --create-home \
+        --shell /bin/bash \
+        "${BUILDER_USER}" \
+    && usermod --append --groups docker "${BUILDER_USER}" \
+    && install -d -o "${BUILDER_USER}" -g "${BUILDER_USER}" /workspace \
+    && chown -R "${BUILDER_USER}":"${BUILDER_USER}" \
+        /usr/local/rustup \
+        /usr/local/cargo \
+        /opt/poetry
+
+USER ${BUILDER_USER}
+WORKDIR /workspace
+ENV HOME=/home/${BUILDER_USER}

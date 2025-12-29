@@ -1,0 +1,310 @@
+<!-- Japanese translation of docs/source/sumeragi.md -->
+
+---
+lang: ja
+direction: ltr
+source: docs/source/sumeragi.md
+status: needs-update
+translator: manual
+---
+
+## Sumeragi: 現行実装 (v1)
+
+残りの移行タスクを詳細に把握したい場合は、[`sumeragi_npos_task_breakdown.md`](sumeragi_npos_task_breakdown.md) を参照してください。
+
+### 概要
+- **役割とローテーション**: ソート済みトポロジはピアを `Leader`、`ValidatingPeer`、`ProxyTail`、`SetBValidator` の役割に分割します。各コミット後、集合 A（`min_votes_for_commit()` で決まる先頭ピア群）は左に 1 つ回転します。ビュー変更ではリーダーを進めるためトポロジ全体を回転させます。`network_topology.rs` の `rotated_for_epoch_height(epoch, height)` が `(epoch, height)` に基づく監査しやすい決定論的ローテーションを定義しています。
+- **K コレクターモード**: 各高さに対し、トポロジは `proxy_tail_index()`（含む）から始まる連続領域として K 個のコレクターを決定論的に選びます（巻き戻りなし）。リーダーは決して含まれません。K=1 にすると従来の単一コレクター（プロキシテール）構成と一致します。
+- **First-QC-wins**: 指定コレクター（プロキシテールを含む）が正当な Precommit QC を組み立てた場合、それを公表できます。ピアは同じ `(height, hash)` に対して最初に受信した正当な QC を採用し、遅れて届いた重複は破棄します。ブロックコミットはこれらの QC だけで判断されます。
+
+### ノード役割（設定）
+- `validator`（既定）: 現在のトポロジ上の役割に従って合意に参加します。
+- `observer`: 合意トポロジから除外され（役割は `Undefined`）、本来その位置がコレクターであっても提案・投票・収集を行いません。ブロックゴシップで完全同期し、受信した QC を使ってコミットできます。
+
+### バリデータ鍵要件
+- バリデータは BLS-Normal 公開鍵と証明（PoP）を必ず提示する必要があります。起動時（高さ 0）には、`trusted_peers` から BLS-Normal 鍵を持たないピア、または PoP が欠落・無効なピアを除外した集合が初期バリデータ集合になります。BLS でない、もしくは PoP 不備のピアは合意集合から外されます。
+- QC には同一メッセージ署名に対する BLS 集約署名、明示的な署名集合、コンパクトな署名者ビットマップが必須で添付されます。合意検証は明示署名に基づいたままです。集約署名とビットマップは監査目的のアーティファクトであり、セマンティクスを変えてはなりません。
+
+### メッセージフロー（定常状態）
+- **リーダー**: ブロック作成が必要な状況（トランザクション待ちまたは前ブロックが非空）で期限が来ると `BlockCreated` をブロードキャストします。
+- **バリデータ**: ブロックを検証し、可用性投票を発行し、指定コレクターへ Prevote/Precommit 投票を送ります。ビュー 0 でローカルタイムアウトした場合、ノードは最大 `r` 個まで追加コレクターに投票をファンアウトできます。
+- **コレクター**: 投票を集約し、Availability/Prevote/Precommit の各 QC を公表します。`(height, hash)` ごとに最初の正当な Precommit QC が勝者となり、遅い QC は無視されます。
+- **観測ピア**: ビュー 0 では投票しません。後続ビューでは投票する場合があります。ブロック本体と一致する Precommit QC が揃った時点で決定論的にコミットします。
+- **受信側**: QC を検証し、Highest/Locked QC の追跡を更新し、対応する Precommit QC とブロック本体が揃ったらコミットを試みます。
+
+### コミット規則（2 QC パイプライン）
+- 各バリデータは 2 種の QC を追跡します。最新の `highest_qc`（通常は子高さ）、安全性を守る `locked_qc` です。`highest_qc` が `locked_qc` を拡張しなければ提案は生成されず、NEW_VIEW のクォーラムがあっても破棄されます。
+- 高さ `h` のブロックは、高さ `h + 1` の QC の親ハッシュが高さ `h` でロックされた QC と一致した時点で最終化されます。この「2 段」条件によりパイプラインを維持しつつ、競合チェーンがコミットを得ることを防ぎます。`h` の実行を進めながら `h + 1` の投票を集められます。
+- この規則により、追加の最終化メッセージが不要になります。子 QC が届けば親ブロックは安全であり、ブロックと 2 つの QC を持つ全ノードが決定論的にコミットできます。最初の QC を見逃したノードはゴシップ／RBC 経由でブロックと QC を取得するだけで同じ決定に到達します。
+- 任意の時点で開いている高さは 2 連続までのため、コレクター・RBC・テレメトリはフォークの危険なくパイプライン処理できます。`sumeragi::main_loop` 内の不変条件でこれを保証しており、`ensure_locked_qc_allows` が提案生成をガードし、保留ブロックはインメモリで追跡され、コミット経路では互換子 QC を観測した後にのみ `locked_qc` を退役させます。
+
+### ペースメーカー（ビュー変更）
+- v1 ではビュー 0 における観測ピアの投票猶予が削除され、観測ピアはビュー 0 で投票しません。ビュー 0 でローカルタイムアウトした際は（ローテーション前の広げる処理なしで）ビュー変更を提案します。タイミングはオンチェーンの `SumeragiParameters`（`BlockTimeMs` と `CommitTimeMs`）で制御され、リーダー提案はパイプライン時間の約 1/3、期待コミットは約 2/3 です。
+
+### K / r パラメータ
+- 設定キー: `sumeragi.collectors_k: usize`（高さごとのコレクター数、既定 1）、`sumeragi.collectors_redundant_send_r: u8`（冗長送信ファンアウト、既定 1）。
+- オンチェーン: K と r は `SumeragiParameters` にも格納され、`SetSumeragiParameters` によって更新できます。オペレーターは `sumeragi status --summary` などの CLI で最新値を確認できます。
+
+### トポロジ原則
+- トポロジ生成は BLS PoP を持つバリデータのみで実施します。`leader_index()` と `proxy_tail_index()` は余り演算を使わず、監査しやすい決定論的な `TopologySegment` を返します。
+- `Topology::collectors_for(height)` は高さごとに決定論的なコレクター集合を返し、`CollectingPeerSet` 型で表現します。K=1 の場合はプロキシテール単独となり、従来の Sumeragi と互換です。
+- `Topology::role_at(index)` で任意ピアの役割を取得し、`is_validator(idx)` でその高さにおけるバリデータかどうかを判定します。
+
+### API サーフェス
+- `iroha_cli sumeragi status --summary`（`GET /v1/sumeragi/status/summary`）がトポロジ情報・役割分布・QC 状態に加え、RBC の利用状況やエポック調整値（`epoch_len`/`epoch_commit`/`epoch_reveal`）を表示します。
+- `iroha_cli sumeragi params --summary`（`GET /v1/sumeragi/params`）で `collectors_k`、`collectors_redundant_send_r`、Sumeragi パラメータ（タイムアウト、モード等）を確認できます。
+- `iroha_cli sumeragi status`（`GET /v1/sumeragi/status`）はノードの役割履歴、ビュー、ロック中 QC、未コミットブロックなど完全な Norito レコードを返します。
+
+### 実装ハイライト
+- `sumeragi::main_loop` がイベントループを担当し、QC 更新、提案処理、コミット処理を管理します。
+- QC ストレージは `HighestQc` と `LockedQc` を明示的な構造体で追跡し、ミスマッチ時に詳細ログとエビデンスを提供します。
+- RBC（Reliable Broadcast）は非同期で動作し、ブロック本体が揃うと QC に基づいて即座にコミットを試行します。
+- Pacemaker はハートビートとビュー変更を制御し、`SumeragiParameters` のタイムアウトに従ってローカルタイムアウトやビュー拡張を行います。
+- Telemetry は Prometheus メトリクスを公開し、`sumeragi_*` メトリクスで集約・キュー深さ・エビデンス件数などを可視化します。
+
+### RBC／DA（データ可用性）
+- RBC はトポロジから導出された Collector 集合を使用してブロック本体を配布します。ブロックヘッダーには RBC セッション ID とパケットメタデータが含まれます。
+- `sumeragi.da_enabled` を有効にすると、可用性証跡（`AvailabilityQC`）を追跡しますがコミットは待機しません（ローカルの RBC `DELIVER` は条件になりません）。可用性証跡が不足している間は `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` が増加し、`da_reschedule_total` はレガシーのため通常 0 のままです。
+- 大規模ペイロード（≥10 MiB）を扱うシナリオでは RBC デリバリー時間、コミット時間、スループット、キュー深さをテレメトリで監視し、SLO 違反をアラートします。
+
+### トポロジ／役割取得の CLI 例
+- `iroha_cli sumeragi topology --summary` で現在の順序付きリストと役割を表示します。
+- `iroha_cli sumeragi collectors --height <h>` で高さ `h` のコレクターを取得します。
+- `iroha_cli sumeragi roles --peer <account>` で指定ピアの現在の役割を照会できます。
+
+### エビデンス & スラッシング
+- ダブル投票や無効な QC/提案は `Evidence` レコードとして保存され、`/v1/sumeragi/evidence` エンドポイントから取得できます。
+- `iroha_cli sumeragi evidence submit --evidence-hex <0x…>` を使って Norito エンコードされたエビデンスを提出できます。Torii は構造検証を行い、`invalid consensus evidence` の場合は保存しません。
+- `sumeragi evidence count` で重複排除後の件数を確認し、監査やガバナンス判断に活用します。
+- `SumeragiParameters evidence_horizon_blocks` により保持期間を制御できます。短すぎる値は CI テストで拒否されます。
+
+### ガバナンスとモード切り替え
+- `SumeragiMode` は `Hot`, `Cold`, `Maintenance` などの運転モードを定義し、`SetSumeragiMode` 命令でオンチェーン切り替えが可能です。
+- `SumeragiParameters` の更新は `SetSumeragiParameters` で行い、`collectors_k`, `collectors_redundant_send_r`, タイムアウトなどを調整します。更新は `next_mode` と `mode_activation_height` を通じて段階的に適用されます。
+- 既定ではモード切り替えは 1 ブロック後に有効化され、CLI の `sumeragi params --summary` で確認できます。
+
+### モード運用パターン
+- **Hot モード**: 通常運転。すべてのバリデータが BFT パイプラインに参加します。
+- **Maintenance モード**: 新しい提案を拒否し、既存ブロックのコミットのみ許可。アップグレード時や長時間メンテナンスで使用します。
+- **Cold モード**: 合意を停止し、ブロック処理を凍結します。緊急停止シナリオで使用します。
+
+### CLI / API チートシート
+- `iroha_cli sumeragi status --summary` / `GET /v1/sumeragi/status/summary`
+- `iroha_cli sumeragi status` / `GET /v1/sumeragi/status`
+- `iroha_cli sumeragi params --summary` / `GET /v1/sumeragi/params`
+- `iroha_cli sumeragi topology --summary`
+- `iroha_cli sumeragi collectors --height <h>`
+- `iroha_cli sumeragi evidence list --summary`
+- `iroha_cli sumeragi evidence count`
+- `iroha_cli sumeragi evidence submit --evidence-hex <0x…>`
+
+### テレメトリメトリクス
+- `sumeragi_leader_proposals_total`
+- `sumeragi_collector_qc_total{kind="availability|prevote|precommit"}`
+- `sumeragi_pending_blocks`
+- `sumeragi_pacemaker_backpressure_deferrals_total`
+- `sumeragi_evidence_records_total`
+- `sumeragi_collectors_k`, `sumeragi_collectors_r`
+
+### テストカバレッジ
+- `crates/iroha_core/tests/sumeragi_negative_paths.rs`: 無効な提案・QC・重複投票を投稿し、`invalid proposal` / `invalid consensus evidence` を検証します。
+- `crates/iroha_core/tests/sumeragi_exec_qc.rs`: ExecQC の厳格モードと各フェイルパスをテストします。
+- `integration_tests/tests/sumeragi_da.rs`: RBC/DA の大規模ペイロードを検証し、SLO 違反で失敗させます。
+- `docs/source/sumeragi_da.md` に RBC の運用手順と測定基準がまとまっています。
+
+---
+
+## 実装詳細
+
+### トポロジ
+- `Topology` 構造体は ordered ピアリストと役割算出ロジックを保持します。
+- `Topology::rotated_for_epoch_height` は `(epoch, height)` に基づく決定論的ローテーションを提供し、監査と再現性を保証します。
+- `TopologySegment` は特定レンジのピアをイテレータ形式で扱える軽量ビューです。
+
+### コレクター選定
+- `collectors_for(height)` は高さ別に `CollectingPeerSet` を返します。K の設定に応じて集約戦略が変わります。
+- 冗長送信 `r` が設定されている場合、バリデータは `collectors.extend_for_redundancy(r)` で追加コレクターへ投票を送れます。
+
+### View / Epoch の管理
+- ビュー変更は `Pacemaker` がトリガーし、`ViewChange` メッセージが全ピアに伝播します。
+- `Epoch` はガバナンスイベントやトポロジ変更を区切る単位であり、`FetchedTopology` が参照するスナップショットを更新します。
+
+### Highest / Locked QC
+- `HighestQc` と `LockedQc` はそれぞれ最新 QC と安全性を担保する QC を保持します。
+- `update_highest_qc` は高さ・ビューを比較し、より新しい QC のみ受け入れます。
+- `ensure_locked_qc_allows` が提案時に安全条件を確認し、違反した場合は提案を破棄しエビデンスを生成します。
+
+### RBC
+- RBC セッションは `RbcSessionId` で識別され、メタデータにはブロック高さ・ハッシュ・収集に必要な閾値が含まれます。
+- RBC は Gossip でブロック断片を流通させ、全ピアが復元できるようにすることで DA を実現します。
+- `sumeragi.da_enabled` を有効にすると、コミット前に `AvailabilityQC` が必要になります。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
+
+### ExecQC と証跡
+- ExecQC は実行結果を証明する QC で、SBV-AM シグネチャを含みます。
+- `require_execution_qc` を true にすると、Precommit QC に加えて ExecQC がなければコミットできません。
+- `require_wsv_exec_qc` を有効にすると、WSV に ExecQC が永続化されたことを確認してからコミットします。
+
+### `proof_policy` の設定
+- `proof_policy = "precommit_qc"`（既定）: Precommit QC のみ要求。
+- `proof_policy = "exec_qc"`: ExecQC を必須化。
+- `proof_policy = "off"`: QC を使用しない（検証・監査目的以外では推奨されません）。
+
+### Telemetry & Backpressure
+- `pacemaker_backpressure_deferrals_total` が増加した場合、`scripts/sumeragi_backpressure_log_scraper.py` を使ってログと照合できます。
+- `sumeragi_da_summary::*` メトリクスが RBC 実行状況を示し、CI で SLO を検証します。
+
+### Evidence パイプライン
+1. CLI や Torii から Norito エンコードした Evidence を受信。
+2. `validate_evidence` が署名集合、ビュー、ハッシュ、一貫性を確認。
+3. 正当であれば WSV に保存し、Prometheus カウンタを更新。
+4. Horizon 過ぎた古いエビデンスはガーベジコレクションで削除。
+
+### CLI 運用メモ
+- `iroha_cli sumeragi status --summary` は `{role, view, locked_qc_height, highest_qc_height, pending_blocks}` に加えて RBC 利用状況やエポック調整値（`epoch_len`/`epoch_commit`/`epoch_reveal`）を即座に把握するためのショートカットです。
+- `iroha_cli sumeragi params` は `collectors_k`, `collectors_r`, タイムアウト、モードを含むフル Norito JSON を返します。
+- `--summary-only` を付けると CLI が整形した短い出力のみが得られます。
+
+### コレクター／ウィットネステレメトリ実務ガイド
+
+停滞したコレクターやウィットネス遅延は `AvailabilityQC` が生成されない、DA 集約が長引く、`collect_witness_ms` がスパイクする、といった形で表面化します。次の信号を監視してください。
+
+**主要ダッシュボード**
+- `sum(rate(sumeragi_da_votes_ingested_total[1m])) by (collector_idx)` — 投票を取り込めていないコレクターを特定。
+- `sumeragi_qc_last_latency_ms{kind="availability"}` とヒストグラム `sumeragi_qc_assembly_latency_ms{kind="availability"}` — Availability QC 組み立ての最新／直近レイテンシ。
+- `sumeragi_phase_latency_ms{phase="collect_da"}` と `{phase="collect_witness"}` の P95（5 分窓） — 可用性票とウィットネス ACK 収集に費やした時間。
+- `sumeragi_phase_latency_ms{phase="collect_aggregator"}` — 冗長送信の遅延。`sumeragi_gossip_fallback_total`、`block_created_dropped_by_lock_total`、`block_created_hint_mismatch_total`、`block_created_proposal_mismatch_total`、`pacemaker_backpressure_deferrals_total` と合わせてファンアウト不足やバックプレッシャを判別。
+- `sumeragi_phase_latency_ema_ms{phase="…"}`
+  — 各フェーズの平滑化レイテンシ（EMA）。生値との乖離で異常を検出。
+- `/v1/sumeragi/telemetry`（または `iroha_cli sumeragi status --summary`） — コレクター別の投票数、QC レイテンシ、RBC backlog、最新 Highest/Locked QC ハッシュを含む軽量スナップショット。
+- `/v1/sumeragi/status/sse` — 1 秒周期程度の SSE ストリームでライブ観測。
+- `/v1/sumeragi/phases` / `iroha_cli sumeragi phases --summary` — `{propose_ms, collect_da_ms, …, commit_ms, pipeline_total_ms}` と `ema_ms` を併記したフェーズ別タイムライン。
+- `docs/source/grafana_sumeragi_overview.json` — QC 高さの乖離、BlockCreated ドロップ、VRF 参加状況を可視化する Grafana ダッシュボード。
+
+**アラート閾値**
+- Availability QC レイテンシ: `sumeragi_qc_last_latency_ms{kind="availability"}` が `0.6 * CommitTimeMs` を 2 連続で超過、またはヒストグラム P95 が `0.7 * CommitTimeMs` を超えたら要警告。
+- 投票取り込みの停滞: `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` かつ `sumeragi_rbc_backlog_sessions_pending > 0`（RBC は動いているのに票が集まらない）。
+- ウィットネス遅延: `collect_witness_ms` または `sumeragi_phase_latency_ms{phase="collect_witness"}` の P95 が `0.75 * CommitTimeMs` を超過、あるいは新しいブロックが届いているのに 3 ラウンド以上 0 のまま。
+- コレクターファンアウト: `collect_aggregator_ms` が `0.5 * sumeragi.npos.timeouts.aggregator_ms` を 3 ラウンド連続で上回る、`sumeragi_redundant_sends_total` が一つの View で `redundant_send_r` を超える、`rate(sumeragi_gossip_fallback_total[5m]) > 0`、`increase(block_created_dropped_by_lock_total[5m]) > 0`、`increase(block_created_hint_mismatch_total[5m]) > 0`、`increase(block_created_proposal_mismatch_total[5m]) > 0`、または `increase(pacemaker_backpressure_deferrals_total[5m]) > 0` のいずれかが持続。
+
+冗長送信カウンタは DA リトライが追加コレクターへキャッシュ済み RBC ペイロードを再送したときに増えます。`npos_redundant_send_retries_update_metrics` テストでこの経路をカバーし、ダッシュボードと契約の乖離を検出します。
+
+**トリアージ手順**
+1. `iroha_cli sumeragi collectors --summary` で担当コレクターが現行の担当に残っているか確認。
+2. `/v1/sumeragi/telemetry` を見て `votes_ingested` が伸びていないコレクター index を特定。単一コレクターだけ停滞しているなら一時的に `collectors_redundant_send_r` を増やし、票を次順位へ回す。
+3. `sumeragi_bg_post_queue_depth` と `p2p_*_throttled_total` でキューやトランスポートの逼迫を診断。
+4. ウィットネス停滞の場合は `/v1/torii/zk/prover/reports` と Torii ログでプローバの失敗を調べ、必要に応じて再起動。
+5. 両コレクターが停止しているなら RBC backlog を確認。`sumeragi_rbc_store_evictions_total` のスパイクや `/v1/sumeragi/status` の `rbc_store.recent_evictions` を手掛かりにボトルネックとなるペイロードやエポックを特定。
+   さらに `iroha_cli sumeragi status --summary` は `lane_governance_sealed_total` / `lane_governance_sealed_aliases` を併記するため、未だ封止されたレーンを GUI を介さずに確認できます。ローンチ／ロールバック手順や CI では `iroha_cli nexus lane-report --only-missing --fail-on-sealed` を合わせて実行し、マニフェストが未展開のまま進行しないようガードしてください。
+6. 復旧後はインシデントを記録し、冗長送信やコレクターパラメータを通常値へ戻す。
+
+---
+
+## RBC / DA ロードマップ
+
+1. **DA/RBC 有効化**: `sumeragi.da_enabled = true` を既定とし、コミット前に `AvailabilityQC` を要求。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
+2. **前処理**: リーダーはブロック提案と同時に RBC セッションを起動し、Collectors が投票を集約するまでに全ピアへブロック断片を配布します。
+3. **Fallback**: RBC 完了前に View 変更が発生した場合、次リーダーが同一ブロックを提案する必要性を評価し、未完セッションを踏まえて処理します。
+4. **監視**: `sumeragi_da_summary::*` と `/v1/sumeragi/rbc/sessions` を定期取得し、遅延や失敗を早期検知します。
+5. **CI**: `integration_tests/tests/sumeragi_da.rs` が 4 ピア／6 ピアのシナリオで 10 MiB 以上のペイロードを送信し、RBC デリバリー ≤3.6 s、コミット ≤4.0 s、スループット ≥2.7 MiB/s を検証します。
+
+---
+
+## ExecQC 厳格モード設定
+
+WSV に ExecutionQC レコードが存在するまで親ブロックのコミットを許可しないようにするには、設定で厳格モードを有効化します。この設定は ExecQC ゲート自体も有効化します。
+
+```toml
+[sumeragi]
+# 親ブロックコミット前に ExecQC (SBV-AM) を要求する
+proof_policy = "exec_qc"           # あるいは `require_execution_qc = true`
+require_execution_qc = true         # proof_policy != "off" のとき有効
+
+# 厳格モード: WSV に完全な ExecutionQC レコードを必須化
+require_wsv_exec_qc = true
+
+# PrecommitQC ゲートは既定で有効。無効化する場合は以下をコメントアウト解除（非推奨）
+# require_precommit_qc = false
+```
+
+`require_wsv_exec_qc = true` を設定すると、ノードはインメモリ QC が存在する場合に同じ更新処理で WSV に ExecutionQC レコードを永続化し、それが完了しない限りコミットを進めません。
+
+### VRF ランダムネスパイプライン
+
+NPoS のペースメーカーは VRF からリーダー／コレクタのローテーションを導出します。各エポック（`epoch_length_blocks`）は次の 2 ウィンドウで構成されます。
+
+1. **コミットウィンドウ**（`vrf_commit_deadline_offset` ブロック）— バリデータがリビールのハッシュを持つ `VrfCommit` を提出。
+2. **リビールウィンドウ**（`vrf_reveal_deadline_offset` ブロック）— `VrfReveal` でリビールを開示。コントローラはコミットと照合して 32 バイトのリビールを記録します。
+
+コミット／リビールの取り込みは同期的かつ決定的です。
+
+- オペレーター（または自動化）が Torii に Norito JSON を POST:
+  - `POST /v1/sumeragi/vrf/commit` `{ "epoch": <u64>, "signer": <u32>, "commitment_hex": "0x…" }`
+  - `POST /v1/sumeragi/vrf/reveal` `{ "epoch": <u64>, "signer": <u32>, "reveal_hex": "0x…" }`
+- Torii がレート制御と 32 バイト入力の検証を行い、`SumeragiHandle` へ転送。
+- `handle_vrf_commit` / `handle_vrf_reveal` がエポックとウィンドウ、コミットの整合性を確認し、進行中のエポック状態を `world.vrf_epochs` に永続化します。
+
+エポック境界（高さが `epoch_length_blocks` の倍数）でアクターは:
+1. ペナルティ（`committed_no_reveal`, `no_participation`）を計算。
+2. 有効なリビールを混ぜ合わせて次エポックシード `S_e` を生成。
+3. `VrfEpochRecord` を最終化して保存。
+4. `epoch_report::VrfPenaltiesReport`、ステータスカウンタ、テレメトリを更新。
+
+更新されたシードは `deterministic_collectors` でコレクター選定に再利用され、`/v1/sumeragi/collectors` で `(height, view)` とともに公開されます。
+
+#### CLI とオペレーター手順
+- `iroha_cli sumeragi vrf-epoch --epoch <n>` で保存済みシード、参加テーブル、ペナルティ、`commit_deadline_offset`／`reveal_deadline_offset` を確認。`--summary` で 1 行表示。
+- `iroha_cli sumeragi telemetry --summary` は最新の投票合計、RBC backlog、VRF 参加サマリ（`reveals_total`, `late_reveals_total`, `committed_no_reveal` など）を返します。`--summary` を外すと JSON 全体が得られます。
+- `iroha_cli sumeragi params --summary` で `evidence_horizon_blocks` や `activation_lag_blocks` を含むコンセンサスパラメータを照合。
+- 手動投稿が必要な場合は Torii の POST エンドポイントを利用（自動化が通常は処理）。例:
+
+  ```bash
+  curl -X POST "$TORII/v1/sumeragi/vrf/commit" \
+    -H "Content-Type: application/json" \
+    -d '{"epoch":42,"signer":1,"commitment_hex":"0x..."}'
+  curl -X POST "$TORII/v1/sumeragi/vrf/reveal" \
+    -H "Content-Type: application/json" \
+    -d '{"epoch":42,"signer":1,"reveal_hex":"0x..."}'
+  ```
+
+  `/v1/sumeragi/collectors` でコレクター集合 (`collectors[*].peer_id`) を、`/v1/sumeragi/status` で `prf_epoch_seed`, `prf_height`, `vrf_late_reveals_total` 等を確認できます。
+
+**ランダムネス運用チェックリスト**
+- 各ブロック後に `sumeragi status --summary` を確認し、`vrf_penalty_epoch` が跳ねたり `committed_no_reveal` が増えた場合は `sumeragi vrf-epoch --epoch <n>` で不足しているバリデータを特定。
+- コミットウィンドウでは全バリデータがコミットを出したか `sumeragi telemetry --summary` (`commitments_total`) と `/v1/sumeragi/telemetry` の `vrf.commitments` で確認。
+- リビール締め切り前に `vrf.reveals_total` と `vrf_late_reveals_total` を監視。リビール漏れがあれば速やかにバリデータへ通知し、`POST /v1/sumeragi/vrf/reveal` で代理投稿できるよう準備。
+- 記録された `commit_deadline_offset`／`reveal_deadline_offset` が想定スケジュールと一致するか照合。ズレは構成ドリフトの兆候。
+- 遅延リビールが届いたら seed を控え、`vrf.late_reveals` へ登録されたことと `prf.epoch_seed` が変わらないことを確認。
+- エポック rollover 後にペナルティが解消 (`vrf_committed_no_reveal_total` が対象サイナーで 0 へ) されていることを確かめ、`/v1/sumeragi/vrf/epoch/{n}` が `finalized: true` を示すか検証。
+- 健全な NPoS では RBC データプレーンが CI の予算を維持します（`integration_tests/tests/sumeragi_npos_happy_path.rs` を参照）。`sumeragi_rbc_deliver_broadcasts_total` が各ブロックで進み、`sumeragi_bg_post_queue_depth` と `sumeragi_bg_post_queue_depth_by_peer` が ≤16 に収まっているか確認。
+
+`integration_tests/tests/sumeragi_npos_performance.rs` の `npos_rbc_store_backpressure_records_metrics` と `npos_rbc_chunk_loss_fault_reports_backlog` が RBC ストア圧力とチャンク損失のテレメトリを検証します。
+
+#### 指標とアラート
+- `sumeragi_vrf_commit_emitted_total` / `sumeragi_vrf_reveal_emitted_total` — 受理されたコミット／リビール数。
+- `sumeragi_vrf_non_reveal_total` / `sumeragi_vrf_no_participation_total` — 各エポックのペナルティカウンタ。
+- `sumeragi_prf_epoch_seed`（`/v1/sumeragi/status`）— 現行シード（16 進文字列から復元して可視化可能）。
+- `sumeragi_prf_context_height` / `_view` — コレクター／リーダー抽出に使用された `(height, view)`。
+- `/v1/sumeragi/vrf/epoch/{epoch}` — `seed_hex`、参加状況、ペナルティ集計を含むスナップショット。CLI 版は `sumeragi vrf-epoch`。
+- `/v1/sumeragi/telemetry` の `vrf` セクション — `{found, epoch, finalized, seed_hex, roster_len, participants_total, commitments_total, reveals_total, late_reveals_total, committed_no_reveal[], no_participation[], late_reveals[]}` を返し、リアルタイム参加率を可視化。
+- `/v1/sumeragi/status` は `vrf_penalty_epoch`, `vrf_committed_no_reveal_total`, `vrf_no_participation_total`, `vrf_late_reveals_total` を公開。遅延リビールは `sumeragi_vrf_reveals_late_total` と `world.vrf_epochs[*].late_reveals` に記録され、シードに影響しないことが保証されます。
+
+#### VRF アラート閾値
+- `increase(sumeragi_vrf_no_participation_total[1h]) > 0` または `increase(sumeragi_vrf_non_reveal_total[1h]) > 0` が継続する場合はページ送信。
+- `vrf_late_reveals_total` が急増したら 遅延提出の原因（遅延したバリデータやネットワーク）を調査。
+- `sumeragi_prf_epoch_seed` がエポック途中で変化した場合は重大インシデントとして扱い、`vrf-epoch` スナップショットと Torii ログで差分を解析。
+
+### マルチピアソークマトリクス
+
+Milestone A6 の sign-off では `sumeragi_npos_performance.rs` のストレスシナリオを
+複数のピア構成（4/6/8 ノード）で実行し、ログとサマリを束ねた sign-off パックを
+残す必要があります。以下のスクリプトはすべてのシナリオを実行し、
+各シナリオの `summary.json` / README を生成したうえで SRE と共有できる ZIP アーカイブを出力します。
+
+```bash
+python3 scripts/run_sumeragi_soak_matrix.py \
+  --artifacts-root artifacts/sumeragi-soak-$(date +%Y%m%d-%H%M) \
+  --pack artifacts/sumeragi-soak-$(date +%Y%m%d-%H%M)/signoff.zip
+```
+
+マトリクスの詳細とチェックリストは
+[`sumeragi_soak_matrix.md`](sumeragi_soak_matrix.md) を参照してください。

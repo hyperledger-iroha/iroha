@@ -1,0 +1,63 @@
+# World State Tiering Plan
+
+This note captures the initial steps towards splitting the World State View (WSV)
+into *hot* and *cold* tiers so validators can bound memory usage without giving up
+fast transaction validation.
+
+## Motivation
+
+- The in-memory WSV keeps every key resident, so long-lived networks accumulate
+  tens of gigabytes of state and stress validator hardware.
+- Operators need predictable resource bounds while retaining the ability to keep
+  frequently accessed data hot for low-latency queries and validation.
+
+## Current Implementation
+
+- `TieredStateBackend` (see `crates/iroha_core/src/state/tiered.rs`) now walks
+  the WSV after each committed block, ranks keys by their last mutation, and
+  spills entries beyond the configured hot capacity to the on-disk cold tier.
+  Cold payloads are written using Norito encoding alongside a snapshot manifest
+  (`manifest.json`) that records key hashes, value fingerprints, and relative
+  spill paths.
+- Runtime configuration lives under `iroha_config.parameters.tiered_state`
+  (`enabled`, `hot_retained_keys`, `cold_store_root`, `max_snapshots`). The node
+  applies these knobs at startup via `State::set_tiered_backend`, and the default
+  build keeps the feature disabled until operators opt in.
+- `StateBlock::commit` records a fresh snapshot under the configured cold root
+  (pruning older directories according to `max_snapshots`) while holding the
+  world-state write lock, guaranteeing deterministic manifests across peers.
+
+## Snapshot authenticity & recovery
+
+- Every state snapshot now ships with two sidecar files in the snapshot directory:
+  - `snapshot.sha256` — hex-encoded SHA-256 of `snapshot.data`
+  - `snapshot.sig` — signature over the raw SHA-256 digest using the node’s identity key
+- Snapshots also include `snapshot.merkle.json` (chunk size, total length, root hash, and per-chunk digests) computed with the configured `snapshot.merkle_chunk_size_bytes`. Restores validate the Merkle root against the snapshot bytes before replaying blocks.
+- Restore refuses snapshots when either sidecar is missing, the digest mismatches, or the signature fails under the configured node public key. Operators should keep the signing key secure and rotate snapshots if keys rotate.
+- `snapshot.verification_public_key` can override the verification key if operators want a dedicated verifier (defaults to the node identity key).
+- `snapshot.signing_private_key` can override the key used to sign snapshots if you want to separate signing from the node identity key.
+- Operational flow:
+  1. Ensure the node identity key is available when `snapshot.mode = "read_write"`.
+  2. On creation, the node writes `snapshot.data`, `snapshot.sha256`, and `snapshot.sig` atomically (temp files renamed in place).
+  3. On startup, restore loads `snapshot.data`, verifies the Merkle metadata (`snapshot.merkle.json`), recomputes the digest, verifies the signature, then checks block hashes against Kura.
+  4. If any check fails, the node falls back to building state from genesis.
+
+### Operator checklist
+- Keep `snapshot.store_dir` writable by the node and include it in backups alongside both sidecars.
+- Tune `snapshot.merkle_chunk_size_bytes` for your I/O profile (default 1 MiB). Changing the chunk size requires taking a new snapshot.
+- If rotating node keys, generate a fresh snapshot so future restores validate under the new public key.
+- For incident bundles/audits, include `snapshot.data`, `snapshot.sha256`, and `snapshot.sig` plus the node public key used for verification.
+
+## Next Steps
+
+1. **Populate metrics:** expose hot/cold hit ratios, spill counts, and snapshot
+   latencies so we can size the hot tier before switching it on by default.
+2. **Pluggable stores:** support swapping the cold tier between sled, LMDB, or a
+   streaming offload so operators can choose durability characteristics.
+3. **API surface:** add admin and telemetry endpoints for runtime inspection and
+   surface the new `tiered_state` knobs via CLI/REST for dynamic control.
+4. **Verification:** extend integration tests to run with a limited hot tier and
+   ensure transaction validation pulls cold data on demand without diverging.
+
+These steps keep the implementation small and testable while moving us towards a
+bounded-memory WSV that still delivers the current validation guarantees.

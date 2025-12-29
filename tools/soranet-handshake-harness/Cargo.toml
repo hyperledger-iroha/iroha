@@ -1,0 +1,25 @@
+[package]
+name = "soranet-handshake-harness"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+description = "Reference harness for SoraNet handshake fixtures"
+
+[dependencies]
+base64 = { workspace = true }
+clap = { version = "4.5.51", features = ["derive"] }
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
+hex = "0.4.3"
+norito = { workspace = true }
+sha3 = "0.10.8"
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+time = { version = "0.3.44", features = ["formatting", "parsing"] }
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+iroha_crypto = { workspace = true }
+soranet_pq = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = "2.1.1"

@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha मा स्वागत छ!",
+  "error.trace_config_setup": "कन्फिगरेसन ट्रेसिङ सेटअप गर्न सकिएन",
+  "error.config": "कन्फिगरेसन त्रुटि!",
+  "error.logger": "लगिङ प्रणाली सुरु गर्न सकिएन",
+  "error.start": "Iroha सुरु गर्न सकिएन",
+  "error.run": "Iroha चलाउँदा त्रुटि भयो",
+  "error.start_p2p": "P2P सञ्जाल सुरु गर्न सकिएन",
+  "error.init_kura": "Kura (ब्लक भण्डारण) सुरु गर्न सकिएन",
+  "error.start_dev_telemetry": "विकास टेलिमेट्री सेवा सुरु गर्न सकिएन",
+  "error.start_telemetry": "टेलिमेट्री सेवा सुरु गर्न सकिएन",
+  "error.listen_os_signal": "OS संकेत सुन्न कन्फिगर गर्न सकिएन",
+  "error.start_torii": "Torii (Iroha HTTP API गेटवे) सुरु गर्न सकिएन"
+}

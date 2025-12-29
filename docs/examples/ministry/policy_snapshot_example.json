@@ -1,0 +1,18 @@
+{
+  "snapshot_id": "denylist-2026-03",
+  "generated_at": "2026-03-31T12:00:00Z",
+  "entries": [
+    {
+      "hash_family": "blake3-256",
+      "hash_hex": "0d714bed4b7c63c23a2cf8ee9ce6c3cde1007907c427b4a0754e8ad31c91338d",
+      "policy_id": "denylist-2025-014-entry-01",
+      "note": "Referenced by GAR case CSAM-2025-014; already quarantined."
+    },
+    {
+      "hash_family": "sha256",
+      "hash_hex": "b0d19565b8772ba7e9f40c4e19b53b98116037535b0dc5fd5b1f989c5b2ff1c1",
+      "policy_id": "denylist-2025-014-entry-02",
+      "note": "Legacy IPv4 malware mirror blocked by compliance."
+    }
+  ]
+}

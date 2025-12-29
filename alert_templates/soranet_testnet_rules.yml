@@ -1,0 +1,30 @@
+groups:
+  - name: soranet-testnet.rules
+    interval: 1m
+    rules:
+      - record: job:soranet_privacy_circuit_downgrades_per_minute
+        expr: sum by (region) (rate(soranet_privacy_circuit_events_total{kind="downgrade"}[5m]))
+      - alert: SoranetCircuitDowngradeRate
+        expr: job:soranet_privacy_circuit_downgrades_per_minute > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraNet downgrade rate exceeded zero"
+          description: "Region {{ $labels.region }} is experiencing downgrades. Investigate guard availability and PQ supply."
+      - alert: SoranetBrownoutSpike
+        expr: sum(rate(sorafs_orchestrator_policy_events_total{outcome="brownout"}[10m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Brownout ratio exceeded threshold"
+          description: "Brownout events are above acceptable limits. Check relay PQ ratio and compliance overrides."
+      - alert: SoranetRelayDown
+        expr: up{job="soranet-relay"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Relay instance unreachable"
+          description: "Relay {{ $labels.instance }} is down. Restore connectivity immediately."

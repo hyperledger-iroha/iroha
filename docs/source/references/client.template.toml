@@ -1,0 +1,23 @@
+# chain =
+
+## Configure the Torii endpoint via this file. Environment variable overrides exist for developer tooling but are not meant for operator workflows.
+# torii_url = "http://127.0.0.1:8080"
+
+[basic_auth]
+# login =
+# password =
+
+[account]
+# domain =
+# public_key =
+# private_key =
+
+[transaction]
+# time_to_live_ms = 100_000
+# status_timeout_ms = 100_000
+## Whether to append a random nonce to every submitted transaction (helps avoid hash clashes in demos/tests).
+# nonce = false
+
+[connect]
+# Root directory for Connect queue diagnostics and evidence export. Defaults to `~/.iroha/connect`.
+# queue_root = "/home/alice/.iroha/connect"

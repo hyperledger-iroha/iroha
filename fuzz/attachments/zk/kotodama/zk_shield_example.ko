@@ -1,0 +1,22 @@
+// Kotodama sample: shield-like host interaction demo (logs and asset ops)
+
+seiyaku ZkShieldDemo {
+  meta {
+    abi_version: 1,
+    features: ["zk"],
+    max_cycles: 0,
+  }
+
+  // Public entrypoint: demonstrates pointer constructors and host calls
+  kotoage fn run() {
+    let who = account!("alice@wonderland");
+    let ad = asset_definition!("rose#wonderland");
+
+    info("ZkShieldDemo: start");
+    // Example: set an account detail (host syscall)
+    set_account_detail(who, name!("zk_demo"), json!{ run: true });
+    // Example: mint a tiny amount (host syscall)
+    mint_asset(who, ad, 1);
+    info("ZkShieldDemo: done");
+  }
+}

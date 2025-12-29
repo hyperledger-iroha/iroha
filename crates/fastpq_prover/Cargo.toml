@@ -1,0 +1,56 @@
+[package]
+name = "fastpq_prover"
+version.workspace = true
+edition = "2024"
+publish = false
+
+[features]
+default = []
+fastpq-gpu = ["dep:metal"]
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+fastpq_isi = { path = "../fastpq_isi" }
+iroha_crypto = { workspace = true }
+iroha_data_model = { workspace = true }
+iroha_primitives = { workspace = true }
+iroha_zkp_halo2 = { workspace = true }
+norito = { workspace = true, features = ["json"] }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+tracing = { workspace = true }
+smallvec = { version = "1.15.1", default-features = false, features = ["union"] }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+time = { workspace = true }
+
+halo2curves = { workspace = true }
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = { version = "0.32.0", optional = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+iroha_test_samples = { workspace = true }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
+
+[[bench]]
+name = "planner"
+harness = false
+
+[[bin]]
+name = "fastpq_metal_bench"
+path = "src/bin/fastpq_metal_bench.rs"
+required-features = ["fastpq-gpu"]
+
+[[bin]]
+name = "fastpq_cuda_bench"
+path = "src/bin/fastpq_cuda_bench.rs"
+
+[[test]]
+name = "transcript_replay"
+required-features = ["fastpq-gpu"]
+
+[build-dependencies]
+cc = "1.2.45"
+
+[lints]
+workspace = true

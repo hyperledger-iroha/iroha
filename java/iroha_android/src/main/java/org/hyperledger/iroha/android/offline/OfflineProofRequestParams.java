@@ -1,0 +1,103 @@
+package org.hyperledger.iroha.android.offline;
+
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Objects;
+import org.hyperledger.iroha.android.client.JsonEncoder;
+
+/** Parameters accepted by the Torii `/v1/offline/transfers/proof` endpoint. */
+public final class OfflineProofRequestParams {
+
+  private final String bundleIdHex;
+  private final OfflineProofRequestKind kind;
+  private final Long counterCheckpoint;
+  private final String replayLogHeadHex;
+  private final String replayLogTailHex;
+
+  private OfflineProofRequestParams(final Builder builder) {
+    this.bundleIdHex =
+        Objects.requireNonNull(builder.bundleIdHex, "bundleIdHex must be provided").trim();
+    if (bundleIdHex.isEmpty()) {
+      throw new IllegalArgumentException("bundleIdHex must not be empty");
+    }
+    this.kind = Objects.requireNonNull(builder.kind, "kind must be provided");
+    this.counterCheckpoint = builder.counterCheckpoint;
+    this.replayLogHeadHex = builder.replayLogHeadHex;
+    this.replayLogTailHex = builder.replayLogTailHex;
+    if (kind == OfflineProofRequestKind.REPLAY) {
+      if (replayLogHeadHex == null || replayLogTailHex == null) {
+        throw new IllegalArgumentException(
+            "replay proofs require replayLogHeadHex and replayLogTailHex");
+      }
+    } else {
+      if (replayLogHeadHex != null || replayLogTailHex != null) {
+        throw new IllegalArgumentException(
+            "replayLogHeadHex/replayLogTailHex are only valid for replay proofs");
+      }
+    }
+  }
+
+  public static Builder builder() {
+    return new Builder();
+  }
+
+  public OfflineProofRequestKind kind() {
+    return kind;
+  }
+
+  public byte[] toJsonBytes() {
+    final Map<String, Object> body = new LinkedHashMap<>();
+    body.put("bundle_id_hex", bundleIdHex);
+    body.put("kind", kind.asParameter());
+    if (counterCheckpoint != null) {
+      body.put("counter_checkpoint", counterCheckpoint);
+    }
+    if (replayLogHeadHex != null) {
+      body.put("replay_log_head_hex", replayLogHeadHex);
+    }
+    if (replayLogTailHex != null) {
+      body.put("replay_log_tail_hex", replayLogTailHex);
+    }
+    return JsonEncoder.encode(body).getBytes(StandardCharsets.UTF_8);
+  }
+
+  public static final class Builder {
+    private String bundleIdHex;
+    private OfflineProofRequestKind kind;
+    private Long counterCheckpoint;
+    private String replayLogHeadHex;
+    private String replayLogTailHex;
+
+    private Builder() {}
+
+    public Builder bundleIdHex(final String bundleIdHex) {
+      this.bundleIdHex = bundleIdHex;
+      return this;
+    }
+
+    public Builder kind(final OfflineProofRequestKind kind) {
+      this.kind = kind;
+      return this;
+    }
+
+    public Builder counterCheckpoint(final Long counterCheckpoint) {
+      this.counterCheckpoint = counterCheckpoint;
+      return this;
+    }
+
+    public Builder replayLogHeadHex(final String replayLogHeadHex) {
+      this.replayLogHeadHex = replayLogHeadHex;
+      return this;
+    }
+
+    public Builder replayLogTailHex(final String replayLogTailHex) {
+      this.replayLogTailHex = replayLogTailHex;
+      return this;
+    }
+
+    public OfflineProofRequestParams build() {
+      return new OfflineProofRequestParams(this);
+    }
+  }
+}

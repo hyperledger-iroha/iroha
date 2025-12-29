@@ -1,0 +1,328 @@
+[workspace.package]
+edition = "2024"
+rust-version = "1.91"
+version = "2.0.0-rc.2.0"
+# GitHub org teams pages are deprecated; point to project contributors instead.
+authors = ["Iroha 2 contributors <https://github.com/hyperledger-iroha/iroha/graphs/contributors>"]
+
+description = "Efficient, simple, Byzantine-fault-tolerant DLT inspired by the Kaizen principle"
+repository = "https://github.com/hyperledger-iroha/iroha"
+documentation = "https://docs.iroha.tech"
+homepage = "https://iroha.tech"
+
+license = "Apache-2.0"
+keywords = ["blockchain", "crypto", "iroha", "ledger"]
+categories = ["cryptography::cryptocurrencies"]
+
+[workspace.metadata]
+docker_bins = ["iroha", "irohad", "iroha3", "iroha3d", "iroha2", "iroha2d", "kagami"]
+
+[workspace.dependencies]
+iroha_core = { path = "crates/iroha_core" }
+
+iroha_torii = { path = "crates/iroha_torii", default-features = false, features = ["app_api", "transparent_api", "ws_integration_tests", "connect", "circuit-params", "zk-tests", "zk-halo2", "zk-halo2-ipa", "ipa-commitment"] }
+iroha_torii_shared = { path = "crates/iroha_torii_shared" }
+
+iroha = { path = "crates/iroha" }
+
+iroha_macro_utils = { path = "crates/iroha_macro_utils" }
+iroha_telemetry = { path = "crates/iroha_telemetry" }
+iroha_p2p = { path = "crates/iroha_p2p" }
+iroha_primitives = { path = "crates/iroha_primitives", default-features = false }
+iroha_config = { path = "crates/iroha_config" }
+iroha_config_base = { path = "crates/iroha_config_base" }
+iroha_derive = { path = "crates/iroha_derive" }
+iroha_derive_primitives = { path = "crates/iroha_derive_primitives" }
+iroha_schema_gen = { path = "crates/iroha_schema_gen" }
+iroha_schema = { path = "crates/iroha_schema", default-features = false }
+iroha_logger = { path = "crates/iroha_logger" }
+iroha_crypto = { path = "crates/iroha_crypto", default-features = false, features = ["std", "rand", "bls", "bls-multi-pairing"] }
+iroha_macro = { path = "crates/iroha_macro", default-features = false }
+iroha_futures = { path = "crates/iroha_futures" }
+iroha_genesis = { path = "crates/iroha_genesis" }
+norito = { path = "crates/norito", features = ["json", "json-std-io", "strict-safe", "gpu-compression"] }
+norito_derive = { path = "crates/norito_derive" }
+iroha_ffi = { path = "crates/iroha_ffi" }
+iroha_version = { path = "crates/iroha_version", default-features = false, features = ["json"] }
+connect_norito_bridge = { path = "crates/connect_norito_bridge" }
+iroha_zkp_halo2 = { path = "crates/iroha_zkp_halo2" }
+iroha_i18n = { path = "crates/iroha_i18n" }
+
+iroha_smart_contract = { path = "crates/iroha_smart_contract" }
+iroha_smart_contract_utils = { path = "crates/iroha_smart_contract_utils" }
+iroha_executor = { path = "crates/iroha_executor" }
+iroha_smart_contract_codec = { path = "crates/iroha_smart_contract_codec" }
+iroha_trigger = { path = "crates/iroha_trigger" }
+iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
+
+iroha_data_model = { path = "crates/iroha_data_model", default-features = false, features = ["json", "governance", "http", "bridge"] }
+iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
+
+iroha_test_network = { path = "crates/iroha_test_network" }
+iroha_test_samples = { path = "crates/iroha_test_samples" }
+ivm = { path = "crates/ivm" }
+sorafs_car = { path = "crates/sorafs_car" }
+sorafs_chunker = { path = "crates/sorafs_chunker" }
+sorafs_manifest = { path = "crates/sorafs_manifest" }
+sorafs_orchestrator = { path = "crates/sorafs_orchestrator" }
+soranet_pq = { path = "crates/soranet_pq" }
+
+# Note: remaining dependencies stay pinned until we resolve the outstanding
+# compatibility issues with their latest major releases.
+
+proc-macro2 = "1.0.103"
+syn = { version = "2.0.109", default-features = false }
+quote = "1.0.42"
+manyhow = { version = "0.11.4", features = ["darling"] }
+darling = "0.22.0"
+drop_bomb = "0.1.5"
+
+futures = { version = "0.3.31", default-features = false }
+tokio = "1.48.0"
+tokio-stream = "0.1.17"
+tokio-tungstenite = "0.28.0"
+tokio-util = "0.7.17"
+tokio-rustls = { version = "0.26.4", default-features = false }
+rustls = { version = "0.23.35", default-features = false, features = ["std"] }
+tungstenite = "0.28.0"
+crossbeam-queue = "0.3.12"
+parking_lot = { version = "0.12.5" }
+blake3 = "1.8.2"
+blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
+once_cell = "1.21.3"
+
+tempfile = "3.23.0"
+path-absolutize = "3.1.1"
+bytes = "1.10.1"
+
+vergen = { version = "9.0.6", default-features = false }
+"vergen-git2" = { version = "1.0.7", default-features = false }
+trybuild = "1.0.114"
+impls = "1.0.3"
+
+base64 = { version = "0.22.1", default-features = false }
+hex = { version = "0.4.3", default-features = false }
+http-body-util = "0.1.3"
+http = "1.3.1"
+httpmock = "0.8.2"
+nonzero_ext = { version = "0.3.0", default-features = false }
+rust_decimal = { version = "1.39", default-features = false }
+
+heck = "0.5.0"
+
+url = "2.5.7"
+reqwest = { version = "0.12.24", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
+
+clap = "4.5.51"
+owo-colors = "4.2.3"
+supports-color = "3.0.2"
+humantime = "2.3.0"
+crossterm = "0.29"
+eframe = { version = "0.33.0", default-features = true }
+
+criterion = "0.8.0"
+expect-test = "1.5.1"
+assertables = "9.8.2"
+
+eyre = "0.6.12"
+color-eyre = "0.6.5"
+thiserror = { version = "2.0.17", default-features = false }
+displaydoc = { version = "0.2.5", default-features = false }
+error-stack = "0.6.0"
+
+# Removed cfg-if dependency as we now use explicit cfg attributes
+derive_more = { version = "2.0.1", default-features = false }
+async-trait = "0.1.89"
+strum = { version = "0.27.2", default-features = false }
+getset = "0.1.6"
+hex-literal = "1.1.0"
+derive-where = "1.6.0"
+
+rand = { version = "0.9.2", default-features = false, features = ["alloc", "os_rng", "small_rng", "std", "std_rng", "thread_rng"] }
+rand_core_06 = { package = "rand_core", version = "0.6.4", default-features = false, features = ["std"] }
+axum = { version = "0.8.6", default-features = false }
+
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = { version = "0.3.20", default-features = false }
+
+rayon = "1.11.0"
+
+dashmap = { version = "6.1.0" }
+rustc-hash = "2.1.1"
+
+json5 = "1.0.0"
+toml = "0.9.8"
+bincode = "2.0.1"
+zstd = "0.13.3"
+time = { version = "0.3.44", default-features = false, features = ["formatting", "parsing"] }
+
+tiny-keccak = { version = "2.0.2", features = ["sha3"] }
+halo2curves = { version = "0.9" }
+
+mv = { path = "crates/mv" }
+concread = "=0.5.7"
+
+# [patch.crates-io] was temporarily disabled; re-enable the Halo2 patches so the
+# vendor versions (which expose Serde helpers required by our CLI tests) are used.
+[patch.crates-io]
+halo2-axiom = { path = "vendor/halo2-axiom" }
+halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
+rust_decimal = { path = "vendor/rust_decimal" }
+"vergen-git2" = { path = "vendor/vergen-git2" }
+find_cuda_helper = { path = "vendor/find_cuda_helper" }
+writeable = { path = "vendor/writeable" }
+document-features = { path = "vendor/document-features" }
+indoc = { path = "vendor/indoc" }
+is-terminal = { path = "vendor/is-terminal" }
+darling = { path = "vendor/darling-0.22.0/darling-0.22.0" }
+darling_core = { path = "vendor/darling_core-0.22.0/darling_core-0.22.0" }
+darling_macro = { path = "vendor/darling_macro-0.22.0/darling_macro-0.22.0" }
+#streebog = { path = "vendor/streebog" }
+#opus = { path = "vendor/opus_stub" }
+pasta_curves = { path = "vendor/pasta_curves" }
+#icrate = { path = "vendor/icrate" }
+
+[workspace.lints]
+rustdoc.private_doc_tests = "deny"
+
+rust.future_incompatible = { level = "deny", priority = -1 }
+rust.nonstandard_style = { level = "deny", priority = -1 }
+rust.rust_2018_idioms = { level = "deny", priority = -1 }
+rust.unused = { level = "warn", priority = -1 }
+
+rust.anonymous_parameters = "deny"
+rust.missing_copy_implementations = "deny"
+rust.missing_docs = "deny"
+rust.trivial_casts = "deny"
+# FIXME: https://github.com/paritytech/parity-scale-codec/issues/740
+#        There are 900+ errors in the workspace.
+#        Too many to put individual `#[allow]` everywhere.
+rust.trivial_numeric_casts = "allow"
+rust.unsafe_code = "deny"
+rust.variant_size_differences = "deny"
+rust.explicit_outlives_requirements = "deny"
+rust.non_ascii_idents = "deny"
+rust.elided_lifetimes_in_paths = "allow"
+rust.unknown_lints = "warn"
+rust.single_use_lifetimes = "warn"
+rust.unsafe_op_in_unsafe_fn = "deny"
+rust.unexpected_cfgs = { level = "warn", check-cfg = [
+    # FIXME: https://github.com/hyperledger-iroha/iroha/issues/3102
+    'cfg(feature, values("adaptive-telemetry"))',
+    'cfg(feature, values("adaptive-telemetry-log"))',
+    'cfg(feature, values("bench-internal"))',
+    'cfg(feature, values("columnar"))',
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("compression"))',
+    'cfg(feature, values("crc-key-hash"))',
+    'cfg(feature, values("cuda-stage1"))',
+    'cfg(feature, values("derive"))',
+    'cfg(feature, values("ffi_import"))',
+    'cfg(feature, values("gpu-compression"))',
+    'cfg(feature, values("iroha_schema"))',
+    'cfg(feature, values("iroha-core-tests"))',
+    'cfg(feature, values("halo2-dev-tests"))',
+    'cfg(feature, values("json"))',
+    'cfg(feature, values("json-raw-value"))',
+    'cfg(feature, values("json-std-io"))',
+    'cfg(feature, values("metal-stage1"))',
+    'cfg(feature, values("packed-seq"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("parallel-stage1"))',
+    'cfg(feature, values("parallel-stage1-rayon"))',
+    'cfg(feature, values("parity-scale"))',
+    'cfg(feature, values("schema-structural"))',
+    'cfg(feature, values("sm"))',
+    'cfg(target_feature, values("neon", "pmull"))',
+    'cfg(feature, values("simd-accel"))',
+    'cfg(feature, values("simdutf8-validate"))',
+    'cfg(feature, values("stage1-validate"))',
+    'cfg(feature, values("std"))',
+    'cfg(feature, values("strict-safe"))',
+    'cfg(feature, values("transparent_api"))',
+    'cfg(feature, values("trybuild-tests"))',
+    # It is set by `cargo-llvm-cov`
+    'cfg(coverage)'
+] }
+
+# pedantic
+clippy.pedantic = { level = "warn", priority = -1 }
+clippy.match_wildcard_for_single_variants = "allow"
+clippy.semicolon_if_nothing_returned = "allow"
+clippy.wildcard_imports = "allow"
+clippy.manual_let_else = "allow"
+clippy.enum_glob_use = "allow"
+clippy.module_name_repetitions = "allow"
+clippy.must_use_candidate = "allow"
+clippy.missing_panics_doc = "allow"
+
+# restriction
+clippy.dbg_macro = "deny"
+
+# nursery
+clippy.debug_assert_with_mut_call = "deny"
+clippy.derive_partial_eq_without_eq = "deny"
+clippy.empty_line_after_outer_attr = "deny"
+clippy.fallible_impl_from = "deny"
+clippy.future_not_send = "deny"
+clippy.iter_with_drain = "deny"
+clippy.mutex_integer = "deny"
+clippy.needless_collect = "deny"
+clippy.path_buf_push_overwrite = "deny"
+clippy.suboptimal_flops = "deny"
+clippy.trailing_empty_array = "deny"
+clippy.transmute_undefined_repr = "deny"
+clippy.trivial_regex = "deny"
+clippy.unused_peekable = "deny"
+clippy.unused_rounding = "deny"
+clippy.option_if_let_else = "warn"
+clippy.or_fun_call = "warn"
+clippy.redundant_pub_crate = "warn"
+clippy.string_lit_as_bytes = "warn"
+clippy.suspicious_operation_groupings = "warn"
+clippy.useless_let_if_seq = "warn"
+
+# cargo
+clippy.redundant_feature_names = "deny"
+clippy.wildcard_dependencies = "deny"
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/*",
+    "crates/norito/accelerators/jsonstage1_cuda",
+    "crates/norito/accelerators/jsonstage1_metal",
+    "crates/iroha_ffi/proc_macro",
+    "vendor/find_cuda_helper",
+    "mochi/*",
+    "data_model/samples/*",
+    "integration_tests",
+    "python/iroha_python/iroha_python_rs",
+    "xtask",
+    "tools/soranet-handshake-harness",
+    "tools/soranet-puzzle-service",
+    "tools/soranet-relay",
+    "tools/norito_codegen_exporter",
+    "tools/soradns-resolver",
+    "tools/telemetry-schema-diff"
+]
+exclude = [
+    "mochi/fixtures"
+]
+
+[profile.dev]
+incremental = true
+split-debuginfo = "packed"
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.deploy]
+inherits = "release"
+strip = "symbols"
+lto = true
+
+[profile.profiling]
+inherits = "release"
+debug = "limited"

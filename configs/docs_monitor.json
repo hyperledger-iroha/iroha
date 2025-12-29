@@ -1,0 +1,64 @@
+{
+  "portal": {
+    "baseUrl": "https://docs-preview.sora.link",
+    "paths": ["/", "/devportal/try-it", "/reference/torii-swagger"],
+    "expectRelease": "preview-2026-02-14",
+    "checkSecurity": true,
+    "expectedSecurity": {
+      "csp": "default-src 'self'; connect-src https://tryit-preview.sora",
+      "permissionsPolicy": "fullscreen=()",
+      "referrerPolicy": "strict-origin-when-cross-origin"
+    }
+  },
+  "tryIt": {
+    "proxyUrl": "https://tryit-preview.sora",
+    "samplePath": "/proxy/v1/accounts/wonderland@wonderland/assets?limit=1",
+    "method": "GET",
+    "timeoutMs": 7000,
+    "token": "${TRYIT_BEARER}",
+    "metricsUrl": "https://tryit-preview.sora/metrics"
+  },
+  "bindings": [
+    {
+      "label": "portal",
+      "url": "https://docs-preview.sora.link/.well-known/sorafs/manifest",
+      "alias": "docs-preview.sora.link",
+      "contentCid": "bafybeiaff84aef0aaaf6a7c246c8ca1889e62d69c8d9b20d94933cb7b09902f3",
+      "manifest": "8b8f3d2a4a7e92abdb17e5fafd4f9d67c6c7a8547ff985bb0d71f87209c1444d",
+      "status": "ok",
+      "expectHost": "docs-preview.sora.link"
+    },
+    {
+      "label": "openapi",
+      "url": "https://docs-preview.sora.link/.well-known/sorafs/openapi",
+      "alias": "docs-preview.sora.link",
+      "contentCid": "bafybeidevopenapi",
+      "manifest": "dad4b9fd48e35297c7fd71cd15b52c4ff0bb62dd8a1da4c5c2c1536ae2732b55",
+      "status": "ok",
+      "expectHost": "docs-preview.sora.link"
+    },
+    {
+      "label": "portal-sbom",
+      "url": "https://docs-preview.sora.link/.well-known/sorafs/portal-sbom",
+      "alias": "docs-preview.sora.link",
+      "contentCid": "bafybeiportalssbom",
+      "manifest": "e2b2790f9f4c1ecbc8f1bdb9f8ba3fd65fd687e9e5e4de3c3d67c3d3192b79c8",
+      "status": "ok",
+      "expectHost": "docs-preview.sora.link"
+    }
+  ],
+  "dns": [
+    {
+      "label": "docs-preview CNAME",
+      "hostname": "docs-preview.sora.link",
+      "recordType": "CNAME",
+      "expectedRecords": ["docs-preview.sora.link.gw.sora.name"]
+    },
+    {
+      "label": "docs-preview canonical",
+      "hostname": "igjssx53t4ayu3d5qus5o6xtp2f5dvka5rewr6xgscpmh3x4io4q.gw.sora.id",
+      "recordType": "CNAME",
+      "expectedRecords": ["docs-preview.sora.link.gw.sora.name"]
+    }
+  ]
+}

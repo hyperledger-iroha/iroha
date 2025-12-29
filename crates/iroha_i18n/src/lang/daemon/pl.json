@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Witamy w Hyperledger Iroha!",
+  "error.trace_config_setup": "Nie mogłem skonfigurować śledzenia konfiguracji",
+  "error.config": "Błąd konfiguracji",
+  "error.logger": "Nie można zainicjować systemu logowania",
+  "error.start": "Nie udało się uruchomić Iroha",
+  "error.run": "Błąd wystąpił podczas uruchamiania Iroha",
+  "error.start_p2p": "Nie można uruchomić sieci peer-to-peer",
+  "error.init_kura": "Nie można zainicjować kury (przechowywanie bloków)",
+  "error.start_dev_telemetry": "Nie można uruchomić usługi telemetrii dla deweloperów",
+  "error.start_telemetry": "Nie można uruchomić usługi telemetrycznej",
+  "error.listen_os_signal": "Nie można skonfigurować słuchania sygnałów systemu operacyjnego",
+  "error.start_torii": "Nie można uruchomić Torii (bramy Iroha HTTP API)"
+}

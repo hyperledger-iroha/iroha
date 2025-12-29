@@ -1,0 +1,9 @@
+# Stage B / Ramp rollout configuration
+[sorafs]
+rollout_phase = "ramp"
+# Optional explicit stage override (otherwise the phase selects anon-majority-pq)
+# anonymity_policy = "anon-majority-pq"
+
+[sorafs.gateway]
+rollout_phase = "ramp"
+# anonymity_policy = "anon-majority-pq"

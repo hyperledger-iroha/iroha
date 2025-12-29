@@ -1,0 +1,15 @@
+[package]
+name = "rust_decimal"
+version = "1.39.0"
+edition = "2024"
+description = "Minimal stub of rust_decimal for offline builds"
+license = "Apache-2.0"
+
+[features]
+default = ["std", "serde"]
+std = []
+serde = ["dep:serde"]
+c-repr = []
+
+[dependencies]
+serde = { version = "1.0", optional = true, features = ["derive"] }

@@ -1,0 +1,905 @@
+//! Proposal- and block-created message handling.
+
+use iroha_logger::prelude::*;
+
+use super::*;
+
+pub(super) fn invalid_proposal_evidence(
+    proposal: crate::sumeragi::consensus::Proposal,
+    reason: String,
+) -> crate::sumeragi::consensus::Evidence {
+    crate::sumeragi::consensus::Evidence {
+        kind: crate::sumeragi::consensus::EvidenceKind::InvalidProposal,
+        payload: crate::sumeragi::consensus::EvidencePayload::InvalidProposal { proposal, reason },
+    }
+}
+
+#[inline]
+fn stale_height(height: u64, committed_height: u64) -> bool {
+    height <= committed_height
+}
+
+pub(super) fn allow_stale_block_created(da_enabled: bool, missing_request: bool) -> bool {
+    da_enabled || missing_request
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct MissingProposalContext {
+    pub(super) hint_seen: bool,
+    pub(super) proposal_cached: bool,
+    pub(super) pending_blocks: usize,
+    pub(super) pending_match: bool,
+    pub(super) pending_gate: Option<GateReason>,
+    pub(super) pending_validation: Option<ValidationStatus>,
+    pub(super) pending_availability_qc_view: Option<u64>,
+    pub(super) pending_age_ms: Option<u64>,
+    pub(super) commit_inflight: Option<(u64, u64)>,
+    pub(super) forced_view_after_timeout: Option<(u64, u64)>,
+    pub(super) da_enabled: bool,
+}
+
+impl Actor {
+    pub(super) fn handle_consensus_params(
+        &self,
+        advert: super::message::ConsensusParamsAdvert,
+    ) -> Result<()> {
+        let expected_k = u64::try_from(self.config.collectors_k).unwrap_or(u64::MAX);
+        let expected_r = u64::from(self.config.collectors_redundant_send_r);
+        if u64::from(advert.collectors_k) != expected_k {
+            warn!(
+                advertised = advert.collectors_k,
+                expected = expected_k,
+                "collector parameter mismatch"
+            );
+        }
+        if u64::from(advert.redundant_send_r) != expected_r {
+            warn!(
+                advertised = advert.redundant_send_r,
+                expected = expected_r,
+                "redundant send parameter mismatch"
+            );
+        }
+        #[cfg(feature = "telemetry")]
+        self.telemetry.set_collectors_params(
+            u64::from(advert.collectors_k),
+            u64::from(advert.redundant_send_r),
+        );
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn handle_proposal_hint(
+        &mut self,
+        hint: super::message::ProposalHint,
+    ) -> Result<()> {
+        let mut hint = hint;
+        let highest_qc = hint.highest_qc;
+        let height = hint.height;
+        let view = hint.view;
+        let state_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        if stale_height(height, state_height) {
+            debug!(
+                height,
+                view,
+                state_height,
+                block = %hint.block_hash,
+                "dropping proposal hint at or below committed height"
+            );
+            self.propose.proposal_cache.prune_height_leq(state_height);
+            return Ok(());
+        }
+        if self.drop_stale_view(height, view, "ProposalHint") {
+            return Ok(());
+        }
+        let committed_height = self.latest_committed_qc().map_or(0, |qc| qc.height);
+
+        if let Some(existing) = self.propose.proposal_cache.get_hint(height, view) {
+            let conflict = existing.block_hash != hint.block_hash
+                || existing.height != hint.height
+                || existing.view != hint.view
+                || existing.highest_qc != highest_qc;
+            if conflict {
+                let committed_conflict = usize::try_from(existing.highest_qc.height)
+                    .ok()
+                    .and_then(NonZeroUsize::new)
+                    .and_then(|nz| self.kura.get_block(nz))
+                    .map(|block| block.hash())
+                    .is_some_and(|hash| hash != existing.highest_qc.subject_block_hash)
+                    && existing.highest_qc.height <= committed_height;
+                if committed_conflict {
+                    info!(
+                        height,
+                        view,
+                        existing_block = %existing.block_hash,
+                        incoming_block = %hint.block_hash,
+                        existing_highest = %existing.highest_qc.subject_block_hash,
+                        incoming_highest = %highest_qc.subject_block_hash,
+                        "replacing cached proposal hint that conflicts with committed tip"
+                    );
+                } else {
+                    info!(
+                        height,
+                        view,
+                        existing_block = %existing.block_hash,
+                        incoming_block = %hint.block_hash,
+                        existing_highest = %existing.highest_qc.subject_block_hash,
+                        incoming_highest = %highest_qc.subject_block_hash,
+                        "ignoring conflicting proposal hint for cached slot"
+                    );
+                    return Ok(());
+                }
+            }
+
+            if existing.avail_qc_ref.is_some() && hint.avail_qc_ref.is_none() {
+                hint.avail_qc_ref = existing.avail_qc_ref;
+            }
+        }
+
+        if let Some(stored_height) = self
+            .kura
+            .get_block_height_by_hash(highest_qc.subject_block_hash)
+            .and_then(|nz| u64::try_from(nz.get()).ok())
+        {
+            if stored_height != highest_qc.height {
+                warn!(
+                    height,
+                    view,
+                    stored_height,
+                    highest_height = highest_qc.height,
+                    block = %highest_qc.subject_block_hash,
+                    "dropping proposal hint: highest QC hash stored at different height"
+                );
+                return Ok(());
+            }
+            let stored_hash = usize::try_from(stored_height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .and_then(|nz| self.kura.get_block(nz))
+                .map(|block| block.hash());
+            if highest_qc.height <= committed_height
+                && stored_hash.is_some_and(|hash| hash != highest_qc.subject_block_hash)
+            {
+                info!(
+                    height,
+                    view,
+                    committed_height,
+                    committed_hash = %stored_hash.unwrap_or(highest_qc.subject_block_hash),
+                    highest_hash = %highest_qc.subject_block_hash,
+                    "dropping proposal hint: highest QC conflicts with committed block at height"
+                );
+                return Ok(());
+            }
+        } else if highest_qc.height <= committed_height {
+            info!(
+                height,
+                view,
+                committed_height,
+                highest_height = highest_qc.height,
+                block = %highest_qc.subject_block_hash,
+                "dropping proposal hint: highest QC block missing locally for committed height"
+            );
+            return Ok(());
+        } else {
+            info!(
+                height,
+                view,
+                highest_height = highest_qc.height,
+                block = %highest_qc.subject_block_hash,
+                "caching proposal hint without local highest QC block; awaiting sync"
+            );
+        }
+
+        self.update_prf_context_for_hint(&hint);
+        if !self.ensure_highest_qc_extends_locked(&hint, highest_qc) {
+            return Ok(());
+        }
+        self.highest_qc = Some(highest_qc);
+        self.record_phase_sample(PipelinePhase::Propose, hint.height, hint.view);
+        super::status::set_highest_qc(highest_qc.height, highest_qc.view);
+        super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
+        let hint_block = hint.block_hash;
+        self.propose.proposal_cache.insert_hint(hint);
+        if self.proposals_seen.insert((height, view)) {
+            iroha_logger::info!(
+                height,
+                view,
+                block = %hint_block,
+                "observed proposal hint for view"
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn update_prf_context_for_hint(&self, hint: &super::message::ProposalHint) {
+        if let ConsensusMode::Npos = self.consensus_mode {
+            if let Some(cfg) = self.npos_collectors {
+                super::status::set_prf_context(cfg.seed, hint.height, hint.view);
+                #[cfg(feature = "telemetry")]
+                self.telemetry
+                    .set_prf_context(Some(cfg.seed), hint.height, hint.view);
+            }
+        }
+    }
+
+    pub(super) fn ensure_highest_qc_extends_locked(
+        &mut self,
+        hint: &super::message::ProposalHint,
+        highest_qc: super::consensus::QcHeaderRef,
+    ) -> bool {
+        if !self.highest_qc_extends_locked(highest_qc) {
+            if let Some(new_lock) = realign_locked_to_committed_if_extends(
+                self.locked_qc,
+                self.latest_committed_qc(),
+                highest_qc,
+                |hash, height| self.parent_hash_for(hash, height),
+            ) {
+                if self.locked_qc != Some(new_lock) {
+                    info!(
+                        height = hint.height,
+                        view = hint.view,
+                        highest_height = highest_qc.height,
+                        highest_hash = %highest_qc.subject_block_hash,
+                        locked_height = new_lock.height,
+                        locked_hash = %new_lock.subject_block_hash,
+                        "resetting locked QC to committed chain before caching proposal hint"
+                    );
+                    self.locked_qc = Some(new_lock);
+                    super::status::set_locked_qc(
+                        new_lock.height,
+                        new_lock.view,
+                        Some(new_lock.subject_block_hash),
+                    );
+                }
+            }
+        }
+        if self.highest_qc_extends_locked(highest_qc) {
+            return true;
+        }
+        debug!(
+            height = hint.height,
+            view = hint.view,
+            highest_height = highest_qc.height,
+            highest_hash = ?highest_qc.subject_block_hash,
+            locked_height = ?self.locked_qc.map(|qc| qc.height),
+            locked_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
+            "dropping proposal hint: highest QC does not extend locked chain"
+        );
+        false
+    }
+
+    pub(super) fn handle_proposal(
+        &mut self,
+        proposal: crate::sumeragi::consensus::Proposal,
+    ) -> Result<()> {
+        let height = proposal.header.height;
+        let view = proposal.header.view;
+        let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        if stale_height(height, committed_height) {
+            debug!(
+                height,
+                view,
+                committed_height,
+                payload = %proposal.payload_hash,
+                "dropping proposal at or below committed height"
+            );
+            self.propose
+                .proposal_cache
+                .prune_height_leq(committed_height);
+            return Ok(());
+        }
+        if self.drop_stale_view(height, view, "Proposal") {
+            return Ok(());
+        }
+        self.note_proposal_seen(height, view, proposal.payload_hash);
+        self.propose.proposal_cache.insert_proposal(proposal);
+        Ok(())
+    }
+
+    pub(super) fn note_proposal_seen(&mut self, height: u64, view: u64, payload_hash: Hash) {
+        if self.proposals_seen.insert((height, view)) {
+            iroha_logger::info!(
+                height,
+                view,
+                payload = %payload_hash,
+                "observed proposal for view"
+            );
+        }
+    }
+
+    pub(super) fn missing_proposal_context(
+        &self,
+        height: u64,
+        view: u64,
+    ) -> MissingProposalContext {
+        let hint_seen = self.propose.proposal_cache.get_hint(height, view).is_some();
+        let proposal_cached = self
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .is_some();
+        let pending = self
+            .pending
+            .pending_blocks
+            .values()
+            .find(|pending| pending.height == height && pending.view == view);
+        let pending_match = pending.is_some();
+        let pending_gate = pending.and_then(|pending| pending.last_gate);
+        let pending_validation = pending.map(|pending| pending.validation_status);
+        let pending_availability_qc_view = pending.and_then(|pending| pending.availability_qc_view);
+        let pending_age_ms = pending.map(|pending| {
+            u64::try_from(pending.inserted_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+        });
+        let commit_inflight = self
+            .commit
+            .inflight
+            .as_ref()
+            .map(|inflight| (inflight.pending.height, inflight.pending.view));
+        let da_enabled = sumeragi_da_enabled(&self.state);
+        MissingProposalContext {
+            hint_seen,
+            proposal_cached,
+            pending_blocks: self.pending.pending_blocks.len(),
+            pending_match,
+            pending_gate,
+            pending_validation,
+            pending_availability_qc_view,
+            pending_age_ms,
+            commit_inflight,
+            forced_view_after_timeout: self.propose.forced_view_after_timeout,
+            da_enabled,
+        }
+    }
+
+    pub(super) fn assert_proposal_seen(&self, height: u64, view: u64, reason: &'static str) {
+        if height <= 1 {
+            return;
+        }
+        if !self.proposals_seen.contains(&(height, view)) {
+            let context = self.missing_proposal_context(height, view);
+            iroha_logger::error!(
+                height,
+                view,
+                trigger = reason,
+                hint_seen = context.hint_seen,
+                proposal_cached = context.proposal_cached,
+                pending_blocks = context.pending_blocks,
+                pending_match = context.pending_match,
+                pending_gate = ?context.pending_gate,
+                pending_validation = ?context.pending_validation,
+                pending_availability_qc_view = ?context.pending_availability_qc_view,
+                pending_age_ms = ?context.pending_age_ms,
+                commit_inflight = ?context.commit_inflight,
+                forced_view_after_timeout = ?context.forced_view_after_timeout,
+                da_enabled = context.da_enabled,
+                "no proposal observed for view before changing view"
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn handle_block_created(&mut self, msg: super::message::BlockCreated) -> Result<()> {
+        let block = msg.block;
+        let block_hash = block.hash();
+        let header = block.header();
+        let height = header.height().get();
+        let view = u64::from(header.view_change_index());
+        let (committed_height, committed_hash) = {
+            let state_view = self.state.view();
+            (
+                u64::try_from(state_view.height()).unwrap_or(u64::MAX),
+                state_view.latest_block_hash(),
+            )
+        };
+        let missing_request = self
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash);
+        if stale_height(height, committed_height) {
+            debug!(
+                height,
+                view,
+                committed_height,
+                committed_hash = ?committed_hash,
+                block = %block_hash,
+                "dropping BlockCreated at or below committed height"
+            );
+            self.pending.pending_blocks.remove(&block_hash);
+            self.propose.proposal_cache.pop_hint(height, view);
+            self.propose.proposal_cache.pop_proposal(height, view);
+            self.propose
+                .proposal_cache
+                .prune_height_leq(committed_height);
+            self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+            self.clean_rbc_sessions_for_block(block_hash, height);
+            let matches_committed = committed_hash.is_some_and(|hash| hash == block_hash);
+            if !matches_committed {
+                self.qc_cache
+                    .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+                self.execution_qc_cache.remove(&block_hash);
+            }
+            return Ok(());
+        }
+        let da_enabled = self.runtime_da_enabled();
+        if let Some(local_view) = self.stale_view(height, view) {
+            if !allow_stale_block_created(da_enabled, missing_request) {
+                debug!(
+                    height,
+                    view,
+                    local_view,
+                    kind = "BlockCreated",
+                    "dropping consensus message for stale view"
+                );
+                return Ok(());
+            }
+            debug!(
+                height,
+                view,
+                local_view,
+                da_enabled,
+                missing_request,
+                "accepting BlockCreated for stale view to recover missing payload"
+            );
+        }
+        if self.pending.pending_blocks.contains_key(&block_hash) {
+            if da_enabled {
+                let session_key = Self::session_key(&block_hash, height, view);
+                if !self.rbc.sessions.contains_key(&session_key) {
+                    let payload_bytes = super::proposals::block_payload_bytes(&block);
+                    let payload_hash = Hash::new(&payload_bytes);
+                    self.seed_rbc_session_from_block(session_key, &block, payload_hash)?;
+                    self.hydrate_rbc_session_from_block(session_key, &payload_bytes, payload_hash)?;
+                }
+            }
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "dropping duplicate BlockCreated"
+            );
+            return Ok(());
+        }
+        iroha_logger::info!(
+            height,
+            view,
+            block = %block_hash,
+            committed_height,
+            "received BlockCreated"
+        );
+        if let Some(bundle) = block.da_commitments() {
+            self.validate_da_bundle(bundle)?;
+        }
+        let mut cached_hint = self.propose.proposal_cache.get_hint(height, view).copied();
+        if let Some(hint) = cached_hint {
+            match Self::validate_block_against_hint(&block_hash, &header, &hint) {
+                Ok(()) => {}
+                Err(HintMismatch::BlockHash) => {
+                    super::status::inc_block_created_hint_mismatch();
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry.inc_block_created_hint_mismatch();
+                    info!(
+                        cached_block = %hint.block_hash,
+                        incoming_block = %block_hash,
+                        height,
+                        view,
+                        "BlockCreated hash mismatches cached hint; replacing cached hint for processing"
+                    );
+                    cached_hint = Some(super::message::ProposalHint { block_hash, ..hint });
+                }
+                Err(HintMismatch::HighestQcParentHash) => {
+                    super::status::inc_block_created_hint_mismatch();
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry.inc_block_created_hint_mismatch();
+                    warn!(
+                        ?block_hash,
+                        height,
+                        view,
+                        "BlockCreated hint parent mismatch; dropping cached hint and continuing"
+                    );
+                    self.propose.proposal_cache.pop_hint(height, view);
+                    cached_hint = None;
+                }
+                Err(reason) => {
+                    super::status::inc_block_created_hint_mismatch();
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry.inc_block_created_hint_mismatch();
+                    warn!(
+                        ?reason,
+                        ?block_hash,
+                        height,
+                        view,
+                        "BlockCreated hint mismatch"
+                    );
+                    return Ok(());
+                }
+            }
+        }
+        let hinted_avail = if let Some(hint) = cached_hint {
+            if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint.highest_qc) {
+                let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
+                let locked_missing =
+                    locked_hash.is_some_and(|hash| !self.block_known_locally(hash));
+                if locked_missing {
+                    warn!(
+                        ?reason,
+                        locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                        locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                        locked_qc_hash = ?locked_hash,
+                        hint_highest_qc_height = hint.highest_qc.height,
+                        hint_highest_qc_view = hint.highest_qc.view,
+                        hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                        height,
+                        view,
+                        "locked QC missing from kura; accepting BlockCreated and replacing lock"
+                    );
+                    self.locked_qc = Some(hint.highest_qc);
+                } else {
+                    super::status::inc_block_created_dropped_by_lock();
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry.inc_block_created_dropped_by_lock();
+                    warn!(
+                        ?reason,
+                        locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                        locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                        locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
+                        hint_highest_qc_height = hint.highest_qc.height,
+                        hint_highest_qc_view = hint.highest_qc.view,
+                        hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                        height,
+                        view,
+                        "BlockCreated rejected by locked QC gate"
+                    );
+                    return Ok(());
+                }
+            }
+            if !self.highest_qc_extends_locked(hint.highest_qc) {
+                if let Some(new_lock) = realign_locked_to_committed_if_extends(
+                    self.locked_qc,
+                    self.latest_committed_qc(),
+                    hint.highest_qc,
+                    |hash, height| self.parent_hash_for(hash, height),
+                ) {
+                    if self.locked_qc != Some(new_lock) {
+                        info!(
+                            locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                            locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
+                            highest_qc_height = hint.highest_qc.height,
+                            highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                            height,
+                            view,
+                            "resetting locked QC to committed chain before accepting BlockCreated"
+                        );
+                        self.locked_qc = Some(new_lock);
+                        super::status::set_locked_qc(
+                            new_lock.height,
+                            new_lock.view,
+                            Some(new_lock.subject_block_hash),
+                        );
+                    }
+                }
+            }
+            if !self.highest_qc_extends_locked(hint.highest_qc) {
+                super::status::inc_block_created_dropped_by_lock();
+                #[cfg(feature = "telemetry")]
+                self.telemetry.inc_block_created_dropped_by_lock();
+                warn!(
+                    locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                    locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
+                    highest_qc_height = hint.highest_qc.height,
+                    highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                    height,
+                    view,
+                    "BlockCreated rejected: highest QC does not extend locked chain"
+                );
+                return Ok(());
+            }
+            hint.avail_qc_ref
+        } else {
+            trace!(
+                height,
+                view, "BlockCreated arrived without cached ProposalHint"
+            );
+            None
+        };
+
+        let payload_bytes = block_payload_bytes(&block);
+        let payload_hash = Hash::new(&payload_bytes);
+        let tx_count = block.transactions_vec().len();
+        let queue_len = self.queue.tx_len();
+        if empty_block_disfavored(
+            tx_count,
+            queue_len,
+            self.has_nonempty_pending_at_height(height),
+        ) {
+            iroha_logger::info!(
+                height,
+                view,
+                queue_len,
+                block = %block_hash,
+                "accepting empty BlockCreated despite queued transactions or competing non-empty candidate to stay in sync"
+            );
+        }
+        if let Some(reason) = self
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .and_then(|proposal| detect_proposal_mismatch(proposal, &header, &payload_hash))
+            .map(|mismatch| mismatch.reason())
+        {
+            self.invalidate_proposal(height, view, reason)?;
+            // Keep processing the payload after invalidating a stale proposal.
+        }
+        let session_key = Self::session_key(&block_hash, height, view);
+        if da_enabled {
+            if !self.rbc.sessions.contains_key(&session_key) {
+                debug!(
+                    height,
+                    view,
+                    "BlockCreated arrived before RBC session initialised; seeding local RBC snapshot"
+                );
+                self.seed_rbc_session_from_block(session_key, &block, payload_hash)?;
+            }
+            self.hydrate_rbc_session_from_block(session_key, &payload_bytes, payload_hash)?;
+        }
+        if self
+            .pending
+            .pending_processing
+            .get()
+            .is_some_and(|pending| pending == block_hash)
+        {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "BlockCreated received while pending block is being processed; skipping pending update"
+            );
+            return Ok(());
+        }
+        if self
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| inflight.block_hash == block_hash)
+        {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "BlockCreated received while commit is in flight; skipping pending update"
+            );
+            return Ok(());
+        }
+        {
+            let pending = match self.pending.pending_blocks.entry(block_hash) {
+                Entry::Occupied(mut occ) => {
+                    occ.get_mut()
+                        .replace_block(block, payload_hash, height, view);
+                    occ.into_mut()
+                }
+                Entry::Vacant(vac) => {
+                    vac.insert(PendingBlock::new(block, payload_hash, height, view))
+                }
+            };
+
+            if let Some(avail_ref) = hinted_avail {
+                pending.mark_availability_qc(avail_ref.view);
+            } else if pending.availability_qc_view.is_none() {
+                let cached_exact = super::cached_qc_for(
+                    &self.qc_cache,
+                    crate::sumeragi::consensus::Phase::Available,
+                    block_hash,
+                    height,
+                    view,
+                );
+                let cached_any = cached_exact.or_else(|| {
+                    super::qc_cache_for_subject(&self.qc_cache, block_hash)
+                        .find(|qc| {
+                            matches!(qc.phase, crate::sumeragi::consensus::Phase::Available)
+                                && qc.height == height
+                        })
+                        .cloned()
+                });
+                let cached_precommit = cached_any
+                    .is_none()
+                    .then(|| {
+                        super::cached_qc_for(
+                            &self.qc_cache,
+                            crate::sumeragi::consensus::Phase::Precommit,
+                            block_hash,
+                            height,
+                            view,
+                        )
+                    })
+                    .flatten();
+                if let Some(avail_qc) = cached_any.as_ref() {
+                    Self::mark_pending_availability_from_qcs(pending, Some(avail_qc), None);
+                } else if let Some(precommit_qc) = cached_precommit.as_ref() {
+                    Self::mark_pending_availability_from_qcs(pending, None, Some(precommit_qc));
+                }
+            }
+        }
+
+        let mut status_update = None;
+        let mut mismatch_expected = None;
+        {
+            if let Some(session) = self.rbc.sessions.get_mut(&session_key) {
+                if let Some(expected_hash) = session.payload_hash() {
+                    if expected_hash != payload_hash {
+                        session.invalid = true;
+                        mismatch_expected = Some(expected_hash);
+                    }
+                } else {
+                    session.payload_hash = Some(payload_hash);
+                }
+                status_update = Some((
+                    session.total_chunks(),
+                    session.received_chunks(),
+                    session.ready_signatures.len() as u64,
+                    session.delivered,
+                    session.payload_hash(),
+                    session.recovered_from_disk(),
+                    session.is_invalid(),
+                ));
+            }
+        }
+        if let Some((
+            total_chunks,
+            received_chunks,
+            ready_count,
+            delivered_flag,
+            payload_hash_opt,
+            recovered_flag,
+            invalid_flag,
+        )) = status_update
+        {
+            let (lane_backlog, dataspace_backlog) =
+                self.rbc.sessions.get(&session_key).map_or_else(
+                    || (Vec::new(), Vec::new()),
+                    |session| {
+                        (
+                            session.lane_backlog_entries(),
+                            session.dataspace_backlog_entries(),
+                        )
+                    },
+                );
+            let summary = super::rbc_status::Summary {
+                block_hash: session_key.0,
+                height: session_key.1,
+                view: session_key.2,
+                total_chunks,
+                received_chunks,
+                ready_count,
+                delivered: delivered_flag,
+                payload_hash: payload_hash_opt,
+                recovered_from_disk: recovered_flag,
+                invalid: invalid_flag,
+                lane_backlog,
+                dataspace_backlog,
+            };
+            self.rbc.status_handle.update(summary, SystemTime::now());
+            if let Some(expected_hash) = mismatch_expected {
+                debug!(
+                    height,
+                    view,
+                    expected = ?expected_hash,
+                    observed = ?payload_hash,
+                    "BlockCreated payload hash mismatches RBC session"
+                );
+                self.invalidate_proposal(
+                    height,
+                    view,
+                    format!(
+                        "payload hash mismatch: expected {expected_hash:?}, observed {payload_hash:?}",
+                    ),
+                )?;
+                self.pending.pending_blocks.remove(&block_hash);
+                self.rbc.sessions.remove(&session_key);
+                self.rbc.status_handle.remove(&session_key);
+                if self.ensure_rbc_chunk_store() {
+                    if let Some(store) = self.rbc.chunk_store.as_ref() {
+                        if let Err(err) = store.remove(&session_key) {
+                            warn!(
+                            ?err,
+                                    block_hash = ?block_hash,
+                                    height,
+                                    view,
+                                    "failed to purge persisted RBC session after payload mismatch"
+                                );
+                        }
+                    }
+                }
+                self.publish_rbc_backlog_snapshot();
+                self.finalize_collector_plan(false);
+                return Ok(());
+            }
+        }
+
+        self.propose.proposal_cache.pop_hint(height, view);
+        self.propose.proposal_cache.pop_proposal(height, view);
+        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
+
+        // If votes or cached QCs already exist for this block, re-evaluate now that the payload is
+        // present so late-arriving block payloads can still finalize with previously collected votes.
+        let commit_topology = self.effective_commit_topology();
+        if !commit_topology.is_empty() {
+            let topology = super::network_topology::Topology::new(commit_topology.clone());
+            let epochs = distinct_epochs_for_block_votes(
+                &self.vote_log,
+                crate::sumeragi::consensus::Phase::Precommit,
+                block_hash,
+                height,
+                view,
+            );
+            for epoch in epochs {
+                self.try_form_qc_from_votes(
+                    crate::sumeragi::consensus::Phase::Precommit,
+                    block_hash,
+                    height,
+                    view,
+                    epoch,
+                    topology.clone(),
+                );
+            }
+            let cached_qc = qc_cache_for_subject(&self.qc_cache, block_hash)
+                .find(|cached| {
+                    cached.phase == crate::sumeragi::consensus::Phase::Precommit
+                        && cached.height == height
+                        && cached.view == view
+                })
+                .cloned();
+            if let Some(qc) = cached_qc {
+                let _ = self.handle_qc(qc);
+            }
+        }
+
+        self.process_commit_candidates();
+        Ok(())
+    }
+    pub(super) fn invalidate_proposal(
+        &mut self,
+        height: u64,
+        view: u64,
+        reason: String,
+    ) -> Result<()> {
+        let proposal_opt = self.propose.proposal_cache.pop_proposal(height, view);
+        self.propose.proposal_cache.pop_hint(height, view);
+        super::status::inc_block_created_proposal_mismatch();
+        #[cfg(feature = "telemetry")]
+        self.telemetry.inc_block_created_proposal_mismatch();
+        if let Some(proposal) = proposal_opt {
+            warn!(
+                height,
+                view,
+                reason = reason.as_str(),
+                "dropping BlockCreated due to proposal mismatch"
+            );
+            let evidence = invalid_proposal_evidence(proposal, reason);
+            self.record_and_broadcast_evidence(evidence)?;
+        } else {
+            warn!(
+                height,
+                view,
+                reason = reason.as_str(),
+                "proposal mismatch detected but no cached proposal available to emit evidence"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stale_height;
+
+    #[test]
+    fn stale_height_rejects_committed_or_lower() {
+        assert!(stale_height(1, 1));
+        assert!(stale_height(2, 5));
+        assert!(stale_height(5, 5));
+    }
+
+    #[test]
+    fn stale_height_allows_above_committed() {
+        assert!(!stale_height(2, 1));
+        assert!(!stale_height(6, 5));
+    }
+}

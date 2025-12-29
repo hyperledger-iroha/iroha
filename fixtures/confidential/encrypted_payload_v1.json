@@ -1,0 +1,41 @@
+{
+  "format_version": 1,
+  "notes": [
+    "Deterministic fixtures for ConfidentialEncryptedPayload v1. Positive cases capture the canonical layout used by Norito (version byte, 32-byte ephemeral key, 24-byte nonce, ciphertext length varint, ciphertext bytes). Negative cases describe malformed inputs and the expected error mode so SDKs can assert parity."
+  ],
+  "cases": {
+    "positive": [
+      {
+        "case_id": "enc-payload-hello",
+        "note": "Short ASCII memo with sequential ephemeral/nonce bytes.",
+        "version": 1,
+        "ephemeral_public_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7",
+        "ciphertext_plaintext": "ConfidentialPayloadV1",
+        "ciphertext_hex": "436f6e666964656e7469616c5061796c6f61645631",
+        "serialized_hex": "01000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b715436f6e666964656e7469616c5061796c6f61645631"
+      }
+    ],
+    "negative": [
+      {
+        "case_id": "invalid-version",
+        "note": "Version byte set to 0 (unsupported).",
+        "serialized_hex": "00000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b715436f6e666964656e7469616c5061796c6f61645631",
+        "expected_error": {
+          "mode": "unsupported_version",
+          "kind": "UnsupportedVersion",
+          "version": 0
+        }
+      },
+      {
+        "case_id": "truncated-ciphertext",
+        "note": "Payload ends before ciphertext completes.",
+        "serialized_hex": "01000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b715436f6e666964656e7469616c5061796c6f6164",
+        "expected_error": {
+          "mode": "decode_error",
+          "kind": "TruncatedPayload"
+        }
+      }
+    ]
+  }
+}

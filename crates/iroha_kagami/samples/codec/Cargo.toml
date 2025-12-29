@@ -1,0 +1,11 @@
+[package]
+name = "codec_samples"
+version = "2.0.0-rc.2.0"
+edition = "2024"
+
+[dependencies]
+iroha_data_model = { path = "../../../iroha_data_model" }
+iroha_primitives = { path = "../../../iroha_primitives" }
+norito = {path = "../../../norito"}
+
+[workspace]

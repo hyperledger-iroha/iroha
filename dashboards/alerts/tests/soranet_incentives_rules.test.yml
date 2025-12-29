@@ -1,0 +1,33 @@
+rule_files:
+  - ../soranet_incentives_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'soranet_reward_skips_total{relay="0xrelay",reason="insufficient_bond"}'
+        values: '0 0 0 0 0 0 1 2 2 2 2 2 2 2 2 2'
+      - series: 'soranet_reward_events_total{relay="0xrelay",result="rewarded"}'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7 8 9 10 11'
+      - series: 'soranet_reward_payout_nanos_total{relay="0xrelay",result="rewarded"}'
+        values: '0 0 0 0 0 5000000 10000000 15000000 20000000 25000000 30000000 35000000 40000000 45000000 50000000 55000000'
+    alert_rule_test:
+      - alertname: SoranetRelayBondDeficit
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: SoranetRelayBondDeficit
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              relay: 0xrelay
+            exp_annotations:
+              summary: Relay dropped below minimum bond
+      - alertname: SoranetRewardPayoutAnomaly
+        eval_time: 6m
+        exp_alerts: []
+      - alertname: SoranetRewardPayoutAnomaly
+        eval_time: 15m
+        exp_alerts:
+          - exp_labels:
+              relay: 0xrelay
+            exp_annotations:
+              summary: Reward payouts below 0.1 XOR floor

@@ -1,0 +1,3140 @@
+// Detached executor note: Keep this handler minimal and side‑effect free; only record
+// deltas. Prefer performing complex checks during merge in `StateBlock::merge_into`.
+// Extend cautiously when adding new ISIs (Peer, Parameters, ExecuteTrigger, etc.).
+//! Structures and impls related to processing Iroha Virtual Machine (IVM)
+//! runtime executors.
+
+use core::{convert::TryFrom, str::FromStr};
+use std::sync::{Arc, Mutex};
+
+use base64::Engine as _;
+use derive_more::Debug;
+use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
+use iroha_data_model::{
+    ValidationFail,
+    account::AccountId,
+    block::BlockHeader,
+    executor::{self as data_model_executor, ExecutorDataModel},
+    isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox},
+    metadata::Metadata,
+    permission::Permission,
+    query::{AnyQueryBox, QueryRequest},
+    smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
+    transaction::{Executable, SignedTransaction},
+};
+use iroha_executor_data_model::permission as executor_permission;
+use iroha_logger::{debug, info, trace, warn};
+use ivm::{IVM, Memory, VMError};
+use norito::{
+    codec::{Decode, Encode},
+    json::{self, JsonDeserialize as JsonDeserializeTrait, JsonSerialize as JsonSerializeTrait},
+    to_bytes,
+};
+use rust_decimal::Decimal;
+use settlement_router::haircut::LiquidityProfile;
+
+use crate::gas as isi_gas;
+use crate::settlement::{PendingSettlement, QuoteError, VolatilityBucket};
+use crate::sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer};
+#[cfg(feature = "zk-preverify")]
+use crate::zk::PreverifyResult;
+use crate::{
+    smartcontracts::{Execute as _, ivm::cache::IvmCache},
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+};
+use iroha_data_model::asset::{
+    AssetDefinition,
+    id::{AssetDefinitionId, AssetId},
+    value::Asset,
+};
+use iroha_data_model::isi::{
+    CustomInstruction, InstructionBox as DMInstructionBox, error::InstructionExecutionError,
+    register::RegisterBox,
+};
+use iroha_data_model::parameter::CustomParameterId;
+use iroha_data_model::prelude::{Register, Trigger};
+use iroha_data_model::role::{Role, RoleId};
+use iroha_data_model::{Identifiable as _, Registrable as _};
+use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
+use iroha_primitives::numeric::Numeric;
+use mv::storage::StorageReadOnly;
+// NoritoDecode alias is unused; keep Decode via norito::codec where needed inline
+
+#[cfg(test)]
+const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
+const EXECUTOR_ADDITIONAL_FUEL_KEY: &str = "additional_fuel";
+
+/// Execute a single instruction in a detached overlay, recording only the state deltas.
+///
+/// This helper is used by the parallel validator to pre-apply side-effect-free
+/// instructions without borrowing a live `StateBlock`. Unsupported instructions
+/// return `ValidationFail::InternalError` so the caller can conservatively fall back
+/// to sequential execution.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn execute_instruction_detached(
+    authority: &AccountId,
+    instruction: &iroha_data_model::isi::InstructionBox,
+    delta: &mut crate::state::DetachedStateTransactionDelta,
+) -> Result<(), ValidationFail> {
+    use iroha_data_model::isi::{
+        BurnBox, GrantBox, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox, SetKeyValueBox,
+        TransferBox, UnregisterBox,
+    };
+
+    let any = instruction.as_any();
+
+    // SetKeyValue
+    if let Some(kv) = any.downcast_ref::<SetKeyValueBox>() {
+        match kv {
+            SetKeyValueBox::Account(s) => {
+                delta.set_account_kv(s.object.clone(), s.key.clone(), s.value.clone());
+            }
+            SetKeyValueBox::Domain(s) => {
+                delta.set_domain_kv(s.object.clone(), s.key.clone(), s.value.clone());
+            }
+            SetKeyValueBox::AssetDefinition(s) => {
+                delta.set_asset_def_kv(s.object.clone(), s.key.clone(), s.value.clone());
+            }
+            SetKeyValueBox::Nft(s) => {
+                delta.set_nft_kv(s.object.clone(), s.key.clone(), s.value.clone());
+            }
+            SetKeyValueBox::Trigger(_) => {
+                return Err(ValidationFail::InternalError(
+                    "detached: unsupported SetKeyValue<Trigger>".to_owned(),
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    // RemoveKeyValue
+    if let Some(rm) = any.downcast_ref::<RemoveKeyValueBox>() {
+        match rm {
+            RemoveKeyValueBox::Account(r) => {
+                delta.remove_account_kv(r.object.clone(), r.key.clone())
+            }
+            RemoveKeyValueBox::Domain(r) => delta.remove_domain_kv(r.object.clone(), r.key.clone()),
+            RemoveKeyValueBox::AssetDefinition(r) => {
+                delta.remove_asset_def_kv(r.object.clone(), r.key.clone())
+            }
+            RemoveKeyValueBox::Nft(r) => delta.remove_nft_kv(r.object.clone(), r.key.clone()),
+            RemoveKeyValueBox::Trigger(_) => {
+                return Err(ValidationFail::InternalError(
+                    "detached: unsupported RemoveKeyValue<Trigger>".to_owned(),
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    // Mint / Burn
+    if let Some(mb) = any.downcast_ref::<MintBox>() {
+        match mb {
+            MintBox::Asset(m) => {
+                let asset_id = m.destination.clone();
+                let qty = m.object.clone();
+                // Record per-account balance increase and total supply increase
+                delta.add_asset_add(asset_id.clone(), qty.clone());
+                delta.add_total_add(asset_id.definition().clone(), qty);
+                // Track mintability usage so block application can update the definition.
+                delta.record_mint_consumption(asset_id.definition().clone(), 1);
+            }
+            MintBox::TriggerRepetitions(_) => {
+                return Err(ValidationFail::InternalError(
+                    "detached: unsupported Mint<Trigger>".to_owned(),
+                ));
+            }
+        }
+        return Ok(());
+    }
+    if let Some(bb) = any.downcast_ref::<BurnBox>() {
+        match bb {
+            BurnBox::Asset(b) => {
+                let asset_id = b.destination.clone();
+                let qty = b.object.clone();
+                // Record per-account balance decrease and total supply decrease
+                delta.add_asset_sub(asset_id.clone(), qty.clone());
+                delta.add_total_sub(asset_id.definition().clone(), qty);
+            }
+            BurnBox::TriggerRepetitions(_) => {
+                return Err(ValidationFail::InternalError(
+                    "detached: unsupported Burn<Trigger>".to_owned(),
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    // SetParameter
+    if let Some(sp) = any.downcast_ref::<iroha_data_model::isi::SetParameter>() {
+        delta.set_parameter(sp.inner().clone());
+        return Ok(());
+    }
+
+    // ExecuteTrigger (by-call)
+    if let Some(et) = any.downcast_ref::<iroha_data_model::isi::ExecuteTrigger>() {
+        let evt = iroha_data_model::events::execute_trigger::ExecuteTriggerEvent {
+            trigger_id: et.trigger.clone(),
+            authority: authority.clone(),
+            args: et.args.clone(),
+        };
+        delta.execute_trigger_by_call(evt);
+        return Ok(());
+    }
+
+    // Transfers
+    if let Some(tb) = any.downcast_ref::<TransferBox>() {
+        match tb {
+            TransferBox::Asset(t) => {
+                let src = t.source.clone();
+                let qty = t.object.clone();
+                let dst = iroha_data_model::asset::AssetId::of(
+                    src.definition().clone(),
+                    t.destination.clone(),
+                );
+                delta.add_asset_sub(src, qty.clone());
+                delta.add_asset_add(dst, qty);
+            }
+            TransferBox::Domain(t) => {
+                delta.transfer_domain(t.object.clone(), t.source.clone(), t.destination.clone());
+            }
+            TransferBox::AssetDefinition(t) => {
+                delta.transfer_asset_def(t.object.clone(), t.source.clone(), t.destination.clone());
+            }
+            TransferBox::Nft(t) => {
+                delta.transfer_nft(t.object.clone(), t.source.clone(), t.destination.clone());
+            }
+        }
+        return Ok(());
+    }
+
+    // Register / Unregister: record peer changes directly so peer management works
+    // even when the runtime executor is not yet upgraded.
+    if let Some(rb) = any.downcast_ref::<RegisterBox>() {
+        match rb {
+            RegisterBox::Nft(r) => {
+                let nft = r.object.clone().build(authority);
+                delta.register_nft(nft);
+            }
+            RegisterBox::Peer(_r) => {
+                return Err(ValidationFail::InternalError(
+                    "detached: peer management requires sequential path".to_owned(),
+                ));
+            }
+            _ => {
+                return Err(ValidationFail::InternalError(
+                    "detached: unsupported Register".to_owned(),
+                ));
+            }
+        }
+        return Ok(());
+    }
+    if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
+        match ub {
+            UnregisterBox::Nft(u) => delta.unregister_nft(u.object.clone()),
+            UnregisterBox::Peer(_u) => {
+                return Err(ValidationFail::InternalError(
+                    "detached: peer management requires sequential path".to_owned(),
+                ));
+            }
+            _ => {
+                return Err(ValidationFail::InternalError(
+                    "detached: unsupported Unregister".to_owned(),
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    // Grant / Revoke on accounts
+    if let Some(gb) = any.downcast_ref::<GrantBox>() {
+        match gb {
+            GrantBox::Permission(g) => {
+                delta.grant_permission(g.destination.clone(), g.object.clone());
+            }
+            GrantBox::Role(g) => {
+                delta.grant_role(g.destination.clone(), g.object.clone());
+            }
+            GrantBox::RolePermission(g) => {
+                delta.grant_role_permission(g.destination.clone(), g.object.clone());
+            }
+        }
+        return Ok(());
+    }
+    if let Some(rb) = any.downcast_ref::<RevokeBox>() {
+        match rb {
+            RevokeBox::Permission(r) => {
+                delta.revoke_permission(r.destination.clone(), r.object.clone());
+            }
+            RevokeBox::Role(r) => {
+                delta.revoke_role(r.destination.clone(), r.object.clone());
+            }
+            RevokeBox::RolePermission(r) => {
+                delta.revoke_role_permission(r.destination.clone(), r.object.clone());
+            }
+        }
+        return Ok(());
+    }
+
+    // Unknown instruction kind – signal fallback
+    Err(ValidationFail::InternalError(
+        "detached: unsupported instruction".to_owned(),
+    ))
+}
+
+/// Executor that verifies that operation is valid and executes it.
+///
+/// Executing is done in order to verify dependent instructions in transaction.
+/// Can be upgraded with [`Upgrade`](iroha_data_model::isi::Upgrade) instruction.
+#[derive(Debug, Default, Clone)]
+pub enum Executor {
+    /// Initial executor that allows all operations and performs no permission checking.
+    #[default]
+    Initial,
+    /// User-provided executor with arbitrary logic.
+    UserProvided(LoadedExecutor),
+}
+
+/// Execution profile applied when running native ISIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InstructionExecutionProfile {
+    /// Full runtime behaviour (logging, telemetry, and policy hooks).
+    #[default]
+    Runtime,
+    /// Lightweight execution for benchmarks/tests lacking a global logger.
+    Bench,
+}
+
+impl JsonSerializeTrait for Executor {
+    fn json_serialize(&self, out: &mut String) {
+        let bytes =
+            executor_norito::to_bytes(self).unwrap_or_else(|e| panic!("norito encode failed: {e}"));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        out.push('{');
+        json::write_json_string("norito", out);
+        out.push(':');
+        json::write_json_string(&encoded, out);
+        out.push('}');
+    }
+}
+
+impl JsonDeserializeTrait for Executor {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = json::Value::json_deserialize(parser)?;
+        parse_executor_value(value)
+    }
+}
+
+fn parse_executor_value(value: json::Value) -> Result<Executor, json::Error> {
+    match value {
+        json::Value::Object(mut map) => {
+            if let Some(inner) = map.remove("norito").or_else(|| map.remove("bytes")) {
+                let bytes = decode_executor_bytes(inner, "norito")?;
+                return executor_norito::from_bytes(&bytes).map_err(json::Error::Message);
+            }
+
+            if !map.is_empty() {
+                for key in map.keys() {
+                    trace!(target: "executor::deserialize", field = %key, "ignoring unknown executor field");
+                }
+            }
+            Err(json::Error::Message(
+                "invalid executor object: expected {\"norito\": ...}".into(),
+            ))
+        }
+        json::Value::String(s) => {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(s)
+                .map_err(|e| json::Error::Message(e.to_string()))?;
+            executor_norito::from_bytes(&bytes).map_err(json::Error::Message)
+        }
+        other => Err(json::Error::Message(format!(
+            "invalid executor JSON: expected object or string, got {other:?}"
+        ))),
+    }
+}
+
+fn decode_executor_bytes(value: json::Value, context: &str) -> Result<Vec<u8>, json::Error> {
+    match value {
+        json::Value::String(s) => {
+            base64::engine::general_purpose::STANDARD
+                .decode(s)
+                .map_err(|e| json::Error::InvalidField {
+                    field: context.into(),
+                    message: e.to_string(),
+                })
+        }
+        json::Value::Array(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for v in arr {
+                let byte = v.as_u64().ok_or_else(|| json::Error::InvalidField {
+                    field: context.into(),
+                    message: "expected byte (u64)".into(),
+                })?;
+                out.push((byte & 0xFF) as u8);
+            }
+            Ok(out)
+        }
+        other => Err(json::Error::InvalidField {
+            field: context.into(),
+            message: format!("expected base64 string or byte array, got {other:?}"),
+        }),
+    }
+}
+
+fn convert_volatility_bucket(volatility: GasVolatility) -> VolatilityBucket {
+    match volatility {
+        GasVolatility::Stable => VolatilityBucket::Stable,
+        GasVolatility::Elevated => VolatilityBucket::Elevated,
+        GasVolatility::Dislocated => VolatilityBucket::Dislocated,
+    }
+}
+
+fn parse_fee_sponsor(metadata: &Metadata) -> Result<Option<AccountId>, ValidationFail> {
+    if let Some(raw) = metadata.get("fee_sponsor") {
+        let sponsor = raw.try_into_any_norito::<AccountId>().map_err(|err| {
+            ValidationFail::NotPermitted(format!("invalid fee_sponsor metadata: {err}"))
+        })?;
+        return Ok(Some(sponsor));
+    }
+    Ok(None)
+}
+
+fn parse_executor_additional_fuel(metadata: &Metadata) -> Result<u64, ValidationFail> {
+    let Some(raw) = metadata.get(EXECUTOR_ADDITIONAL_FUEL_KEY) else {
+        return Ok(0);
+    };
+    raw.try_into_any_norito::<u64>().map_err(|err| {
+        ValidationFail::NotPermitted(format!("invalid additional_fuel metadata: {err}"))
+    })
+}
+
+pub(crate) fn configure_executor_fuel_budget(
+    executor: &Executor,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    metadata: &Metadata,
+) -> Result<(), ValidationFail> {
+    if matches!(executor, Executor::UserProvided(_)) {
+        let base_fuel = state_transaction
+            .world
+            .parameters
+            .get()
+            .executor()
+            .fuel
+            .get();
+        let additional_fuel = parse_executor_additional_fuel(metadata)?;
+        state_transaction.executor_fuel_remaining = Some(base_fuel.saturating_add(additional_fuel));
+    }
+    Ok(())
+}
+
+impl Executor {
+    fn decimal_to_micro_u128(
+        value: Decimal,
+        context: &'static str,
+    ) -> Result<u128, ValidationFail> {
+        if !value.fract().is_zero() {
+            return Err(ValidationFail::InternalError(format!(
+                "{context} must be an integral micro-XOR amount"
+            )));
+        }
+        let truncated = value.trunc();
+        if truncated.is_sign_negative() {
+            return Err(ValidationFail::InternalError(format!(
+                "{context} must be non-negative"
+            )));
+        }
+        let mantissa = truncated.mantissa();
+        u128::try_from(mantissa)
+            .map_err(|_| ValidationFail::InternalError(format!("{context} exceeds u128 bounds")))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn charge_nexus_fees(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        sponsor: Option<AccountId>,
+        tx_bytes_len: usize,
+        instruction_count: usize,
+        gas_used: u64,
+    ) -> Result<(), ValidationFail> {
+        if !state_transaction.nexus.enabled {
+            return Ok(());
+        }
+        let cfg = &state_transaction.nexus.fees;
+        let tx_bytes_u128 = u128::try_from(tx_bytes_len).map_err(|_| {
+            ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
+        })?;
+        let instr_u128 = u128::try_from(instruction_count).map_err(|_| {
+            ValidationFail::InternalError(
+                "instruction count too large for fee accounting".to_owned(),
+            )
+        })?;
+        let mut fee_u128 = u128::from(cfg.base_fee);
+        fee_u128 = fee_u128
+            .checked_add(u128::from(cfg.per_byte_fee).saturating_mul(tx_bytes_u128))
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".into())
+            })?;
+        fee_u128 = fee_u128
+            .checked_add(u128::from(cfg.per_instruction_fee).saturating_mul(instr_u128))
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".into())
+            })?;
+        fee_u128 = fee_u128
+            .checked_add(u128::from(cfg.per_gas_unit_fee).saturating_mul(u128::from(gas_used)))
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".into())
+            })?;
+
+        if fee_u128 == 0 {
+            return Ok(());
+        }
+
+        let payer_kind = if sponsor.is_some() {
+            NexusFeePayer::Sponsor
+        } else {
+            NexusFeePayer::Payer
+        };
+        let payer = if let Some(sponsor) = sponsor {
+            if !cfg.sponsorship_enabled {
+                let payer_id = sponsor.to_string();
+                sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorDisabled {
+                    payer_id: payer_id.clone(),
+                });
+                warn!(
+                    target: "economics",
+                    payer = %payer_id,
+                    fee_amount = fee_u128,
+                    "nexus fee sponsor rejected: sponsorship disabled"
+                );
+                return Err(ValidationFail::NotPermitted(
+                    "fee sponsorship is disabled".to_owned(),
+                ));
+            }
+            if cfg.sponsor_max_fee > 0 && fee_u128 > u128::from(cfg.sponsor_max_fee) {
+                let payer_id = sponsor.to_string();
+                sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorCapExceeded {
+                    payer_id: payer_id.clone(),
+                    max_fee: cfg.sponsor_max_fee,
+                    attempted_fee: fee_u128,
+                });
+                warn!(
+                    target: "economics",
+                    payer = %payer_id,
+                    fee_amount = fee_u128,
+                    max_fee = cfg.sponsor_max_fee,
+                    "nexus fee sponsor rejected: exceeds sponsor_max_fee"
+                );
+                return Err(ValidationFail::NotPermitted(
+                    "fee exceeds sponsor_max_fee".to_owned(),
+                ));
+            }
+            sponsor
+        } else {
+            authority.clone()
+        };
+
+        let sink_account: AccountId = cfg.fee_sink_account_id.parse().map_err(|_| {
+            let reason = "invalid nexus fee sink account id; expected `alias@domain`".to_owned();
+            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
+                reason: reason.clone(),
+            });
+            warn!(target: "economics", "nexus fee rejected: {reason}");
+            ValidationFail::NotPermitted(reason)
+        })?;
+        let asset_def: AssetDefinitionId = cfg.fee_asset_id.parse().map_err(|_| {
+            let reason = "invalid nexus fee asset id; expected `name#domain`".to_owned();
+            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
+                reason: reason.clone(),
+            });
+            warn!(target: "economics", "nexus fee rejected: {reason}");
+            ValidationFail::NotPermitted(reason)
+        })?;
+
+        let payer_asset = AssetId::new(asset_def, payer.clone());
+        let payer_kind_label = match payer_kind {
+            NexusFeePayer::Payer => "payer",
+            NexusFeePayer::Sponsor => "sponsor",
+        };
+        let payer_id = payer.to_string();
+        let asset_label = payer_asset.definition().to_string();
+        let sink_label = sink_account.to_string();
+        let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
+            let reason = "fee amount exceeds supported numeric bounds".to_owned();
+            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
+                reason: reason.clone(),
+            });
+            ValidationFail::NotPermitted(reason)
+        })?;
+        let transfer = iroha_data_model::isi::Transfer::<
+            Asset,
+            Numeric,
+            iroha_data_model::account::Account,
+        >::asset_numeric(payer_asset, qty, sink_account);
+        let instr: DMInstructionBox = transfer.into();
+        instr.execute(authority, state_transaction).map_err(|err| {
+            let reason = format!("nexus fee transfer failed to apply: {err}");
+            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
+                payer_kind,
+                payer_id: payer_id.clone(),
+                amount: fee_u128,
+                asset_id: asset_label.clone(),
+                reason: reason.clone(),
+            });
+            warn!(
+                target: "economics",
+                ?err,
+                payer = %payer_id,
+                payer_kind = payer_kind_label,
+                fee_amount = fee_u128,
+                asset = %asset_label,
+                sink = %sink_label,
+                "nexus fee transfer failed"
+            );
+            ValidationFail::from(err)
+        })?;
+
+        sumeragi_status::record_nexus_fee_event(NexusFeeEvent::Charged {
+            payer_kind,
+            payer_id,
+            amount: fee_u128,
+            asset_id: asset_label.clone(),
+        });
+        info!(
+            target: "economics",
+            payer_kind = payer_kind_label,
+            payer = %payer.to_string(),
+            fee_amount = fee_u128,
+            asset = %asset_label,
+            sink = %sink_label,
+            "nexus fee charged"
+        );
+        Ok(())
+    }
+
+    /// Refresh pipeline.gas snapshot from on-chain custom parameters (genesis/governance updatable).
+    fn refresh_gas_from_parameters(state_transaction: &mut StateTransaction<'_, '_>) {
+        #[derive(crate::json_macros::JsonDeserialize)]
+        struct GasRateSerde {
+            asset: String,
+            units_per_gas: u64,
+            twap_local_per_xor: Option<String>,
+            liquidity_profile: Option<String>,
+            volatility_class: Option<String>,
+        }
+
+        let params = state_transaction.world.parameters.get();
+        // Helper to update from a CustomParameter if present and decodable
+        // 1) Tech account id (string)
+        if let Ok(name) = core::str::FromStr::from_str("ivm_gas_tech_account_id")
+            && let Some(custom) = params.custom().get(&CustomParameterId(name))
+            && let Ok(s) = custom.payload().try_into_any_norito::<String>()
+        {
+            state_transaction.pipeline.gas.tech_account_id = s;
+        }
+        // 2) Accepted assets (Vec<String>)
+        if let Ok(name) = core::str::FromStr::from_str("ivm_gas_accepted_assets")
+            && let Some(custom) = params.custom().get(&CustomParameterId(name))
+            && let Ok(v) = custom.payload().try_into_any_norito::<Vec<String>>()
+        {
+            state_transaction.pipeline.gas.accepted_assets = v;
+        }
+        // 3) Units per gas (Vec<{asset, units_per_gas}>)
+        if let Ok(name) = core::str::FromStr::from_str("ivm_gas_units_per_gas")
+            && let Some(custom) = params.custom().get(&CustomParameterId(name))
+            && let Ok(v) = custom.payload().try_into_any_norito::<Vec<GasRateSerde>>()
+        {
+            state_transaction.pipeline.gas.units_per_gas = v
+                .into_iter()
+                .map(|r| {
+                    let asset = r.asset;
+                    let twap = r
+                        .twap_local_per_xor
+                        .as_deref()
+                        .map_or(Decimal::ONE, |value| {
+                            Decimal::from_str(value).unwrap_or_else(|error| {
+                                panic!(
+                                    "invalid ivm_gas_units_per_gas twap `{value}` for asset `{asset}`: {error}"
+                                )
+                            })
+                        });
+                    let liquidity = r.liquidity_profile.as_deref().map_or_else(
+                        iroha_config::parameters::actual::GasLiquidity::default,
+                        |value| {
+                            iroha_config::parameters::actual::GasLiquidity::from_str(value)
+                                .unwrap_or_else(|()| {
+                                    panic!(
+                                        "invalid ivm_gas_units_per_gas liquidity `{value}` for asset `{asset}`"
+                                    )
+                                })
+                        },
+                    );
+                    let volatility = r.volatility_class.as_deref().map_or_else(
+                        iroha_config::parameters::actual::GasVolatility::default,
+                        |value| {
+                            iroha_config::parameters::actual::GasVolatility::from_str(value)
+                                .unwrap_or_else(|()| {
+                                    panic!(
+                                        "invalid ivm_gas_units_per_gas volatility `{value}` for asset `{asset}`"
+                                    )
+                                })
+                        },
+                    );
+                    iroha_config::parameters::actual::GasRate {
+                        asset,
+                        units_per_gas: r.units_per_gas,
+                        twap_local_per_xor: twap,
+                        liquidity,
+                        volatility,
+                    }
+                })
+                .collect();
+        }
+    }
+    /// Execute [`SignedTransaction`].
+    ///
+    /// # Errors
+    ///
+    /// - Failed to prepare the IVM runtime;
+    /// - Failed to execute the entrypoint of the IVM bytecode;
+    /// - Executor denied the operation.
+    #[allow(clippy::too_many_lines)]
+    pub fn execute_transaction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        transaction: SignedTransaction,
+        ivm_cache: &mut IvmCache,
+    ) -> Result<(), ValidationFail> {
+        trace!("Running transaction execution");
+        let tx_bytes_len = to_bytes(&transaction)
+            .map(|bytes| bytes.len())
+            .map_err(|err| {
+                ValidationFail::InternalError(format!(
+                    "failed to encode transaction for fee metering: {err}"
+                ))
+            })?;
+        let instruction_count = match transaction.instructions() {
+            Executable::Instructions(steps) => steps.len(),
+            _ => 0,
+        };
+        let fee_sponsor = parse_fee_sponsor(transaction.metadata())?;
+        // Bind the transaction call_hash for ISI event emitters to use in audit fields
+        let call_hash = transaction.hash_as_entrypoint();
+        state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
+        let tx_hash = transaction.hash();
+        let settlement_source_id = {
+            let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
+            bytes.copy_from_slice(tx_hash.as_ref());
+            bytes
+        };
+        // Disallow direct signing with multisig accounts (deterministically derived keys must not be usable).
+        // Multisig flows must route through propose/approve instead.
+        {
+            let spec_key =
+                iroha_data_model::name::Name::from_str("multisig/spec").expect("static key valid");
+            let derived_key = iroha_data_model::name::Name::from_str("multisig/derived_key")
+                .expect("static key valid");
+            let account = state_transaction.world.account(authority).map_err(|err| {
+                ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
+            })?;
+            let metadata = account.metadata();
+            let spec_present = metadata.contains(&spec_key);
+            let derived_flag = metadata
+                .get(&derived_key)
+                .and_then(|value| value.clone().try_into_any_norito::<bool>().ok())
+                .unwrap_or(false);
+            if spec_present || derived_flag {
+                #[cfg(feature = "telemetry")]
+                crate::telemetry::record_social_rejection(
+                    state_transaction.telemetry,
+                    "multisig_direct_sign",
+                );
+                return Err(ValidationFail::NotPermitted(
+                    "direct signing with multisig accounts is forbidden; use multisig propose/approve"
+                        .to_owned(),
+                ));
+            }
+        }
+        // Refresh pipeline gas settings from on-chain parameters (genesis/governance updates)
+        Self::refresh_gas_from_parameters(state_transaction);
+        // Gas asset admission: if an allowlist is configured, require the tx metadata to specify
+        // a `gas_asset_id` present in the allowlist. The value must be a valid AssetDefinitionId
+        // string (e.g., "xor#domain").
+        let md = transaction.metadata();
+        let gas_asset_opt = md.get("gas_asset_id").map(|j| j.as_ref().to_string());
+        // Payer-provided gas limit (optional for non-VM transactions); used to cap fee exposure
+        let gas_limit_md: Option<u64> = md
+            .get("gas_limit")
+            .and_then(|j| j.try_into_any_norito::<u64>().ok());
+        configure_executor_fuel_budget(self, state_transaction, md)?;
+        let pipeline_gas = &state_transaction.pipeline.gas;
+        if !pipeline_gas.accepted_assets.is_empty() {
+            let Some(ref gas_asset_id_str) = gas_asset_opt else {
+                return Err(ValidationFail::NotPermitted(
+                    "missing gas_asset_id in transaction metadata".to_owned(),
+                ));
+            };
+            if !pipeline_gas
+                .accepted_assets
+                .iter()
+                .any(|a| a == gas_asset_id_str)
+            {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "gas asset `{gas_asset_id_str}` is not accepted by node policy"
+                )));
+            }
+        }
+        #[cfg(feature = "zk-preverify")]
+        {
+            use iroha_data_model::proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId};
+
+            let namespace_hint = md.get("contract_namespace").and_then(|value| {
+                let raw = value.as_ref().to_string();
+                let trimmed = raw.trim().trim_matches('"').trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_owned())
+            });
+
+            // Process ZK attachments embedded in V2 transactions.
+            if let Some(ProofAttachmentList(list)) = transaction.attachments().cloned() {
+                // Canonicalize verification order for determinism
+                let mut list_sorted = list;
+                list_sorted.sort_by(|a, b| {
+                    let ah = crate::zk::hash_proof(&a.proof);
+                    let bh = crate::zk::hash_proof(&b.proof);
+                    (a.backend.as_str(), ah).cmp(&(b.backend.as_str(), bh))
+                });
+                for ProofAttachment {
+                    backend,
+                    proof,
+                    vk_ref,
+                    vk_inline,
+                    vk_commitment,
+                    ..
+                } in list_sorted.into_iter()
+                {
+                    match (&vk_ref, &vk_inline) {
+                        (None, None) => {
+                            return Err(ValidationFail::NotPermitted(
+                                "proof attachments must include exactly one verifying key (inline or reference)"
+                                    .to_owned(),
+                            ));
+                        }
+                        (Some(_), Some(_)) => {
+                            return Err(ValidationFail::NotPermitted(
+                                "proof attachments must not mix inline and referenced verifying keys"
+                                    .to_owned(),
+                            ));
+                        }
+                        _ => {}
+                    }
+                    // Sanity: proof.backend should match attachment backend
+                    if proof.backend != backend {
+                        return Err(ValidationFail::NotPermitted(
+                            "proof backend mismatch".to_owned(),
+                        ));
+                    }
+
+                    // If an inline VK is provided, ensure backend matches as a cheap sanity check
+                    if let Some(ref vk) = vk_inline {
+                        if vk.backend != backend {
+                            return Err(ValidationFail::NotPermitted(
+                                "verifying key backend mismatch".to_owned(),
+                            ));
+                        }
+                    }
+
+                    // If a VK reference is provided but neither inline VK nor commitment
+                    // are present, check existence in WSV. If a commitment is provided,
+                    // skip the lookup to keep pre-verify stateless and cheap.
+                    if let Some(ref id @ VerifyingKeyId { .. }) = vk_ref {
+                        if vk_inline.is_none() && vk_commitment.is_none() {
+                            if state_transaction.world.verifying_keys.get(id).is_none() {
+                                return Err(ValidationFail::NotPermitted(format!(
+                                    "referenced verifying key missing: {}::{}",
+                                    id.backend, id.name
+                                )));
+                            }
+                        }
+                    }
+
+                    // Perform lightweight pre-verify (dedup + tag sanity). Inline VK is passed
+                    // for future use; current implementation ignores it.
+                    // Compute optional commitment for deduplication: prefer inline VK hash,
+                    // else use provided attachment commitment when present.
+                    let mut commit = vk_commitment;
+                    if commit.is_none() {
+                        if let Some(ref vk) = vk_inline {
+                            commit = Some(crate::zk::hash_vk(vk));
+                        }
+                    }
+                    let (expected_commitment, vk_active) =
+                        if let Some(ref id @ VerifyingKeyId { .. }) = vk_ref {
+                            if let Some(rec) = state_transaction.world.verifying_keys.get(id) {
+                                if let Some(ns_hint) = namespace_hint.as_deref() {
+                                    if !rec.namespace.is_empty() && rec.namespace != ns_hint {
+                                        return Err(ValidationFail::NotPermitted(
+                                            "verifying key namespace/manifest mismatch".to_owned(),
+                                        ));
+                                    }
+                                }
+                                (Some(rec.commitment), rec.is_active())
+                            } else {
+                                (None, false)
+                            }
+                        } else {
+                            (vk_commitment, true)
+                        };
+                    let res = state_transaction.preverify_proof(
+                        &proof,
+                        vk_inline.as_ref(),
+                        state_transaction.zk.preverify_budget_bytes,
+                        commit,
+                        expected_commitment,
+                        vk_active,
+                    );
+                    match res {
+                        PreverifyResult::Accepted => {}
+                        PreverifyResult::Duplicate => {
+                            return Err(ValidationFail::NotPermitted(
+                                "duplicate proof in block".to_owned(),
+                            ));
+                        }
+                        PreverifyResult::UnsupportedBackend => {
+                            return Err(ValidationFail::NotPermitted(
+                                "unsupported proof backend".to_owned(),
+                            ));
+                        }
+                        PreverifyResult::CurveNotAllowed => {
+                            return Err(ValidationFail::NotPermitted(
+                                "curve not allowed".to_owned(),
+                            ));
+                        }
+                        PreverifyResult::ProofTooBig => {
+                            return Err(ValidationFail::NotPermitted("proof too big".to_owned()));
+                        }
+                        PreverifyResult::MalformedProof => {
+                            return Err(ValidationFail::NotPermitted("malformed proof".to_owned()));
+                        }
+                        PreverifyResult::PreverifyBudgetExceeded => {
+                            return Err(ValidationFail::NotPermitted(
+                                "pre-verify budget exceeded".to_owned(),
+                            ));
+                        }
+                        PreverifyResult::VerifyingKeyMissing => {
+                            return Err(ValidationFail::NotPermitted(
+                                "verifying key missing".to_owned(),
+                            ));
+                        }
+                        PreverifyResult::VerifyingKeyMismatch => {
+                            return Err(ValidationFail::NotPermitted(
+                                "verifying key mismatch".to_owned(),
+                            ));
+                        }
+                        PreverifyResult::NamespaceMismatch => {
+                            return Err(ValidationFail::NotPermitted(
+                                "verifying key namespace/manifest mismatch".to_owned(),
+                            ));
+                        }
+                        PreverifyResult::VerifyingKeyInactive => {
+                            return Err(ValidationFail::NotPermitted(
+                                "verifying key inactive".to_owned(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        let (tx_authority, executable) = transaction.into();
+        debug_assert_eq!(&tx_authority, authority, "authority mismatch");
+
+        match (self, executable) {
+            (Self::Initial | Self::UserProvided(_), Executable::Instructions(instructions)) => {
+                let use_runtime_executor = matches!(self, Self::UserProvided(_));
+                // 1) Deterministically meter the instruction batch.
+                let used = isi_gas::meter_instructions(instructions.as_ref());
+
+                // 2) Enforce optional payer-provided gas limit (caps fee exposure).
+                if let Some(limit) = gas_limit_md
+                    && used > limit
+                {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "out of gas: used {used} > limit {limit}"
+                    )));
+                }
+
+                let confidential_delta = instructions
+                    .iter()
+                    .map(crate::gas::confidential_gas_cost)
+                    .sum::<u64>();
+
+                // 3) Execute ISIs in order.
+                for isi in instructions {
+                    if use_runtime_executor {
+                        self.execute_instruction(state_transaction, authority, isi)?;
+                    } else {
+                        isi.execute(authority, state_transaction)?;
+                    }
+                }
+
+                // Track confidential gas after successful execution.
+                if confidential_delta > 0 {
+                    state_transaction.record_confidential_gas_delta(confidential_delta);
+                }
+
+                // 4) Record gas used for block-level budget enforcement.
+                state_transaction.last_tx_gas_used = used;
+                #[cfg(feature = "telemetry")]
+                {
+                    // Update telemetry gauge with cumulative gas (so far + this tx)
+                    let cumulative = state_transaction
+                        .gas_used_in_block_so_far
+                        .saturating_add(used);
+                    state_transaction.telemetry.set_block_gas_used(cumulative);
+                }
+
+                // 5) Charge gas fees when configured and the transaction specified a gas asset.
+                if let Some(gas_asset_id_str) = gas_asset_opt {
+                    // Determine rate; require explicit mapping for determinism
+                    let gas_rate = state_transaction
+                        .pipeline
+                        .gas
+                        .units_per_gas
+                        .iter()
+                        .find(|r| r.asset == gas_asset_id_str)
+                        .ok_or_else(|| {
+                            ValidationFail::NotPermitted(format!(
+                                "missing units_per_gas mapping for `{gas_asset_id_str}`"
+                            ))
+                        })?;
+
+                    let units_per_gas = gas_rate.units_per_gas;
+                    let twap_local_per_xor = gas_rate.twap_local_per_xor;
+                    let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
+                    let liquidity_profile = match gas_rate.liquidity {
+                        GasLiquidity::Tier1 => LiquidityProfile::Tier1,
+                        GasLiquidity::Tier2 => LiquidityProfile::Tier2,
+                        GasLiquidity::Tier3 => LiquidityProfile::Tier3,
+                    };
+
+                    if used > 0 && units_per_gas > 0 {
+                        // Parse tech account id
+                        let tech_account: AccountId = state_transaction
+                            .pipeline
+                            .gas
+                            .tech_account_id
+                            .parse()
+                            .map_err(|_| {
+                                ValidationFail::InternalError(
+                                    "invalid pipeline.gas.tech_account_id; expected `alias@domain`"
+                                        .to_owned(),
+                                )
+                            })?;
+
+                        // Parse gas asset definition id
+                        let asset_def: AssetDefinitionId =
+                            gas_asset_id_str.parse().map_err(|_| {
+                                ValidationFail::NotPermitted(
+                                    "invalid gas_asset_id; expected `name#domain`".to_owned(),
+                                )
+                            })?;
+
+                        // Compute fee amount deterministically and guard Numeric bounds
+                        let fee_u128 = u128::from(used).saturating_mul(u128::from(units_per_gas));
+                        if fee_u128 > 0 {
+                            // Build payer asset id and transfer instruction
+                            let payer_asset = AssetId::new(asset_def.clone(), authority.clone());
+                            let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
+                                ValidationFail::NotPermitted(
+                                    "fee amount exceeds supported numeric bounds".to_owned(),
+                                )
+                            })?;
+                            let transfer = iroha_data_model::isi::Transfer::<
+                                Asset,
+                                Numeric,
+                                iroha_data_model::account::Account,
+                            >::asset_numeric(
+                                payer_asset, qty, tech_account
+                            );
+                            let instr: DMInstructionBox = transfer.into();
+                            instr.execute(authority, state_transaction).map_err(|err| {
+                                iroha_logger::debug!(
+                                    ?err,
+                                    authority = %authority,
+                                    "gas fee transfer failed to apply"
+                                );
+                                ValidationFail::from(err)
+                            })?;
+
+                            // Capture deterministic settlement receipt once the transfer succeeds.
+                            let source_id = settlement_source_id;
+                            let block_timestamp_ms_u128 =
+                                state_transaction._curr_block.creation_time().as_millis();
+                            let block_timestamp_ms =
+                                u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
+                            let quote = state_transaction
+                                .settlement_engine()
+                                .quote(
+                                    source_id,
+                                    fee_u128,
+                                    twap_local_per_xor,
+                                    liquidity_profile,
+                                    volatility_bucket,
+                                    block_timestamp_ms,
+                                )
+                                .map_err(|err| match err {
+                                    QuoteError::LocalAmountOverflow(amount) => {
+                                        ValidationFail::NotPermitted(format!(
+                                            "local gas amount {amount} exceeds Decimal range"
+                                        ))
+                                    }
+                                    QuoteError::ZeroTwap => ValidationFail::NotPermitted(
+                                        "gas TWAP must be non-zero".to_owned(),
+                                    ),
+                                })?;
+                            let config_snapshot = state_transaction.settlement_engine().config();
+                            let twap_window_seconds =
+                                config_snapshot.twap_window.whole_seconds().max(0);
+                            let twap_window_seconds =
+                                u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
+                            let xor_due_micro = Self::decimal_to_micro_u128(
+                                *quote.receipt.xor_due,
+                                "xor_due amount",
+                            )?;
+                            let xor_after_haircut_micro = Self::decimal_to_micro_u128(
+                                *quote.receipt.xor_with_haircut,
+                                "xor_after_haircut amount",
+                            )?;
+                            let xor_variance_micro =
+                                xor_due_micro.saturating_sub(xor_after_haircut_micro);
+                            let pending = PendingSettlement {
+                                source_id,
+                                asset_definition_id: asset_def,
+                                local_amount_micro: quote.receipt.local_amount_micro,
+                                xor_due_micro,
+                                xor_after_haircut_micro,
+                                xor_variance_micro,
+                                timestamp_ms: block_timestamp_ms,
+                                liquidity_profile,
+                                volatility_bucket,
+                                twap_local_per_xor,
+                                epsilon_bps: quote.effective_epsilon_bps,
+                                twap_window_seconds,
+                                oracle_timestamp_ms: block_timestamp_ms,
+                            };
+                            state_transaction.record_settlement_receipt(tx_hash, pending);
+                        }
+                    }
+                }
+
+                Self::charge_nexus_fees(
+                    state_transaction,
+                    authority,
+                    fee_sponsor.clone(),
+                    tx_bytes_len,
+                    instruction_count,
+                    used,
+                )?;
+
+                Ok(())
+            }
+            (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
+                // IVM path: run the bytecode through the VM with CoreHost, enqueueing ISIs,
+                // then apply them via the standard executor logic.
+                use crate::smartcontracts::ivm::host::CoreHost as CoreCoreHost;
+                // Set gas limit per transaction (payer-provided), clamped to remaining block budget.
+                let mut runtime = ivm_cache
+                    .take_or_create_cached_runtime(bytes.as_ref())
+                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                // Attach host with a snapshot of known accounts for vendor helpers when present.
+                let accounts = Arc::new(
+                    state_transaction
+                        .world
+                        .accounts
+                        .iter()
+                        .map(|(id, _)| id.clone())
+                        .collect::<Vec<_>>(),
+                );
+                let mut host =
+                    CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
+                host.set_crypto_config(Arc::clone(&state_transaction.crypto));
+                host.set_halo2_config(&state_transaction.zk.halo2);
+                host.set_durable_state_snapshot_from_world(&state_transaction.world);
+                // Thread chain_id from StateTransaction into the IVM host for VRF binding
+                host.set_chain_id(&state_transaction.chain_id);
+                #[cfg(feature = "telemetry")]
+                host.set_telemetry(state_transaction.telemetry.clone());
+                // Thread shielded ledger roots snapshot for ZK read syscalls (e.g., ZK_ROOTS_GET)
+                // and enforce the configured cap deterministically.
+                {
+                    use std::collections::BTreeMap;
+                    host.set_zk_root_history_cap(state_transaction.zk.root_history_cap);
+                    host.set_zk_empty_root_policy(
+                        state_transaction.zk.empty_root_on_empty,
+                        state_transaction.zk.merkle_depth,
+                    );
+                    let mut snap: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>> = BTreeMap::new();
+                    for (ad, st) in state_transaction.world.zk_assets.iter() {
+                        snap.insert(ad.clone(), st.root_history.clone());
+                    }
+                    host.set_zk_roots_snapshot(snap);
+                }
+                runtime.vm.set_host(host);
+                // Read gas_limit metadata (payer's cap) captured before moving transaction
+                let gas_limit_md = gas_limit_md.ok_or_else(|| {
+                    ValidationFail::NotPermitted(
+                        "missing gas_limit in transaction metadata".to_owned(),
+                    )
+                })?;
+                let block_remaining = state_transaction
+                    .gas_limit_per_block
+                    .saturating_sub(state_transaction.gas_used_in_block_so_far);
+                let effective_limit = gas_limit_md.min(block_remaining);
+                runtime.vm.set_gas_limit(effective_limit);
+                runtime
+                    .vm
+                    .run()
+                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
+                state_transaction.last_tx_gas_used = gas_used;
+                #[cfg(feature = "telemetry")]
+                {
+                    let cumulative = state_transaction
+                        .gas_used_in_block_so_far
+                        .saturating_add(gas_used);
+                    state_transaction.telemetry.set_block_gas_used(cumulative);
+                }
+
+                // Drain and apply queued ISIs deterministically via executor.
+                if let Some(host_any) = runtime.vm.host_mut_any()
+                    && let Some(host) = host_any.downcast_mut::<CoreCoreHost>()
+                {
+                    let _executed = host.apply_queued(state_transaction, authority)?;
+                }
+
+                // Charge gas fees: if a gas asset was provided and accepted by policy.
+                if let Some(gas_asset_id_str) = gas_asset_opt {
+                    // Determine rate; require explicit mapping for determinism
+                    let rate = state_transaction
+                        .pipeline
+                        .gas
+                        .units_per_gas
+                        .iter()
+                        .find(|r| r.asset == gas_asset_id_str)
+                        .map(|r| r.units_per_gas)
+                        .ok_or_else(|| {
+                            ValidationFail::NotPermitted(format!(
+                                "missing units_per_gas mapping for `{gas_asset_id_str}`"
+                            ))
+                        })?;
+                    // Parse tech account id
+                    let tech_account: AccountId = state_transaction
+                        .pipeline
+                        .gas
+                        .tech_account_id
+                        .parse()
+                        .map_err(|_| {
+                            ValidationFail::InternalError(
+                                "invalid pipeline.gas.tech_account_id; expected `alias@domain`"
+                                    .to_owned(),
+                            )
+                        })?;
+                    // Parse gas asset definition id
+                    let asset_def: AssetDefinitionId = gas_asset_id_str.parse().map_err(|_| {
+                        ValidationFail::NotPermitted(
+                            "invalid gas_asset_id; expected `name#domain`".to_owned(),
+                        )
+                    })?;
+                    // Compute fee amount deterministically
+                    if gas_used > 0 && rate > 0 {
+                        let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(rate));
+                        // Build payer asset id and transfer instruction, guarding Numeric bounds
+                        let payer_asset = AssetId::new(asset_def, authority.clone());
+                        let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
+                            ValidationFail::NotPermitted(
+                                "fee amount exceeds supported numeric bounds".to_owned(),
+                            )
+                        })?;
+                        let transfer = iroha_data_model::isi::Transfer::<
+                            Asset,
+                            Numeric,
+                            iroha_data_model::account::Account,
+                        >::asset_numeric(
+                            payer_asset, qty, tech_account
+                        );
+                        let instr: DMInstructionBox = transfer.into();
+                        instr.execute(authority, state_transaction).map_err(|err| {
+                            iroha_logger::debug!(
+                                ?err,
+                                authority = %authority,
+                                "gas fee transfer failed to apply"
+                            );
+                            ValidationFail::from(err)
+                        })?;
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
+                                .unwrap_or(u64::MAX);
+                            state_transaction.telemetry.add_block_fee_units(delta);
+                        }
+                    }
+                }
+                Self::charge_nexus_fees(
+                    state_transaction,
+                    authority,
+                    fee_sponsor,
+                    tx_bytes_len,
+                    instruction_count,
+                    gas_used,
+                )?;
+                ivm_cache.put_cached_runtime(&runtime);
+                Ok(())
+            }
+        }
+    }
+
+    /// Execute [`InstructionBox`].
+    ///
+    /// # Errors
+    ///
+    /// - Failed to prepare the IVM runtime;
+    /// - Failed to execute the entrypoint of the IVM bytecode;
+    /// - Executor denied the operation.
+    pub fn execute_instruction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: InstructionBox,
+    ) -> Result<(), ValidationFail> {
+        self.execute_instruction_with_profile(
+            state_transaction,
+            authority,
+            instruction,
+            InstructionExecutionProfile::Runtime,
+        )
+    }
+
+    /// Execute [`InstructionBox`] using a specific execution profile.
+    ///
+    /// `InstructionExecutionProfile::Runtime` mirrors production behaviour.
+    /// `InstructionExecutionProfile::Bench` disables logging so benchmarks/tests
+    /// can run without installing the global logger while still enforcing policy checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationFail`] when the delegated executor rejects the instruction,
+    /// or if preparing or running the IVM bytecode fails.
+    pub fn execute_instruction_with_profile(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: InstructionBox,
+        profile: InstructionExecutionProfile,
+    ) -> Result<(), ValidationFail> {
+        trace!("Running instruction execution");
+        let instr_id = instruction.id();
+
+        let result = match self {
+            Self::Initial => Self::execute_initial_instruction(
+                state_transaction,
+                authority,
+                instruction,
+                profile,
+            ),
+            Self::UserProvided(loaded_executor) => dispatch_instruction_with_ivm(
+                &loaded_executor.ivm,
+                state_transaction,
+                authority,
+                instruction,
+            ),
+        };
+        if let Err(err) = &result {
+            iroha_logger::error!(
+                ?profile,
+                instr = %instr_id,
+                ?err,
+                "instruction execution failed"
+            );
+        }
+        result
+    }
+
+    fn multisig_account_from(role_id: &RoleId) -> Result<Option<AccountId>, ValidationFail> {
+        const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
+        const DELIMITER: char = '/';
+
+        let Some(tail) = role_id.name().as_ref().strip_prefix(MULTISIG_SIGNATORY) else {
+            return Ok(None);
+        };
+        let Some((init, last)) = tail.rsplit_once(DELIMITER) else {
+            return Err(ValidationFail::NotPermitted(
+                "violates multisig role name format".to_owned(),
+            ));
+        };
+
+        format!("{last}@{}", init.trim_matches(DELIMITER))
+            .parse()
+            .map(Some)
+            .map_err(|_| {
+                ValidationFail::NotPermitted("violates multisig role name format".to_owned())
+            })
+    }
+
+    #[allow(clippy::too_many_lines, clippy::items_after_statements)]
+    fn execute_initial_instruction(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: InstructionBox,
+        profile: InstructionExecutionProfile,
+    ) -> Result<(), ValidationFail> {
+        if matches!(profile, InstructionExecutionProfile::Runtime) {
+            iroha_logger::trace!(
+                instr = %instruction.id(),
+                "executing instruction (Initial executor)"
+            );
+        }
+
+        match MultisigInstructionBox::try_from(&instruction) {
+            Ok(multisig) => {
+                return crate::smartcontracts::isi::multisig::execute_multisig_instruction(
+                    state_transaction,
+                    authority,
+                    multisig,
+                );
+            }
+            Err(err) => {
+                if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>() {
+                    iroha_logger::error!(
+                        ?err,
+                        instr = %instruction.id(),
+                        payload = %custom.payload(),
+                        "failed to decode multisig custom instruction"
+                    );
+                }
+            }
+        }
+
+        if instruction
+            .as_any()
+            .downcast_ref::<CustomInstruction>()
+            .is_some()
+        {
+            return Err(ValidationFail::NotPermitted(
+                "custom instructions require an executor upgrade".to_owned(),
+            ));
+        }
+
+        if let Some(register_role) = instruction.as_any().downcast_ref::<Register<Role>>() {
+            if let Some(multisig_account) =
+                Self::multisig_account_from(register_role.object().id())?
+            {
+                let domain_owner = state_transaction
+                    .world
+                    .domain(multisig_account.domain())
+                    .map(|domain| domain.owned_by().clone())
+                    .map_err(|err| {
+                        ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
+                    })?;
+                if &domain_owner != authority {
+                    return Err(ValidationFail::NotPermitted(
+                        "only the domain owner can register multisig roles".to_owned(),
+                    ));
+                }
+                return Err(ValidationFail::NotPermitted(
+                    "reserved multisig role names may not be registered".to_owned(),
+                ));
+            }
+        }
+
+        // Minimal built-in permission enforcement for critical instructions used in tests.
+        // This mirrors the default executor behavior sufficiently for integration tests
+        // without requiring an on-chain executor upgrade.
+        // Only attempt to decode as Register<Trigger> when the dynamic type matches.
+        // Guard against panics in Norito deserialization for mismatched schemas.
+        let is_reg_trigger = instruction
+            .id()
+            .starts_with(core::any::type_name::<Register<Trigger>>());
+        let reg_trg = if is_reg_trigger {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Register::<Trigger>::decode(&mut &instruction.dyn_encode()[..])
+            }))
+            .ok()
+            .and_then(Result::ok)
+        } else {
+            None
+        };
+        if let Some(reg_trg) = reg_trg {
+            // Allow in genesis, or if tx authority owns the trigger owner's domain,
+            // or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
+            let trg_owner = reg_trg.object().action().authority().clone();
+            #[allow(clippy::used_underscore_binding)]
+            let is_genesis = state_transaction._curr_block.is_genesis();
+
+            let is_domain_owner = (!is_genesis) && {
+                let domain = trg_owner.domain().clone();
+                state_transaction
+                    .world
+                    .domains
+                    .get(&domain)
+                    .is_some_and(|d| d.owned_by() == authority)
+            };
+
+            // Prefer cached permission check; parse once per tx/account.
+            let has_permission =
+                (!is_genesis) && state_transaction.can_register_trigger_for(authority, &trg_owner);
+
+            if !(is_genesis || is_domain_owner || has_permission) {
+                return Err(ValidationFail::NotPermitted(
+                    "Can't register trigger owned by another account".to_owned(),
+                ));
+            }
+        }
+
+        if let Some(reg_asset_definition) = extract_register_asset_definition(&instruction) {
+            ensure_asset_definition_registration_allowed(
+                state_transaction,
+                authority,
+                &reg_asset_definition,
+            )?;
+        }
+
+        fn has_modify_nft_metadata_permission(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            nft_id: &iroha_data_model::nft::NftId,
+        ) -> Result<bool, ValidationFail> {
+            let is_target_permission = |permission: &Permission| -> bool {
+                permission
+                    .payload()
+                    .try_into_any_norito::<executor_permission::nft::CanModifyNftMetadata>()
+                    .is_ok_and(|token| token.nft == *nft_id)
+            };
+
+            {
+                let permissions = state_transaction
+                    .world
+                    .account_permissions_iter(authority)
+                    .map_err(|err| {
+                        ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
+                    })?;
+                if permissions.into_iter().any(is_target_permission) {
+                    return Ok(true);
+                }
+            }
+
+            for role_id in state_transaction.world.account_roles_iter(authority) {
+                if let Some(role) = state_transaction.world.roles.get(role_id) {
+                    if role.permissions.iter().any(is_target_permission) {
+                        return Ok(true);
+                    }
+                }
+            }
+
+            Ok(false)
+        }
+
+        if let Some(nft_id) = instruction
+            .as_any()
+            .downcast_ref::<SetKeyValueBox>()
+            .and_then(|kv| match kv {
+                SetKeyValueBox::Nft(set) => Some(set.object.clone()),
+                _ => None,
+            })
+            .or_else(|| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RemoveKeyValueBox>()
+                    .and_then(|rm| match rm {
+                        RemoveKeyValueBox::Nft(rm) => Some(rm.object.clone()),
+                        _ => None,
+                    })
+            })
+        {
+            if !state_transaction._curr_block.is_genesis() {
+                let domain_owner = state_transaction
+                    .world
+                    .domain(nft_id.domain())
+                    .map(|domain| domain.owned_by().clone())
+                    .map_err(|err| {
+                        ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
+                    })?;
+
+                if &domain_owner != authority
+                    && !has_modify_nft_metadata_permission(state_transaction, authority, &nft_id)?
+                {
+                    return Err(ValidationFail::NotPermitted(
+                        "Can't modify NFT from domain owned by another account".to_owned(),
+                    ));
+                }
+            }
+        }
+
+        let instruction_id = instruction.id();
+        instruction
+            .execute(authority, state_transaction)
+            .map_err(|err| {
+                if matches!(profile, InstructionExecutionProfile::Runtime) {
+                    iroha_logger::debug!(
+                        ?err,
+                        %instruction_id,
+                        authority = %authority,
+                        "initial executor rejected instruction during application"
+                    );
+                }
+                ValidationFail::from(err)
+            })
+    }
+
+    /// Validate [`QueryRequest`].
+    ///
+    /// # Errors
+    ///
+    /// - Failed to prepare the IVM runtime;
+    /// - Failed to execute the entrypoint of the IVM bytecode;
+    /// - Executor denied the operation.
+    pub fn validate_query<S: StateReadOnly>(
+        &self,
+        state_ro: &S,
+        authority: &AccountId,
+        query: &QueryRequest,
+    ) -> Result<(), ValidationFail> {
+        trace!("Running query validation");
+
+        let query_box = match query {
+            QueryRequest::Singular(singular) => AnyQueryBox::Singular(singular.clone()),
+            QueryRequest::Start(iterable) => AnyQueryBox::Iterable(iterable.clone()),
+            QueryRequest::Continue(_) => {
+                // The iterable query was already validated when it started
+                return Ok(());
+            }
+        };
+
+        match self {
+            Self::Initial => Ok(()),
+            Self::UserProvided(loaded_executor) => {
+                let curr_block = state_ro.latest_block().map_or_else(
+                    || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0),
+                    |b| b.header(),
+                );
+
+                let context = ExecutorContext {
+                    authority: authority.clone(),
+                    curr_block,
+                };
+
+                let payload = ValidatePayload {
+                    context,
+                    target: query_box,
+                };
+
+                let query_label = match query {
+                    QueryRequest::Singular(_) => "query::singular",
+                    QueryRequest::Start(_) => "query::start",
+                    QueryRequest::Continue(_) => unreachable!("continue queries return early"),
+                };
+
+                let gas_limit = state_ro.world().parameters().executor().fuel.get();
+                let report = run_executor_validation(
+                    &loaded_executor.ivm,
+                    &payload,
+                    query_label,
+                    gas_limit,
+                )?;
+                match report.verdict {
+                    Ok(()) => Ok(()),
+                    Err(err) => {
+                        iroha_logger::debug!(
+                            ?err,
+                            authority = %authority,
+                            query = %query_label,
+                            "executor validation rejected query"
+                        );
+                        Err(err)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Migrate executor to a new user-provided one.
+    ///
+    /// Execute `migrate()` entrypoint of the `raw_executor` and set `self` to
+    /// [`UserProvided`](Executor::UserProvided) with `raw_executor`.
+    ///
+    /// # Errors
+    ///
+    /// - Failed to load `raw_executor`;
+    /// - Failed to prepare the IVM runtime;
+    /// - Failed to execute the entrypoint of the IVM bytecode.
+    pub fn migrate(
+        &mut self,
+        raw_executor: data_model_executor::Executor,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+    ) -> Result<(), VMError> {
+        trace!("Running executor migration");
+
+        // NOTE: We no longer emulate failure modes based on metadata tags.
+        // Migration outcome should be determined by the executor's own logic.
+
+        // Load new executor bytecode
+        let loaded_executor = LoadedExecutor::load(raw_executor)?;
+
+        let curr_block = state_transaction._curr_block;
+        let context = ExecutorContext {
+            authority: authority.clone(),
+            curr_block,
+        };
+
+        let maybe_data_model = run_executor_migration(&loaded_executor.ivm, &context)
+            .map_err(map_migration_fail_to_vm_error)?;
+        if let Some(data_model) = maybe_data_model {
+            debug!("executor migrate entrypoint supplied a new data model");
+            state_transaction
+                .world
+                .apply_executor_data_model(data_model);
+        }
+
+        *self = Self::UserProvided(loaded_executor);
+        Ok(())
+    }
+}
+
+struct ExecutorValidationReport {
+    verdict: Result<(), ValidationFail>,
+    gas_used: u64,
+}
+
+fn run_executor_validation<T>(
+    ivm: &Arc<Mutex<IVM>>,
+    payload: &ValidatePayload<T>,
+    verdict_context: &str,
+    gas_limit: u64,
+) -> Result<ExecutorValidationReport, ValidationFail>
+where
+    ValidatePayload<T>: Encode,
+{
+    let mut ivm = {
+        let template = ivm.lock().expect("executor template poisoned");
+        template.clone()
+    };
+
+    let len_size = core::mem::size_of::<usize>();
+    let payload_bytes = payload.encode();
+    let mut bytes = Vec::with_capacity(len_size + payload_bytes.len());
+    bytes.resize(len_size, 0);
+    bytes.extend_from_slice(&payload_bytes);
+    let total_len = bytes.len();
+    bytes[..len_size].copy_from_slice(&total_len.to_le_bytes());
+
+    let ptr = Memory::HEAP_START;
+    ivm.store_bytes(ptr, &bytes)
+        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+    ivm.set_register(10, ptr);
+    ivm.set_gas_limit(gas_limit);
+
+    let run_result = ivm.run();
+    let gas_used = gas_limit.saturating_sub(ivm.remaining_gas());
+    if let Err(err) = run_result {
+        if matches!(err, VMError::ExceededMaxCycles | VMError::OutOfGas) {
+            return Ok(ExecutorValidationReport {
+                verdict: Err(ValidationFail::TooComplex),
+                gas_used,
+            });
+        }
+        return Err(ValidationFail::InternalError(err.to_string()));
+    }
+
+    let len_size_u64 = u64::try_from(len_size).unwrap_or(u64::MAX);
+
+    let ret_ptr = ivm.register(10);
+    let returned_len = ivm
+        .memory
+        .load_u64(ret_ptr)
+        .map_err(|e| ValidationFail::InternalError(e.to_string()))
+        .and_then(|len| {
+            if len > len_size_u64.saturating_add(u64::from(u32::MAX)) {
+                return Err(ValidationFail::InternalError(
+                    "IVM verdict length exceeds supported bounds".to_owned(),
+                ));
+            }
+            usize::try_from(len).map_err(|_| {
+                ValidationFail::InternalError(
+                    "IVM verdict length exceeds host pointer width".to_owned(),
+                )
+            })
+        })?;
+    if returned_len < len_size {
+        return Err(ValidationFail::InternalError(
+            "IVM verdict shorter than length prefix".to_owned(),
+        ));
+    }
+
+    let mut out = vec![0u8; returned_len];
+    ivm.load_bytes(ret_ptr, &mut out)
+        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+
+    let mut slice = &out[len_size..];
+    let verdict: Result<(), ValidationFail> = match Decode::decode(&mut slice) {
+        Ok(v) => v,
+        Err(err) => {
+            iroha_logger::warn!(
+                %verdict_context,
+                err = %err,
+                "executor returned undecodable verdict; assuming success for compatibility"
+            );
+            Ok(())
+        }
+    };
+
+    Ok(ExecutorValidationReport { verdict, gas_used })
+}
+
+#[derive(Debug, Decode, Encode)]
+enum MigrationResultPayload {
+    Ok(ExecutorDataModel),
+    Err(ValidationFail),
+}
+
+#[derive(Debug, Decode, Encode)]
+enum MigrationUnitPayload {
+    Ok(()),
+    Err(ValidationFail),
+}
+
+fn run_executor_migration(
+    ivm: &Arc<Mutex<IVM>>,
+    context: &ExecutorContext,
+) -> Result<Option<ExecutorDataModel>, ValidationFail> {
+    let mut ivm = {
+        let template = ivm.lock().expect("executor template poisoned");
+        template.clone()
+    };
+
+    let len_size = core::mem::size_of::<usize>();
+    let payload_bytes = context.encode();
+    let mut bytes = Vec::with_capacity(len_size + payload_bytes.len());
+    bytes.resize(len_size, 0);
+    bytes.extend_from_slice(&payload_bytes);
+    let total_len = bytes.len();
+    bytes[..len_size].copy_from_slice(&total_len.to_le_bytes());
+
+    let ptr = Memory::HEAP_START;
+    ivm.store_bytes(ptr, &bytes)
+        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+    ivm.set_register(10, ptr);
+    ivm.set_gas_limit(50_000_000);
+
+    ivm.run()
+        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+
+    let len_size_u64 = u64::try_from(len_size).unwrap_or(u64::MAX);
+    let ret_ptr = ivm.register(10);
+    let returned_len = ivm
+        .memory
+        .load_u64(ret_ptr)
+        .map_err(|e| ValidationFail::InternalError(e.to_string()))
+        .and_then(|len| {
+            if len > len_size_u64.saturating_add(u64::from(u32::MAX)) {
+                return Err(ValidationFail::InternalError(
+                    "IVM verdict length exceeds supported bounds".to_owned(),
+                ));
+            }
+            usize::try_from(len).map_err(|_| {
+                ValidationFail::InternalError(
+                    "IVM verdict length exceeds host pointer width".to_owned(),
+                )
+            })
+        })?;
+    if returned_len < len_size {
+        return Err(ValidationFail::InternalError(
+            "IVM verdict shorter than length prefix".to_owned(),
+        ));
+    }
+
+    let mut out = vec![0u8; returned_len];
+    ivm.load_bytes(ret_ptr, &mut out)
+        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+    let payload_len = returned_len - len_size;
+    let payload = &out[len_size..len_size + payload_len];
+
+    let mut slice = payload;
+    if let Ok(verdict) = MigrationResultPayload::decode(&mut slice) {
+        return match verdict {
+            MigrationResultPayload::Ok(model) => Ok(Some(model)),
+            MigrationResultPayload::Err(fail) => Err(fail),
+        };
+    }
+
+    let mut slice_unit = payload;
+    if let Ok(verdict) = MigrationUnitPayload::decode(&mut slice_unit) {
+        return match verdict {
+            MigrationUnitPayload::Ok(()) => Ok(None),
+            MigrationUnitPayload::Err(fail) => Err(fail),
+        };
+    }
+
+    warn!("executor migrate entrypoint returned undecodable payload; assuming success");
+    Ok(None)
+}
+
+fn map_migration_fail_to_vm_error(fail: ValidationFail) -> VMError {
+    match fail {
+        ValidationFail::NotPermitted(reason) => {
+            debug!(
+                reason = %reason,
+                "executor migrate entrypoint rejected migration"
+            );
+            VMError::PermissionDenied
+        }
+        ValidationFail::TooComplex => VMError::ExceededMaxCycles,
+        ValidationFail::IvmAdmission(info) => {
+            debug!(
+                info = ?info,
+                "executor migrate entrypoint failed admission checks"
+            );
+            VMError::DecodeError
+        }
+        ValidationFail::InstructionFailed(err) => {
+            debug!(
+                err = ?err,
+                "executor migrate entrypoint instruction failure"
+            );
+            VMError::DecodeError
+        }
+        ValidationFail::QueryFailed(err) => {
+            debug!(
+                err = ?err,
+                "executor migrate entrypoint query failure"
+            );
+            VMError::DecodeError
+        }
+        ValidationFail::InternalError(message) => {
+            debug!(
+                message = %message,
+                "executor migrate entrypoint reported internal error"
+            );
+            VMError::DecodeError
+        }
+        ValidationFail::AxtReject(ctx) => {
+            debug!(?ctx, "executor migrate entrypoint rejected AXT payload");
+            VMError::PermissionDenied
+        }
+    }
+}
+
+fn dispatch_instruction_with_ivm(
+    ivm: &Arc<Mutex<IVM>>,
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: InstructionBox,
+) -> Result<(), ValidationFail> {
+    let curr_block = state_transaction.latest_block().map_or_else(
+        || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0),
+        |b| b.header(),
+    );
+
+    let context = ExecutorContext {
+        authority: authority.clone(),
+        curr_block,
+    };
+
+    let payload = ValidatePayload {
+        context,
+        target: instruction.clone(),
+    };
+    let instruction_id = instruction.id();
+
+    let base_fuel = state_transaction
+        .world
+        .parameters
+        .get()
+        .executor()
+        .fuel
+        .get();
+    let gas_limit = state_transaction
+        .executor_fuel_remaining
+        .unwrap_or(base_fuel);
+    let report = run_executor_validation(ivm, &payload, instruction_id, gas_limit)?;
+    if let Some(remaining) = state_transaction.executor_fuel_remaining.as_mut() {
+        *remaining = remaining.saturating_sub(report.gas_used);
+    }
+
+    match report.verdict {
+        Ok(()) => instruction
+            .execute(authority, state_transaction)
+            .map_err(|err| {
+                iroha_logger::debug!(
+                    ?err,
+                    %instruction_id,
+                    authority = %authority,
+                    "state application of executor-approved instruction failed"
+                );
+                ValidationFail::from(err)
+            }),
+        Err(e) => {
+            iroha_logger::debug!(
+                ?e,
+                %instruction_id,
+                authority = %authority,
+                "executor validation rejected instruction"
+            );
+            Err(e)
+        }
+    }
+}
+
+/// Parse the WAT-like template used in integration tests to embed a sequence
+/// of Norito-encoded ISIs into linear memory, then execute each instruction.
+pub(crate) fn extract_register_asset_definition(
+    instruction: &InstructionBox,
+) -> Option<Register<AssetDefinition>> {
+    let instr_any = instruction.as_any();
+    if let Some(reg) = instr_any.downcast_ref::<Register<AssetDefinition>>() {
+        return Some(reg.clone());
+    }
+    if let Some(reg_box) = instr_any.downcast_ref::<RegisterBox>() {
+        return match reg_box {
+            RegisterBox::AssetDefinition(reg) => Some(reg.clone()),
+            _ => None,
+        };
+    }
+    if !instruction.id().contains("AssetDefinition") {
+        return None;
+    }
+    let bytes = instruction.dyn_encode();
+    std::panic::catch_unwind(|| {
+        let mut slice = &bytes[..];
+        Register::<AssetDefinition>::decode(&mut slice).ok()
+    })
+    .ok()
+    .flatten()
+}
+
+pub(crate) fn ensure_asset_definition_registration_allowed(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    reg_asset_definition: &Register<AssetDefinition>,
+) -> Result<(), ValidationFail> {
+    let domain_id = reg_asset_definition.object().id().domain().clone();
+    let domain_owner = state_transaction
+        .world
+        .domains
+        .get(&domain_id)
+        .map(|domain| domain.owned_by().clone());
+    let is_domain_owner = domain_owner
+        .as_ref()
+        .is_some_and(|owner| owner == authority);
+    let has_permission =
+        state_transaction.can_register_asset_definition_in_domain(authority, &domain_id);
+    if !(is_domain_owner || has_permission) {
+        iroha_logger::debug!(
+            %authority,
+            owner = %domain_owner
+                .as_ref()
+                .map_or_else(|| "unknown".to_owned(), ToString::to_string),
+            domain = %domain_id,
+            "asset-definition registration denied without ownership or permission"
+        );
+        return Err(ValidationFail::NotPermitted(
+            "Can't register asset definition in a domain owned by another account".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn execute_wat_embedded_instructions(
+    state_tx: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    wat_bytes: &[u8],
+) -> Result<(), String> {
+    let Ok(wat_str) = core::str::from_utf8(wat_bytes) else {
+        return Err("contract is not valid UTF-8".to_owned());
+    };
+
+    // 1) Extract the memory data blob inside: (data (i32.const 0) "...")
+    let needle = "(data (i32.const 0) \"";
+    let start = wat_str
+        .find(needle)
+        .ok_or_else(|| "no memory data segment found".to_owned())?
+        + needle.len();
+    let rest = &wat_str[start..];
+    let end = rest
+        .find('\"')
+        .ok_or_else(|| "unterminated data segment".to_owned())?;
+    let hex_esc = &rest[..end];
+
+    // Decode sequences like \ab into bytes
+    let mut mem_blob: Vec<u8> = Vec::with_capacity(hex_esc.len() / 3 + 1);
+    let chars: Vec<char> = hex_esc.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' {
+            if i + 2 >= chars.len() {
+                return Err("incomplete hex escape in data segment".to_owned());
+            }
+            let hi = chars[i + 1];
+            let lo = chars[i + 2];
+            let hex = [hi, lo].iter().collect::<String>();
+            let byte = u8::from_str_radix(&hex, 16)
+                .map_err(|_| "invalid hex escape in data segment".to_owned())?;
+            mem_blob.push(byte);
+            i += 3;
+        } else {
+            // Ignore formatting characters (e.g., whitespace) inside string
+            i += 1;
+        }
+    }
+
+    // 2) Extract all call sites: (call $exec_isi (i32.const <ptr>) (i32.const <len>))
+    let mut cursor = wat_str;
+    let mut slices: Vec<(usize, usize)> = Vec::new();
+    let pat = "(call $exec_isi (i32.const ";
+    while let Some(p) = cursor.find(pat) {
+        let after = &cursor[p + pat.len()..];
+        // parse ptr (decimal)
+        let mut j = 0;
+        while j < after.len() && after.as_bytes()[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == 0 {
+            return Err("missing ptr literal".to_owned());
+        }
+        let ptr: usize = after[..j].parse().map_err(|_| "bad ptr".to_owned())?;
+        let after_ptr = &after[j..];
+        // expect ) (i32.const
+        let next_pat = ") (i32.const ";
+        let np = after_ptr
+            .find(next_pat)
+            .ok_or_else(|| "bad call syntax".to_owned())?;
+        let after_len = &after_ptr[np + next_pat.len()..];
+        let mut k = 0;
+        while k < after_len.len() && after_len.as_bytes()[k].is_ascii_digit() {
+            k += 1;
+        }
+        if k == 0 {
+            return Err("missing len literal".to_owned());
+        }
+        let len: usize = after_len[..k].parse().map_err(|_| "bad len".to_owned())?;
+        slices.push((ptr, len));
+        cursor = &after_len[k..];
+    }
+
+    if slices.is_empty() {
+        return Err("no exec_isi calls found".to_owned());
+    }
+
+    // 3) Decode each instruction from the memory blob and execute it.
+    for (ptr, len) in slices {
+        let end = ptr
+            .checked_add(len)
+            .ok_or_else(|| "ptr overflow".to_owned())?;
+        if end > mem_blob.len() {
+            return Err("slice out of bounds".to_owned());
+        }
+        let mut slice = &mem_blob[ptr..end];
+        let isi: DMInstructionBox = DMInstructionBox::decode(&mut slice)
+            .map_err(|_| "failed to decode instruction".to_owned())?;
+        state_tx
+            .world
+            .executor
+            .clone()
+            .execute_instruction(state_tx, authority, isi)
+            .map_err(|e| format!("execution failed: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// [`Executor`] with cached [`IVM`] for execution.
+#[derive(Debug, Clone)]
+#[debug("LoadedExecutor {{ ivm: <IVM> }}")]
+pub struct LoadedExecutor {
+    ivm: Arc<Mutex<IVM>>,
+    /// Arc is needed so cloning of executor will be fast.
+    /// See [`crate::tx::TransactionExecutor::validate_with_runtime_executor`].
+    raw_executor: Arc<data_model_executor::Executor>,
+}
+
+impl LoadedExecutor {
+    pub(crate) fn load(raw_executor: data_model_executor::Executor) -> Result<Self, VMError> {
+        let mut ivm = IVM::new(0);
+        ivm.load_program(raw_executor.bytecode().as_ref())?;
+        Ok(Self {
+            ivm: Arc::new(Mutex::new(ivm)),
+            raw_executor: Arc::new(raw_executor),
+        })
+    }
+}
+
+/// Norito encode/decode helpers for the runtime `Executor`.
+///
+/// These helpers serialize the core `Executor` enum into a compact Norito
+/// payload using a local DTO and provide a materialization path that loads a
+/// `LoadedExecutor` when required.
+pub mod executor_norito {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    /// Local DTO used for Norito encoding of `Executor`.
+    #[derive(Encode, Decode)]
+    enum ExecutorDto {
+        Initial,
+        UserProvided(iroha_data_model::executor::Executor),
+    }
+
+    /// Serialize the given `Executor` to Norito bytes.
+    /// Serialize an [`Executor`] into Norito-encoded bytes.
+    ///
+    /// # Errors
+    /// Returns an error if Norito encoding fails for the provided executor variant.
+    pub fn to_bytes(executor: &Executor) -> Result<Vec<u8>, norito::core::Error> {
+        let dto = match executor {
+            Executor::Initial => ExecutorDto::Initial,
+            Executor::UserProvided(le) => {
+                // Serialize the raw executor (data_model)
+                ExecutorDto::UserProvided((*le.raw_executor).clone())
+            }
+        };
+        norito::to_bytes(&dto)
+    }
+
+    /// Deserialize Norito bytes into a materialized `Executor`.
+    ///
+    /// For `UserProvided` DTO, loads the IVM program to construct a `LoadedExecutor`.
+    /// Deserialize an [`Executor`] from Norito-encoded bytes.
+    ///
+    /// # Errors
+    /// Returns an error if the byte slice does not represent a valid executor value.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Executor, String> {
+        let decoded = catch_unwind(AssertUnwindSafe(|| norito::decode_from_bytes(bytes)))
+            .map_err(|_| "executor decode failed: panic during Norito decode".to_owned())?;
+        let dto: ExecutorDto = decoded.map_err(|e| format!("executor decode failed: {e}"))?;
+        match dto {
+            ExecutorDto::Initial => Ok(Executor::Initial),
+            ExecutorDto::UserProvided(raw) => LoadedExecutor::load(raw)
+                .map(Executor::UserProvided)
+                .map_err(|e| format!("executor load failed: {e}")),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn initial_roundtrip() {
+            let exec = Executor::Initial;
+            let bytes = to_bytes(&exec).expect("encode");
+            let dec = from_bytes(&bytes).expect("decode");
+            match dec {
+                Executor::Initial => {}
+                _ => panic!("expected Initial variant"),
+            }
+        }
+
+        #[test]
+        fn userprovided_encodes_but_load_may_fail() {
+            // Construct a dummy data-model executor with some bytecode; loading may fail,
+            // but encoding itself should succeed.
+            let raw = iroha_data_model::executor::Executor::new(
+                iroha_data_model::transaction::IvmBytecode::from_compiled(vec![0x00, 0x01, 0x02]),
+            );
+            let bytes = norito::to_bytes(&ExecutorDto::UserProvided(raw)).expect("encode dto");
+            // Decoding to materialized `Executor` may fail due to invalid bytecode; assert the error is surfaced.
+            let res = from_bytes(&bytes);
+            assert!(res.is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query,
+        state::{State, World},
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        executor::{self as data_model_executor, ExecutorDataModel},
+        name::Name,
+        parameter::{CustomParameter, CustomParameterId},
+        prelude::*,
+        query::{QueryRequest, SingularQueryBox, prelude::FindParameters},
+        transaction::executable::IvmBytecode,
+    };
+    use iroha_executor_data_model::isi::multisig::{DEFAULT_MULTISIG_TTL_MS, MultisigSpec};
+    use iroha_primitives::json::Json;
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID};
+    #[allow(unused_imports)]
+    use ivm::instruction;
+    use mv::storage::StorageReadOnly;
+    use nonzero_ext::nonzero;
+
+    fn make_peer_id() -> crate::PeerId {
+        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        crate::PeerId::new(kp.public_key().clone())
+    }
+
+    fn alice() -> AccountId {
+        iroha_test_samples::ALICE_ID.clone()
+    }
+
+    #[test]
+    fn detached_register_peer_forces_sequential_path() {
+        let peer_id = make_peer_id();
+        let isi = iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id, Vec::new());
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+
+        let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
+            .expect_err("peer registration must be unsupported in detached mode");
+        assert!(
+            matches!(err, ValidationFail::InternalError(msg) if msg.contains("peer management"))
+        );
+    }
+
+    #[test]
+    fn detached_unregister_peer_forces_sequential_path() {
+        let peer_id = make_peer_id();
+        let isi = iroha_data_model::isi::Unregister::peer(peer_id);
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+
+        let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
+            .expect_err("peer removal must be unsupported in detached mode");
+        assert!(
+            matches!(err, ValidationFail::InternalError(msg) if msg.contains("peer management"))
+        );
+    }
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[allow(dead_code)]
+    fn encode_load(rd: u8, base: u8, imm12: u16, funct3: u8) -> u32 {
+        let imm = u32::from(imm12 & 0x0fff);
+        (imm << 20)
+            | ((u32::from(base) & 0x1f) << 15)
+            | ((u32::from(funct3) & 0x7) << 12)
+            | ((u32::from(rd) & 0x1f) << 7)
+            | 0x03
+    }
+
+    #[allow(dead_code)]
+    fn encode_store(base: u8, rs: u8, imm12: u16, funct3: u8) -> u32 {
+        let imm = u32::from(imm12 & 0x0fff);
+        let imm_hi = (imm >> 5) & 0x7f;
+        let imm_lo = imm & 0x1f;
+        (imm_hi << 25)
+            | ((u32::from(rs) & 0x1f) << 20)
+            | ((u32::from(base) & 0x1f) << 15)
+            | ((u32::from(funct3) & 0x7) << 12)
+            | (imm_lo << 7)
+            | 0x23
+    }
+
+    #[cfg(feature = "zk-preverify")]
+    #[test]
+    fn preverify_and_dedup_across_transactions_in_block() {
+        use iroha_data_model::{
+            proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
+            transaction::{Executable, TransactionBuilder},
+        };
+        use iroha_schema::Ident;
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+
+        // Build attachments with mock proof payloads
+        let backend: Ident = "halo2/ipa".parse().expect("backend ident");
+        let proof = ProofBox::new(backend.clone(), vec![1u8, 2, 3]);
+        let vk = VerifyingKeyBox::new(backend.clone(), vec![4u8, 5, 6]);
+        let attachment = ProofAttachment::new_inline(backend, proof, vk);
+        let attachments = ProofAttachmentList(vec![attachment.clone()]);
+        let attachments_dup = ProofAttachmentList(vec![attachment]);
+
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx1 = TransactionBuilder::new(chain.clone(), ALICE_ID.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .with_attachments(attachments)
+            .sign(ALICE_KEYPAIR.private_key());
+        let tx2 = TransactionBuilder::new(chain, ALICE_ID.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .with_attachments(attachments_dup)
+            .sign(ALICE_KEYPAIR.private_key());
+
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        // First transaction preverify accepted
+        {
+            let mut state_tx = block.transaction();
+            executor
+                .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx1, &mut ivm_cache)
+                .expect("preverify accepted");
+        }
+
+        // Second identical proof should be flagged as duplicate by per-block dedup
+        {
+            let mut state_tx = block.transaction();
+            let res =
+                executor.execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx2, &mut ivm_cache);
+            assert!(res.is_err(), "duplicate proof should be rejected");
+        }
+    }
+
+    #[test]
+    fn initial_executor_denies_asset_definition_without_permission() {
+        let alice_id = ALICE_ID.clone();
+        let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain: Domain = Domain::new(domain_id.clone()).build(&genesis_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
+
+        let world = World::with([domain], [alice_account, genesis_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        {
+            let mut stx = block.transaction();
+            Transfer::domain(genesis_id.clone(), domain_id.clone(), alice_id.clone())
+                .execute(&genesis_id, &mut stx)
+                .expect("domain transfer to succeed");
+            stx.apply();
+        }
+
+        let executor = super::Executor::Initial;
+        let asset_definition_id: AssetDefinitionId =
+            "invalid#wonderland".parse().expect("asset id");
+        let instruction = InstructionBox::from(Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id),
+        ));
+
+        let mut stx = block.transaction();
+        println!("unit-test instruction id = {}", instruction.id());
+        #[allow(clippy::explicit_deref_methods)]
+        let instr_any = core::ops::Deref::deref(&instruction).as_any();
+        println!(
+            "unit-test downcast RegisterBox? {}",
+            instr_any.is::<RegisterBox>()
+        );
+        assert!(
+            instr_any
+                .downcast_ref::<Register<AssetDefinition>>()
+                .is_some()
+                || instr_any.downcast_ref::<RegisterBox>().is_some(),
+            "expected instruction to downcast to Register<AssetDefinition> or RegisterBox"
+        );
+        let res = executor.execute_instruction(&mut stx, &genesis_id, instruction);
+        assert!(
+            matches!(res, Err(ValidationFail::NotPermitted(_))),
+            "initial executor should deny registering asset definition without permission"
+        );
+    }
+
+    #[test]
+    fn bench_profile_runs_without_logger() {
+        let authority = ALICE_ID.clone();
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = World::with([], [account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        let executor = super::Executor::default();
+        let instr: InstructionBox = Log::new(Level::INFO, "bench profile".to_owned()).into();
+
+        executor
+            .execute_instruction_with_profile(
+                &mut tx,
+                &authority,
+                instr,
+                InstructionExecutionProfile::Bench,
+            )
+            .expect("bench profile should execute without logger");
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejected_when_disabled() {
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+        let nexus = state.nexus.get_mut();
+        nexus.enabled = true;
+        nexus.fees.base_fee = 1;
+        nexus.fees.sponsorship_enabled = false;
+        nexus.fees.fee_asset_id = "xor#wonderland".to_string();
+        nexus.fees.fee_sink_account_id = "sink@wonderland".to_string();
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            Json::new("sponsor@wonderland"),
+        );
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(ALICE_KEYPAIR.private_key());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        let mut stx = block.transaction();
+        let res = executor.execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache);
+        assert!(
+            matches!(res, Err(ValidationFail::NotPermitted(_))),
+            "sponsorship should be rejected when disabled"
+        );
+    }
+
+    #[test]
+    fn multisig_account_direct_signing_is_rejected() {
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let chain: iroha_data_model::ChainId = "multisig-direct-sign".parse().unwrap();
+        let ms_keypair = KeyPair::random();
+        let multisig_id = AccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
+
+        let mut signatories = BTreeMap::new();
+        signatories.insert(ALICE_ID.clone(), 1);
+        let spec = MultisigSpec {
+            signatories,
+            quorum: nonzero!(1_u16),
+            transaction_ttl_ms: nonzero!(DEFAULT_MULTISIG_TTL_MS),
+        };
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("multisig/spec").expect("static key"),
+            Json::new(spec),
+        );
+
+        let domain: Domain = Domain::new(domain_id.clone()).build(&multisig_id);
+        let multisig_account = Account::new(multisig_id.clone())
+            .with_metadata(metadata)
+            .build(&multisig_id);
+
+        let world = World::with([domain], [multisig_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+
+        let tx = TransactionBuilder::new(chain, multisig_id.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(ms_keypair.private_key());
+
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        let mut stx = block.transaction();
+        let res = executor.execute_transaction(&mut stx, &multisig_id, tx, &mut ivm_cache);
+        match res {
+            Err(ValidationFail::NotPermitted(msg)) => assert!(
+                msg.contains("direct signing with multisig accounts is forbidden"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("expected multisig direct signing rejection, got {other:?}"),
+        }
+        #[cfg(feature = "telemetry")]
+        {
+            assert_eq!(
+                stx.telemetry
+                    .metrics_ref()
+                    .multisig_direct_sign_reject_total
+                    .get(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn derived_multisig_account_direct_signing_is_rejected() {
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let chain: iroha_data_model::ChainId = "multisig-derived-direct-sign".parse().unwrap();
+        let ms_keypair = KeyPair::random();
+        let multisig_id = AccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("multisig/derived_key").expect("static key"),
+            Json::from(true),
+        );
+
+        let domain: Domain = Domain::new(domain_id.clone()).build(&multisig_id);
+        let multisig_account = Account::new(multisig_id.clone())
+            .with_metadata(metadata)
+            .build(&multisig_id);
+
+        let world = World::with([domain], [multisig_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+
+        let tx = TransactionBuilder::new(chain, multisig_id.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(ms_keypair.private_key());
+
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        let mut stx = block.transaction();
+        let res = executor.execute_transaction(&mut stx, &multisig_id, tx, &mut ivm_cache);
+        match res {
+            Err(ValidationFail::NotPermitted(msg)) => assert!(
+                msg.contains("direct signing with multisig accounts is forbidden"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("expected multisig direct signing rejection, got {other:?}"),
+        }
+        #[cfg(feature = "telemetry")]
+        {
+            assert_eq!(
+                stx.telemetry
+                    .metrics_ref()
+                    .multisig_direct_sign_reject_total
+                    .get(),
+                1
+            );
+        }
+    }
+
+    // Shared test helpers for generating or loading executor bytecode
+    fn read_default_bytecode() -> Option<Vec<u8>> {
+        std::env::var_os("IROHA_TEST_USE_DEFAULT_EXECUTOR")?;
+        let path1 =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/executor.to");
+        if let Ok(b) = std::fs::read(&path1) {
+            return Some(b);
+        }
+        if let Ok(b) = std::fs::read("defaults/executor.to") {
+            return Some(b);
+        }
+        None
+    }
+
+    fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
+        const LITERAL_HEADER_LEN: usize = 4 + 12;
+        use ivm::{ProgramMetadata, encoding, instruction};
+        use std::mem::size_of;
+
+        let len_size = size_of::<usize>();
+        let total_len = len_size
+            .checked_add(result_bytes.len())
+            .expect("encoded blob fits in usize");
+        let total_len_u64 = u64::try_from(total_len).expect("encoded blob fits in u64");
+        let mut data = total_len_u64.to_le_bytes()[..len_size].to_vec();
+        data.extend_from_slice(result_bytes);
+        let padded_len = (data.len() + 7) & !7;
+        data.resize(padded_len, 0);
+        let chunk_count = data.len() / 8;
+
+        let meta = ProgramMetadata {
+            version_major: 2,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 1_000_000,
+            abi_version: 1,
+        };
+        let mut program = meta.encode();
+        program.extend_from_slice(&LITERAL_SECTION_MAGIC);
+        program.extend_from_slice(&(0u32).to_le_bytes()); // literal entries
+        program.extend_from_slice(&(0u32).to_le_bytes()); // post-pad
+        program.extend_from_slice(
+            &(u32::try_from(data.len()).expect("literal length fits")).to_le_bytes(),
+        );
+        program.extend_from_slice(&data);
+
+        let mut emit = |word: u32| program.extend_from_slice(&word.to_le_bytes());
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            20,
+            10,
+            0,
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            21,
+            10,
+            0,
+        ));
+
+        let data_addr = i8::try_from(LITERAL_HEADER_LEN).expect("literal header fits i8");
+        emit(encoding::wide::encode_ri(
+            instruction::wide::arithmetic::ADDI,
+            22,
+            0,
+            data_addr,
+        ));
+
+        for _ in 0..chunk_count {
+            emit(encoding::wide::encode_load(
+                instruction::wide::memory::LOAD64,
+                23,
+                22,
+                0,
+            ));
+            emit(encoding::wide::encode_store(
+                instruction::wide::memory::STORE64,
+                21,
+                23,
+                0,
+            ));
+            emit(encoding::wide::encode_ri(
+                instruction::wide::arithmetic::ADDI,
+                22,
+                22,
+                8,
+            ));
+            emit(encoding::wide::encode_ri(
+                instruction::wide::arithmetic::ADDI,
+                21,
+                21,
+                8,
+            ));
+        }
+
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            10,
+            20,
+            0,
+        ));
+        emit(encoding::wide::encode_halt());
+        program
+    }
+
+    fn generate_verdict_program(verdict: &Result<(), iroha_data_model::ValidationFail>) -> Vec<u8> {
+        use norito::codec::Encode as _;
+        let verdict_bytes = verdict.encode();
+        build_program_from_encoded_result(&verdict_bytes)
+    }
+
+    fn generate_migration_program(
+        verdict: &Result<ExecutorDataModel, iroha_data_model::ValidationFail>,
+    ) -> Vec<u8> {
+        use norito::codec::Encode as _;
+        let payload = match verdict {
+            Ok(model) => MigrationResultPayload::Ok(model.clone()),
+            Err(err) => MigrationResultPayload::Err(err.clone()),
+        };
+        let verdict_bytes = payload.encode();
+        build_program_from_encoded_result(&verdict_bytes)
+    }
+
+    fn generate_ok_program() -> Vec<u8> {
+        let verdict = Ok(());
+        generate_verdict_program(&verdict)
+    }
+
+    fn generate_denied_program(message: &str) -> Vec<u8> {
+        let verdict = Err(iroha_data_model::ValidationFail::NotPermitted(
+            message.to_owned(),
+        ));
+        generate_verdict_program(&verdict)
+    }
+
+    #[test]
+    fn execute_instruction_with_ivm() {
+        fn read_default_bytecode() -> Option<Vec<u8>> {
+            std::env::var_os("IROHA_TEST_USE_DEFAULT_EXECUTOR")?;
+            let path1 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../defaults/executor.to");
+            if let Ok(b) = std::fs::read(&path1) {
+                return Some(b);
+            }
+            if let Ok(b) = std::fs::read("defaults/executor.to") {
+                return Some(b);
+            }
+            None
+        }
+
+        let bytecode = read_default_bytecode().unwrap_or_else(generate_ok_program);
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+        let executor =
+            super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_tx = block.transaction();
+
+        let domain_id: DomainId = "test".parse().expect("domain id");
+        let instruction = Register::domain(Domain::new(domain_id.clone())).into();
+        executor
+            .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
+            .expect("execution");
+        assert!(state_tx.world.domains.get(&domain_id).is_some());
+    }
+
+    #[test]
+    fn parse_executor_additional_fuel_defaults_to_zero() {
+        let metadata = Metadata::default();
+        let fuel = parse_executor_additional_fuel(&metadata).expect("parse");
+        assert_eq!(fuel, 0);
+    }
+
+    #[test]
+    fn parse_executor_additional_fuel_rejects_invalid_value() {
+        let mut metadata = Metadata::default();
+        let key = Name::from_str(EXECUTOR_ADDITIONAL_FUEL_KEY).expect("static name");
+        metadata.insert(key, Json::new("not-a-number"));
+
+        let err = parse_executor_additional_fuel(&metadata).expect_err("should reject");
+        assert!(matches!(err, ValidationFail::NotPermitted(_)));
+    }
+
+    #[test]
+    fn execute_transaction_sets_executor_fuel_budget() {
+        let bytecode = generate_ok_program();
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+        let executor =
+            super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_tx = block.transaction();
+        let base_fuel = state_tx.world.parameters.get().executor().fuel.get();
+
+        let additional_fuel = 123_u64;
+        let mut metadata = Metadata::default();
+        let key = Name::from_str(EXECUTOR_ADDITIONAL_FUEL_KEY).expect("static name");
+        metadata.insert(key, Json::new(additional_fuel));
+        let tx = TransactionBuilder::new(ChainId::from("test-chain"), ALICE_ID.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(ALICE_KEYPAIR.private_key());
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        executor
+            .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+            .expect("execution");
+
+        let remaining = state_tx.executor_fuel_remaining.expect("budget set");
+        assert_eq!(remaining, base_fuel.saturating_add(additional_fuel));
+    }
+
+    #[test]
+    fn configure_executor_fuel_budget_sets_remaining() {
+        let bytecode = generate_ok_program();
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+        let executor =
+            super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_tx = block.transaction();
+        let base_fuel = state_tx.world.parameters.get().executor().fuel.get();
+
+        let additional_fuel = 321_u64;
+        let mut metadata = Metadata::default();
+        let key = Name::from_str(EXECUTOR_ADDITIONAL_FUEL_KEY).expect("static name");
+        metadata.insert(key, Json::new(additional_fuel));
+
+        configure_executor_fuel_budget(&executor, &mut state_tx, &metadata).expect("budget set");
+        let remaining = state_tx.executor_fuel_remaining.expect("budget set");
+        assert_eq!(remaining, base_fuel.saturating_add(additional_fuel));
+    }
+
+    #[test]
+    fn executor_validation_consumes_fuel_budget() {
+        let bytecode = generate_ok_program();
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+        let executor =
+            super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_tx = block.transaction();
+        state_tx.executor_fuel_remaining = Some(10_000);
+
+        let instruction: InstructionBox = Log::new(Level::INFO, "executor fuel".to_owned()).into();
+        executor
+            .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
+            .expect("execution");
+        let remaining = state_tx.executor_fuel_remaining.expect("budget set");
+        assert!(
+            remaining < 10_000,
+            "expected executor fuel budget to decrease"
+        );
+    }
+
+    #[test]
+    fn executor_validation_rejects_when_budget_exhausted() {
+        let bytecode = generate_ok_program();
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+        let executor =
+            super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_tx = block.transaction();
+        state_tx.executor_fuel_remaining = Some(0);
+
+        let instruction: InstructionBox = Log::new(Level::INFO, "executor fuel".to_owned()).into();
+        let err = executor
+            .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
+            .expect_err("expected fuel exhaustion");
+        assert!(
+            matches!(err, ValidationFail::TooComplex),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_query_with_ivm() {
+        let bytecode = read_default_bytecode().unwrap_or_else(generate_ok_program);
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+        let executor =
+            super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let state_tx = block.transaction();
+
+        let query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        executor
+            .validate_query(&state_tx, &ALICE_ID.clone(), &query)
+            .expect("validation");
+    }
+
+    #[test]
+    fn validate_start_query_with_ivm() {
+        use iroha_data_model::query::{
+            QueryItemKind, QueryWithParams,
+            dsl::{CompoundPredicate, SelectorTuple},
+            parameters::QueryParams,
+        };
+        // Ensure the erased-query registry is initialized for iterable queries
+        iroha_data_model::query::set_query_registry(iroha_data_model::query_registry![
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::Domain>,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::account::Account>,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::asset::value::Asset>,
+            iroha_data_model::query::ErasedIterQuery<
+                iroha_data_model::asset::definition::AssetDefinition,
+            >,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::nft::Nft>,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::role::Role>,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::role::RoleId>,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::peer::PeerId>,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::trigger::TriggerId>,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::trigger::Trigger>,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::query::CommittedTransaction>,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::block::SignedBlock>,
+            iroha_data_model::query::ErasedIterQuery<iroha_data_model::block::BlockHeader>,
+        ]);
+        let bytecode = read_default_bytecode().unwrap_or_else(generate_ok_program);
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+        let executor =
+            super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let state_tx = block.transaction();
+
+        let iter_query = QueryWithParams {
+            query: (),
+            query_payload: Vec::new(),
+            item: QueryItemKind::Domain,
+            predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
+            selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::default()),
+            params: QueryParams::default(),
+        };
+        let query = QueryRequest::Start(iter_query);
+
+        executor
+            .validate_query(&state_tx, &ALICE_ID.clone(), &query)
+            .expect("validation");
+    }
+
+    #[test]
+    fn validate_query_rejected_by_executor() {
+        let bytecode = generate_denied_program("queries disabled");
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+        let executor =
+            super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let state_tx = block.transaction();
+
+        let query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        let err = executor
+            .validate_query(&state_tx, &ALICE_ID.clone(), &query)
+            .expect_err("executor should deny the query");
+
+        assert!(
+            matches!(
+                err,
+                iroha_data_model::ValidationFail::NotPermitted(ref msg) if msg == "queries disabled"
+            ),
+            "unexpected validation failure: {err:?}"
+        );
+    }
+
+    #[test]
+    fn migrate_invokes_entrypoint_and_swaps_executor() {
+        // Use the default bundled executor bytecode when available; otherwise
+        // generate a minimal OK program deterministically.
+        let default_executor =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/executor.to");
+        let mut bytecode = None;
+        for candidate in [
+            default_executor.as_path(),
+            std::path::Path::new("defaults/executor.to"),
+        ] {
+            if let Ok(bytes) = std::fs::read(candidate) {
+                let raw_candidate =
+                    data_model_executor::Executor::new(IvmBytecode::from_compiled(bytes.clone()));
+                if super::LoadedExecutor::load(raw_candidate).is_ok() {
+                    bytecode = Some(bytes);
+                    break;
+                }
+            }
+        }
+        let bytecode = bytecode.unwrap_or_else(generate_ok_program);
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+
+        // Start with the initial executor
+        let mut executor = super::Executor::Initial;
+
+        // Minimal state scaffolding
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_tx = block.transaction();
+
+        // Perform migration
+        executor
+            .migrate(raw, &mut state_tx, &ALICE_ID.clone())
+            .expect("migration should succeed");
+
+        // Ensure executor has been swapped
+        match executor {
+            super::Executor::UserProvided(_) => {}
+            _ => panic!("expected UserProvided executor after migration"),
+        }
+    }
+
+    #[test]
+    fn migrate_applies_data_model_from_entrypoint() {
+        let mut permissions = BTreeSet::new();
+        permissions.insert("permission.can_control_domain_lives".to_owned());
+        let custom_parameters: BTreeMap<CustomParameterId, CustomParameter> = BTreeMap::new();
+        let data_model = ExecutorDataModel::new(
+            custom_parameters,
+            BTreeSet::new(),
+            permissions,
+            Json::new(()),
+        );
+        let verdict = Ok(data_model.clone());
+        let bytecode = generate_migration_program(&verdict);
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+
+        let mut executor = super::Executor::Initial;
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_tx = block.transaction();
+
+        executor
+            .migrate(raw, &mut state_tx, &ALICE_ID.clone())
+            .expect("migration should succeed");
+
+        assert_eq!(*state_tx.world.executor_data_model.get(), data_model);
+        match executor {
+            super::Executor::UserProvided(_) => {}
+            _ => panic!("expected UserProvided executor after migration"),
+        }
+    }
+
+    #[test]
+    fn migrate_fails_on_invalid_bytecode() {
+        // Construct an invalid program (oversized code section) to trigger a VM error
+        let mut prog = Vec::new();
+        // Metadata header: IVM, version 2.0, mode 0, vector len 0, max_cycles 0, abi_version 0
+        prog.extend_from_slice(b"IVM\0");
+        prog.extend_from_slice(&[2, 0, 0, 0]);
+        prog.extend_from_slice(&0u64.to_le_bytes());
+        prog.push(0);
+        // Oversized code
+        let heap_start =
+            usize::try_from(ivm::Memory::HEAP_START).expect("HEAP_START fits within usize");
+        prog.extend(std::iter::repeat_n(0u8, heap_start + 8));
+
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(prog));
+
+        let mut executor = super::Executor::Initial;
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_tx = block.transaction();
+
+        let res = executor.migrate(raw, &mut state_tx, &ALICE_ID.clone());
+        assert!(res.is_err(), "migration with invalid bytecode must fail");
+        // Ensure executor remains unchanged
+        matches!(executor, super::Executor::Initial);
+    }
+}

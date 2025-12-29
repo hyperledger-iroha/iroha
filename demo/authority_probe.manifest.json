@@ -1,0 +1,24 @@
+{
+  "code_hash": "hash:6D57C21641EF0368CC0C770006092CCA65B35198B7A5F1CF59DFC98BC9B02A99#C046",
+  "abi_hash": "hash:377F7125A0F20D40F65ED5E3A179BC5E04D68A385570B54D67D961861E8D9F83#1C50",
+  "compiler_fingerprint": null,
+  "features_bitmap": null,
+  "access_set_hints": null,
+  "entrypoints": [
+    {
+      "name": "main",
+      "kind": {
+        "kind": "Public",
+        "value": null
+      },
+      "permission": "Admin",
+      "read_keys": [
+        
+      ],
+      "write_keys": [
+        
+      ]
+    }
+  ],
+  "provenance": null
+}

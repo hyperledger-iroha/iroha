@@ -1,0 +1,29 @@
+[package]
+name = "settlement_router"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Deterministic XOR settlement primitives shared across Iroha lanes"
+documentation = "https://docs.iroha.tech"
+repository = "https://github.com/hyperledger-iroha/iroha"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+compact-len = []
+json = []
+packed-struct = []
+schema-structural = []
+
+[dependencies]
+derive_more = { workspace = true, features = ["display", "from"] }
+iroha_primitives = { workspace = true, default-features = false, features = ["json"] }
+norito = { workspace = true }
+rust_decimal = { workspace = true, default-features = false }
+time = { workspace = true }
+
+[dev-dependencies]
+expect-test = { workspace = true }

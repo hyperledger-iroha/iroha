@@ -1,0 +1,13 @@
+[
+  {
+    "kind": "mint_asset",
+    "asset": "rose#wonderland#alice@wonderland",
+    "quantity": "5"
+  },
+  {
+    "kind": "transfer_asset",
+    "asset": "rose#wonderland#alice@wonderland",
+    "quantity": "1",
+    "destination": "bob@wonderland"
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "status": 422,
+  "body": {
+    "error": "proof_mismatch",
+    "reason": "chunk digest mismatch detected in proof bundle",
+    "details": {
+      "section": "proof.chunks[0]"
+    }
+  }
+}

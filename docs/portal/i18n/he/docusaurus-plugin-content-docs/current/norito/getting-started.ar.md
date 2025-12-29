@@ -1,0 +1,20 @@
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/norito/getting-started.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 2d8879628554e84e6bd32512a1ba63180a1b066d7839b39339cc024a9a20acce
+source_last_modified: "2025-11-04T12:03:18.017187+00:00"
+translation_last_reviewed: null
+---
+
+# قيد الترجمة
+
+<div dir="rtl">
+هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+
+هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
+</div>

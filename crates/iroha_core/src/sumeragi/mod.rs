@@ -1,0 +1,3923 @@
+//! Translates to Emperor. Consensus-related logic of Iroha.
+//!
+//! `Consensus` trait is now implemented only by `Sumeragi` for now.
+use std::{
+    collections::BTreeSet,
+    path::PathBuf,
+    sync::{Arc, Mutex, mpsc},
+    time::{Duration, Instant},
+};
+
+use eyre::Result;
+use iroha_config::parameters::actual::{
+    Common as CommonConfig, ConsensusMode, Sumeragi as SumeragiConfig,
+};
+use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
+use iroha_data_model::{
+    ChainId, block::BlockHeader, merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope,
+    parameter::system::SumeragiConsensusMode, peer::PeerId,
+};
+use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
+use iroha_genesis::GenesisBlock;
+use mv::storage::StorageReadOnly;
+
+use crate::{
+    kura::BlockCount,
+    state::{State, StateReadOnly, StateView, WorldReadOnly},
+};
+
+/// Stack size reserved for the consensus worker thread to handle deep recursion safely.
+const SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Build initial validator topology from trusted peers by enforcing BLS-normal keys and `PoP`.
+/// Observers are not included; this helper filters the validator set only.
+pub fn filter_validators_from_trusted(
+    tp: &iroha_config::parameters::actual::TrustedPeers,
+) -> Vec<PeerId> {
+    let mut out: BTreeSet<PeerId> = BTreeSet::new();
+    // Compose iterator over myself + others
+    let iter = std::iter::once(tp.myself.clone()).chain(tp.others.clone());
+    for peer in iter {
+        let pk = peer.id().public_key();
+        if pk.algorithm() != Algorithm::BlsNormal {
+            iroha_logger::warn!(?pk, "excluding peer: validator identity must be BLS-normal");
+            continue;
+        }
+        if let Some(pop) = tp.pops.get(pk) {
+            if let Err(e) = iroha_crypto::bls_normal_pop_verify(pk, pop) {
+                iroha_logger::warn!(?pk, ?e, "invalid PoP; excluding peer from consensus");
+                continue;
+            }
+        } else {
+            iroha_logger::warn!(?pk, "missing PoP; excluding peer from consensus");
+            continue;
+        }
+        out.insert(PeerId::new(pk.clone()));
+    }
+
+    // If the explicit peer roster was empty but the configuration still includes PoP
+    // records, fall back to those so we do not silently collapse into a single-node
+    // topology when addresses were omitted.
+    if out.is_empty() {
+        iroha_logger::warn!(
+            roster_peers = tp.others.len().saturating_add(1),
+            pops = tp.pops.len(),
+            "validator roster resolved empty from trusted peers; falling back to PoP map"
+        );
+        for (bls_pk, pop) in &tp.pops {
+            if let Err(e) = iroha_crypto::bls_normal_pop_verify(bls_pk, pop) {
+                iroha_logger::warn!(?bls_pk, ?e, "invalid PoP; excluding peer from consensus");
+                continue;
+            }
+            out.insert(PeerId::new(bls_pk.clone()));
+        }
+        if out.is_empty() {
+            iroha_logger::warn!(
+                pops = tp.pops.len(),
+                "validator roster still empty after PoP fallback"
+            );
+        }
+    }
+
+    iroha_logger::info!(
+        validators = out.len(),
+        configured_peers = tp.others.len().saturating_add(1),
+        pops = tp.pops.len(),
+        "resolved validator roster from trusted peers"
+    );
+
+    out.into_iter().collect()
+}
+
+/// Derive the effective runtime consensus mode based on on-chain parameters and the current
+/// height snapshot, falling back to the configured mode when no activation has occurred yet.
+pub fn effective_consensus_mode(view: &StateView<'_>, fallback: ConsensusMode) -> ConsensusMode {
+    let params = view.world.parameters();
+    let sumeragi = params.sumeragi();
+    match (sumeragi.next_mode, sumeragi.mode_activation_height) {
+        (Some(next), Some(height)) if (view.height() as u64) >= height => match next {
+            SumeragiConsensusMode::Permissioned => ConsensusMode::Permissioned,
+            SumeragiConsensusMode::Npos => ConsensusMode::Npos,
+        },
+        _ => fallback,
+    }
+}
+
+/// Snapshot of `NPoS` collector configuration derived from on-chain parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NposCollectorConfig {
+    /// Epoch PRF seed currently in effect.
+    pub seed: [u8; 32],
+    /// Number of collectors K to designate per round.
+    pub k: usize,
+    /// Redundant send fan-out.
+    pub redundant_send_r: u8,
+}
+
+/// Attempt to load `NPoS` collector configuration (PRF seed + tunables) from the given state view.
+pub fn load_npos_collector_config(view: &StateView<'_>) -> Option<NposCollectorConfig> {
+    let params = view.world.sumeragi_npos_parameters()?;
+    let seed = latest_epoch_seed(view);
+    let k = usize::from(params.k_aggregators());
+    let redundant_send_r = params.redundant_send_r();
+    Some(NposCollectorConfig {
+        seed,
+        k,
+        redundant_send_r,
+    })
+}
+
+fn latest_epoch_seed(view: &StateView<'_>) -> [u8; 32] {
+    latest_epoch_seed_from_world(&view.world, view.chain_id())
+}
+
+fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 32] {
+    let mut seed_opt = None;
+    for (_epoch, record) in world.vrf_epochs().iter() {
+        seed_opt = Some(record.seed);
+    }
+    seed_opt
+        .or_else(|| {
+            world
+                .sumeragi_npos_parameters()
+                .map(|params| params.epoch_seed())
+        })
+        .unwrap_or_else(|| {
+            let chain = chain_id.clone().into_inner();
+            let hash = CryptoHash::new(chain.as_bytes());
+            <[u8; 32]>::from(hash)
+        })
+}
+
+/// Resolve the NPoS PRF seed for the epoch containing `height`.
+pub(crate) fn npos_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
+    npos_seed_for_height_from_world(&view.world, view.chain_id(), height)
+}
+
+/// Resolve the NPoS PRF seed for the epoch containing `height` from any world snapshot.
+pub(crate) fn npos_seed_for_height_from_world(
+    world: &impl WorldReadOnly,
+    chain_id: &ChainId,
+    height: u64,
+) -> [u8; 32] {
+    if let Some(params) = world.sumeragi_npos_parameters() {
+        let epoch_len = params.epoch_length_blocks();
+        if epoch_len > 0 && height > 0 {
+            let epoch = (height - 1) / epoch_len;
+            if let Some(record) = world.vrf_epochs().get(&epoch) {
+                return record.seed;
+            }
+        }
+        return params.epoch_seed();
+    }
+    latest_epoch_seed_from_world(world, chain_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sumeragi::consensus::ValidatorIndex;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+    use iroha_crypto::{Hash, KeyPair, SignatureOf};
+    use iroha_data_model::block::consensus::{
+        ConsensusBlockHeader, LaneBlockCommitment, Phase, Proposal, QcAggregate, QcHeaderRef,
+        RbcChunk, Vote,
+    };
+    use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
+    use iroha_data_model::consensus::VrfEpochRecord;
+    use iroha_data_model::nexus::{DataSpaceId, LaneId, LaneRelayEnvelope};
+    use iroha_data_model::{
+        parameter::system::{SumeragiConsensusMode, SumeragiNposParameters},
+        peer::PeerId,
+    };
+    use std::num::NonZeroU64;
+    use std::{
+        collections::BTreeSet,
+        sync::{Arc, Mutex, mpsc},
+    };
+
+    const TEST_CHANNEL_CAP: usize = 16;
+
+    fn backdate(now: Instant, duration: Duration) -> Instant {
+        now.checked_sub(duration).unwrap_or(now)
+    }
+
+    #[test]
+    fn drain_receiver_with_budget_respects_message_cap() {
+        let (tx, rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        for idx in 0..5u8 {
+            tx.send(idx).expect("send should succeed");
+        }
+
+        let mut drained = Vec::new();
+        let report =
+            drain_receiver_with_budget(&rx, |value| drained.push(value), 2, Duration::from_secs(1));
+
+        assert_eq!(
+            report,
+            DrainBudgetReport {
+                handled: 2,
+                budget_exhausted: true,
+            }
+        );
+        assert_eq!(drained, vec![0, 1]);
+
+        let remaining: Vec<_> = rx.try_iter().collect();
+        assert_eq!(remaining, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn drain_receiver_with_budget_yields_immediately_when_duration_zero() {
+        let (tx, rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        tx.send(42u8).expect("send should succeed");
+
+        let mut drained = Vec::new();
+        let report =
+            drain_receiver_with_budget(&rx, |value| drained.push(value), 1024, Duration::ZERO);
+
+        assert_eq!(
+            report,
+            DrainBudgetReport {
+                handled: 0,
+                budget_exhausted: true,
+            }
+        );
+        assert!(drained.is_empty());
+        assert_eq!(rx.try_recv().expect("message should remain"), 42u8);
+    }
+
+    #[test]
+    fn should_run_tick_when_queues_not_exhausted() {
+        let now = Instant::now();
+        let last_tick = backdate(now, Duration::from_millis(10));
+        assert!(should_run_tick(
+            now,
+            last_tick,
+            false,
+            false,
+            false,
+            false,
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn should_run_tick_when_gap_exceeds_max() {
+        let now = Instant::now();
+        let last_tick = backdate(now, Duration::from_millis(500));
+        assert!(should_run_tick(
+            now,
+            last_tick,
+            true,
+            true,
+            true,
+            true,
+            Duration::from_millis(200)
+        ));
+    }
+
+    #[test]
+    fn should_skip_tick_when_exhausted_and_gap_small() {
+        let now = Instant::now();
+        let last_tick = backdate(now, Duration::from_millis(50));
+        assert!(!should_run_tick(
+            now,
+            last_tick,
+            true,
+            true,
+            true,
+            true,
+            Duration::from_millis(200)
+        ));
+    }
+
+    #[test]
+    fn should_drain_block_rx_when_votes_not_exhausted() {
+        let now = Instant::now();
+        let last_drain = backdate(now, Duration::from_millis(10));
+        assert!(should_drain_block_rx(
+            now,
+            last_drain,
+            false,
+            true,
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn should_skip_block_rx_when_votes_exhausted_and_pending_within_starve() {
+        let now = Instant::now();
+        let last_drain = backdate(now, Duration::from_millis(10));
+        assert!(!should_drain_block_rx(
+            now,
+            last_drain,
+            true,
+            true,
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn should_drain_block_rx_when_starve_exceeded() {
+        let now = Instant::now();
+        let last_drain = backdate(now, Duration::from_millis(1500));
+        assert!(should_drain_block_rx(
+            now,
+            last_drain,
+            true,
+            false,
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn should_skip_block_rx_when_votes_exhausted_and_gap_small() {
+        let now = Instant::now();
+        let last_drain = backdate(now, Duration::from_millis(200));
+        assert!(!should_drain_block_rx(
+            now,
+            last_drain,
+            true,
+            false,
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn should_drain_non_vote_rx_when_votes_not_exhausted() {
+        let now = Instant::now();
+        let last_drain = backdate(now, Duration::from_millis(10));
+        assert!(should_drain_non_vote_rx(
+            now,
+            last_drain,
+            false,
+            true,
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn should_skip_non_vote_rx_when_votes_exhausted_and_pending_within_starve() {
+        let now = Instant::now();
+        let last_drain = backdate(now, Duration::from_millis(10));
+        assert!(!should_drain_non_vote_rx(
+            now,
+            last_drain,
+            true,
+            true,
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn should_drain_non_vote_rx_when_starve_exceeded() {
+        let now = Instant::now();
+        let last_drain = backdate(now, Duration::from_millis(1500));
+        assert!(should_drain_non_vote_rx(
+            now,
+            last_drain,
+            true,
+            false,
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn should_skip_non_vote_rx_when_votes_exhausted_and_gap_small() {
+        let now = Instant::now();
+        let last_drain = backdate(now, Duration::from_millis(200));
+        assert!(!should_drain_non_vote_rx(
+            now,
+            last_drain,
+            true,
+            false,
+            Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn resolve_sumeragi_timeouts_prefers_on_chain_values() {
+        let (block_time, commit_time) = resolve_sumeragi_timeouts(
+            Duration::from_millis(900),
+            Duration::from_millis(1_100),
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+        );
+
+        assert_eq!(block_time, Duration::from_millis(900));
+        assert_eq!(commit_time, Duration::from_millis(1_100));
+    }
+
+    #[test]
+    fn resolve_sumeragi_timeouts_uses_fallback_for_zero() {
+        let (block_time, commit_time) = resolve_sumeragi_timeouts(
+            Duration::ZERO,
+            Duration::ZERO,
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+        );
+
+        assert_eq!(block_time, Duration::from_secs(2));
+        assert_eq!(commit_time, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn vote_rx_drain_budget_caps_at_time_budget() {
+        let budget = vote_rx_drain_budget(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            true,
+            1,
+            Duration::from_millis(200),
+        );
+        assert_eq!(budget, Duration::from_millis(200));
+    }
+
+    #[test]
+    fn vote_rx_drain_budget_uses_commit_quorum_window() {
+        let budget = vote_rx_drain_budget(
+            Duration::from_millis(80),
+            Duration::from_millis(50),
+            true,
+            1,
+            Duration::from_secs(1),
+        );
+        assert_eq!(budget, Duration::from_millis(280));
+    }
+
+    #[test]
+    fn vote_rx_drain_budget_never_zero() {
+        let budget = vote_rx_drain_budget(
+            Duration::ZERO,
+            Duration::ZERO,
+            true,
+            1,
+            Duration::from_millis(200),
+        );
+        assert_eq!(budget, Duration::from_millis(1));
+    }
+
+    #[test]
+    fn vote_rx_drain_budget_scales_with_da_multiplier() {
+        let budget = vote_rx_drain_budget(
+            Duration::from_millis(10),
+            Duration::from_millis(20),
+            true,
+            2,
+            Duration::from_secs(5),
+        );
+        assert_eq!(budget, Duration::from_millis(180));
+    }
+
+    #[test]
+    fn vote_rx_drain_budget_caps_at_drain_cap() {
+        let budget = vote_rx_drain_budget(
+            Duration::from_millis(200),
+            Duration::from_millis(300),
+            true,
+            3,
+            Duration::from_secs(10),
+        );
+        assert_eq!(budget, Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS));
+    }
+
+    #[test]
+    fn cap_drain_budget_clamps_to_floor_and_cap() {
+        let floor = Duration::from_millis(200);
+        assert_eq!(
+            cap_drain_budget(Duration::from_secs(2), floor),
+            Duration::from_millis(DRAIN_BUDGET_CAP_MS)
+        );
+        assert_eq!(cap_drain_budget(Duration::from_millis(100), floor), floor);
+        assert_eq!(
+            cap_drain_budget(Duration::from_millis(300), floor),
+            Duration::from_millis(300)
+        );
+    }
+
+    #[test]
+    fn cap_vote_drain_budget_clamps_to_floor_and_cap() {
+        let floor = Duration::from_millis(200);
+        assert_eq!(
+            cap_vote_drain_budget(Duration::from_secs(5), floor),
+            Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS)
+        );
+        assert_eq!(
+            cap_vote_drain_budget(Duration::from_millis(100), floor),
+            floor
+        );
+        assert_eq!(
+            cap_vote_drain_budget(Duration::from_millis(300), floor),
+            Duration::from_millis(300)
+        );
+    }
+
+    #[test]
+    fn cap_rbc_drain_budget_clamps_to_floor_and_cap() {
+        let floor = Duration::from_millis(200);
+        assert_eq!(
+            cap_rbc_drain_budget(Duration::from_secs(5), floor),
+            Duration::from_millis(RBC_DRAIN_BUDGET_CAP_MS)
+        );
+        assert_eq!(
+            cap_rbc_drain_budget(Duration::from_millis(100), floor),
+            floor
+        );
+        assert_eq!(
+            cap_rbc_drain_budget(Duration::from_millis(300), floor),
+            Duration::from_millis(300)
+        );
+    }
+
+    #[test]
+    fn effective_consensus_mode_switches_after_activation_height() {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let params = block.parameters.get_mut();
+            params.sumeragi.next_mode = Some(SumeragiConsensusMode::Npos);
+            params.sumeragi.mode_activation_height = Some(0);
+            block.commit();
+        }
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        assert_eq!(
+            effective_consensus_mode(&view, ConsensusMode::Permissioned),
+            ConsensusMode::Npos
+        );
+    }
+
+    #[test]
+    fn effective_consensus_mode_uses_fallback_before_activation_height() {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let params = block.parameters.get_mut();
+            params.sumeragi.next_mode = Some(SumeragiConsensusMode::Npos);
+            params.sumeragi.mode_activation_height = Some(10);
+            block.commit();
+        }
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        assert_eq!(
+            effective_consensus_mode(&view, ConsensusMode::Permissioned),
+            ConsensusMode::Permissioned
+        );
+    }
+
+    #[test]
+    fn load_npos_collector_config_uses_vrf_seed() {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let params = block.parameters.get_mut();
+            params.custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                SumeragiNposParameters::default().into_custom_parameter(),
+            );
+            block.vrf_epochs.insert(
+                0,
+                VrfEpochRecord {
+                    epoch: 0,
+                    seed: [0xAB; 32],
+                    epoch_length: 3600,
+                    commit_deadline_offset: 100,
+                    reveal_deadline_offset: 140,
+                    roster_len: 4,
+                    finalized: false,
+                    updated_at_height: 0,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.commit();
+        }
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let config = load_npos_collector_config(&view).expect("npos config present");
+        assert_eq!(config.seed, [0xAB; 32]);
+        assert_eq!(
+            config.k,
+            usize::from(SumeragiNposParameters::default().k_aggregators())
+        );
+        assert_eq!(
+            config.redundant_send_r,
+            SumeragiNposParameters::default().redundant_send_r()
+        );
+    }
+
+    #[test]
+    fn load_npos_collector_config_falls_back_to_epoch_seed() {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let params = SumeragiNposParameters::default().with_epoch_seed([0xCD; 32]);
+            block.parameters.get_mut().custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                params.into_custom_parameter(),
+            );
+            block.commit();
+        }
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let config = load_npos_collector_config(&view).expect("npos config present");
+        assert_eq!(config.seed, [0xCD; 32]);
+    }
+
+    #[test]
+    fn roster_adapter_from_iter_preserves_peers() {
+        let peers: Vec<PeerId> = (0..4)
+            .map(|_| {
+                let (public_key, _) = KeyPair::random().into_parts();
+                public_key.into()
+            })
+            .collect();
+
+        let adapter = WsvEpochRosterAdapter::from_peer_iter(peers.clone());
+
+        assert_eq!(adapter.peers(), peers.as_slice());
+    }
+
+    #[test]
+    fn vote_dedup_rejects_duplicates_and_resets_on_overflow() {
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            Arc::clone(&vote_dedup),
+            Arc::clone(&block_payload_dedup),
+        );
+
+        let make_hash = |seed: u64| {
+            let mut bytes = [0u8; 32];
+            bytes[..8].copy_from_slice(&seed.to_be_bytes());
+            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(bytes))
+        };
+
+        let base_key: VoteDedupKey = (
+            SumeragiHandle::phase_id(crate::sumeragi::consensus::Phase::Prevote),
+            make_hash(0),
+            1,
+            0,
+            0,
+            0,
+        );
+
+        assert!(handle.dedup_vote(base_key));
+        assert!(!handle.dedup_vote(base_key));
+
+        let max_dedup_cache = 8192usize;
+        {
+            let mut guard = vote_dedup.lock().expect("dedup cache poisoned");
+            guard.clear();
+            for i in 0..max_dedup_cache {
+                guard.insert((
+                    0,
+                    make_hash(i as u64 + 1),
+                    i as u64 + 2,
+                    0,
+                    0,
+                    ValidatorIndex::try_from(i).expect("validator index fits") + 1,
+                ));
+            }
+            assert_eq!(guard.len(), max_dedup_cache);
+        }
+
+        assert!(handle.dedup_vote(base_key));
+        let guard = vote_dedup.lock().expect("dedup cache poisoned");
+        assert!(guard.contains(&base_key));
+        assert!(guard.len() < max_dedup_cache);
+    }
+
+    #[test]
+    fn block_payload_dedup_rejects_duplicates_and_resets_on_overflow() {
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            Arc::clone(&vote_dedup),
+            Arc::clone(&block_payload_dedup),
+        );
+
+        let base_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7u8; 32]));
+        let base_key = BlockPayloadDedupKey::BlockCreated {
+            height: 1,
+            view: 0,
+            block_hash: base_hash,
+        };
+
+        assert!(handle.dedup_block_payload(base_key));
+        assert!(!handle.dedup_block_payload(base_key));
+
+        let max_dedup_cache = 2048usize;
+        {
+            let mut guard = block_payload_dedup
+                .lock()
+                .expect("block payload dedup cache poisoned");
+            guard.clear();
+            for i in 0..max_dedup_cache {
+                let payload_seed = u8::try_from(i % 255).expect("payload seed fits u8");
+                let payload_hash = Hash::prehashed([payload_seed; 32]);
+                guard.insert(BlockPayloadDedupKey::Proposal {
+                    height: i as u64 + 2,
+                    view: 0,
+                    payload_hash,
+                });
+            }
+            assert_eq!(guard.len(), max_dedup_cache);
+        }
+
+        assert!(handle.dedup_block_payload(base_key));
+        let guard = block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        assert!(guard.contains(&base_key));
+        assert!(guard.len() < max_dedup_cache);
+    }
+
+    #[test]
+    fn incoming_block_message_drops_duplicate_votes() {
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            Arc::clone(&vote_dedup),
+            Arc::clone(&block_payload_dedup),
+        );
+
+        let vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Precommit,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([1u8; 32]),
+            ),
+            height: 3,
+            view: 0,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        };
+        let msg = BlockMessage::PrecommitVote(message::PrecommitVoteMsg(vote.clone()));
+
+        handle.incoming_block_message(msg.clone());
+        handle.incoming_block_message(msg);
+
+        let received: Vec<_> = vote_rx.try_iter().collect();
+        assert_eq!(received.len(), 1);
+        let only = received.into_iter().next().expect("one message");
+        assert!(matches!(only, BlockMessage::PrecommitVote(_)));
+    }
+
+    #[test]
+    fn incoming_block_message_allows_duplicate_rbc_ready() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let msg = BlockMessage::RbcReady(crate::sumeragi::consensus::RbcReady {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([2u8; 32])),
+            height: 4,
+            view: 1,
+            epoch: 0,
+            chunk_root: Hash::prehashed([3u8; 32]),
+            sender: 1,
+            signature: Vec::new(),
+        });
+
+        handle.incoming_block_message(msg.clone());
+        handle.incoming_block_message(msg);
+
+        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        assert_eq!(received.len(), 2);
+        assert!(
+            received
+                .iter()
+                .all(|msg| matches!(msg, BlockMessage::RbcReady(_)))
+        );
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_allows_duplicate_rbc_deliver() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let msg = BlockMessage::RbcDeliver(crate::sumeragi::consensus::RbcDeliver {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([4u8; 32])),
+            height: 5,
+            view: 2,
+            epoch: 0,
+            chunk_root: Hash::prehashed([5u8; 32]),
+            sender: 2,
+            signature: Vec::new(),
+        });
+
+        handle.incoming_block_message(msg.clone());
+        handle.incoming_block_message(msg);
+
+        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        assert_eq!(received.len(), 2);
+        assert!(
+            received
+                .iter()
+                .all(|msg| matches!(msg, BlockMessage::RbcDeliver(_)))
+        );
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_block_created_via_payload_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let block_signature = BlockSignature::new(0, signature);
+        let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+
+        handle.incoming_block_message(BlockMessage::BlockCreated(message::BlockCreated { block }));
+
+        let received = block_payload_rx
+            .try_recv()
+            .expect("BlockCreated should be enqueued to block-payload channel");
+        assert!(matches!(received, BlockMessage::BlockCreated(_)));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_drops_duplicate_block_payload() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let block_signature = BlockSignature::new(0, signature);
+        let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+        let msg = BlockMessage::BlockCreated(message::BlockCreated { block });
+
+        handle.incoming_block_message(msg.clone());
+        handle.incoming_block_message(msg);
+
+        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        assert_eq!(received.len(), 1);
+        assert!(matches!(
+            received.first(),
+            Some(BlockMessage::BlockCreated(_))
+        ));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_block_sync_update_via_block_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let block_signature = BlockSignature::new(0, signature);
+        let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+        let update = message::BlockSyncUpdate::from(&block);
+
+        handle.incoming_block_message(BlockMessage::BlockSyncUpdate(update));
+
+        let received = block_rx
+            .try_recv()
+            .expect("BlockSyncUpdate should be enqueued to block channel");
+        assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_waits_when_block_queue_full() {
+        const CAP: usize = 1;
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let block_tx_fill = block_tx.clone();
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let block_signature = BlockSignature::new(0, signature);
+        let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+        let update = message::BlockSyncUpdate::from(&block);
+        let update_overflow = message::BlockSyncUpdate::from(&block);
+
+        block_tx_fill
+            .send(BlockMessage::BlockSyncUpdate(update))
+            .expect("fill block channel");
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let join = std::thread::spawn(move || {
+            handle_clone.incoming_block_message(BlockMessage::BlockSyncUpdate(update_overflow));
+            let _ = done_tx.send(());
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "BlockSyncUpdate should wait for block queue capacity"
+        );
+        let _ = block_rx
+            .recv()
+            .expect("drain block queue to unblock sender");
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("BlockSyncUpdate should be enqueued after space is available");
+        join.join().expect("join BlockSyncUpdate sender");
+
+        let received = block_rx
+            .try_recv()
+            .expect("BlockSyncUpdate should be enqueued after space is freed");
+        assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn incoming_block_message_waits_when_block_payload_queue_full() {
+        const CAP: usize = 1;
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_tx_fill = block_payload_tx.clone();
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let header_one = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let header_two = BlockHeader {
+            height: NonZeroU64::new(2).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature_one = SignatureOf::from_hash(&private_key, header_one.hash());
+        let signature_two = SignatureOf::from_hash(&private_key, header_two.hash());
+        let block_one = SignedBlock::presigned_with_da(
+            BlockSignature::new(0, signature_one),
+            header_one,
+            Vec::new(),
+            None,
+        );
+        let block_two = SignedBlock::presigned_with_da(
+            BlockSignature::new(0, signature_two),
+            header_two,
+            Vec::new(),
+            None,
+        );
+
+        block_payload_tx_fill
+            .send(BlockMessage::BlockCreated(message::BlockCreated {
+                block: block_one,
+            }))
+            .expect("fill block payload channel");
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let join = std::thread::spawn(move || {
+            handle_clone.incoming_block_message(BlockMessage::BlockCreated(
+                message::BlockCreated { block: block_two },
+            ));
+            let _ = done_tx.send(());
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "BlockCreated should wait for block payload queue capacity"
+        );
+        let _ = block_payload_rx
+            .recv()
+            .expect("drain block payload queue to unblock sender");
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("BlockCreated should be enqueued after space is available");
+        join.join().expect("join BlockCreated sender");
+
+        let received = block_payload_rx
+            .try_recv()
+            .expect("BlockCreated should be enqueued after space is freed");
+        assert!(matches!(received, BlockMessage::BlockCreated(_)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn incoming_block_message_waits_when_rbc_chunk_queue_full() {
+        const CAP: usize = 1;
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let rbc_chunk_tx_fill = rbc_chunk_tx.clone();
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32]));
+        let chunk_one = crate::sumeragi::consensus::RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![1, 2, 3],
+        };
+        let chunk_two = crate::sumeragi::consensus::RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 1,
+            bytes: vec![4, 5, 6],
+        };
+
+        rbc_chunk_tx_fill
+            .send(BlockMessage::RbcChunk(chunk_one))
+            .expect("fill RBC chunk channel");
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let join = std::thread::spawn(move || {
+            handle_clone.incoming_block_message(BlockMessage::RbcChunk(chunk_two));
+            let _ = done_tx.send(());
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "RBC chunk should wait for RBC queue capacity"
+        );
+        let _ = rbc_chunk_rx
+            .recv()
+            .expect("drain RBC chunk queue to unblock sender");
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("RBC chunk should be enqueued after space is available");
+        join.join().expect("join RBC chunk sender");
+
+        let received = rbc_chunk_rx
+            .try_recv()
+            .expect("RBC chunk should be enqueued after space is freed");
+        assert!(matches!(received, BlockMessage::RbcChunk(_)));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_rbc_ready_via_payload_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let msg = BlockMessage::RbcReady(crate::sumeragi::consensus::RbcReady {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([1u8; 32])),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            chunk_root: Hash::prehashed([2u8; 32]),
+            sender: 0,
+            signature: Vec::new(),
+        });
+
+        handle.incoming_block_message(msg);
+
+        let received = block_payload_rx
+            .try_recv()
+            .expect("RbcReady should be enqueued to block-payload channel");
+        assert!(matches!(received, BlockMessage::RbcReady(_)));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_proposal_hint_via_vote_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32]));
+        let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([8u8; 32]));
+        let qc = crate::sumeragi::consensus::QcHeaderRef {
+            height: 1,
+            view: 0,
+            epoch: 0,
+            subject_block_hash: parent_hash,
+            phase: crate::sumeragi::consensus::Phase::Prevote,
+        };
+        let hint = crate::sumeragi::message::ProposalHint {
+            block_hash,
+            height: 2,
+            view: 0,
+            highest_qc: qc,
+            avail_qc_ref: None,
+        };
+
+        handle.incoming_block_message(BlockMessage::ProposalHint(hint));
+
+        let received = vote_rx
+            .try_recv()
+            .expect("ProposalHint should be enqueued to vote channel");
+        assert!(matches!(received, BlockMessage::ProposalHint(_)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_exec_vote_via_vote_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let vote = crate::sumeragi::consensus::ExecVote {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([1u8; 32])),
+            parent_state_root: Hash::prehashed([2u8; 32]),
+            post_state_root: Hash::prehashed([3u8; 32]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+
+        handle.incoming_block_message(BlockMessage::ExecVote(vote));
+
+        let received = vote_rx
+            .try_recv()
+            .expect("ExecVote should be enqueued to vote channel");
+        assert!(matches!(received, BlockMessage::ExecVote(_)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_execution_qc_via_vote_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let qc = crate::sumeragi::consensus::ExecutionQC {
+            subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [4u8; 32],
+            )),
+            parent_state_root: Hash::prehashed([5u8; 32]),
+            post_state_root: Hash::prehashed([6u8; 32]),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            aggregate: QcAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
+        };
+
+        handle.incoming_block_message(BlockMessage::ExecutionQC(qc));
+
+        let received = vote_rx
+            .try_recv()
+            .expect("ExecutionQC should be enqueued to vote channel");
+        assert!(matches!(received, BlockMessage::ExecutionQC(_)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_rbc_chunk_via_rbc_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let msg = BlockMessage::RbcChunk(crate::sumeragi::consensus::RbcChunk {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([1u8; 32])),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![0u8],
+        });
+
+        handle.incoming_block_message(msg);
+
+        let received = rbc_chunk_rx
+            .try_recv()
+            .expect("RbcChunk should be enqueued to RBC chunk channel");
+        assert!(matches!(received, BlockMessage::RbcChunk(_)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_rbc_init_via_rbc_queue() {
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let msg = BlockMessage::RbcInit(crate::sumeragi::consensus::RbcInit {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([3u8; 32])),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            total_chunks: 1,
+            payload_hash: Hash::prehashed([4u8; 32]),
+            chunk_root: Hash::prehashed([5u8; 32]),
+        });
+
+        handle.incoming_block_message(msg);
+
+        let received = rbc_chunk_rx
+            .try_recv()
+            .expect("RbcInit should be enqueued to RBC chunk channel");
+        assert!(matches!(received, BlockMessage::RbcInit(_)));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[derive(Default)]
+    struct RecordingActor {
+        events: Vec<&'static str>,
+        tick_calls: usize,
+    }
+
+    impl WorkerActor for RecordingActor {
+        fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
+            let label = match msg {
+                BlockMessage::PrevoteVote(_) => "vote",
+                BlockMessage::RbcChunk(_) => "rbc",
+                BlockMessage::Proposal(_) => "payload",
+                BlockMessage::ConsensusParams(_) => "block",
+                _ => "other",
+            };
+            self.events.push(label);
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            self.events.push("control");
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            self.events.push("lane");
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            self.events.push("background");
+            Ok(())
+        }
+
+        fn tick(&mut self) -> bool {
+            self.tick_calls = self.tick_calls.saturating_add(1);
+            true
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingActorWithTick {
+        events: Vec<&'static str>,
+        tick_calls: usize,
+    }
+
+    impl WorkerActor for RecordingActorWithTick {
+        fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
+            let label = match msg {
+                BlockMessage::PrevoteVote(_) => "vote",
+                BlockMessage::RbcChunk(_) => "rbc",
+                BlockMessage::Proposal(_) => "payload",
+                BlockMessage::ConsensusParams(_) => "block",
+                _ => "other",
+            };
+            self.events.push(label);
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            self.events.push("control");
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            self.events.push("lane");
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            self.events.push("background");
+            Ok(())
+        }
+
+        fn tick(&mut self) -> bool {
+            self.tick_calls = self.tick_calls.saturating_add(1);
+            self.events.push("tick");
+            true
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn run_worker_iteration_drains_in_priority_order() {
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let vote = Vote {
+            phase: Phase::Prevote,
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        };
+        vote_tx
+            .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
+            .expect("send prevote");
+
+        let rbc_chunk = RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![1, 2, 3],
+        };
+        rbc_chunk_tx
+            .send(BlockMessage::RbcChunk(rbc_chunk))
+            .expect("send rbc chunk");
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prevote,
+                },
+                avail_qc_ref: None,
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        block_payload_tx
+            .send(BlockMessage::Proposal(proposal))
+            .expect("send proposal");
+
+        block_tx
+            .send(BlockMessage::ConsensusParams(
+                message::ConsensusParamsAdvert {
+                    collectors_k: 1,
+                    redundant_send_r: 1,
+                },
+            ))
+            .expect("send consensus params");
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+            sleep: Duration::from_millis(1),
+        };
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let mut loop_state = WorkerLoopState {
+            last_tick: past,
+            last_block_drain: past,
+            last_non_vote_drain: past,
+        };
+        let mut actor = RecordingActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.events, vec!["rbc", "payload", "vote", "block"]);
+        assert_eq!(stats.votes_handled, 1);
+        assert_eq!(stats.rbc_chunks_handled, 1);
+        assert_eq!(stats.block_payloads_handled, 1);
+        assert_eq!(stats.blocks_handled, 1);
+        assert!(stats.progress);
+        assert!(!stats.budget_exceeded);
+        assert_eq!(actor.tick_calls, 1);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn run_worker_iteration_ticks_after_drains() {
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let vote = Vote {
+            phase: Phase::Prevote,
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        };
+        vote_tx
+            .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
+            .expect("send prevote");
+
+        let rbc_chunk = RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![1, 2, 3],
+        };
+        rbc_chunk_tx
+            .send(BlockMessage::RbcChunk(rbc_chunk))
+            .expect("send rbc chunk");
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prevote,
+                },
+                avail_qc_ref: None,
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        block_payload_tx
+            .send(BlockMessage::Proposal(proposal))
+            .expect("send proposal");
+
+        block_tx
+            .send(BlockMessage::ConsensusParams(
+                message::ConsensusParamsAdvert {
+                    collectors_k: 1,
+                    redundant_send_r: 1,
+                },
+            ))
+            .expect("send consensus params");
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+            sleep: Duration::from_millis(1),
+        };
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let mut loop_state = WorkerLoopState {
+            last_tick: past,
+            last_block_drain: past,
+            last_non_vote_drain: past,
+        };
+        let mut actor = RecordingActorWithTick::default();
+
+        run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(
+            actor.events,
+            vec!["rbc", "payload", "vote", "block", "tick"]
+        );
+        assert_eq!(actor.tick_calls, 1);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn worker_queue_depths_track_enqueues_and_drains() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let vote_dedup = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup = Arc::new(Mutex::new(BTreeSet::new()));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            Arc::clone(&vote_dedup),
+            Arc::clone(&block_payload_dedup),
+        );
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let vote = Vote {
+            phase: Phase::Prevote,
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        };
+        handle.incoming_block_message(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)));
+
+        let rbc_chunk = RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![1, 2, 3],
+        };
+        handle.incoming_block_message(BlockMessage::RbcChunk(rbc_chunk));
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prevote,
+                },
+                avail_qc_ref: None,
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        handle.incoming_block_message(BlockMessage::Proposal(proposal));
+
+        handle.incoming_block_message(BlockMessage::ConsensusParams(
+            message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+            },
+        ));
+
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        handle.post_to_peer(
+            peer_id,
+            BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
+                collectors_k: 2,
+                redundant_send_r: 1,
+            }),
+        );
+        handle.broadcast(BlockMessage::ConsensusParams(
+            message::ConsensusParamsAdvert {
+                collectors_k: 3,
+                redundant_send_r: 1,
+            },
+        ));
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let commitment = LaneBlockCommitment {
+            block_height: 1,
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::new(0),
+            tx_count: 0,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+        };
+        let envelope =
+            LaneRelayEnvelope::new(header, None, None, commitment, 0).expect("relay envelope");
+        handle.incoming_lane_relay(envelope);
+        handle.incoming_merge_signature(MergeCommitteeSignature {
+            epoch_id: 0,
+            view: 0,
+            signer: 0,
+            message_digest: Hash::new(b"merge-signature"),
+            bls_sig: vec![0x22; 48],
+        });
+
+        let depths = status::worker_queue_depth_snapshot();
+        assert_eq!(depths.vote_rx, 1);
+        assert_eq!(depths.block_payload_rx, 1);
+        assert_eq!(depths.rbc_chunk_rx, 1);
+        assert_eq!(depths.block_rx, 1);
+        assert_eq!(depths.background_rx, 2);
+        assert_eq!(depths.lane_relay_rx, 2);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+            sleep: Duration::from_millis(1),
+        };
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let mut state = WorkerLoopState {
+            last_tick: past,
+            last_block_drain: past,
+            last_non_vote_drain: past,
+        };
+        let mut actor = RecordingActor::default();
+
+        run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        let depths = status::worker_queue_depth_snapshot();
+        assert_eq!(depths.vote_rx, 0);
+        assert_eq!(depths.block_payload_rx, 0);
+        assert_eq!(depths.rbc_chunk_rx, 0);
+        assert_eq!(depths.block_rx, 0);
+        assert_eq!(depths.background_rx, 0);
+        assert_eq!(depths.lane_relay_rx, 0);
+    }
+
+    #[test]
+    fn run_worker_loop_exits_when_shutdown_is_sent() {
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let mut actor = RecordingActor::default();
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+            sleep: Duration::from_millis(1),
+        };
+        let state = WorkerLoopState {
+            last_tick: Instant::now(),
+            last_block_drain: Instant::now(),
+            last_non_vote_drain: Instant::now(),
+        };
+        let shutdown_signal = ShutdownSignal::new();
+        shutdown_signal.send();
+
+        run_worker_loop(
+            &mut actor,
+            config,
+            state,
+            vote_rx,
+            block_payload_rx,
+            rbc_chunk_rx,
+            block_rx,
+            consensus_rx,
+            lane_rx,
+            background_rx,
+            shutdown_signal,
+        );
+
+        assert!(actor.events.is_empty());
+        assert_eq!(actor.tick_calls, 0);
+    }
+}
+
+/// QC-based consensus message types and helpers (single-chain).
+pub mod collectors;
+pub mod consensus;
+pub mod da;
+pub mod election;
+pub mod epoch;
+pub mod epoch_report;
+pub(crate) mod evidence;
+pub(crate) mod exec;
+pub mod main_loop;
+pub mod message;
+pub mod network_topology;
+pub(crate) mod new_view_stats;
+pub(crate) mod penalties;
+pub mod rbc_sampling;
+pub mod rbc_status;
+pub mod rbc_store;
+pub(crate) mod smt;
+pub mod status;
+pub mod view_change;
+pub(crate) mod witness;
+pub use evidence::EvidenceValidationContext;
+
+/// Validate an evidence payload using the canonical rules.
+///
+/// # Errors
+///
+/// Propagates [`EvidenceValidationError`](evidence::EvidenceValidationError) when the payload
+/// fails any of the structural or metadata consistency checks enforced by consensus.
+pub fn validate_evidence(
+    evidence: &consensus::Evidence,
+    context: &EvidenceValidationContext<'_>,
+) -> Result<(), evidence::EvidenceValidationError> {
+    evidence::validate_evidence(evidence, context)
+}
+
+/// Placeholder for in-flight voting block state tracked by consensus.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VotingBlock;
+
+/// Public snapshot of `NEW_VIEW` counts for operator-facing APIs (SSE/JSON).
+pub fn new_view_snapshot_counts() -> Vec<(u64, u64, u64)> {
+    new_view_stats::snapshot_counts()
+}
+
+/// Public snapshot of leader index and `HighestQC` tuple for status endpoints.
+pub use status::StatusSnapshot;
+
+/// Return the latest consensus status snapshot (leader, QCs, drop counters).
+pub fn status_snapshot() -> StatusSnapshot {
+    status::snapshot()
+}
+
+use self::message::*;
+#[cfg(feature = "telemetry")]
+use crate::telemetry::Telemetry;
+use crate::{
+    EventsSender, IrohaNetwork, kura::Kura, peers_gossiper::PeersGossiperHandle, queue::Queue,
+};
+
+/// Bundle of genesis block and its publishing key.
+#[derive(Clone)]
+pub struct GenesisWithPubKey {
+    /// Optional genesis block to seed the chain; `None` when submitted elsewhere.
+    pub genesis: Option<GenesisBlock>,
+    /// Public key used to sign the genesis payload.
+    pub public_key: PublicKey,
+}
+
+/// Configuration for the persisted RBC session store.
+#[derive(Clone)]
+pub struct RbcStoreConfig {
+    /// Filesystem directory where sessions are stored.
+    pub dir: PathBuf,
+    /// Hard cap on concurrent persisted sessions.
+    pub max_sessions: usize,
+    /// Soft limit on concurrent sessions before pressure is applied.
+    pub soft_sessions: usize,
+    /// Hard cap on the total persisted payload size in bytes.
+    pub max_bytes: usize,
+    /// Soft limit on persisted payload bytes.
+    pub soft_bytes: usize,
+    /// Time-to-live for cached sessions before eviction.
+    pub ttl: Duration,
+}
+
+/// Background posting tasks issued by Sumeragi.
+#[derive(Debug, Clone)]
+pub enum BackgroundPost {
+    /// Post a consensus message to a specific peer.
+    Post {
+        /// Destination peer identifier.
+        peer: PeerId,
+        /// Message to dispatch.
+        msg: BlockMessage,
+        /// Time when the task was enqueued.
+        enqueued_at: Instant,
+    },
+    /// Post a consensus control-flow frame to a specific peer.
+    PostControlFlow {
+        /// Destination peer identifier.
+        peer: PeerId,
+        /// Control-flow frame to dispatch.
+        frame: ControlFlow,
+        /// Time when the task was enqueued.
+        enqueued_at: Instant,
+    },
+    /// Broadcast a consensus message to all peers.
+    Broadcast {
+        /// Message to broadcast.
+        msg: BlockMessage,
+        /// Time when the task was enqueued.
+        enqueued_at: Instant,
+    },
+    /// Broadcast a consensus control-flow frame to all peers.
+    BroadcastControlFlow {
+        /// Frame to broadcast.
+        frame: ControlFlow,
+        /// Time when the task was enqueued.
+        enqueued_at: Instant,
+    },
+}
+
+/// Internal request type enqueued by subsystems that need the actor to schedule a background
+/// consensus transmission (high-priority control frames, RBC chunks, etc.).
+#[derive(Debug, Clone)]
+pub enum BackgroundRequest {
+    /// Send a point-to-point `BlockMessage` to the given peer.
+    Post {
+        /// Peer that should receive the consensus message.
+        peer: PeerId,
+        /// Consensus message to send to the peer.
+        msg: BlockMessage,
+    },
+    /// Send a point-to-point control-flow frame to the given peer.
+    PostControlFlow {
+        /// Peer that should receive the control-flow frame.
+        peer: PeerId,
+        /// Control-flow frame to send to the peer.
+        frame: ControlFlow,
+    },
+    /// Broadcast a `BlockMessage` to all peers.
+    Broadcast {
+        /// Consensus message to broadcast.
+        msg: BlockMessage,
+    },
+    /// Broadcast a control-flow frame to all peers.
+    BroadcastControlFlow {
+        /// Control-flow frame to broadcast.
+        frame: ControlFlow,
+    },
+}
+
+type VoteDedupKey = (
+    u8,
+    HashOf<BlockHeader>,
+    u64,
+    u64,
+    u64,
+    crate::sumeragi::consensus::ValidatorIndex,
+);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum BlockPayloadDedupKey {
+    BlockCreated {
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+    },
+    Proposal {
+        height: u64,
+        view: u64,
+        payload_hash: CryptoHash,
+    },
+}
+
+#[derive(Debug)]
+enum LaneRelayMessage {
+    Envelope(LaneRelayEnvelope),
+    MergeSignature(MergeCommitteeSignature),
+}
+
+/// Minimal handle for the Sumeragi actor.
+#[derive(Clone)]
+pub struct SumeragiHandle {
+    block_payload: mpsc::SyncSender<BlockMessage>,
+    block: mpsc::SyncSender<BlockMessage>,
+    rbc_chunks: mpsc::SyncSender<BlockMessage>,
+    votes: mpsc::SyncSender<BlockMessage>,
+    consensus_control: mpsc::SyncSender<ControlFlow>,
+    background: mpsc::SyncSender<BackgroundRequest>,
+    lane_relay: mpsc::SyncSender<LaneRelayMessage>,
+    vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>>,
+    block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>>,
+}
+
+impl SumeragiHandle {
+    fn phase_id(phase: crate::sumeragi::consensus::Phase) -> u8 {
+        match phase {
+            crate::sumeragi::consensus::Phase::Prevote => 0,
+            crate::sumeragi::consensus::Phase::Precommit => 1,
+            crate::sumeragi::consensus::Phase::Available => 2,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        block_payload_tx: mpsc::SyncSender<BlockMessage>,
+        block_tx: mpsc::SyncSender<BlockMessage>,
+        rbc_chunk_tx: mpsc::SyncSender<BlockMessage>,
+        vote_tx: mpsc::SyncSender<BlockMessage>,
+        consensus_control_tx: mpsc::SyncSender<ControlFlow>,
+        background_tx: mpsc::SyncSender<BackgroundRequest>,
+        lane_relay_tx: mpsc::SyncSender<LaneRelayMessage>,
+        vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>>,
+        block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>>,
+    ) -> Self {
+        Self {
+            block_payload: block_payload_tx,
+            block: block_tx,
+            rbc_chunks: rbc_chunk_tx,
+            votes: vote_tx,
+            consensus_control: consensus_control_tx,
+            background: background_tx,
+            lane_relay: lane_relay_tx,
+            vote_dedup,
+            block_payload_dedup,
+        }
+    }
+
+    fn dedup_vote(&self, key: VoteDedupKey) -> bool {
+        const MAX_DEDUP_CACHE: usize = 8192;
+        let mut guard = self.vote_dedup.lock().expect("vote dedup cache poisoned");
+        if guard.contains(&key) {
+            return false;
+        }
+        if guard.len() >= MAX_DEDUP_CACHE {
+            guard.clear();
+        }
+        guard.insert(key);
+        true
+    }
+
+    fn dedup_block_payload(&self, key: BlockPayloadDedupKey) -> bool {
+        const MAX_DEDUP_CACHE: usize = 2048;
+        let mut guard = self
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        if guard.contains(&key) {
+            return false;
+        }
+        if guard.len() >= MAX_DEDUP_CACHE {
+            guard.clear();
+        }
+        guard.insert(key);
+        true
+    }
+
+    /// Enqueue an incoming block-synchronization or consensus message.
+    #[allow(clippy::too_many_lines)]
+    pub fn incoming_block_message(&self, msg: BlockMessage) {
+        let enqueue_blocking = |tx: &mpsc::SyncSender<BlockMessage>,
+                                msg: BlockMessage,
+                                kind: &'static str,
+                                queue: status::WorkerQueueKind| {
+            let start = Instant::now();
+            match tx.send(msg) {
+                Ok(()) => {
+                    status::record_worker_queue_enqueue(queue);
+                    status::record_worker_queue_blocked(queue, start.elapsed());
+                }
+                Err(err) => {
+                    status::record_worker_queue_drop(queue);
+                    iroha_logger::warn!(?err, kind, "Sumeragi actor dropped block message");
+                }
+            }
+        };
+        let log_drop = |kind: &'static str,
+                        queue: status::WorkerQueueKind,
+                        msg: &BlockMessage,
+                        reason: &'static str| {
+            match msg {
+                BlockMessage::RbcChunk(chunk) => {
+                    iroha_logger::warn!(
+                        height = chunk.height,
+                        view = chunk.view,
+                        idx = chunk.idx,
+                        block = %chunk.block_hash,
+                        queue = ?queue,
+                        reason,
+                        "dropping RBC chunk message"
+                    );
+                }
+                BlockMessage::RbcInit(init) => {
+                    iroha_logger::warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        total_chunks = init.total_chunks,
+                        queue = ?queue,
+                        reason,
+                        "dropping RBC init message"
+                    );
+                }
+                BlockMessage::BlockCreated(created) => {
+                    let header = created.block.header();
+                    iroha_logger::warn!(
+                        height = header.height().get(),
+                        view = u64::from(header.view_change_index()),
+                        block = %created.block.hash(),
+                        queue = ?queue,
+                        reason,
+                        "dropping BlockCreated message"
+                    );
+                }
+                BlockMessage::Proposal(proposal) => {
+                    iroha_logger::warn!(
+                        height = proposal.header.height,
+                        view = proposal.header.view,
+                        payload = %proposal.payload_hash,
+                        queue = ?queue,
+                        reason,
+                        "dropping Proposal message"
+                    );
+                }
+                BlockMessage::BlockSyncUpdate(update) => {
+                    let header = update.block.header();
+                    iroha_logger::warn!(
+                        height = header.height().get(),
+                        view = u64::from(header.view_change_index()),
+                        block = %update.block.hash(),
+                        queue = ?queue,
+                        reason,
+                        "dropping BlockSyncUpdate message"
+                    );
+                }
+                _ => {
+                    iroha_logger::debug!(
+                        kind,
+                        queue = ?queue,
+                        reason,
+                        "dropping block message"
+                    );
+                }
+            }
+        };
+        let enqueue_nonblocking =
+            |tx: &mpsc::SyncSender<BlockMessage>,
+             msg: BlockMessage,
+             kind: &'static str,
+             queue: status::WorkerQueueKind| match tx.try_send(msg) {
+                Ok(()) => {
+                    status::record_worker_queue_enqueue(queue);
+                }
+                Err(mpsc::TrySendError::Full(msg)) => {
+                    status::record_worker_queue_drop(queue);
+                    log_drop(kind, queue, &msg, "channel_full");
+                }
+                Err(mpsc::TrySendError::Disconnected(msg)) => {
+                    status::record_worker_queue_drop(queue);
+                    log_drop(kind, queue, &msg, "channel_disconnected");
+                }
+            };
+        match msg {
+            BlockMessage::PrecommitVote(vote) => {
+                let vote_ref = &vote.0;
+                let duplicate = !self.dedup_vote((
+                    Self::phase_id(vote_ref.phase),
+                    vote_ref.block_hash,
+                    vote_ref.height,
+                    vote_ref.view,
+                    vote_ref.epoch,
+                    vote_ref.signer,
+                ));
+                if duplicate {
+                    iroha_logger::debug!(
+                        phase = ?vote_ref.phase,
+                        height = vote_ref.height,
+                        view = vote_ref.view,
+                        epoch = vote_ref.epoch,
+                        signer = vote_ref.signer,
+                        block_hash = %vote_ref.block_hash,
+                        "dropping duplicate precommit vote from network"
+                    );
+                    return;
+                }
+                iroha_logger::debug!(
+                    phase = ?vote_ref.phase,
+                    height = vote_ref.height,
+                    view = vote_ref.view,
+                    epoch = vote_ref.epoch,
+                    signer = vote_ref.signer,
+                    block_hash = %vote_ref.block_hash,
+                    "enqueueing precommit vote from network"
+                );
+                enqueue_blocking(
+                    &self.votes,
+                    BlockMessage::PrecommitVote(vote),
+                    "PrecommitVote",
+                    status::WorkerQueueKind::Votes,
+                );
+            }
+            BlockMessage::PrevoteVote(vote) => {
+                let vote_ref = &vote.0;
+                let duplicate = !self.dedup_vote((
+                    Self::phase_id(vote_ref.phase),
+                    vote_ref.block_hash,
+                    vote_ref.height,
+                    vote_ref.view,
+                    vote_ref.epoch,
+                    vote_ref.signer,
+                ));
+                if duplicate {
+                    iroha_logger::debug!(
+                        phase = ?vote_ref.phase,
+                        height = vote_ref.height,
+                        view = vote_ref.view,
+                        epoch = vote_ref.epoch,
+                        signer = vote_ref.signer,
+                        block_hash = %vote_ref.block_hash,
+                        "dropping duplicate prevote from network"
+                    );
+                    return;
+                }
+                iroha_logger::debug!(
+                    phase = ?vote_ref.phase,
+                    height = vote_ref.height,
+                    view = vote_ref.view,
+                    epoch = vote_ref.epoch,
+                    signer = vote_ref.signer,
+                    block_hash = %vote_ref.block_hash,
+                    "enqueueing prevote from network"
+                );
+                enqueue_blocking(
+                    &self.votes,
+                    BlockMessage::PrevoteVote(vote),
+                    "PrevoteVote",
+                    status::WorkerQueueKind::Votes,
+                );
+            }
+            BlockMessage::AvailabilityVote(vote) => {
+                let duplicate = !self.dedup_vote((
+                    Self::phase_id(crate::sumeragi::consensus::Phase::Available),
+                    vote.block_hash,
+                    vote.height,
+                    vote.view,
+                    vote.epoch,
+                    vote.signer,
+                ));
+                if duplicate {
+                    iroha_logger::debug!(
+                        height = vote.height,
+                        view = vote.view,
+                        epoch = vote.epoch,
+                        signer = vote.signer,
+                        block = %vote.block_hash,
+                        "dropping duplicate availability vote from network"
+                    );
+                    return;
+                }
+                iroha_logger::debug!(
+                    height = vote.height,
+                    view = vote.view,
+                    epoch = vote.epoch,
+                    signer = vote.signer,
+                    block = %vote.block_hash,
+                    "enqueueing availability vote from network"
+                );
+                enqueue_blocking(
+                    &self.votes,
+                    BlockMessage::AvailabilityVote(vote),
+                    "AvailabilityVote",
+                    status::WorkerQueueKind::Votes,
+                );
+            }
+            BlockMessage::ExecVote(vote) => {
+                enqueue_blocking(
+                    &self.votes,
+                    BlockMessage::ExecVote(vote),
+                    "ExecVote",
+                    status::WorkerQueueKind::Votes,
+                );
+            }
+            BlockMessage::ExecutionQC(qc) => {
+                enqueue_blocking(
+                    &self.votes,
+                    BlockMessage::ExecutionQC(qc),
+                    "ExecutionQC",
+                    status::WorkerQueueKind::Votes,
+                );
+            }
+            BlockMessage::RbcReady(ready) => {
+                // Route READY/DELIVER through the block-payload queue so they bypass RBC chunk
+                // backlog and are handled before votes.
+                enqueue_blocking(
+                    &self.block_payload,
+                    BlockMessage::RbcReady(ready),
+                    "RbcReady",
+                    status::WorkerQueueKind::BlockPayload,
+                );
+            }
+            BlockMessage::RbcDeliver(deliver) => {
+                enqueue_blocking(
+                    &self.block_payload,
+                    BlockMessage::RbcDeliver(deliver),
+                    "RbcDeliver",
+                    status::WorkerQueueKind::BlockPayload,
+                );
+            }
+            BlockMessage::PrecommitQC(qc) => {
+                enqueue_blocking(
+                    &self.votes,
+                    BlockMessage::PrecommitQC(qc),
+                    "VoteLike",
+                    status::WorkerQueueKind::Votes,
+                );
+            }
+            BlockMessage::PrevoteQC(qc) => {
+                enqueue_blocking(
+                    &self.votes,
+                    BlockMessage::PrevoteQC(qc),
+                    "VoteLike",
+                    status::WorkerQueueKind::Votes,
+                );
+            }
+            BlockMessage::AvailabilityQC(qc) => {
+                enqueue_blocking(
+                    &self.votes,
+                    BlockMessage::AvailabilityQC(qc),
+                    "VoteLike",
+                    status::WorkerQueueKind::Votes,
+                );
+            }
+            BlockMessage::ProposalHint(hint) => {
+                enqueue_blocking(
+                    &self.votes,
+                    BlockMessage::ProposalHint(hint),
+                    "ProposalHint",
+                    status::WorkerQueueKind::Votes,
+                );
+            }
+            BlockMessage::BlockCreated(created) => {
+                let header = created.block.header();
+                let height = header.height().get();
+                let view = u64::from(header.view_change_index());
+                let block_hash = created.block.hash();
+                let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::BlockCreated {
+                    height,
+                    view,
+                    block_hash,
+                });
+                if duplicate {
+                    iroha_logger::debug!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        "dropping duplicate BlockCreated from network"
+                    );
+                    return;
+                }
+                enqueue_blocking(
+                    &self.block_payload,
+                    BlockMessage::BlockCreated(created),
+                    "BlockPayload",
+                    status::WorkerQueueKind::BlockPayload,
+                );
+            }
+            BlockMessage::Proposal(proposal) => {
+                let height = proposal.header.height;
+                let view = proposal.header.view;
+                let payload_hash = proposal.payload_hash;
+                let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::Proposal {
+                    height,
+                    view,
+                    payload_hash,
+                });
+                if duplicate {
+                    iroha_logger::debug!(
+                        height,
+                        view,
+                        payload = %payload_hash,
+                        "dropping duplicate Proposal from network"
+                    );
+                    return;
+                }
+                enqueue_blocking(
+                    &self.block_payload,
+                    BlockMessage::Proposal(proposal),
+                    "BlockPayload",
+                    status::WorkerQueueKind::BlockPayload,
+                );
+            }
+            BlockMessage::BlockSyncUpdate(update) => {
+                enqueue_blocking(
+                    &self.block,
+                    BlockMessage::BlockSyncUpdate(update),
+                    "BlockSyncUpdate",
+                    status::WorkerQueueKind::Blocks,
+                );
+            }
+            BlockMessage::RbcInit(init) => {
+                enqueue_blocking(
+                    &self.rbc_chunks,
+                    BlockMessage::RbcInit(init),
+                    "RbcChunk",
+                    status::WorkerQueueKind::RbcChunks,
+                );
+            }
+            BlockMessage::RbcChunk(chunk) => {
+                enqueue_blocking(
+                    &self.rbc_chunks,
+                    BlockMessage::RbcChunk(chunk),
+                    "RbcChunk",
+                    status::WorkerQueueKind::RbcChunks,
+                );
+            }
+            other => enqueue_nonblocking(
+                &self.block,
+                other,
+                "BlockMessage",
+                status::WorkerQueueKind::Blocks,
+            ),
+        }
+    }
+
+    /// Enqueue a consensus control-flow command for the actor.
+    pub fn incoming_consensus_control_flow_message(&self, msg: ControlFlow) {
+        let start = Instant::now();
+        match self.consensus_control.send(msg) {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::Consensus);
+                status::record_worker_queue_blocked(
+                    status::WorkerQueueKind::Consensus,
+                    start.elapsed(),
+                );
+            }
+            Err(err) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::Consensus);
+                iroha_logger::warn!(?err, "Sumeragi actor dropped consensus control message");
+            }
+        }
+    }
+
+    /// Enqueue an inbound lane relay envelope for processing.
+    pub fn incoming_lane_relay(&self, envelope: LaneRelayEnvelope) {
+        let start = Instant::now();
+        match self.lane_relay.send(LaneRelayMessage::Envelope(envelope)) {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                status::record_worker_queue_blocked(
+                    status::WorkerQueueKind::LaneRelay,
+                    start.elapsed(),
+                );
+            }
+            Err(err) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                iroha_logger::warn!(?err, "Sumeragi actor dropped lane relay envelope");
+            }
+        }
+    }
+
+    /// Enqueue an inbound merge committee signature for processing.
+    pub fn incoming_merge_signature(&self, signature: MergeCommitteeSignature) {
+        let start = Instant::now();
+        match self
+            .lane_relay
+            .send(LaneRelayMessage::MergeSignature(signature))
+        {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                status::record_worker_queue_blocked(
+                    status::WorkerQueueKind::LaneRelay,
+                    start.elapsed(),
+                );
+            }
+            Err(err) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                iroha_logger::warn!(?err, "Sumeragi actor dropped merge signature");
+            }
+        }
+    }
+
+    /// Schedule a high-priority consensus message to be posted to a specific peer.
+    pub fn post_to_peer(&self, peer: PeerId, msg: BlockMessage) {
+        let start = Instant::now();
+        match self.background.send(BackgroundRequest::Post { peer, msg }) {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::Background);
+                status::record_worker_queue_blocked(
+                    status::WorkerQueueKind::Background,
+                    start.elapsed(),
+                );
+            }
+            Err(err) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::Background);
+                iroha_logger::warn!(?err, "failed to enqueue background post task");
+            }
+        }
+    }
+
+    /// Schedule a consensus broadcast to all peers.
+    pub fn broadcast(&self, msg: BlockMessage) {
+        let start = Instant::now();
+        match self.background.send(BackgroundRequest::Broadcast { msg }) {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::Background);
+                status::record_worker_queue_blocked(
+                    status::WorkerQueueKind::Background,
+                    start.elapsed(),
+                );
+            }
+            Err(err) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::Background);
+                iroha_logger::warn!(?err, "failed to enqueue background broadcast task");
+            }
+        }
+    }
+
+    /// Schedule a control-flow broadcast to all peers.
+    pub fn broadcast_control_flow(&self, frame: ControlFlow) {
+        let start = Instant::now();
+        match self
+            .background
+            .send(BackgroundRequest::BroadcastControlFlow { frame })
+        {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::Background);
+                status::record_worker_queue_blocked(
+                    status::WorkerQueueKind::Background,
+                    start.elapsed(),
+                );
+            }
+            Err(err) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::Background);
+                iroha_logger::warn!(?err, "failed to enqueue background control-flow task");
+            }
+        }
+    }
+}
+
+/// Adapter exposing a static roster derived from WSV peers.
+#[derive(Clone)]
+pub struct WsvEpochRosterAdapter {
+    peers: Vec<PeerId>,
+}
+
+impl WsvEpochRosterAdapter {
+    /// Construct an adapter from the current world-state peer roster.
+    pub fn new(peers: Vec<PeerId>) -> Self {
+        Self { peers }
+    }
+
+    /// Convenience helper for benches/tests to build a roster from iterators.
+    #[cfg(any(test, feature = "bench-internal"))]
+    pub fn from_peer_iter<I>(peers: I) -> Arc<Self>
+    where
+        I: IntoIterator<Item = PeerId>,
+    {
+        Arc::new(Self::new(peers.into_iter().collect()))
+    }
+
+    #[allow(dead_code)]
+    /// Return the cached peer roster.
+    pub fn peers(&self) -> &[PeerId] {
+        &self.peers
+    }
+}
+
+/// Spawn configuration for the Sumeragi actor.
+pub struct SumeragiStartArgs {
+    /// Consensus configuration knobs for the Sumeragi actor.
+    pub config: SumeragiConfig,
+    /// Common configuration shared with other subsystems (keys, peers, chain id).
+    pub common_config: CommonConfig,
+    /// Maximum consensus frame payload size (bytes) for block/control messages.
+    pub consensus_frame_cap: usize,
+    /// Channel used to emit consensus lifecycle events to observers.
+    pub events_sender: EventsSender,
+    /// Handle to the world state view.
+    pub state: Arc<State>,
+    /// Transaction queue shared with the pipeline.
+    pub queue: Arc<Queue>,
+    /// Persistent block store interface.
+    pub kura: Arc<Kura>,
+    /// Network transport handle for broadcasting consensus messages.
+    pub network: IrohaNetwork,
+    /// Gossiper handle used to propagate updated peer topologies.
+    pub peers_gossiper: PeersGossiperHandle,
+    /// Genesis network data augmented with leader public keys.
+    pub genesis_network: GenesisWithPubKey,
+    /// Current committed block count.
+    pub block_count: BlockCount,
+    /// Maximum fanout for block sync updates, availability votes, and NEW_VIEW gossip.
+    pub block_sync_gossip_limit: usize,
+    #[cfg(feature = "telemetry")]
+    /// Telemetry sink describing enabled metrics/logging endpoints.
+    pub telemetry: Telemetry,
+    /// Provider yielding epoch rosters derived from WSV peers, when available.
+    pub epoch_roster_provider: Option<Arc<WsvEpochRosterAdapter>>,
+    /// Configuration for the reliable broadcast (RBC) store.
+    pub rbc_store: Option<RbcStoreConfig>,
+    /// Optional sender for background post-task execution.
+    pub background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
+    /// Directory containing DA commitment spool artefacts emitted by Torii.
+    pub da_spool_dir: PathBuf,
+}
+
+impl SumeragiStartArgs {
+    /// Launch the Sumeragi actor, returning handles for control and supervision.
+    pub fn start(self, shutdown_signal: ShutdownSignal) -> (SumeragiHandle, Child) {
+        let SumeragiStartArgs {
+            config,
+            common_config,
+            consensus_frame_cap,
+            events_sender,
+            state,
+            queue,
+            kura,
+            network,
+            peers_gossiper,
+            genesis_network,
+            block_count,
+            block_sync_gossip_limit,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+            epoch_roster_provider,
+            rbc_store,
+            background_post_tx,
+            da_spool_dir,
+        } = self;
+
+        status::set_commit_cert_history_cap(config.commit_cert_history_cap);
+        status::set_commit_inflight_timeout(config.commit_inflight_timeout);
+
+        let vote_channel_cap = config.msg_channel_cap_votes.max(1);
+        let block_payload_channel_cap = config.msg_channel_cap_block_payload.max(1);
+        let rbc_chunk_channel_cap = config.msg_channel_cap_rbc_chunks.max(1);
+        let block_channel_cap = config.msg_channel_cap_blocks.max(1);
+        let control_msg_channel_cap = config.control_msg_channel_cap.max(1);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(block_payload_channel_cap);
+        let (block_tx, block_rx) = mpsc::sync_channel(block_channel_cap);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(rbc_chunk_channel_cap);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(vote_channel_cap);
+        let (consensus_tx, consensus_rx) = mpsc::sync_channel(control_msg_channel_cap);
+        let (background_tx, background_rx) = mpsc::sync_channel(control_msg_channel_cap);
+        let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(control_msg_channel_cap);
+        let vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let block_payload_dedup: Arc<Mutex<BTreeSet<BlockPayloadDedupKey>>> =
+            Arc::new(Mutex::new(BTreeSet::new()));
+
+        let handle = SumeragiHandle::new(
+            block_payload_tx.clone(),
+            block_tx.clone(),
+            rbc_chunk_tx.clone(),
+            vote_tx.clone(),
+            consensus_tx.clone(),
+            background_tx,
+            lane_relay_tx,
+            Arc::clone(&vote_dedup),
+            Arc::clone(&block_payload_dedup),
+        );
+
+        let rbc_status_handle = rbc_status::register_handle();
+        rbc_status::set_active(&rbc_status_handle);
+
+        let actor = SumeragiWorker {
+            config,
+            common_config,
+            consensus_frame_cap,
+            events_sender,
+            state,
+            queue,
+            kura,
+            network,
+            peers_gossiper,
+            genesis_network,
+            block_count,
+            block_sync_gossip_limit,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+            epoch_roster_provider,
+            lane_relay_rx,
+            rbc_store,
+            background_post_tx,
+            da_spool_dir,
+            vote_dedup,
+            vote_rx,
+            block_payload_rx,
+            block_rx,
+            rbc_chunk_rx,
+            consensus_rx,
+            background_rx,
+            shutdown_signal,
+            rbc_status_handle,
+        };
+
+        let join_handle = tokio::task::spawn(spawn_os_thread_as_future(
+            std::thread::Builder::new()
+                .name("sumeragi".to_owned())
+                .stack_size(SUMERAGI_STACK_SIZE_BYTES),
+            move || actor.run(),
+        ));
+
+        (
+            handle,
+            Child::new(join_handle, OnShutdown::Wait(Duration::from_secs(5))),
+        )
+    }
+}
+
+struct SumeragiWorker {
+    config: SumeragiConfig,
+    common_config: CommonConfig,
+    consensus_frame_cap: usize,
+    events_sender: EventsSender,
+    state: Arc<State>,
+    queue: Arc<Queue>,
+    kura: Arc<Kura>,
+    network: IrohaNetwork,
+    peers_gossiper: PeersGossiperHandle,
+    genesis_network: GenesisWithPubKey,
+    block_count: BlockCount,
+    block_sync_gossip_limit: usize,
+    #[cfg(feature = "telemetry")]
+    telemetry: Telemetry,
+    epoch_roster_provider: Option<Arc<WsvEpochRosterAdapter>>,
+    lane_relay_rx: mpsc::Receiver<LaneRelayMessage>,
+    rbc_store: Option<RbcStoreConfig>,
+    background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
+    da_spool_dir: PathBuf,
+    vote_dedup: Arc<Mutex<BTreeSet<VoteDedupKey>>>,
+    vote_rx: mpsc::Receiver<BlockMessage>,
+    block_payload_rx: mpsc::Receiver<BlockMessage>,
+    block_rx: mpsc::Receiver<BlockMessage>,
+    rbc_chunk_rx: mpsc::Receiver<BlockMessage>,
+    consensus_rx: mpsc::Receiver<ControlFlow>,
+    background_rx: mpsc::Receiver<BackgroundRequest>,
+    shutdown_signal: ShutdownSignal,
+    rbc_status_handle: rbc_status::Handle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DrainBudgetReport {
+    handled: usize,
+    budget_exhausted: bool,
+}
+
+fn drain_receiver_with_budget<T>(
+    rx: &mpsc::Receiver<T>,
+    mut handle: impl FnMut(T),
+    max_messages: usize,
+    max_duration: Duration,
+) -> DrainBudgetReport {
+    let start = Instant::now();
+    let mut handled = 0usize;
+    let mut budget_exhausted = false;
+
+    loop {
+        if handled >= max_messages || start.elapsed() >= max_duration {
+            budget_exhausted = true;
+            break;
+        }
+        match rx.try_recv() {
+            Ok(msg) => {
+                handle(msg);
+                handled += 1;
+            }
+            Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => break,
+        }
+    }
+
+    DrainBudgetReport {
+        handled,
+        budget_exhausted,
+    }
+}
+
+/// Skip ticks when message queues are saturated, while enforcing a periodic tick cadence.
+#[allow(clippy::fn_params_excessive_bools)]
+fn should_run_tick(
+    now: Instant,
+    last_tick: Instant,
+    vote_rx_budget_exhausted: bool,
+    block_payload_rx_budget_exhausted: bool,
+    rbc_chunk_rx_budget_exhausted: bool,
+    block_rx_budget_exhausted: bool,
+    max_tick_gap: Duration,
+) -> bool {
+    if !vote_rx_budget_exhausted
+        && !block_payload_rx_budget_exhausted
+        && !rbc_chunk_rx_budget_exhausted
+        && !block_rx_budget_exhausted
+    {
+        return true;
+    }
+    now.saturating_duration_since(last_tick) >= max_tick_gap
+}
+
+/// Defer block-queue draining when vote traffic is saturated, but cap the deferral window.
+fn should_drain_block_rx(
+    now: Instant,
+    last_block_drain: Instant,
+    vote_rx_budget_exhausted: bool,
+    block_rx_pending: bool,
+    max_starve: Duration,
+) -> bool {
+    if !block_rx_pending {
+        return false;
+    }
+    if !vote_rx_budget_exhausted {
+        return true;
+    }
+    now.saturating_duration_since(last_block_drain) >= max_starve
+}
+
+/// Defer non-vote message draining while votes are saturated, but cap the deferral window.
+fn should_drain_non_vote_rx(
+    now: Instant,
+    last_non_vote_drain: Instant,
+    vote_rx_budget_exhausted: bool,
+    non_vote_pending: bool,
+    max_starve: Duration,
+) -> bool {
+    if !non_vote_pending {
+        return false;
+    }
+    if !vote_rx_budget_exhausted {
+        return true;
+    }
+    now.saturating_duration_since(last_non_vote_drain) >= max_starve
+}
+
+fn resolve_sumeragi_timeouts(
+    on_chain_block_time: Duration,
+    on_chain_commit_time: Duration,
+    fallback_block_time: Duration,
+    fallback_commit_time: Duration,
+) -> (Duration, Duration) {
+    let block_time = if on_chain_block_time == Duration::ZERO {
+        fallback_block_time
+    } else {
+        on_chain_block_time
+    };
+    let commit_time = if on_chain_commit_time == Duration::ZERO {
+        fallback_commit_time
+    } else {
+        on_chain_commit_time
+    };
+    (block_time, commit_time)
+}
+
+fn vote_rx_drain_budget(
+    block_time: Duration,
+    commit_time: Duration,
+    da_enabled: bool,
+    da_quorum_timeout_multiplier: u32,
+    max_budget: Duration,
+) -> Duration {
+    let quorum_timeout = crate::sumeragi::main_loop::commit_quorum_timeout_from_durations(
+        block_time,
+        commit_time,
+        da_enabled,
+        da_quorum_timeout_multiplier,
+    );
+    let budget = quorum_timeout.min(max_budget);
+    // Cap vote draining so long queues don't stall RBC/DA progress in a single iteration.
+    cap_vote_drain_budget(budget, Duration::from_millis(1))
+}
+
+const DRAIN_BUDGET_CAP_MS: u64 = 500;
+const VOTE_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
+const RBC_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
+
+fn cap_drain_budget(raw: Duration, floor: Duration) -> Duration {
+    raw.min(Duration::from_millis(DRAIN_BUDGET_CAP_MS))
+        .max(floor)
+}
+
+fn cap_vote_drain_budget(raw: Duration, floor: Duration) -> Duration {
+    raw.min(Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS))
+        .max(floor)
+}
+
+fn cap_rbc_drain_budget(raw: Duration, floor: Duration) -> Duration {
+    raw.min(Duration::from_millis(RBC_DRAIN_BUDGET_CAP_MS))
+        .max(floor)
+}
+
+trait WorkerActor {
+    fn on_block_message(&mut self, msg: BlockMessage) -> Result<()>;
+    fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()>;
+    fn on_lane_relay(&mut self, message: LaneRelayMessage) -> Result<()>;
+    fn on_background_request(&mut self, request: BackgroundRequest) -> Result<()>;
+    fn tick(&mut self) -> bool;
+}
+
+impl WorkerActor for crate::sumeragi::main_loop::Actor {
+    fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
+        crate::sumeragi::main_loop::Actor::on_block_message(self, msg)
+    }
+
+    fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()> {
+        crate::sumeragi::main_loop::Actor::on_consensus_control(self, msg)
+    }
+
+    fn on_lane_relay(&mut self, message: LaneRelayMessage) -> Result<()> {
+        crate::sumeragi::main_loop::Actor::on_lane_relay_message(self, message)
+    }
+
+    fn on_background_request(&mut self, request: BackgroundRequest) -> Result<()> {
+        crate::sumeragi::main_loop::Actor::on_background_request(self, request)
+    }
+
+    fn tick(&mut self) -> bool {
+        crate::sumeragi::main_loop::Actor::tick(self)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WorkerLoopConfig {
+    time_budget: Duration,
+    vote_rx_drain_budget: Duration,
+    block_payload_rx_drain_budget: Duration,
+    block_payload_rx_drain_max_messages: usize,
+    vote_rx_drain_max_messages: usize,
+    block_rx_drain_budget: Duration,
+    block_rx_drain_max_messages: usize,
+    rbc_chunk_rx_drain_budget: Duration,
+    rbc_chunk_rx_drain_max_messages: usize,
+    tick_max_gap: Duration,
+    block_rx_starve_max: Duration,
+    non_vote_starve_max: Duration,
+    sleep: Duration,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[allow(clippy::struct_field_names)]
+struct WorkerLoopState {
+    last_tick: Instant,
+    last_block_drain: Instant,
+    last_non_vote_drain: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+struct WorkerIterationStats {
+    block_payloads_handled: usize,
+    blocks_handled: usize,
+    rbc_chunks_handled: usize,
+    votes_handled: usize,
+    precommit_votes_handled: usize,
+    last_precommit_vote: Option<(u64, u64, u64, HashOf<BlockHeader>)>,
+    consensus_handled: usize,
+    lane_relays_handled: usize,
+    background_handled: usize,
+    tick_elapsed_ms: u64,
+    queue_depths: status::WorkerQueueDepthSnapshot,
+    budget_exceeded: bool,
+    progress: bool,
+    vote_rx_budget_exhausted: bool,
+    block_payload_rx_budget_exhausted: bool,
+    rbc_chunk_rx_budget_exhausted: bool,
+    block_rx_budget_exhausted: bool,
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn run_worker_iteration<A: WorkerActor>(
+    actor: &mut A,
+    cfg: &WorkerLoopConfig,
+    loop_state: &mut WorkerLoopState,
+    vote_rx: &mpsc::Receiver<BlockMessage>,
+    block_payload_rx: &mpsc::Receiver<BlockMessage>,
+    rbc_chunk_rx: &mpsc::Receiver<BlockMessage>,
+    block_rx: &mpsc::Receiver<BlockMessage>,
+    consensus_rx: &mpsc::Receiver<ControlFlow>,
+    lane_relay_rx: &mpsc::Receiver<LaneRelayMessage>,
+    background_rx: &mpsc::Receiver<BackgroundRequest>,
+) -> WorkerIterationStats {
+    let mut stats = WorkerIterationStats {
+        block_payloads_handled: 0,
+        blocks_handled: 0,
+        rbc_chunks_handled: 0,
+        votes_handled: 0,
+        precommit_votes_handled: 0,
+        last_precommit_vote: None,
+        consensus_handled: 0,
+        lane_relays_handled: 0,
+        background_handled: 0,
+        tick_elapsed_ms: 0,
+        queue_depths: status::WorkerQueueDepthSnapshot::default(),
+        budget_exceeded: false,
+        progress: false,
+        vote_rx_budget_exhausted: false,
+        block_payload_rx_budget_exhausted: false,
+        rbc_chunk_rx_budget_exhausted: false,
+        block_rx_budget_exhausted: false,
+    };
+
+    let vote_drain_budget = cfg.vote_rx_drain_budget;
+
+    status::set_worker_stage(status::WorkerLoopStage::DrainRbcChunks);
+    let report = drain_receiver_with_budget(
+        rbc_chunk_rx,
+        |msg| {
+            if let Err(err) = actor.on_block_message(msg) {
+                iroha_logger::error!(?err, "Sumeragi RBC-chunk handler failed");
+            }
+            stats.progress = true;
+        },
+        cfg.rbc_chunk_rx_drain_max_messages,
+        cfg.rbc_chunk_rx_drain_budget,
+    );
+    stats.rbc_chunks_handled = stats.rbc_chunks_handled.saturating_add(report.handled);
+    stats.rbc_chunk_rx_budget_exhausted = report.budget_exhausted;
+    status::record_worker_queue_drain(status::WorkerQueueKind::RbcChunks, report.handled);
+
+    status::set_worker_stage(status::WorkerLoopStage::DrainBlockPayloads);
+    let report = drain_receiver_with_budget(
+        block_payload_rx,
+        |msg| {
+            if let Err(err) = actor.on_block_message(msg) {
+                iroha_logger::error!(?err, "Sumeragi block-payload handler failed");
+            }
+            stats.progress = true;
+        },
+        cfg.block_payload_rx_drain_max_messages,
+        cfg.block_payload_rx_drain_budget,
+    );
+    stats.block_payloads_handled = stats.block_payloads_handled.saturating_add(report.handled);
+    stats.block_payload_rx_budget_exhausted = report.budget_exhausted;
+    status::record_worker_queue_drain(status::WorkerQueueKind::BlockPayload, report.handled);
+
+    status::set_worker_stage(status::WorkerLoopStage::DrainVotes);
+    let report = drain_receiver_with_budget(
+        vote_rx,
+        |msg| {
+            if let BlockMessage::PrecommitVote(vote) = &msg {
+                stats.precommit_votes_handled = stats.precommit_votes_handled.saturating_add(1);
+                stats.last_precommit_vote =
+                    Some((vote.0.height, vote.0.view, vote.0.epoch, vote.0.block_hash));
+                iroha_logger::debug!(
+                    height = vote.0.height,
+                    view = vote.0.view,
+                    epoch = vote.0.epoch,
+                    signer = vote.0.signer,
+                    block_hash = %vote.0.block_hash,
+                    "received precommit vote on vote channel"
+                );
+            }
+            if let Err(err) = actor.on_block_message(msg) {
+                iroha_logger::error!(?err, "Sumeragi vote handler failed");
+            }
+            stats.progress = true;
+        },
+        cfg.vote_rx_drain_max_messages,
+        vote_drain_budget,
+    );
+    stats.votes_handled = stats.votes_handled.saturating_add(report.handled);
+    stats.vote_rx_budget_exhausted = report.budget_exhausted;
+    status::record_worker_queue_drain(status::WorkerQueueKind::Votes, report.handled);
+
+    let post_vote_depths = status::worker_queue_depth_snapshot();
+    let non_vote_pending =
+        post_vote_depths.block_payload_rx > 0 || post_vote_depths.rbc_chunk_rx > 0;
+    let block_rx_pending = post_vote_depths.block_rx > 0;
+    let should_drain_non_vote = should_drain_non_vote_rx(
+        Instant::now(),
+        loop_state.last_non_vote_drain,
+        stats.vote_rx_budget_exhausted,
+        non_vote_pending,
+        cfg.non_vote_starve_max,
+    );
+    if stats.vote_rx_budget_exhausted && !should_drain_non_vote {
+        let non_vote_age = Instant::now().saturating_duration_since(loop_state.last_non_vote_drain);
+        iroha_logger::debug!(
+            non_vote_age_ms = non_vote_age.as_millis(),
+            max_starve_ms = cfg.non_vote_starve_max.as_millis(),
+            vote_rx_depth = post_vote_depths.vote_rx,
+            block_payload_rx_depth = post_vote_depths.block_payload_rx,
+            rbc_chunk_rx_depth = post_vote_depths.rbc_chunk_rx,
+            block_rx_depth = post_vote_depths.block_rx,
+            "deferring non-vote drains while vote queue is saturated"
+        );
+    }
+
+    let report = if should_drain_block_rx(
+        Instant::now(),
+        loop_state.last_block_drain,
+        stats.vote_rx_budget_exhausted,
+        block_rx_pending,
+        cfg.block_rx_starve_max,
+    ) {
+        status::set_worker_stage(status::WorkerLoopStage::DrainBlocks);
+        let report = drain_receiver_with_budget(
+            block_rx,
+            |msg| {
+                if let BlockMessage::PrecommitVote(vote) = &msg {
+                    stats.precommit_votes_handled = stats.precommit_votes_handled.saturating_add(1);
+                    stats.last_precommit_vote =
+                        Some((vote.0.height, vote.0.view, vote.0.epoch, vote.0.block_hash));
+                    iroha_logger::info!(
+                        height = vote.0.height,
+                        view = vote.0.view,
+                        epoch = vote.0.epoch,
+                        signer = vote.0.signer,
+                        block_hash = %vote.0.block_hash,
+                        "received precommit vote on block channel"
+                    );
+                }
+                if let Err(err) = actor.on_block_message(msg) {
+                    iroha_logger::error!(?err, "Sumeragi block-message handler failed");
+                }
+                stats.progress = true;
+            },
+            cfg.block_rx_drain_max_messages,
+            cfg.block_rx_drain_budget,
+        );
+        loop_state.last_block_drain = Instant::now();
+        report
+    } else {
+        DrainBudgetReport {
+            handled: 0,
+            budget_exhausted: false,
+        }
+    };
+    stats.blocks_handled = stats.blocks_handled.saturating_add(report.handled);
+    stats.block_rx_budget_exhausted = report.budget_exhausted;
+    status::record_worker_queue_drain(status::WorkerQueueKind::Blocks, report.handled);
+
+    let report = if should_drain_non_vote {
+        status::set_worker_stage(status::WorkerLoopStage::DrainRbcChunks);
+        drain_receiver_with_budget(
+            rbc_chunk_rx,
+            |msg| {
+                if let Err(err) = actor.on_block_message(msg) {
+                    iroha_logger::error!(?err, "Sumeragi RBC-chunk handler failed");
+                }
+                stats.progress = true;
+            },
+            cfg.rbc_chunk_rx_drain_max_messages,
+            cfg.rbc_chunk_rx_drain_budget,
+        )
+    } else {
+        DrainBudgetReport {
+            handled: 0,
+            budget_exhausted: false,
+        }
+    };
+    stats.rbc_chunks_handled = stats.rbc_chunks_handled.saturating_add(report.handled);
+    stats.rbc_chunk_rx_budget_exhausted |= report.budget_exhausted;
+    status::record_worker_queue_drain(status::WorkerQueueKind::RbcChunks, report.handled);
+
+    let report = if should_drain_non_vote {
+        status::set_worker_stage(status::WorkerLoopStage::DrainBlockPayloads);
+        drain_receiver_with_budget(
+            block_payload_rx,
+            |msg| {
+                if let Err(err) = actor.on_block_message(msg) {
+                    iroha_logger::error!(?err, "Sumeragi block-payload handler failed");
+                }
+                stats.progress = true;
+            },
+            cfg.block_payload_rx_drain_max_messages,
+            cfg.block_payload_rx_drain_budget,
+        )
+    } else {
+        DrainBudgetReport {
+            handled: 0,
+            budget_exhausted: false,
+        }
+    };
+    stats.block_payloads_handled = stats.block_payloads_handled.saturating_add(report.handled);
+    stats.block_payload_rx_budget_exhausted |= report.budget_exhausted;
+    status::record_worker_queue_drain(status::WorkerQueueKind::BlockPayload, report.handled);
+    if should_drain_non_vote {
+        loop_state.last_non_vote_drain = Instant::now();
+    }
+
+    if stats.precommit_votes_handled > 0 {
+        iroha_logger::debug!(
+            precommit_votes_handled = stats.precommit_votes_handled,
+            blocks_handled = stats.blocks_handled,
+            ?stats.last_precommit_vote,
+            "drained precommit votes from queues"
+        );
+    }
+
+    let tick_now = Instant::now();
+    if should_run_tick(
+        tick_now,
+        loop_state.last_tick,
+        stats.vote_rx_budget_exhausted,
+        stats.block_payload_rx_budget_exhausted,
+        stats.rbc_chunk_rx_budget_exhausted,
+        stats.block_rx_budget_exhausted,
+        cfg.tick_max_gap,
+    ) {
+        status::set_worker_stage(status::WorkerLoopStage::Tick);
+        let tick_start = Instant::now();
+        stats.progress |= actor.tick();
+        stats.tick_elapsed_ms = u64::try_from(tick_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        loop_state.last_tick = tick_now;
+    }
+    // Apply the time budget to message draining only; exclude tick() so votes
+    // are not starved when ticks are slow (e.g., during DA/RBC processing).
+    let budget_start = Instant::now();
+
+    if !stats.budget_exceeded {
+        status::set_worker_stage(status::WorkerLoopStage::DrainConsensus);
+        while let Ok(msg) = consensus_rx.try_recv() {
+            if let Err(err) = actor.on_consensus_control(msg) {
+                iroha_logger::error!(?err, "Sumeragi consensus control handler failed");
+            }
+            stats.progress = true;
+            stats.consensus_handled = stats.consensus_handled.saturating_add(1);
+            if budget_start.elapsed() >= cfg.time_budget {
+                stats.budget_exceeded = true;
+                break;
+            }
+        }
+        status::record_worker_queue_drain(
+            status::WorkerQueueKind::Consensus,
+            stats.consensus_handled,
+        );
+    }
+
+    if !stats.budget_exceeded {
+        status::set_worker_stage(status::WorkerLoopStage::DrainLaneRelay);
+        while let Ok(message) = lane_relay_rx.try_recv() {
+            if let Err(err) = actor.on_lane_relay(message) {
+                iroha_logger::error!(?err, "Sumeragi lane-relay handler failed");
+            }
+            stats.progress = true;
+            stats.lane_relays_handled = stats.lane_relays_handled.saturating_add(1);
+            if budget_start.elapsed() >= cfg.time_budget {
+                stats.budget_exceeded = true;
+                break;
+            }
+        }
+        status::record_worker_queue_drain(
+            status::WorkerQueueKind::LaneRelay,
+            stats.lane_relays_handled,
+        );
+    }
+
+    if !stats.budget_exceeded {
+        status::set_worker_stage(status::WorkerLoopStage::DrainBackground);
+        while let Ok(req) = background_rx.try_recv() {
+            if let Err(err) = actor.on_background_request(req) {
+                iroha_logger::error!(?err, "Sumeragi background-post handler failed");
+            }
+            stats.progress = true;
+            stats.background_handled = stats.background_handled.saturating_add(1);
+            if budget_start.elapsed() >= cfg.time_budget {
+                stats.budget_exceeded = true;
+                break;
+            }
+        }
+        status::record_worker_queue_drain(
+            status::WorkerQueueKind::Background,
+            stats.background_handled,
+        );
+    }
+
+    stats.queue_depths = status::worker_queue_depth_snapshot();
+    stats
+}
+
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+fn run_worker_loop<A: WorkerActor>(
+    actor: &mut A,
+    cfg: WorkerLoopConfig,
+    mut loop_state: WorkerLoopState,
+    vote_rx: mpsc::Receiver<BlockMessage>,
+    block_payload_rx: mpsc::Receiver<BlockMessage>,
+    rbc_chunk_rx: mpsc::Receiver<BlockMessage>,
+    block_rx: mpsc::Receiver<BlockMessage>,
+    consensus_rx: mpsc::Receiver<ControlFlow>,
+    lane_relay_rx: mpsc::Receiver<LaneRelayMessage>,
+    background_rx: mpsc::Receiver<BackgroundRequest>,
+    shutdown_signal: ShutdownSignal,
+) {
+    loop {
+        if shutdown_signal.is_sent() {
+            break;
+        }
+
+        let iter_start = Instant::now();
+        let stats = run_worker_iteration(
+            actor,
+            &cfg,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_relay_rx,
+            &background_rx,
+        );
+
+        if !stats.progress
+            && !stats.budget_exceeded
+            && !stats.block_payload_rx_budget_exhausted
+            && !stats.block_rx_budget_exhausted
+            && !stats.vote_rx_budget_exhausted
+        {
+            status::set_worker_stage(status::WorkerLoopStage::Idle);
+            std::thread::sleep(cfg.sleep);
+        }
+
+        let iter_elapsed = iter_start.elapsed();
+        status::record_worker_iteration(
+            u64::try_from(iter_elapsed.as_millis()).unwrap_or(u64::MAX),
+        );
+        if iter_elapsed >= Duration::from_millis(500) {
+            iroha_logger::warn!(
+                elapsed_ms = iter_elapsed.as_millis(),
+                votes_handled = stats.votes_handled,
+                block_payloads_handled = stats.block_payloads_handled,
+                blocks_handled = stats.blocks_handled,
+                rbc_chunks_handled = stats.rbc_chunks_handled,
+                consensus_handled = stats.consensus_handled,
+                lane_relays_handled = stats.lane_relays_handled,
+                background_handled = stats.background_handled,
+                tick_elapsed_ms = stats.tick_elapsed_ms,
+                vote_rx_depth = stats.queue_depths.vote_rx,
+                block_payload_rx_depth = stats.queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = stats.queue_depths.rbc_chunk_rx,
+                block_rx_depth = stats.queue_depths.block_rx,
+                consensus_rx_depth = stats.queue_depths.consensus_rx,
+                lane_relay_rx_depth = stats.queue_depths.lane_relay_rx,
+                background_rx_depth = stats.queue_depths.background_rx,
+                progress = stats.progress,
+                vote_rx_budget_exhausted = stats.vote_rx_budget_exhausted,
+                block_payload_rx_budget_exhausted = stats.block_payload_rx_budget_exhausted,
+                block_rx_budget_exhausted = stats.block_rx_budget_exhausted,
+                rbc_chunk_rx_budget_exhausted = stats.rbc_chunk_rx_budget_exhausted,
+                "sumeragi worker iteration slow"
+            );
+        }
+    }
+}
+
+impl SumeragiWorker {
+    #[allow(clippy::too_many_lines)]
+    fn run(self) {
+        let Self {
+            background_post_tx,
+            block_rx,
+            rbc_chunk_rx,
+            block_payload_rx,
+            vote_rx,
+            consensus_rx,
+            lane_relay_rx,
+            background_rx,
+            shutdown_signal,
+            rbc_status_handle,
+            consensus_frame_cap,
+            config,
+            common_config,
+            events_sender,
+            state,
+            queue,
+            kura,
+            network,
+            peers_gossiper,
+            genesis_network,
+            block_count,
+            block_sync_gossip_limit,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+            epoch_roster_provider,
+            rbc_store,
+            da_spool_dir,
+            vote_dedup: _vote_dedup,
+        } = self;
+        let time_budget = Duration::from_millis(200);
+        let fallback_block_time = config.npos.block_time;
+        let fallback_commit_time = config.npos.timeouts.commit;
+        let msg_channel_cap_block_payload = config.msg_channel_cap_block_payload;
+        let msg_channel_cap_votes = config.msg_channel_cap_votes;
+        let msg_channel_cap_blocks = config.msg_channel_cap_blocks;
+        let msg_channel_cap_rbc_chunks = config.msg_channel_cap_rbc_chunks;
+        let chain_id = state.chain_id.clone();
+        let (block_time, commit_time, da_enabled) = {
+            let view = state.view();
+            let params = view.world.parameters().sumeragi();
+            let (block_time, commit_time) = resolve_sumeragi_timeouts(
+                params.block_time(),
+                params.commit_time(),
+                fallback_block_time,
+                fallback_commit_time,
+            );
+            let da_enabled = crate::sumeragi::main_loop::apply_devnet_da_override(
+                params.da_enabled(),
+                &chain_id,
+            );
+            (block_time, commit_time, da_enabled)
+        };
+        let da_quorum_timeout_multiplier = config.da_quorum_timeout_multiplier;
+        let mut actor = match crate::sumeragi::main_loop::Actor::new(
+            config,
+            common_config,
+            consensus_frame_cap,
+            events_sender,
+            state,
+            queue,
+            kura,
+            network,
+            da_spool_dir,
+            peers_gossiper,
+            genesis_network,
+            block_count,
+            block_sync_gossip_limit,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+            epoch_roster_provider,
+            rbc_store,
+            background_post_tx,
+            rbc_status_handle,
+        ) {
+            Ok(actor) => Box::new(actor),
+            Err(err) => {
+                iroha_logger::error!(?err, "Failed to initialise Sumeragi actor");
+                return;
+            }
+        };
+        let commit_worker_join = actor.attach_commit_worker();
+        let vote_rx_drain_budget = vote_rx_drain_budget(
+            block_time,
+            commit_time,
+            da_enabled,
+            da_quorum_timeout_multiplier,
+            Duration::from_secs(8),
+        )
+        .max(time_budget);
+        let non_vote_drain_budget = cap_drain_budget(block_time / 2, time_budget);
+        let rbc_chunk_drain_budget = cap_rbc_drain_budget(block_time / 2, time_budget);
+        let block_rx_drain_budget = cap_drain_budget(block_time / 4, time_budget);
+        let starve_max = block_time.max(commit_time).max(time_budget);
+        let loop_config = WorkerLoopConfig {
+            time_budget,
+            vote_rx_drain_budget,
+            block_payload_rx_drain_budget: non_vote_drain_budget,
+            block_payload_rx_drain_max_messages: msg_channel_cap_block_payload.max(1),
+            vote_rx_drain_max_messages: msg_channel_cap_votes.max(1),
+            block_rx_drain_budget,
+            block_rx_drain_max_messages: msg_channel_cap_blocks.max(1),
+            rbc_chunk_rx_drain_budget: rbc_chunk_drain_budget,
+            rbc_chunk_rx_drain_max_messages: msg_channel_cap_rbc_chunks.max(1),
+            tick_max_gap: time_budget,
+            block_rx_starve_max: starve_max,
+            non_vote_starve_max: starve_max,
+            sleep: Duration::from_millis(25),
+        };
+        let loop_state = WorkerLoopState {
+            last_tick: Instant::now(),
+            last_block_drain: Instant::now(),
+            last_non_vote_drain: Instant::now(),
+        };
+
+        status::set_worker_stage(status::WorkerLoopStage::Idle);
+        run_worker_loop(
+            actor.as_mut(),
+            loop_config,
+            loop_state,
+            vote_rx,
+            block_payload_rx,
+            rbc_chunk_rx,
+            block_rx,
+            consensus_rx,
+            lane_relay_rx,
+            background_rx,
+            shutdown_signal,
+        );
+        drop(actor);
+        if let Err(err) = commit_worker_join.join() {
+            iroha_logger::warn!(?err, "sumeragi commit worker thread exited with error");
+        }
+    }
+}

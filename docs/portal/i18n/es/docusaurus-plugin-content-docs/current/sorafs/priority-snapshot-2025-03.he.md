@@ -1,0 +1,20 @@
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/priority-snapshot-2025-03.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 86f8971f54b39c4aee3b0f19561592fada68a99d18dd9b48bcd3cefc8aa224d1
+source_last_modified: "2025-11-14T04:43:22.091033+00:00"
+translation_last_reviewed: null
+---
+
+# בתהליך תרגום
+
+<div dir="rtl">
+קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+
+לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
+</div>

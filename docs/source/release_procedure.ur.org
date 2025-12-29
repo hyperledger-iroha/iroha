@@ -1,0 +1,18 @@
+#+COMMENT: Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation.
+
+#+LANGUAGE: ur
+#+DIRECTION: rtl
+#+SOURCE: docs/source/release_procedure.org
+#+STATUS: needs-translation
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: 82936055bafd33d2237b4b103ac3acd8fc87a5c546b5b0c0388b43e2d8ece1ab
+#+SOURCE_LAST_MODIFIED: 2025-10-25T15:23:17.003683+00:00
+#+TRANSLATION_LAST_REVIEWED: 
+
+#+HTML: <div dir="rtl">
+* ترجمہ جاری ہے
+
+یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے پر `#+STATUS` کو مناسب قدر کے ساتھ اپ ڈیٹ کریں۔
+
+اس حصے کو مکمل ترجمہ شدہ متن سے تبدیل کریں اور کام مکمل ہونے کے بعد `#+STATUS` کو `complete` پر سیٹ کریں۔ `#+LAST_REVIEWED` کو اس تاریخ سے اپ ڈیٹ کریں جب ترجمے کو موجودہ انگریزی نسخے کے ساتھ ملایا گیا ہو.
+#+HTML: </div>

@@ -1,0 +1,54 @@
+{
+  "metal_dispatch_queue": {
+    "limit": 16,
+    "dispatch_count": 24,
+    "max_in_flight": 4,
+    "busy_ms": 120.5,
+    "overlap_ms": 30.25,
+    "busy_ratio": 0.6,
+    "overlap_ratio": 0.25,
+    "window_ms": 200.0,
+    "poseidon": {
+      "limit": 8,
+      "dispatch_count": 12,
+      "max_in_flight": 2,
+      "busy_ms": 45.0,
+      "overlap_ms": 5.0,
+      "busy_ratio": 0.5,
+      "overlap_ratio": 0.11,
+      "window_ms": 90.0
+    },
+    "poseidon_pipeline": {
+      "batches": 6,
+      "chunk_columns": 128,
+      "enabled": true,
+      "fallbacks": 1,
+      "pipe_depth": 2
+    }
+  },
+  "column_staging": {
+    "batches": 48,
+    "flatten_ms": 180.125,
+    "wait_ms": 25.5,
+    "phases": {
+      "fft": {
+        "batches": 16,
+        "flatten_ms": 60.0,
+        "wait_ms": 10.0,
+        "wait_ratio": 0.142
+      },
+      "lde": {
+        "batches": 16,
+        "flatten_ms": 80.0,
+        "wait_ms": 12.75,
+        "wait_ratio": 0.137
+      },
+      "poseidon": {
+        "batches": 16,
+        "flatten_ms": 40.125,
+        "wait_ms": 2.75,
+        "wait_ratio": 0.064
+      }
+    }
+  }
+}

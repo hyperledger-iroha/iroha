@@ -1,0 +1,20 @@
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sns/address-display-guidelines.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 708a9b92f9d99c4af728d070dd6eb16d3a537feff1aed62a1690a8b5a50e69f8
+source_last_modified: "2025-11-14T04:43:21.230808+00:00"
+translation_last_reviewed: null
+---
+
+# בתהליך תרגום
+
+<div dir="rtl">
+קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+
+לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
+</div>

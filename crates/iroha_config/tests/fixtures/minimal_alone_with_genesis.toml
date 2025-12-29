@@ -1,0 +1,4 @@
+extends = "base.toml"
+
+[genesis]
+file = "./genesis.signed.nrt"

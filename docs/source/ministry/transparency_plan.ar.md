@@ -1,0 +1,20 @@
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/source/ministry/transparency_plan.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 2639f4f7692e13ed61cc6246c87b047dc7415a6c9243ca7c046e6ccea8b55e9a
+source_last_modified: "2025-12-01T13:58:21.504557+00:00"
+translation_last_reviewed: null
+---
+
+# قيد الترجمة
+
+<div dir="rtl">
+هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+
+هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
+</div>

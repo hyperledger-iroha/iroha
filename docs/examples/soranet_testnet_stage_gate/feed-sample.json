@@ -1,0 +1,211 @@
+{
+  "attachments": [
+    {
+      "blake3": "6c51111c16ce911abd6fa16f1e95cd5ceedb8095d600687b567ddfd8099df4fd",
+      "label": "exit-bond",
+      "path": "docs/examples/soranet_testnet_stage_gate/evidence/exit_bond_manifest.to",
+      "sha256": "44aafaf83c45774c6a994f5248c69e435ddd8a3f21934934ccd75955f1c12d16",
+      "size": 108
+    },
+    {
+      "blake3": "ab76c28e9679c1d81fdee72ed67fec6d1acf227a4bb8978c3d53cc22ffb958b9",
+      "label": "guard-rotation",
+      "path": "docs/examples/soranet_testnet_stage_gate/evidence/guard_rotation.log",
+      "sha256": "4e7589618d2e4efca0b2c19843fe33b0430e431d132c02d5eb0398f2aca7b10c",
+      "size": 182
+    }
+  ],
+  "drill_log": {
+    "blake3": "936e2aa889460d85cbefcdf17f37b2e34feac33d0ce3a43c05225a1896cc3445",
+    "path": "docs/examples/soranet_testnet_stage_gate/evidence/drills-signed.json",
+    "sha256": "4fb1b7a10cb80a5408ae33fd4819eda6aaef375eb6fcf7f675750d6761f39025",
+    "signed": true,
+    "value": {
+      "attachments": [
+        {
+          "blake3": "6c51111c16ce911abd6fa16f1e95cd5ceedb8095d600687b567ddfd8099df4fd",
+          "label": "exit-bond",
+          "path": "docs/examples/soranet_testnet_stage_gate/evidence/exit_bond_manifest.to",
+          "sha256": "44aafaf83c45774c6a994f5248c69e435ddd8a3f21934934ccd75955f1c12d16",
+          "size": 108
+        },
+        {
+          "blake3": "ab76c28e9679c1d81fdee72ed67fec6d1acf227a4bb8978c3d53cc22ffb958b9",
+          "label": "guard-rotation",
+          "path": "docs/examples/soranet_testnet_stage_gate/evidence/guard_rotation.log",
+          "sha256": "4e7589618d2e4efca0b2c19843fe33b0430e431d132c02d5eb0398f2aca7b10c",
+          "size": 182
+        }
+      ],
+      "drill_log": {
+        "blake3": "79192330decab7987735f5c5cc815d80cd5e0406e74098cb0efc837fa0a87b5b",
+        "bytes": 486,
+        "path": "docs/examples/soranet_testnet_stage_gate/evidence/drills-log.json",
+        "sha256": "6533a6346f20910389e7e1b33b2d7ab8828e4f71bdac5a35d7b14a6382bf28f9",
+        "value": [
+          {
+            "alert_id": "alert://soranet/brownout/1234",
+            "event": "brownout",
+            "notes": "Switched to anon-guard-pq within 3m12s",
+            "region": "NRT",
+            "restore_secs": 192,
+            "timestamp": "2026-11-05T03:17:00Z"
+          },
+          {
+            "alert_id": "alert://soranet/downgrade/9801",
+            "event": "downgrade-drill",
+            "notes": "Forced PQ downgrade to anon-majority; recovered after guard drain",
+            "region": "AMS",
+            "restore_secs": 145,
+            "timestamp": "2026-11-09T18:04:00Z"
+          }
+        ]
+      },
+      "generated_unix_ms": 1763735049330,
+      "promotion": "T0->T1",
+      "signing": {
+        "algorithm": "ed25519",
+        "payload": {
+          "attachments": [
+            {
+              "blake3": "6c51111c16ce911abd6fa16f1e95cd5ceedb8095d600687b567ddfd8099df4fd",
+              "bytes": 108,
+              "label": "exit-bond",
+              "path": "docs/examples/soranet_testnet_stage_gate/evidence/exit_bond_manifest.to",
+              "sha256": "44aafaf83c45774c6a994f5248c69e435ddd8a3f21934934ccd75955f1c12d16"
+            },
+            {
+              "blake3": "ab76c28e9679c1d81fdee72ed67fec6d1acf227a4bb8978c3d53cc22ffb958b9",
+              "bytes": 182,
+              "label": "guard-rotation",
+              "path": "docs/examples/soranet_testnet_stage_gate/evidence/guard_rotation.log",
+              "sha256": "4e7589618d2e4efca0b2c19843fe33b0430e431d132c02d5eb0398f2aca7b10c"
+            }
+          ],
+          "log_blake3": "79192330decab7987735f5c5cc815d80cd5e0406e74098cb0efc837fa0a87b5b",
+          "log_sha256": "6533a6346f20910389e7e1b33b2d7ab8828e4f71bdac5a35d7b14a6382bf28f9",
+          "promotion": "T0->T1",
+          "version": 1,
+          "window": {
+            "end": "2026-11-14",
+            "start": "2026-11-01"
+          }
+        },
+        "public_key_hex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+        "signature_hex": "8fa1e4be227fee93ceb7a8a5aa2f73a798f38d50844f3c33f34237320ab8bff7b7eccb975d3a19effcb348df451fdbc6bb9404bcd35d6c2dd8b58729b144dc01"
+      },
+      "version": 1,
+      "window": {
+        "end": "2026-11-14",
+        "start": "2026-11-01"
+      }
+    }
+  },
+  "generated_unix_ms": 1763735068439,
+  "metrics_report": {
+    "blake3": "632e64c7684f38056bd1f871192cc7c859df40b3de4b37f8954ffe36de862be9",
+    "path": "docs/examples/soranet_testnet_stage_gate/reports/metrics-report.json",
+    "sha256": "b94a52a4f3c9e821b3ed11246edd2af69193a56307dbb9de81c24080490e599d",
+    "value": {
+      "checks": [
+        {
+          "details": {
+            "counts": {
+              "brownout": 2400.0,
+              "completed": 98500.0,
+              "downgrade": 600.0,
+              "total": 101500.0
+            },
+            "success_ratio": 0.9704433497536946,
+            "threshold": 0.95
+          },
+          "name": "circuit_success_ratio",
+          "passed": true
+        },
+        {
+          "details": {
+            "brownout_ratio": 0.005,
+            "counts": {
+              "brownout": 120.0,
+              "total": 24000.0
+            },
+            "threshold": 0.01
+          },
+          "name": "fetch_brownout_ratio",
+          "passed": true
+        },
+        {
+          "details": {
+            "categories": [
+              {
+                "category": "anon_guard_pq",
+                "difference": 0.001882845188284521,
+                "expected_ratio": 0.55,
+                "observed_count": 13100.0,
+                "observed_ratio": 0.5481171548117155
+              },
+              {
+                "category": "anon_majority_pq",
+                "difference": 0.0012552301255230325,
+                "expected_ratio": 0.3,
+                "observed_count": 7200.0,
+                "observed_ratio": 0.301255230125523
+              },
+              {
+                "category": "anon_strict_pq",
+                "difference": 0.0006276150627615162,
+                "expected_ratio": 0.15,
+                "observed_count": 3600.0,
+                "observed_ratio": 0.1506276150627615
+              }
+            ],
+            "max_deviation": 0.001882845188284521,
+            "threshold": 0.1,
+            "total_observed": 23900.0,
+            "unexpected_categories": []
+          },
+          "name": "gar_mix_variance",
+          "passed": true
+        },
+        {
+          "details": {
+            "attempts": 15000.0,
+            "p95_seconds": 2.6,
+            "p95_threshold": 3.0,
+            "success_rate": 0.998,
+            "successes": 14970.0,
+            "threshold": 0.99
+          },
+          "name": "pow_success_rate",
+          "passed": true
+        },
+        {
+          "details": {
+            "p95_ms": 182.0,
+            "threshold_ms": 200.0
+          },
+          "name": "latency_p95",
+          "passed": true
+        }
+      ],
+      "status": "pass"
+    }
+  },
+  "promotion": "T0->T1",
+  "relays": [
+    "relay-amsterdam-01",
+    "relay-nrt-07",
+    "relay-sjc-02"
+  ],
+  "stage_report": {
+    "blake3": "bf8195fa64eac4b51951215b763af30482eb49eab728bba91e8e40dcbb09bb1e",
+    "bytes": 314,
+    "contents": "# Stage-gate summary (T0 → T1)\n\n- Metrics: pass ( >= 0.95 circuit success, PoW p95 2.6s, latency p95 181ms )\n- PQ mix held at 0.55/0.30/0.15; no unexpected categories\n- Drills: NRT brownout (3m12s restore), AMS downgrade (2m25s restore)\n- Attachments: guard rotation log, exit bond manifest, signed drill bundle\n",
+    "path": "docs/examples/soranet_testnet_stage_gate/reports/stage_gate.md",
+    "sha256": "dc187842c8750a2932fa93f3eea0db063b3dc2d6399a56a9eda93cbab9a98ca4"
+  },
+  "window": {
+    "end": "2026-11-14",
+    "start": "2026-11-01"
+  }
+}

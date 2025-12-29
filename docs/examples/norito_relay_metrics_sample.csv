@@ -1,0 +1,5 @@
+provider_id,delivered_bytes,uptime_ratio,failure_ratio,tickets_valid,tickets_invalid
+relay-alpha,2147483648,0.995,0.012,980,5
+relay-beta,1844674407,0.982,0.018,720,12
+relay-gamma,1073741824,0.965,0.027,615,30
+relay-delta,536870912,0.941,0.041,402,44

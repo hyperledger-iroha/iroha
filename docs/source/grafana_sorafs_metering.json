@@ -1,0 +1,81 @@
+{
+  "$schema": "https://grafana.com/docs/grafana/latest/dashboards/reference/json-model/",
+  "title": "SoraFS Metering & Fee Accrual",
+  "timezone": "",
+  "editable": false,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Accumulated GiB-Hours",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by(provider)(torii_sorafs_capacity_gibhours_total)",
+          "legendFormat": "{{provider}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Fee Projection (nano SORA)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by(provider)(torii_sorafs_fee_projection_nanos)",
+          "legendFormat": "{{provider}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "SLA Compliance (bps)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "avg by(provider)(torii_sorafs_uptime_bps)",
+          "legendFormat": "{{provider}} uptime"
+        },
+        {
+          "expr": "avg by(provider)(torii_sorafs_por_bps)",
+          "legendFormat": "{{provider}} por"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Replication Outcomes",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by(provider)(torii_sorafs_orders_completed_total)",
+          "legendFormat": "{{provider}} completed"
+        },
+        {
+          "expr": "sum by(provider)(torii_sorafs_orders_failed_total)",
+          "legendFormat": "{{provider}} failed"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Outstanding Reservations (GiB)",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(torii_sorafs_capacity_outstanding_gib)"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Utilised Capacity (GiB)",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(torii_sorafs_capacity_utilised_gib)"
+        }
+      ]
+    }
+  ]
+}
