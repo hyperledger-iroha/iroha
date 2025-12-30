@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
+use futures_util::future::join_all;
 use iroha::data_model::{prelude::*, transaction::error::TransactionRejectionReason};
 use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
 use iroha_test_network::*;
@@ -335,25 +336,31 @@ async fn grant_unexisting_role_in_genesis_fail() {
     let grant_genesis_role = Grant::account_role(role_id, alice_id);
 
     let network = NetworkBuilder::new()
-        .with_peers(1)
+        .with_min_peers(4)
         .with_genesis_instruction(grant_genesis_role)
         .build();
     let peer = network.peer();
 
     // Sanity-check stderr to ensure CI surfaces the expected genesis failure diagnostics (see #5423).
-    let terminated_fut = peer.once(|e| matches!(e, PeerLifecycleEvent::Terminated { .. }));
-    if let Err(err) = peer
-        .start(network.config_layers(), Some(&network.genesis()))
-        .await
-    {
-        if let Some(reason) = integration_tests::sandbox::sandbox_reason(&err) {
-            panic!(
-                "sandboxed network restriction detected while starting grant_unexisting_role_in_genesis_fail: {reason}"
-            );
+    let terminated_futs = network
+        .peers()
+        .iter()
+        .map(|peer| peer.once(|e| matches!(e, PeerLifecycleEvent::Terminated { .. })))
+        .collect::<Vec<_>>();
+    for peer in network.peers() {
+        if let Err(err) = peer
+            .start(network.config_layers(), Some(&network.genesis()))
+            .await
+        {
+            if let Some(reason) = integration_tests::sandbox::sandbox_reason(&err) {
+                panic!(
+                    "sandboxed network restriction detected while starting grant_unexisting_role_in_genesis_fail: {reason}"
+                );
+            }
+            panic!("failed to start peer: {err:?}");
         }
-        panic!("failed to start peer: {err:?}");
     }
-    timeout(Duration::from_secs(10), terminated_fut)
+    timeout(Duration::from_secs(10), join_all(terminated_futs))
         .await
         .expect("must terminate immediately");
 

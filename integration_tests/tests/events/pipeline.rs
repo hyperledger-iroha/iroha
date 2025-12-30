@@ -109,9 +109,9 @@ async fn test_with_instruction_and_status(
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn applied_block_must_be_available_in_kura() -> Result<()> {
-    // Given a running single-peer network
+    // Given a running validator network
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_peers(1),
+        NetworkBuilder::new().with_min_peers(4),
         stringify!(applied_block_must_be_available_in_kura),
     )
     .await?

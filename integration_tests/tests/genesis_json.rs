@@ -75,7 +75,7 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
 
     // Build network first to obtain peer topology
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
-        NetworkBuilder::new().with_peers(2),
+        NetworkBuilder::new().with_min_peers(4),
         stringify!(genesis_asset_minted_across_peers),
     )?
     else {
@@ -165,42 +165,36 @@ fn missing_genesis_file_fails() {
 fn genesis_norito_bytes_roundtrip_network() -> Result<()> {
     init_instruction_registry();
 
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_genesis_block(|topology, topology_pop| {
+            load_raw_genesis_transaction()
+                .into_builder()
+                .next_transaction()
+                .set_topology(topology)
+                .set_topology_pop(topology_pop)
+                .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+                .expect("build genesis block")
+        });
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
-        NetworkBuilder::new().with_peers(1),
+        builder,
         stringify!(genesis_norito_bytes_roundtrip_network),
     )?
     else {
         return Ok(());
     };
-    let topology = network
-        .peers()
-        .iter()
-        .map(iroha_test_network::NetworkPeer::id)
-        .collect();
-
-    let topology_pop = network.topology_pops().to_vec();
-    let builder = load_raw_genesis_transaction()
-        .into_builder()
-        .next_transaction()
-        .set_topology(topology)
-        .set_topology_pop(topology_pop);
-    let genesis_block = builder.build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)?;
 
     let sync_timeout = network.sync_timeout();
     let roundtrip_result: Result<()> = rt.block_on(async {
-        let genesis = Arc::new(genesis_block);
-        let peer = &network.peers()[0];
-        if let Err(err) = peer
-            .start_checked(network.config_layers(), Some(&genesis))
-            .await
-        {
+        if let Err(err) = network.start_all().await {
             if let Some(reason) = sandbox::sandbox_reason(&err) {
                 return Err(eyre!(
-                    "sandboxed network restriction detected while starting peer: {reason}"
+                    "sandboxed network restriction detected while starting peers: {reason}"
                 ));
             }
             return Err(err);
         }
+        let peer = network.peer();
         timeout(sync_timeout, peer.once_block(1))
             .await
             .map_err(|_| eyre!("timed out waiting for genesis block 1"))?;
@@ -224,8 +218,7 @@ fn genesis_norito_bytes_roundtrip_network() -> Result<()> {
 async fn tampered_genesis_block_is_rejected() -> Result<()> {
     init_instruction_registry();
 
-    let network = NetworkBuilder::new().with_peers(1).build();
-    let peer = network.peer();
+    let network = NetworkBuilder::new().with_min_peers(4).build();
     let genesis = network.genesis();
 
     let mut framed = genesis.0.encode_wire().map_err(|err| eyre!(err))?;
@@ -244,19 +237,21 @@ async fn tampered_genesis_block_is_rejected() -> Result<()> {
         tampered_path.to_string_lossy().to_string(),
     );
 
-    let start_result = peer
-        .start_checked(
-            network
-                .config_layers()
-                .chain(std::iter::once(Cow::Owned(override_layer))),
-            None,
-        )
-        .await;
+    for peer in network.peers() {
+        let start_result = peer
+            .start_checked(
+                network
+                    .config_layers()
+                    .chain(std::iter::once(Cow::Owned(override_layer.clone()))),
+                None,
+            )
+            .await;
 
-    assert!(
-        start_result.is_err(),
-        "tampered genesis must not start a peer"
-    );
+        assert!(
+            start_result.is_err(),
+            "tampered genesis must not start a peer"
+        );
+    }
 
     Ok(())
 }

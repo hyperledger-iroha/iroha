@@ -32,7 +32,7 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
 
     // Given
     let builder = NetworkBuilder::new()
-        .with_peers(2)
+        .with_min_peers(4)
         .with_ivm_fuel(IvmFuelConfig::Unset)
         .with_genesis_instruction(create_domain)
         .with_genesis_instruction(create_account)

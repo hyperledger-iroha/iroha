@@ -60,7 +60,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     init_instruction_registry();
 
     let builder = NetworkBuilder::new()
-        .with_peers(3)
+        .with_min_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
             layer
@@ -232,7 +232,7 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     init_instruction_registry();
 
     let builder = NetworkBuilder::new()
-        .with_peers(3)
+        .with_min_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
             layer

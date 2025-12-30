@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Enforced a 4-peer minimum for integration-test networks and updated peer-start paths that bypass the sandbox to avoid DA single-peer stalls.
+- Aligned `iroha_torii::test_utils` with current Torii behavior (chain_id validation + full-bytecode contract hashing) and added focused unit tests.
 - Restored `iroha_torii::test_utils` helpers for Torii integration tests, including queue-apply utilities and JSON request builders.
 - Moved `run_test_dump.py` into `scripts/` to keep the repo root tidy.
 - Translated the SoraFS orchestrator configuration guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
