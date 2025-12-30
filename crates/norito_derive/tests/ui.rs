@@ -203,8 +203,7 @@ fn rewrite_manifest_paths_scrubs_absolute_paths() {
         escape_basic_string(&dep_path.to_string_lossy()),
         escape_basic_string(&bin_path.to_string_lossy()),
     );
-    let updated =
-        rewrite_manifest_paths(&contents, &manifest_dir).expect("expected rewrite");
+    let updated = rewrite_manifest_paths(&contents, &manifest_dir).expect("expected rewrite");
     assert!(!updated.contains(dep_path.to_string_lossy().as_ref()));
     assert!(!updated.contains(bin_path.to_string_lossy().as_ref()));
 }
