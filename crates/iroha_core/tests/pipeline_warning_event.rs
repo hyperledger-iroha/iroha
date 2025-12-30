@@ -7,8 +7,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::State,
 };
-use iroha_data_model::events::EventBox;
-use iroha_data_model::prelude::*;
+use iroha_data_model::{events::EventBox, prelude::*};
 // unused
 
 #[test]

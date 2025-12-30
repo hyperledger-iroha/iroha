@@ -4,17 +4,18 @@
 //! selector counts so operators can capture regression data (e.g., for the
 //! 65 536-row planner ceiling) without replaying full witnesses.
 
-use clap::Parser;
-use fastpq_prover::{
-    OperationKind, RowUsage, StateTransition, Trace, TransitionBatch, build_trace,
-};
-use norito::json::{self, Map, Value, to_writer, to_writer_pretty};
 use std::{
     error::Error,
     fs::File,
     io::{self, Write},
     path::PathBuf,
 };
+
+use clap::Parser;
+use fastpq_prover::{
+    OperationKind, RowUsage, StateTransition, Trace, TransitionBatch, build_trace,
+};
+use norito::json::{self, Map, Value, to_writer, to_writer_pretty};
 
 const DEFAULT_TRANSFER_ROWS: usize = 2048;
 const DEFAULT_MINT_ROWS: usize = 64;

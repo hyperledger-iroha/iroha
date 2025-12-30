@@ -11,13 +11,12 @@
 //! This is also where the actual execution of instructions, as well
 //! as various forms of validation are performed.
 
+use core::{fmt, str::FromStr as _};
 use std::{
     borrow::Cow,
     sync::LazyLock,
     time::{Duration, SystemTime, SystemTimeError},
 };
-
-use core::{fmt, str::FromStr as _};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use eyre::Result;
@@ -28,8 +27,7 @@ use iroha_data_model::{
     isi::error::Mismatch,
     query::error::FindError,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
-    transaction::error::TransactionLimitError,
-    transaction::signed::TransactionSignatureError,
+    transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
 };
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
@@ -2563,16 +2561,15 @@ fn expected_band_from_score(score_bps: u16) -> iroha_config::parameters::actual:
 /// Tests for transaction acceptance and validation.
 pub mod tests {
     use core::panic;
-    use std::borrow::Cow;
-    use std::collections::BTreeMap;
-    use std::num::{NonZeroU16, NonZeroU64};
-    use std::str::FromStr;
     use std::sync::LazyLock; // for Name::from_str in tests
+    use std::{
+        borrow::Cow,
+        collections::BTreeMap,
+        num::{NonZeroU16, NonZeroU64},
+        str::FromStr,
+    };
 
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
-    use iroha_data_model::name::Name;
-    use iroha_data_model::permission::Permissions;
-    use iroha_data_model::transaction::signed::{MultisigSignature, MultisigSignatures};
     use iroha_data_model::{
         account::{Account, AccountId, MultisigMember, MultisigPolicy},
         block::{BlockHeader, SignedBlock},
@@ -2587,10 +2584,15 @@ pub mod tests {
         },
         isi::Log,
         metadata::Metadata,
+        name::Name,
         nexus::{DataSpaceCatalog, DataSpaceId as TestDataSpaceId, LaneId as TestLaneId},
+        permission::Permissions,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
         role::{Role, RoleId},
-        transaction::TransactionBuilder,
+        transaction::{
+            TransactionBuilder,
+            signed::{MultisigSignature, MultisigSignatures},
+        },
     };
     use iroha_executor_data_model::isi::multisig::{DEFAULT_MULTISIG_TTL_MS, MultisigSpec};
     use iroha_genesis::GENESIS_DOMAIN_ID;
@@ -3608,8 +3610,10 @@ pub mod tests {
 
     #[test]
     fn validate_ivm_manifest_metadata_conflict_rejected_even_if_state_matches() {
-        use iroha_data_model::smart_contract::manifest::ContractManifest;
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use iroha_data_model::{
+            smart_contract::manifest::ContractManifest,
+            transaction::{Executable, TransactionBuilder},
+        };
         use nonzero_ext::nonzero;
 
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -3694,8 +3698,10 @@ pub mod tests {
 
     #[test]
     fn validate_ivm_manifest_abi_and_code_hash_match() {
-        use iroha_data_model::smart_contract::manifest::ContractManifest;
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use iroha_data_model::{
+            smart_contract::manifest::ContractManifest,
+            transaction::{Executable, TransactionBuilder},
+        };
         use nonzero_ext::nonzero;
 
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -3751,8 +3757,10 @@ pub mod tests {
 
     #[test]
     fn validate_ivm_manifest_rejects_mismatched_hashes() {
-        use iroha_data_model::smart_contract::manifest::ContractManifest;
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use iroha_data_model::{
+            smart_contract::manifest::ContractManifest,
+            transaction::{Executable, TransactionBuilder},
+        };
         use nonzero_ext::nonzero;
 
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -3814,8 +3822,10 @@ pub mod tests {
 
     #[test]
     fn validate_ivm_manifest_rejects_mismatched_code_hash() {
-        use iroha_data_model::smart_contract::manifest::ContractManifest;
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use iroha_data_model::{
+            smart_contract::manifest::ContractManifest,
+            transaction::{Executable, TransactionBuilder},
+        };
         use nonzero_ext::nonzero;
 
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -3876,8 +3886,10 @@ pub mod tests {
 
     #[test]
     fn validate_ivm_manifest_state_conflict_rejected_even_if_metadata_matches() {
-        use iroha_data_model::smart_contract::manifest::ContractManifest;
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use iroha_data_model::{
+            smart_contract::manifest::ContractManifest,
+            transaction::{Executable, TransactionBuilder},
+        };
         use nonzero_ext::nonzero;
 
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -4182,8 +4194,10 @@ pub mod tests {
 
     #[test]
     fn validate_ivm_manifest_lookup_in_state() {
-        use iroha_data_model::smart_contract::manifest::ContractManifest;
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use iroha_data_model::{
+            smart_contract::manifest::ContractManifest,
+            transaction::{Executable, TransactionBuilder},
+        };
         use nonzero_ext::nonzero;
 
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -4788,11 +4802,12 @@ pub mod tests {
 
     #[test]
     fn transaction_expired_at_height_is_rejected_by_state() {
+        use std::time::Duration;
+
         use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-        use std::time::Duration;
 
         let (authority_id, kp) = gen_account_in("wonderland");
         let domain: iroha_data_model::domain::Domain =
@@ -4856,11 +4871,12 @@ pub mod tests {
 
     #[test]
     fn sequence_not_increasing_is_rejected_by_state() {
+        use std::time::Duration;
+
         use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-        use std::time::Duration;
 
         let (authority_id, kp) = gen_account_in("wonderland");
         let domain: iroha_data_model::domain::Domain =
@@ -4925,11 +4941,12 @@ pub mod tests {
 
     #[test]
     fn sequence_increasing_is_accepted_by_state() {
+        use std::time::Duration;
+
         use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-        use std::time::Duration;
 
         let (authority_id, kp) = gen_account_in("wonderland");
         let domain: iroha_data_model::domain::Domain =
@@ -4992,10 +5009,14 @@ pub mod tests {
 
     #[test]
     fn ivm_max_cycles_exceeds_upper_bound_is_rejected() {
-        use iroha_data_model::parameter::Parameter;
-        use iroha_data_model::parameter::custom::{CustomParameter, CustomParameterId};
-        use iroha_data_model::prelude::Name;
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use iroha_data_model::{
+            parameter::{
+                Parameter,
+                custom::{CustomParameter, CustomParameterId},
+            },
+            prelude::Name,
+            transaction::{Executable, TransactionBuilder},
+        };
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
 
@@ -5040,10 +5061,14 @@ pub mod tests {
 
     #[test]
     fn ivm_max_cycles_within_upper_bound_is_accepted() {
-        use iroha_data_model::parameter::Parameter;
-        use iroha_data_model::parameter::custom::{CustomParameter, CustomParameterId};
-        use iroha_data_model::prelude::Name;
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use iroha_data_model::{
+            parameter::{
+                Parameter,
+                custom::{CustomParameter, CustomParameterId},
+            },
+            prelude::Name,
+            transaction::{Executable, TransactionBuilder},
+        };
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
 
@@ -6153,8 +6178,9 @@ fn numeric_to_u64(n: &Numeric) -> Result<u64, iroha_primitives::TryFromNumericEr
 
 #[cfg(test)]
 mod numeric_to_u64_tests {
-    use super::numeric_to_u64;
     use iroha_primitives::numeric::Numeric;
+
+    use super::numeric_to_u64;
 
     #[test]
     fn accepts_scaled_whole_numbers() {

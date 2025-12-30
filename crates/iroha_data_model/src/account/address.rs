@@ -4,13 +4,13 @@ use core::{
     fmt,
     str::FromStr,
 };
-
 use std::{
     io::Write,
     sync::{
         Arc, Condvar, LazyLock, Mutex, OnceLock, RwLock,
         atomic::{AtomicU16, Ordering},
     },
+    thread::ThreadId,
 };
 
 use blake2::{
@@ -34,7 +34,6 @@ use super::{
     curve::{CurveId, CurveRegistryError},
 };
 use crate::{domain::DomainId, error::ParseError, name};
-use std::thread::ThreadId;
 
 #[cfg(feature = "json")]
 pub mod compliance_vectors;
@@ -1608,12 +1607,13 @@ const SORA_KANA_FULLWIDTH: [&str; 47] = [
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 
-    use crate::{domain::DomainId, name::Name};
+    use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use proptest::prelude::*;
+
+    use super::*;
+    use crate::{domain::DomainId, name::Name};
 
     fn ed25519_pk() -> PublicKey {
         PublicKey::from_hex(

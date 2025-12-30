@@ -1,9 +1,8 @@
 //! Proof-of-Timed Retrieval (PoTR) receipt schemas.
 
+use iroha_crypto::{Algorithm, PublicKey, Signature};
 use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
-use iroha_crypto::{Algorithm, PublicKey, Signature};
 
 use crate::proof_stream::ProofStreamTier;
 
@@ -274,9 +273,10 @@ pub enum PotrReceiptValidationError {
 
 #[cfg(test)]
 mod tests {
+    use ed25519_dalek::{Signer, SigningKey};
+
     use super::*;
     use crate::proof_stream::ProofStreamTier;
-    use ed25519_dalek::{Signer, SigningKey};
 
     fn base_receipt() -> PotrReceiptV1 {
         PotrReceiptV1 {

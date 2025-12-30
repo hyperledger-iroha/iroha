@@ -15,23 +15,23 @@
     clippy::too_many_arguments
 )]
 
-use std::borrow::Cow;
-use std::str::FromStr;
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     fmt,
     num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
+    str::FromStr,
     time::Duration,
 };
 
 use error_stack::{Report, ResultExt};
 use iroha_config_base::{WithOrigin, read::ConfigReader, toml::TomlSource, util::Bytes};
-use iroha_crypto::soranet::handshake::{
-    DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-};
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey,
+    soranet::handshake::{
+        DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
+    },
     streaming::StreamingKeyMaterial,
 };
 #[allow(unused_imports)]
@@ -76,8 +76,7 @@ pub use user::{DevTelemetry, Logger, Snapshot};
 
 use crate::{
     kura::{FsyncMode, InitMode},
-    parameters::user::ParseError,
-    parameters::{defaults, user},
+    parameters::{defaults, user, user::ParseError},
 };
 
 type Result<T, E> = core::result::Result<T, Report<E>>;
@@ -317,11 +316,13 @@ pub(crate) fn sora_routing_policy() -> LaneRoutingPolicy {
 
 #[cfg(test)]
 mod sora_profile_tests {
-    use super::*;
+    use std::num::NonZeroU32;
+
     use iroha_config_base::toml::TomlSource;
     use iroha_data_model::nexus::{LaneCatalog, LaneMetadata};
-    use std::num::NonZeroU32;
     use toml::Table;
+
+    use super::*;
 
     const MINIMAL_CONFIG: &str = r#"
 chain = "00000000-0000-0000-0000-000000000000"
@@ -3774,6 +3775,8 @@ pub struct Torii {
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
     /// CIDR allowlist for bypassing API rate limits (IPv4/IPv6).
     pub api_allow_cidrs: Vec<String>,
+    /// Optional Torii base URLs used to fetch peer telemetry metadata.
+    pub peer_telemetry_urls: Vec<Url>,
     /// Require canonical IH58/compressed account literals at Torii boundaries.
     pub strict_addresses: bool,
     /// Emit filter-match debug traces (developer diagnostics only).
@@ -5316,6 +5319,8 @@ pub struct Offline {
     pub prune_batch_size: usize,
     /// Aggregate-proof enforcement mode for offline bundles.
     pub proof_mode: OfflineProofMode,
+    /// Maximum age for offline receipts (0 disables age checks).
+    pub max_receipt_age: Duration,
     /// Optional DER-encoded trust anchors appended to the built-in Android root set.
     pub android_trust_anchors: Vec<Vec<u8>>,
 }
@@ -5328,6 +5333,9 @@ impl Default for Offline {
             cold_retention_blocks: defaults::settlement::offline::COLD_RETENTION_BLOCKS,
             prune_batch_size: defaults::settlement::offline::PRUNE_BATCH_SIZE,
             proof_mode: OfflineProofMode::Optional,
+            max_receipt_age: Duration::from_millis(
+                defaults::settlement::offline::MAX_RECEIPT_AGE_MS,
+            ),
             android_trust_anchors: Vec::new(),
         }
     }

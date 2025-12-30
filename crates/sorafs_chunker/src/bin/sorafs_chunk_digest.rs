@@ -1,8 +1,10 @@
+use std::{
+    env,
+    io::{self, Write},
+};
+
 use blake3::{Hash, Hasher};
-use sorafs_chunker::fixtures::FixtureProfile;
-use sorafs_chunker::{Chunk, ChunkProfile, Chunker};
-use std::env;
-use std::io::{self, Write};
+use sorafs_chunker::{Chunk, ChunkProfile, Chunker, fixtures::FixtureProfile};
 
 const TOTAL_LEN: usize = 1 << 30; // 1 GiB
 

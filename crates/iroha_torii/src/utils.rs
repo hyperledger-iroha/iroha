@@ -1,13 +1,16 @@
 //! Utilities for Norito encoding and Axum integration.
 
+use std::any::TypeId;
+
 use axum::{
     http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
 use iroha_data_model::{query::SignedQuery, transaction::SignedTransaction};
-use norito::json::{self, JsonSerialize, Value};
-use norito::prelude::*;
-use std::any::TypeId;
+use norito::{
+    json::{self, JsonSerialize, Value},
+    prelude::*,
+};
 
 /// MIME used in Torii for Norito encoding
 // note: no elegant way to associate it with generic `NoritoBody<T>`
@@ -185,8 +188,9 @@ pub fn respond_value_with_format(value: Value, format: ResponseFormat) -> Respon
 
 #[cfg(test)]
 mod response_format_tests {
-    use super::*;
     use http_body_util::BodyExt as _;
+
+    use super::*;
 
     #[derive(
         Clone,
@@ -712,7 +716,6 @@ pub mod extractors {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
         use axum::{
             body::Body,
             http::{Request, StatusCode, header::CONTENT_TYPE},
@@ -720,6 +723,8 @@ pub mod extractors {
         use http_body_util::BodyExt as _;
         use iroha_version::{RawVersioned, UnsupportedVersion, Version};
         use norito::core::{NoritoDeserialize, NoritoSerialize};
+
+        use super::*;
 
         #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
         struct Dummy(u32);

@@ -204,12 +204,10 @@ pub struct TransferTranscriptBundle {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::account::AccountId;
-    use crate::asset::id::AssetDefinitionId;
-    use crate::domain::DomainId;
-    use crate::name::Name;
     use std::str::FromStr;
+
+    use super::*;
+    use crate::{account::AccountId, asset::id::AssetDefinitionId, domain::DomainId, name::Name};
 
     const SIGNATORY: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";

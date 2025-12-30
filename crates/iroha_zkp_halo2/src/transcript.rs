@@ -1,8 +1,10 @@
 //! Deterministic transcript based on SHA3-256 with explicit domain separation.
 
-use crate::backend::IpaScalar;
-use crate::constants::DST;
-use crate::hash::{SHA3_256_SIZE, SHA3_512_SIZE, sha3_256, sha3_512};
+use crate::{
+    backend::IpaScalar,
+    constants::DST,
+    hash::{SHA3_256_SIZE, SHA3_512_SIZE, sha3_256, sha3_512},
+};
 
 /// A deterministic Fiat–Shamir transcript (SHA3-256 based).
 ///

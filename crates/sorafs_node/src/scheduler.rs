@@ -4,13 +4,14 @@
 //! the Torii gateway and storage backend. It applies operator supplied limits
 //! and emits lightweight telemetry snapshots for the metrics pipeline.
 
-use crate::config::StorageConfig;
 use std::{
     collections::HashMap,
     sync::{Arc, Condvar, Mutex, RwLock},
     thread,
     time::{Duration, Instant},
 };
+
+use crate::config::StorageConfig;
 
 const LOCAL_PROVIDER_LABEL: &str = "local";
 const FETCH_RATE_SMOOTHING_WEIGHT: u64 = 4;
@@ -746,11 +747,12 @@ fn utilisation_ratio(inflight: usize, limit: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::{
         Arc, Barrier,
         atomic::{AtomicBool, Ordering},
     };
+
+    use super::*;
 
     #[test]
     fn pin_queue_respects_inflight_limit() {

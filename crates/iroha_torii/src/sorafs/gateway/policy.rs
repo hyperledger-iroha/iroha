@@ -8,11 +8,9 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use hex::ToHex;
-use iroha_data_model::events::data::sorafs::{
-    SorafsGarPolicy, SorafsGarPolicyDetail, SorafsGarViolation,
-};
-use iroha_data_model::sorafs::{
-    capacity::ProviderId, gar::GarCdnPolicyV1, pin_registry::ManifestDigest,
+use iroha_data_model::{
+    events::data::sorafs::{SorafsGarPolicy, SorafsGarPolicyDetail, SorafsGarViolation},
+    sorafs::{capacity::ProviderId, gar::GarCdnPolicyV1, pin_registry::ManifestDigest},
 };
 use iroha_logger::debug;
 
@@ -855,8 +853,9 @@ pub fn build_gar_violation_event(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::{Duration, SystemTime};
+
+    use super::*;
 
     fn sample_provider_id() -> [u8; 32] {
         [0x42; 32]

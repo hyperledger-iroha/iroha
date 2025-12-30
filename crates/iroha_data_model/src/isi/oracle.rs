@@ -1,3 +1,5 @@
+use iroha_primitives::numeric::Numeric;
+
 use super::*;
 use crate::{
     oracle::{
@@ -7,7 +9,6 @@ use crate::{
     },
     prelude::Hash,
 };
-use iroha_primitives::numeric::Numeric;
 
 isi! {
     /// Register an oracle feed configuration on-chain.

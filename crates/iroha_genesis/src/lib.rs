@@ -34,10 +34,14 @@ use iroha_config::parameters::{
     user::SmIntrinsicsPolicyConfig,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+#[cfg(test)]
+use iroha_data_model::isi::register::RegisterBox;
 use iroha_data_model::{
     account::curve::CurveId,
-    block::SignedBlock,
-    block::consensus::{ConsensusGenesisParams, NposGenesisParams},
+    block::{
+        SignedBlock,
+        consensus::{ConsensusGenesisParams, NposGenesisParams},
+    },
     confidential::{ConfidentialFeatureDigest, ConfidentialStatus},
     isi::{
         InstructionRegistry, Register, SetParameter, register::RegisterPeerWithPop,
@@ -56,11 +60,10 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use norito::derive::{JsonDeserialize, JsonSerialize};
-
-#[cfg(test)]
-use iroha_data_model::isi::register::RegisterBox;
+use norito::{
+    codec::{Decode, Encode},
+    derive::{JsonDeserialize, JsonSerialize},
+};
 
 /// Domain of the genesis account, technically required for the pre-genesis state
 pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> = LazyLock::new(|| "genesis".parse().unwrap());
@@ -521,7 +524,8 @@ impl GenesisVkRegistry {
 
 /// Norito-compatible JSON helpers for serializing and deserializing genesis instruction lists.
 pub mod genesis_instructions_json {
-    use super::*;
+    use std::{collections::BTreeMap, str::FromStr};
+
     use iroha_data_model::{
         account::NewAccount,
         asset::definition::NewAssetDefinition,
@@ -536,8 +540,8 @@ pub mod genesis_instructions_json {
     };
     use iroha_primitives::numeric::Numeric;
     use norito::json::{self, Number, Parser, SeqVisitor, Value};
-    use std::collections::BTreeMap;
-    use std::str::FromStr;
+
+    use super::*;
 
     /// Render a slice of instructions into a JSON array suitable for the genesis manifest.
     pub fn serialize(instructions: &[InstructionBox], out: &mut String) {
@@ -1033,7 +1037,8 @@ pub mod genesis_instructions_json {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
+        use std::{num::NonZeroU64, path::PathBuf};
+
         #[allow(unused_imports)]
         use iroha_data_model::{
             domain::Domain,
@@ -1047,7 +1052,8 @@ pub mod genesis_instructions_json {
         use iroha_executor_data_model::permission::parameter::CanSetParameters;
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
-        use std::{num::NonZeroU64, path::PathBuf};
+
+        use super::*;
 
         #[test]
         fn instructions_to_value_keeps_structure() {
@@ -2115,14 +2121,16 @@ impl RawGenesisTransaction {
 
 #[cfg(test)]
 mod tests2 {
-    use super::*;
+    use std::{convert::TryInto, num::NonZeroU64, path::PathBuf};
+
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         block::consensus::ConsensusGenesisParams, isi::SetParameter,
         parameter::system::BlockParameter,
     };
     use iroha_version::codec::DecodeVersioned;
-    use std::{convert::TryInto, num::NonZeroU64, path::PathBuf};
+
+    use super::*;
 
     #[test]
     fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
@@ -2567,8 +2575,7 @@ mod tests2 {
 
     #[test]
     fn effective_parameters_prefers_set_parameter_instructions() {
-        use iroha_data_model::isi::InstructionBox;
-        use iroha_data_model::parameter::system::SumeragiParameter;
+        use iroha_data_model::{isi::InstructionBox, parameter::system::SumeragiParameter};
 
         let chain = ChainId::from("iroha:test:paramagg");
         let mut base = Parameters::default();
@@ -3995,8 +4002,9 @@ impl TryFrom<GenesisIvmAction> for Action {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::block::SignedBlock;
+    use eyre::Result;
     use iroha_data_model::{
+        block::SignedBlock,
         isi::SetParameter,
         parameter::{Parameter, system::confidential_metadata},
         transaction::Executable,
@@ -4007,7 +4015,6 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use eyre::Result;
 
     fn test_builder() -> (TempDir, GenesisBuilder) {
         let tmp_dir = TempDir::new().unwrap();

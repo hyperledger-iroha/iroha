@@ -1,5 +1,7 @@
 //! End-to-end regressions for domain-scoped implicit account receive.
 
+use std::{collections::BTreeMap, num::NonZeroU64};
+
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -22,7 +24,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
-use std::{collections::BTreeMap, num::NonZeroU64};
 
 fn balance(state: &State, id: &AssetId) -> Numeric {
     state

@@ -1,3 +1,9 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
 use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr, bail};
 use hex::{decode as hex_decode, encode as hex_encode};
@@ -8,11 +14,6 @@ use soradns_resolver::{
     config::ResolverConfig,
     directory::{parse_directory_listing, signing_payload_bytes},
     rad::{compute_rad_digest, decode_rad_entries, validate_rad},
-};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::Duration,
 };
 use tracing_subscriber::EnvFilter;
 

@@ -15,18 +15,25 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
     }
 
     public static func encode(
+        chainId: String,
         invoiceId: String,
         receiverAccountId: String,
         assetId: String,
         amount: String,
+        issuedAtMs: UInt64,
         nonceHex: String
     ) throws -> Result {
+        if chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw Error.invalidInput("chainId must not be empty")
+        }
         do {
             guard let native = try NoritoNativeBridge.shared.offlineReceiptChallenge(
+                chainId: chainId,
                 invoiceId: invoiceId,
                 receiverId: receiverAccountId,
                 assetId: assetId,
                 amount: amount,
+                issuedAtMs: issuedAtMs,
                 nonceHex: nonceHex
             ) else {
                 throw Error.bridgeUnavailable
@@ -39,18 +46,22 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         } catch let bridgeError as NoritoNativeBridge.OfflineReceiptChallengeBridgeError {
             switch bridgeError {
             case .callFailed(let code):
-                return try computeCanonical(invoiceId: invoiceId,
+                return try computeCanonical(chainId: chainId,
+                                            invoiceId: invoiceId,
                                             receiverAccountId: receiverAccountId,
                                             assetId: assetId,
                                             amount: amount,
+                                            issuedAtMs: issuedAtMs,
                                             nonceHex: nonceHex,
                                             status: code)
             }
         } catch Error.bridgeUnavailable {
-            return try computeCanonical(invoiceId: invoiceId,
+            return try computeCanonical(chainId: chainId,
+                                        invoiceId: invoiceId,
                                         receiverAccountId: receiverAccountId,
                                         assetId: assetId,
                                         amount: amount,
+                                        issuedAtMs: issuedAtMs,
                                         nonceHex: nonceHex,
                                         status: nil)
         } catch {
@@ -59,10 +70,12 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
     }
 
     private static func computeCanonical(
+        chainId: String,
         invoiceId: String,
         receiverAccountId: String,
         assetId: String,
         amount: String,
+        issuedAtMs: UInt64,
         nonceHex: String,
         status: Int32?
     ) throws -> Result {
@@ -71,13 +84,19 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
             receiverAccountId: receiverAccountId,
             assetId: assetId,
             amount: amount,
+            issuedAtMs: issuedAtMs,
             nonceHex: nonceHex
         )
         do {
             let payload = try preimage.noritoPayload()
             let bytes = OfflineNorito.wrap(typeName: OfflineReceiptChallengePreimage.noritoTypeName,
                                            payload: payload)
-            let irohaHash = IrohaHash.hash(bytes)
+            let context = IrohaHash.hash(Data(chainId.utf8))
+            var hashInput = Data()
+            hashInput.reserveCapacity(context.count + bytes.count)
+            hashInput.append(context)
+            hashInput.append(bytes)
+            let irohaHash = IrohaHash.hash(hashInput)
             let client = Data(SHA256.hash(data: irohaHash))
             return Result(preimage: bytes, irohaHash: irohaHash, clientDataHash: client)
         } catch {

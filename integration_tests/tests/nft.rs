@@ -1,12 +1,11 @@
 //! Integration tests for non-fungible token lifecycle operations.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_test_network::{Network, NetworkBuilder};
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
 use tokio::runtime::Runtime;
-
-use integration_tests::sandbox;
 
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()

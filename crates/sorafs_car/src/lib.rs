@@ -10,6 +10,16 @@
 
 #![allow(unexpected_cfgs)]
 
+#[cfg(feature = "manifest")]
+use std::str::FromStr;
+use std::{
+    collections::{BTreeMap, HashSet},
+    convert::TryFrom,
+    fs::{self, File},
+    io::{self, Read, Seek, SeekFrom, Write},
+    path::{Component, Path, PathBuf},
+};
+
 use blake3::{Hash, Hasher};
 #[cfg(feature = "manifest")]
 use iroha_data_model::{
@@ -26,15 +36,6 @@ pub use sorafs_chunker;
 use sorafs_chunker::{ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile};
 #[cfg(feature = "manifest")]
 use sorafs_manifest::ManifestV1 as SorafsManifestV1;
-#[cfg(feature = "manifest")]
-use std::str::FromStr;
-use std::{
-    collections::{BTreeMap, HashSet},
-    convert::TryFrom,
-    fs::{self, File},
-    io::{self, Read, Seek, SeekFrom, Write},
-    path::{Component, Path, PathBuf},
-};
 use thiserror::Error;
 
 pub mod chunker_registry;
@@ -2819,12 +2820,16 @@ impl From<ChunkDigest> for CarChunk {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{
+        collections::{BTreeMap, HashSet},
+        fs,
+        io::Cursor,
+    };
+
     use sorafs_chunker::fixtures::FixtureProfile;
-    use std::collections::{BTreeMap, HashSet};
-    use std::fs;
-    use std::io::Cursor;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[cfg(feature = "manifest")]
     fn sample_manifest() -> DaManifestV1 {
@@ -3307,6 +3312,7 @@ mod tests {
     #[test]
     fn plan_from_directory_matches_from_files() {
         use std::fs;
+
         use tempfile::tempdir;
 
         let tempdir = tempdir().expect("tempdir");

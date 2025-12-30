@@ -1,5 +1,7 @@
 //! User configuration view.
 
+use std::{path::PathBuf, time::Duration};
+
 use error_stack::{Report, ResultExt};
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{
@@ -8,7 +10,7 @@ use iroha_config_base::{
     util::{DurationMs, Emitter, EmitterResultExt},
 };
 use sorafs_manifest::alias_cache::AliasCachePolicy;
-use std::{path::PathBuf, time::Duration};
+use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
 
 use crate::{
@@ -16,7 +18,6 @@ use crate::{
     crypto::{KeyPair, PrivateKey, PublicKey},
     data_model::prelude::{AccountId, ChainId, DomainId},
 };
-use sorafs_orchestrator::AnonymityPolicy;
 
 /// Minimal allowed transaction time-to-live.
 const MIN_TRANSACTION_TTL: Duration = Duration::from_secs(1);
@@ -445,9 +446,11 @@ impl AliasCache {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_crypto::Algorithm;
     use std::{path::PathBuf, str::FromStr, time::Duration};
+
+    use iroha_crypto::Algorithm;
+
+    use super::*;
 
     fn root_with_timeouts(ttl: Duration, timeout: Duration) -> Root {
         let key_pair = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);

@@ -1,12 +1,13 @@
-use std::collections::{BTreeMap, HashMap};
-use std::io::Cursor;
 #[cfg(target_pointer_width = "32")]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(target_pointer_width = "32")]
 use std::sync::Mutex;
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::Cursor,
+};
 
-use norito::core;
-use norito::{self, Error};
+use norito::{self, Error, core};
 
 #[cfg(target_pointer_width = "32")]
 fn with_limit<R>(limit: u64, f: impl FnOnce() -> R) -> R {

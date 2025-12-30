@@ -4,10 +4,15 @@
 //! retrieval marketplace, covering deal proposals, active contracts,
 //! probabilistic micropayment tickets, and settlement ledgers.
 
-use crate::{metadata::Metadata, sorafs::capacity::ProviderId, sorafs::pin_registry::StorageClass};
+use std::cmp::Ordering;
+
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use std::cmp::Ordering;
+
+use crate::{
+    metadata::Metadata,
+    sorafs::{capacity::ProviderId, pin_registry::StorageClass},
+};
 
 /// Client identifier (BLAKE3-256 digest allocated during admission).
 #[derive(

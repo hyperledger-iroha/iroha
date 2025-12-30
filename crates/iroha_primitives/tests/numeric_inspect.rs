@@ -1,6 +1,7 @@
 //! Tests for inspecting the encoded representation of numeric values.
 
 use core::fmt::Write;
+
 use iroha_primitives::numeric::Numeric;
 
 #[test]

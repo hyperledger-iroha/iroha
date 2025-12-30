@@ -268,8 +268,6 @@ fn collect_topology(manifest: &RawGenesisTransaction) -> Result<Vec<(PeerId, Gen
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::genesis::profile::derive_vrf_seed_from_chain;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         parameter::system::SumeragiConsensusMode,
@@ -279,6 +277,9 @@ mod tests {
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use iroha_version::BuildLine;
     use tempfile::NamedTempFile;
+
+    use super::*;
+    use crate::genesis::profile::derive_vrf_seed_from_chain;
 
     fn build_manifest_with_profile(
         profile: GenesisProfile,

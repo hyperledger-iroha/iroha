@@ -1,5 +1,4 @@
-use ivm::zk::verify_trace;
-use ivm::{IVM, encoding, instruction};
+use ivm::{IVM, encoding, instruction, zk::verify_trace};
 mod common;
 use common::assemble_zk;
 

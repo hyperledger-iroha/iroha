@@ -11,12 +11,13 @@ use crate::governance::types::ParliamentBody;
 #[cfg(not(feature = "governance"))]
 type ParliamentBody = ();
 
+use norito::codec::{Decode, Encode};
+
 #[cfg(not(feature = "governance"))]
 pub use self::at_window_placeholder::AtWindow;
 #[cfg(feature = "governance")]
 pub use crate::governance::types::AtWindow;
 use crate::{prelude::*, smart_contract::manifest::ManifestProvenance};
-use norito::codec::{Decode, Encode};
 
 #[cfg(not(feature = "governance"))]
 mod at_window_placeholder {
@@ -358,9 +359,10 @@ impl crate::seal::Instruction for RestituteGovernanceLock {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(not(feature = "governance"))]
     use norito::core::DecodeFromSlice;
+
+    use super::*;
     #[test]
     fn encode_roundtrip_basic() {
         let p = ProposeDeployContract {

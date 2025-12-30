@@ -208,6 +208,7 @@ extension OfflineSpendReceipt {
             "to": .string(to),
             "asset": .string(asset),
             "amount": try OfflineToriiEncoding.numericString(amount),
+            "issued_at_ms": .number(Double(issuedAtMs)),
             "invoice_id": .string(invoiceId),
             "platform_proof": try platformProof.toriiJSON(),
             "platform_snapshot": platformSnapshot.map { $0.toriiJSON() } ?? .null,

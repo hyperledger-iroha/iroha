@@ -1,3 +1,5 @@
+use std::{env, fs, path::PathBuf};
+
 use clap::{Parser, Subcommand};
 use soranet_handshake_harness::{
     CapabilitySummary, HandshakeSuite, HarnessError, HexInput, SaltAnnouncementParams,
@@ -10,7 +12,6 @@ use soranet_pq::{
     MlKemSuite, SuiteParseError, validate_mlkem_ciphertext, validate_mlkem_public_key,
     validate_mlkem_secret_key,
 };
-use std::{env, fs, path::PathBuf};
 
 /// Command-line interface for the (still evolving) SoraNet handshake harness.
 #[derive(Parser, Debug)]
@@ -669,8 +670,9 @@ fn run_kem_validation(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use soranet_pq::{encapsulate_mlkem, generate_mlkem_keypair};
+
+    use super::*;
 
     #[test]
     fn run_kem_validation_accepts_valid_materials() {

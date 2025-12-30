@@ -8,14 +8,16 @@
 //! later roadmap items; this module focuses on the schema and computations
 //! required for pricing, collateral, and low-balance monitoring.
 
+use std::collections::BTreeSet;
+
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use thiserror::Error;
+
 use crate::{
     metadata::Metadata,
     sorafs::{capacity::ProviderId, deal as sorafs_deal, pin_registry::StorageClass},
 };
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use std::collections::BTreeSet;
-use thiserror::Error;
 
 /// First-version schema identifier for [`PricingScheduleRecord`].
 pub const PRICING_SCHEDULE_VERSION_V1: u16 = 1;
@@ -546,8 +548,9 @@ const fn mul_div(value: u128, mul: u128, div: u128) -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::convert::TryFrom;
+
+    use super::*;
 
     #[test]
     fn default_schedule_validates() {

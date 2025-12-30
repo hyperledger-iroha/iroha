@@ -32,8 +32,7 @@ fn ncb_enum_offsets_id_code_delta_large_fixture() {
     // Path checked/created inside ensure_hex_fixture
     // Generate-or-verify fixture behavior
     fn ensure_hex_fixture(rel_path: &str, bytes: &[u8]) {
-        use std::io::Write as _;
-        use std::path::Path;
+        use std::{io::Write as _, path::Path};
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel_path);
         let generated = {
             let mut s = String::with_capacity(bytes.len() * 2);

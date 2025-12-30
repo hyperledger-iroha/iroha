@@ -6,8 +6,11 @@
 //!
 //! This module is internal and accessed from execution/merge paths and the actor.
 
-use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock};
+use core::str::FromStr as _;
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, OnceLock},
+};
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -20,13 +23,13 @@ use iroha_data_model::{
 };
 use iroha_logger::warn;
 use iroha_primitives::json::Json;
+use mv::storage::StorageReadOnly;
 
 use super::consensus::{ExecKv, ExecWitness};
-use crate::fastpq::{self, FASTPQ_CANONICAL_PARAMETER_SET};
-use crate::state::StateBlock;
-use crate::state::WorldReadOnly;
-use core::str::FromStr as _;
-use mv::storage::StorageReadOnly;
+use crate::{
+    fastpq::{self, FASTPQ_CANONICAL_PARAMETER_SET},
+    state::{StateBlock, WorldReadOnly},
+};
 
 #[derive(Default)]
 struct BlockWitness {
@@ -504,12 +507,14 @@ pub fn snapshot_exec_witness() -> ExecWitness {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
+    use iroha_test_samples::ALICE_ID;
+
     use super::*;
     // The SMT helpers live under the sumeragi module.
     use crate::fastpq;
     use crate::sumeragi::smt::{KvPair, compute_post_state_root};
-    use iroha_test_samples::ALICE_ID;
-    use std::sync::LazyLock;
 
     static TEST_LOCK: LazyLock<std::sync::Mutex<()>> = LazyLock::new(|| std::sync::Mutex::new(()));
 
@@ -564,13 +569,14 @@ mod tests {
 
     #[test]
     fn records_fastpq_transcripts() {
+        use std::str::FromStr;
+
         use iroha_data_model::{
             asset::id::AssetDefinitionId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
         };
         use iroha_primitives::numeric::Numeric;
         use iroha_test_samples::{ALICE_ID, BOB_ID};
-        use std::str::FromStr;
 
         let _guard = TEST_LOCK.lock().unwrap();
         start_block();

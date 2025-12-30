@@ -8,9 +8,11 @@
 //! Signature/SignatureOf Norito bare-codec layout sanity checks.
 
 use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
-use norito::codec::Encode as _;
-use norito::core;
-use norito::core::{DecodeFromSlice, Header};
+use norito::{
+    codec::Encode as _,
+    core,
+    core::{DecodeFromSlice, Header},
+};
 
 fn read_varint(bytes: &[u8]) -> (usize, usize) {
     let mut i = 0usize;
@@ -29,8 +31,9 @@ fn read_varint(bytes: &[u8]) -> (usize, usize) {
 }
 
 fn dump_header(label: &str, bytes: &[u8]) {
-    use norito::core::{Header, header_flags};
     use std::fmt::Write as _;
+
+    use norito::core::{Header, header_flags};
 
     if bytes.len() < Header::SIZE {
         eprintln!("{label}: buffer shorter than header (len={})", bytes.len());

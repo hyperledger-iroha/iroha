@@ -1,7 +1,6 @@
 //! JSON writer canonicalizes floats and encodes non-finite values as null.
 
-use norito::json::native::Number;
-use norito::json::{self, Value};
+use norito::json::{self, Value, native::Number};
 
 #[test]
 fn json_float_formatting_is_canonical() {

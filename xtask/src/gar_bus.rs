@@ -102,8 +102,9 @@ fn render_markdown(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn publishes_policy_bundle() -> Result<()> {

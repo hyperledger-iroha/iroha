@@ -3,9 +3,11 @@
 
 use std::collections::HashMap;
 
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-use ivm::mock_wsv::{AccountId, MockWorldStateView, WsvHost};
-use ivm::{AssetDefinitionId, IVM, PermissionToken};
+use ivm::{
+    AssetDefinitionId, IVM, PermissionToken,
+    kotodama::compiler::Compiler as KotodamaCompiler,
+    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+};
 
 fn make_vm_with_wsv() -> (IVM, AccountId) {
     let alice: AccountId =

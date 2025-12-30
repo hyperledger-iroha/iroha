@@ -2,8 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use norito::core::{self as norito_core, DecodeFlagsGuard, header_flags};
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    core::{self as norito_core, DecodeFlagsGuard, header_flags},
+};
 
 fn encode_bare_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
     let _guard = DecodeFlagsGuard::enter(flags);

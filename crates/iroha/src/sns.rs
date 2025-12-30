@@ -1,6 +1,8 @@
 //! Rust client helpers for the Sora Name Service registrar routes.
 
 use eyre::Result;
+use norito::json::Value;
+use url::Url;
 
 use crate::{
     client::{Client, join_torii_url},
@@ -11,8 +13,6 @@ use crate::{
     },
     http::{Method as HttpMethod, RequestBuilder},
 };
-use norito::json::Value;
-use url::Url;
 
 const APPLICATION_JSON: &str = "application/json";
 

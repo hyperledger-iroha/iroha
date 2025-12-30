@@ -6,10 +6,11 @@
 //! the initial escrow/payout policy so treasury dashboards, CLI tools, and SDKs
 //! can deterministically compute refund/slash amounts and panel rewards.
 
+use std::{collections::BTreeMap, fmt, str::FromStr};
+
 use iroha_data_model::account::AccountId;
 use norito::json::{Map as JsonMap, Value, native::Number};
 use rust_decimal::Decimal;
-use std::{collections::BTreeMap, fmt, str::FromStr};
 use thiserror::Error;
 
 /// Supported appeal classes.
@@ -1118,10 +1119,11 @@ fn clamp_decimal(value: Decimal, min: Decimal, max: Decimal) -> Decimal {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::domain::DomainId;
+
+    use super::*;
 
     fn make_account(label: u8, domain: &DomainId) -> AccountId {
         let seed = [label; ed25519_dalek::SECRET_KEY_LENGTH];

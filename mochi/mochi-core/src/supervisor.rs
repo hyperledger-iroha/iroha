@@ -3,7 +3,6 @@
 //! The supervisor prepares filesystem layouts, generates a Kagami-aligned
 //! default genesis manifest, and can launch or stop child `irohad` processes.
 
-use std::str::FromStr;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     env,
@@ -12,6 +11,7 @@ use std::{
     io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    str::FromStr,
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -25,7 +25,9 @@ use iroha_data_model::{
 };
 use iroha_genesis::RawGenesisTransaction;
 use iroha_version::build_line::BuildLine;
+use norito::json::{self, Map, Value};
 use once_cell::sync::OnceCell;
+use tokio::runtime::Handle;
 
 use crate::{
     compose::SigningAuthority,
@@ -35,8 +37,6 @@ use crate::{
     torii::{ManagedBlockStream, ManagedEventStream, ReadinessSmokePlan, ToriiClient, ToriiResult},
     vault::{SignerVault, SignerVaultError},
 };
-use norito::json::{self, Map, Value};
-use tokio::runtime::Handle;
 
 const DEFAULT_CHAIN_ID: &str = "mochi-local";
 const DEFAULT_TORII_BASE_PORT: u16 = 8080;
@@ -3621,9 +3621,6 @@ fn hash_directory(root: &Path) -> io::Result<Hash> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_crypto::PublicKey;
-    use iroha_data_model::{peer::PeerId, prelude::DomainId};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::{
@@ -3636,7 +3633,12 @@ mod tests {
         sync::{Mutex, OnceLock},
         time::Duration,
     };
+
+    use iroha_crypto::PublicKey;
+    use iroha_data_model::{peer::PeerId, prelude::DomainId};
     use tokio::runtime::Runtime;
+
+    use super::*;
 
     struct EnvVarGuard {
         key: &'static str,

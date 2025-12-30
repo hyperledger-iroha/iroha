@@ -5,6 +5,14 @@
 //! bond state, and optional metadata into the calculator and converts the resulting reward decision
 //! into deterministic `RelayRewardInstructionV1` payloads that the treasury daemon can execute.
 
+use std::{
+    fs::{File, OpenOptions},
+    io::{self, BufRead, BufReader, Write},
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
+
 use hex::encode as hex_encode;
 use iroha_core::soranet_incentives::{
     RelayIncentiveError, RelayRewardCalculator, RewardConfig as CoreRewardConfig, RewardDecision,
@@ -22,13 +30,6 @@ use iroha_data_model::{
 };
 use iroha_logger::warn;
 use iroha_primitives::{json::Json, numeric::Numeric};
-use std::{
-    fs::{File, OpenOptions},
-    io::{self, BufRead, BufReader, Write},
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{Arc, Mutex},
-};
 use thiserror::Error;
 
 /// Declarative configuration for the relay reward engine.
@@ -584,14 +585,16 @@ pub fn read_metrics_log(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::convert::TryFrom;
+
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
         asset::AssetDefinitionId, domain::DomainId, metadata::Metadata, name::Name,
         soranet::incentives::RelayComplianceStatusV1,
     };
-    use std::convert::TryFrom;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn numeric(value: u32) -> Numeric {
         Numeric::from(value)

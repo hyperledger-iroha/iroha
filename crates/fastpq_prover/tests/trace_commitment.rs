@@ -1,7 +1,9 @@
 //! Trace commitment regression tests built from Norito fixtures.
 
-use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::{
+    fmt::Write as _,
+    path::{Path, PathBuf},
+};
 
 use fastpq_isi::CANONICAL_PARAMETER_SETS;
 use fastpq_prover::{

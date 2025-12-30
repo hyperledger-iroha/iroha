@@ -3,19 +3,22 @@
 //! basic QC-shape checks, an in-memory deduplication store for the Sumeragi
 //! actor, and routines that persist new evidence records into the world state.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::convert::TryFrom;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use super::consensus::{
-    Evidence, EvidenceKind, EvidencePayload, ExecVote, Phase, Proposal, Qc, Vote,
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::TryFrom,
+    time::{SystemTime, UNIX_EPOCH},
 };
-use crate::state::{State, WorldReadOnly};
+
 use iroha_data_model::{
     block::consensus::{EvidenceRecord, Height, View},
     prelude::ChainId,
 };
 use mv::storage::StorageReadOnly;
+
+use super::consensus::{
+    Evidence, EvidenceKind, EvidencePayload, ExecVote, Phase, Proposal, Qc, Vote,
+};
+use crate::state::{State, WorldReadOnly};
 
 /// Minimum expected length for BLS signatures attached to consensus votes.
 ///
@@ -545,11 +548,6 @@ fn validate_invalid_proposal(proposal: &Proposal) -> Result<(), EvidenceValidati
 
 #[cfg(test)]
 mod tests {
-    use super::super::consensus::{
-        ConsensusBlockHeader, ExecVote, Phase, Proposal, Qc, QcAggregate, QcHeaderRef, Vote,
-    };
-    use super::*;
-    use crate::state::{State, World};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         block::BlockHeader,
@@ -560,6 +558,14 @@ mod tests {
     use mv::cell::Cell;
     use norito::codec::{Decode, Encode as _};
     use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+
+    use super::{
+        super::consensus::{
+            ConsensusBlockHeader, ExecVote, Phase, Proposal, Qc, QcAggregate, QcHeaderRef, Vote,
+        },
+        *,
+    };
+    use crate::state::{State, World};
 
     type EvidenceCase = (EvidenceKind, EvidencePayload, EvidenceValidationError);
     type EvidenceRoundtripCase = (

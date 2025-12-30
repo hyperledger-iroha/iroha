@@ -13,17 +13,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::config::{
-    ConfigError, ExitRoutingConfig, KaigiStreamRoutingConfig, NoritoStreamRoutingConfig,
-};
 use blake3::Hasher as Blake3Hasher;
 use iroha_data_model::soranet::RelayId;
 use norito::{
     Error as NoritoError, decode_from_bytes,
     streaming::{PrivacyRouteUpdate, SoranetAccessKind, SoranetRoute, SoranetStreamTag},
 };
-
 use thiserror::Error;
+
+use crate::config::{
+    ConfigError, ExitRoutingConfig, KaigiStreamRoutingConfig, NoritoStreamRoutingConfig,
+};
 
 const DEFAULT_GAR_CATEGORY_READ_ONLY: &str = "stream.norito.read_only";
 const DEFAULT_GAR_CATEGORY_AUTH: &str = "stream.norito.authenticated";
@@ -633,12 +633,13 @@ pub enum RouteOpenFrameError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::{
         streaming::{PrivacyRouteUpdate, SoranetChannelId, SoranetRoute, SoranetStreamTag},
         to_bytes,
     };
     use tempfile::TempDir;
+
+    use super::*;
 
     fn sample_route() -> NoritoStreamRoutingConfig {
         NoritoStreamRoutingConfig {

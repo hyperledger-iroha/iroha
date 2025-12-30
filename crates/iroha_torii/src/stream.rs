@@ -4,8 +4,10 @@ use core::{result::Result, time::Duration};
 
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use futures::{SinkExt, StreamExt};
-use norito::codec::{DecodeAll as NoritoDecodeAll, Encode as NoritoEncode};
-use norito::prelude::*;
+use norito::{
+    codec::{DecodeAll as NoritoDecodeAll, Encode as NoritoEncode},
+    prelude::*,
+};
 
 #[cfg(test)]
 const TIMEOUT: Duration = Duration::from_millis(10_000);
@@ -162,9 +164,10 @@ pub fn extract_ws_closed(error: axum::Error) -> Error {
 
 #[cfg(feature = "p2p_ws")]
 mod ws_io {
-    use super::*;
     use futures::stream::{SplitSink, SplitStream};
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+    use super::*;
 
     /// Read half adapter over a WebSocket stream that yields bytes from Binary frames.
     pub struct WsReadHalf {

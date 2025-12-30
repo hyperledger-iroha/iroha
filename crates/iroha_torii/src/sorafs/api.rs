@@ -13,7 +13,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::sorafs::BLINDED_CID_LEN;
 use axum::{
     Json,
     body::{Body, Bytes},
@@ -27,8 +26,7 @@ use base64::{
 };
 use blake3::hash as blake3_hash;
 use futures::StreamExt;
-use hex::ToHex;
-use hex::encode;
+use hex::{ToHex, encode};
 use http::header::{AGE, CACHE_CONTROL, HeaderName, RETRY_AFTER, WARNING};
 use hyper::body::Body as HyperBody;
 use iroha_core::state::StateReadOnly;
@@ -47,26 +45,22 @@ use sorafs_car::{
     verifier::{CarVerifier, CarVerifyError},
 };
 use sorafs_chunker::ChunkProfile;
-use sorafs_manifest::capacity::CapacityTelemetryV1;
-use sorafs_manifest::por::{AuditVerdictV1, PorChallengeV1, PorProofV1};
 use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, CapabilityTlv, CapabilityType, EndpointKind,
-    EndpointMetadata, EndpointMetadataKey, PathDiversityPolicy, ProviderAdvertBodyV1,
+    EndpointMetadata, EndpointMetadataKey, ManifestV1, PathDiversityPolicy, ProofStreamKind,
+    ProofStreamRequestError, ProofStreamRequestV1, ProofStreamTier, ProviderAdvertBodyV1,
     ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic, StakePointer,
     StreamBudgetV1, StreamTokenBodyV1, TransportHintV1, TransportProtocol,
-};
-use sorafs_manifest::{
-    ManifestV1, chunker_registry,
+    capacity::CapacityTelemetryV1,
+    chunker_registry,
+    por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
 };
-use sorafs_manifest::{
-    ProofStreamKind, ProofStreamRequestError, ProofStreamRequestV1, ProofStreamTier,
-};
-use sorafs_node::store::{ChunkRoleMetadata, StorageError as StorageBackendError, StoredManifest};
 use sorafs_node::{
     NodeStorageError, PorTrackerError,
     capacity::CapacityUsageSnapshot,
     metering::{FeeProjection, MeteringSnapshot},
+    store::{ChunkRoleMetadata, StorageError as StorageBackendError, StoredManifest},
     telemetry::TelemetryError,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -74,24 +68,24 @@ use tokio::sync::{RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use urlencoding::decode;
 
-use crate::sorafs::gateway::{
-    ClientFingerprint, PerceptualMatchBasis, PerceptualObservation, PolicyViolation,
-    RateLimitError, RequestContext, SORA_TLS_STATE_HEADER,
-};
 use crate::{
     JsonBody, SharedAppState, json_entry, json_object,
     routing::MaybeTelemetry,
     sorafs::{
         AdmissionRegistry, AliasCacheEnforcement, AliasCachePolicyExt, AliasCachePolicyHttpExt,
-        AliasProofEvaluationExt, AliasProofState, CacheDecision, PinSubmissionPolicy,
-        QuotaExceeded, SorafsAction, StreamTokenConcurrencyPermit, StreamTokenHeaderError,
-        StreamTokenIssuerError, StreamTokenQuotaExceeded, TokenOverrides, decode_token_base64,
+        AliasProofEvaluationExt, AliasProofState, BLINDED_CID_LEN, CacheDecision,
+        PinSubmissionPolicy, QuotaExceeded, SorafsAction, StreamTokenConcurrencyPermit,
+        StreamTokenHeaderError, StreamTokenIssuerError, StreamTokenQuotaExceeded, TokenOverrides,
+        decode_token_base64,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
             capability_name,
         },
         encode_token_base64,
-        gateway::DenylistKind,
+        gateway::{
+            ClientFingerprint, DenylistKind, PerceptualMatchBasis, PerceptualObservation,
+            PolicyViolation, RateLimitError, RequestContext, SORA_TLS_STATE_HEADER,
+        },
         pin::PinAuthError,
         registry::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryMetricsSummary,
@@ -4031,13 +4025,15 @@ fn gateway_policy_violation_response(
 
 #[cfg(test)]
 mod gateway_policy_violation_tests {
+    use std::{collections::HashMap, fs, path::PathBuf};
+
+    use axum::body::to_bytes;
+    use tokio::runtime::Runtime;
+
     use super::*;
     use crate::sorafs::gateway::{
         DenylistEntryBuilder, DenylistHit, DenylistKind, PerceptualMatch,
     };
-    use axum::body::to_bytes;
-    use std::{collections::HashMap, fs, path::PathBuf};
-    use tokio::runtime::Runtime;
 
     fn response_json(response: Response) -> Value {
         let runtime = Runtime::new().expect("tokio runtime");
@@ -5740,9 +5736,11 @@ fn alias_proof_header(alias: &str) -> HeaderValue {
 #[cfg(test)]
 fn alias_proof_b64(alias: &str) -> String {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use sorafs_manifest::CouncilSignature;
-    use sorafs_manifest::pin_registry::{
-        AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
+    use sorafs_manifest::{
+        CouncilSignature,
+        pin_registry::{
+            AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
+        },
     };
 
     let binding = AliasBindingV1 {
@@ -5909,33 +5907,6 @@ fn range_not_satisfiable(total_length: u64, message: String) -> Response {
 
 #[cfg(all(test, feature = "app_api"))]
 mod app_api_tests {
-    use super::*;
-    use crate::{
-        mk_app_state_for_tests,
-        sorafs::{AdmissionRegistry, StreamTokenIssuer},
-        utils::extractors::JsonOnly,
-    };
-    use axum::body;
-    use blake3::hash;
-    use ed25519_dalek::{Signer as _, SigningKey};
-    use iroha_config::parameters::actual::SorafsTokenConfig;
-    use sorafs_car::{
-        CarBuildPlan,
-        multi_fetch::{
-            FetchOptions, FetchProvider, ProviderMetadata, RangeCapability, StreamBudget,
-            fetch_plan_parallel,
-        },
-    };
-    use sorafs_manifest::pin_registry::{
-        AliasBindingV1, AliasProofBundleV1, ReplicationOrderV1, alias_merkle_root,
-        alias_proof_signature_digest,
-    };
-    use sorafs_manifest::provider_admission::ProviderAdmissionEnvelopeV1;
-    use sorafs_manifest::{
-        BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, ManifestBuilder, PinPolicy,
-        ProviderAdvertV1,
-    };
-    use sorafs_node::{config::StorageConfig, store::StorageBackend};
     use std::{
         fmt, fs,
         io::Write,
@@ -5947,7 +5918,36 @@ mod app_api_tests {
         },
         time::Duration,
     };
+
+    use axum::body;
+    use blake3::hash;
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use iroha_config::parameters::actual::SorafsTokenConfig;
+    use sorafs_car::{
+        CarBuildPlan,
+        multi_fetch::{
+            FetchOptions, FetchProvider, ProviderMetadata, RangeCapability, StreamBudget,
+            fetch_plan_parallel,
+        },
+    };
+    use sorafs_manifest::{
+        BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, ManifestBuilder, PinPolicy,
+        ProviderAdvertV1,
+        pin_registry::{
+            AliasBindingV1, AliasProofBundleV1, ReplicationOrderV1, alias_merkle_root,
+            alias_proof_signature_digest,
+        },
+        provider_admission::ProviderAdmissionEnvelopeV1,
+    };
+    use sorafs_node::{config::StorageConfig, store::StorageBackend};
     use tempfile::{NamedTempFile, TempDir, tempdir};
+
+    use super::*;
+    use crate::{
+        mk_app_state_for_tests,
+        sorafs::{AdmissionRegistry, StreamTokenIssuer},
+        utils::extractors::JsonOnly,
+    };
 
     #[test]
     fn walk_query_params_decodes_percent_encoding() {
@@ -7495,14 +7495,8 @@ pub(crate) fn init_cache(
 
 #[cfg(test)]
 mod advert_tests {
-    use super::*;
-    use crate::build_sorafs_gateway_security;
-    use crate::sorafs;
-    use crate::sorafs::StreamTokenIssuer;
-    use crate::sorafs::registry::{
-        RegistryCreditLedgerEntry, RegistryDeclaration, RegistryFeeLedgerEntry,
-    };
-    use crate::{mk_app_state_for_tests, utils::extractors::JsonOnly};
+    use std::{io::Write, str::FromStr, sync::Arc};
+
     use axum::body::{self, Bytes};
     use base64::Engine as _;
     use blake3;
@@ -7529,16 +7523,6 @@ mod advert_tests {
     };
     use nonzero_ext::nonzero;
     use norito::to_bytes;
-    use sorafs_manifest::capacity::{
-        CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1,
-    };
-    use sorafs_manifest::por::{
-        AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
-        POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, derive_challenge_id,
-        derive_challenge_seed,
-    };
-    use sorafs_manifest::potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus};
-    use sorafs_manifest::proof_stream::ProofStreamTier;
     use sorafs_manifest::{
         AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier, CapabilityTlv,
         CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
@@ -7546,14 +7530,29 @@ mod advert_tests {
         EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder,
         PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProviderAdmissionEnvelopeV1,
         ProviderAdmissionProposalV1, ProviderAdvertBodyV1, ProviderAdvertV1, QosHints,
-        RendezvousTopic, SignatureAlgorithm, StakePointer, chunker_registry,
-        compute_advert_body_digest, compute_proposal_digest,
+        RendezvousTopic, SignatureAlgorithm, StakePointer,
+        capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
+        chunker_registry, compute_advert_body_digest, compute_proposal_digest,
+        por::{
+            AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
+            POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1,
+            derive_challenge_id, derive_challenge_seed,
+        },
+        potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus},
+        proof_stream::ProofStreamTier,
     };
     use sorafs_node::config::StorageConfig;
-    use std::io::Write;
-    use std::str::FromStr;
-    use std::sync::Arc;
     use tempfile::{NamedTempFile, TempDir};
+
+    use super::*;
+    use crate::{
+        build_sorafs_gateway_security, mk_app_state_for_tests, sorafs,
+        sorafs::{
+            StreamTokenIssuer,
+            registry::{RegistryCreditLedgerEntry, RegistryDeclaration, RegistryFeeLedgerEntry},
+        },
+        utils::extractors::JsonOnly,
+    };
 
     #[tokio::test]
     async fn proof_stream_potr_streams_recorded_receipts() {
@@ -8936,10 +8935,11 @@ mod advert_tests {
 
     #[tokio::test]
     async fn storage_pin_requires_token_and_respects_allowlist_and_rate_limit() {
+        use std::num::NonZeroU32;
+
         use iroha_config::parameters::actual::{
             SorafsGatewayRateLimit as GatewayRateLimitCfg, SorafsStoragePin as PinCfg,
         };
-        use std::num::NonZeroU32;
 
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app)
@@ -9464,10 +9464,12 @@ mod advert_tests {
 
     #[tokio::test]
     async fn storage_manifest_refuses_unsupported_chunker() {
-        use sorafs_manifest::capacity::{
-            CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1,
+        use sorafs_manifest::{
+            capacity::{
+                CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1,
+            },
+            provider_advert::StakePointer,
         };
-        use sorafs_manifest::provider_advert::StakePointer;
 
         let mut context = token_test_context();
         {
@@ -9537,10 +9539,12 @@ mod advert_tests {
 
     #[tokio::test]
     async fn storage_por_sample_refuses_unsupported_chunker() {
-        use sorafs_manifest::capacity::{
-            CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1,
+        use sorafs_manifest::{
+            capacity::{
+                CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1,
+            },
+            provider_advert::StakePointer,
         };
-        use sorafs_manifest::provider_advert::StakePointer;
 
         let mut context = token_test_context();
         {

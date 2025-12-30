@@ -2,6 +2,10 @@
 #![allow(clippy::similar_names)]
 #![allow(clippy::too_many_lines)]
 
+#[cfg(feature = "app_api")]
+use std::collections::BTreeMap;
+use std::{num::NonZeroU64, sync::Arc, time::Duration};
+
 use iroha_config::parameters::actual::NexusAxt as ActualAxtTiming;
 #[cfg(feature = "app_api")]
 use iroha_core::block::BlockBuilder;
@@ -9,10 +13,10 @@ use iroha_core::block::BlockBuilder;
 use iroha_core::nexus::space_directory::{
     SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
 };
-use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
+    smartcontracts::ivm::host::CoreHost,
     state::{State, StateReadOnly, World, WorldReadOnly},
 };
 use iroha_data_model::da::commitment::DaProofScheme;
@@ -45,17 +49,15 @@ use ivm::{
 };
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-#[cfg(feature = "app_api")]
-use std::collections::BTreeMap;
-use std::num::NonZeroU64;
-use std::sync::Arc;
-use std::time::Duration;
 
 fn ensure_alias_resolver() {
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::account::{AccountId, set_account_alias_resolver};
-    use iroha_data_model::domain::DomainId;
     use std::sync::{Arc as StdArc, OnceLock};
+
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_data_model::{
+        account::{AccountId, set_account_alias_resolver},
+        domain::DomainId,
+    };
 
     static INSTALL: OnceLock<()> = OnceLock::new();
     INSTALL.get_or_init(|| {
@@ -150,7 +152,11 @@ fn host_with_policy(
 
 #[test]
 fn axt_policy_snapshot_refreshes_current_slot() {
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State, state::World};
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -581,9 +587,10 @@ fn axt_handle_rejects_clock_skew_above_config() {
 
 #[test]
 fn axt_replay_ledger_persists_through_kura_replay() {
+    use std::collections::BTreeMap;
+
     use iroha_core::block::{BlockBuilder, ValidBlock};
     use iroha_crypto::{HashOf, KeyPair};
-    use iroha_data_model::transaction::TransactionEntrypoint;
     use iroha_data_model::{
         nexus::{
             AssetHandle as ModelAssetHandle, AxtEnvelopeRecord as ModelAxtEnvelopeRecord,
@@ -595,9 +602,9 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             TouchManifest as ModelTouchManifest,
         },
         peer::PeerId,
+        transaction::TransactionEntrypoint,
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-    use std::collections::BTreeMap;
 
     ensure_alias_resolver();
 
@@ -3572,14 +3579,14 @@ fn core_host_records_multi_dataspace_envelope() {
 #[cfg(feature = "app_api")]
 #[test]
 fn axt_sub_nonce_floor_persists_across_restart() {
-    use iroha_data_model::nexus::LaneConfig as LaneMetadata;
     use iroha_data_model::nexus::{
         AssetHandle as ModelAssetHandle, AxtEnvelopeRecord as ModelAxtEnvelopeRecord,
         AxtHandleFragment as ModelAxtHandleFragment, AxtProofFragment as ModelAxtProofFragment,
         AxtTouchFragment as ModelAxtTouchFragment, GroupBinding as ModelGroupBinding,
         HandleBudget as ModelHandleBudget, HandleSubject as ModelHandleSubject,
-        ProofBlob as ModelProofBlob, RemoteSpendIntent as ModelRemoteSpendIntent,
-        SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest,
+        LaneConfig as LaneMetadata, ProofBlob as ModelProofBlob,
+        RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
+        TouchManifest as ModelTouchManifest,
     };
 
     let authority: AccountId =

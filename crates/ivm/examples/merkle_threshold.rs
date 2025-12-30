@@ -1,13 +1,14 @@
 //! Quick comparison between Metal-accelerated and CPU Merkle hashing paths.
 //! Run with `cargo run --release -p ivm --example merkle_threshold`.
 
-use ivm::{AccelerationConfig, ByteMerkleTree};
 use std::{
     env,
     fmt::Write as _,
     hint::black_box,
     time::{Duration, Instant},
 };
+
+use ivm::{AccelerationConfig, ByteMerkleTree};
 
 const CHUNK: usize = 32;
 const LEAF_COUNTS: &[usize] = &[1_024, 4_096, 8_192, 16_384, 32_768, 65_536];

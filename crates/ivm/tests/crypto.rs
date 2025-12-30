@@ -4,8 +4,9 @@ use ivm::{
     encoding, field, instruction, pairing_check_truncated, poseidon2, poseidon6, vector_supported,
 };
 mod common;
-use common::assemble;
 use std::sync::{Mutex, MutexGuard, OnceLock};
+
+use common::assemble;
 
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 

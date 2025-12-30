@@ -5,9 +5,12 @@
 //! throughput. It enforces Weighted Fair Queuing (WFQ) across traffic classes and
 //! generates dummy cells when queues are empty.
 
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
+
 use crate::constant_rate::CONSTANT_RATE_CELL_BYTES;
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
 
 /// Fixed cell size used for constant-rate transport.
 pub const CELL_SIZE_BYTES: usize = CONSTANT_RATE_CELL_BYTES as usize;

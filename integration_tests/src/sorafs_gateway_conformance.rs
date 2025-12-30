@@ -13,7 +13,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::sorafs_gateway_capability_refusal::{self, CapabilityRefusalScenario};
 use blake3::Hasher;
 use eyre::{Result as EyreResult, WrapErr, eyre};
 use iroha_crypto::{KeyPair, Signature};
@@ -36,6 +35,8 @@ use sorafs_manifest::{
     },
     validation::{PinPolicyConstraints, validate_manifest},
 };
+
+use crate::sorafs_gateway_capability_refusal::{self, CapabilityRefusalScenario};
 
 /// Describes a single replay scenario (positive or negative).
 #[derive(Debug, Clone)]

@@ -1,26 +1,5 @@
 //! Data-availability helpers shared across SDKs.
 
-use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
-use blake3::Hasher;
-use eyre::{Result, WrapErr, eyre};
-use iroha_crypto::Signature;
-use iroha_data_model::da::{
-    ingest::{DaIngestReceipt, DaIngestRequest},
-    manifest::{ChunkRole, DaManifestV1},
-    types::{
-        BlobClass, BlobCodec, BlobDigest, Compression, DaRentLedgerProjection, ErasureProfile,
-        ExtraMetadata, GovernanceTag, RetentionPolicy,
-    },
-};
-use iroha_data_model::{nexus::LaneId, sorafs::pin_registry::StorageClass};
-use iroha_primitives::numeric::Numeric;
-use norito::{
-    decode_from_bytes,
-    derive::JsonSerialize,
-    json::{self, Map, Value},
-};
-use sorafs_manifest::{deal::XorAmount, pdp::PdpCommitmentV1};
-use sorafs_orchestrator::prelude::{CarBuildPlan, ChunkStore, InMemoryPayload, PorProof};
 use std::{
     collections::HashSet,
     convert::TryFrom,
@@ -29,8 +8,32 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
+use blake3::Hasher;
+use eyre::{Result, WrapErr, eyre};
+use iroha_crypto::Signature;
+use iroha_data_model::{
+    da::{
+        ingest::{DaIngestReceipt, DaIngestRequest},
+        manifest::{ChunkRole, DaManifestV1},
+        types::{
+            BlobClass, BlobCodec, BlobDigest, Compression, DaRentLedgerProjection, ErasureProfile,
+            ExtraMetadata, GovernanceTag, RetentionPolicy,
+        },
+    },
+    nexus::LaneId,
+    sorafs::pin_registry::StorageClass,
+};
+use iroha_primitives::numeric::Numeric;
+use norito::{
+    decode_from_bytes,
+    derive::JsonSerialize,
+    json::{self, Map, Value},
+};
 #[cfg(test)]
 use sorafs_car::sorafs_chunker::ChunkProfile;
+use sorafs_manifest::{deal::XorAmount, pdp::PdpCommitmentV1};
+use sorafs_orchestrator::prelude::{CarBuildPlan, ChunkStore, InMemoryPayload, PorProof};
 
 use crate::{
     crypto::KeyPair,
@@ -1169,8 +1172,8 @@ fn parse_u64_value(value: &Value, label: &str) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::crypto::KeyPair;
+    use std::{fs, time::Duration};
+
     use base64::engine::general_purpose::STANDARD as BASE64;
     use blake3::hash as blake3_hash;
     use iroha_crypto::Algorithm;
@@ -1192,8 +1195,10 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use sorafs_manifest::{ChunkingProfileV1, ProfileId};
     use sorafs_orchestrator::prelude::ChunkStore;
-    use std::{fs, time::Duration};
     use tempfile::tempdir;
+
+    use super::*;
+    use crate::crypto::KeyPair;
 
     #[test]
     fn chunk_profile_from_chunk_size_rejects_zero() {

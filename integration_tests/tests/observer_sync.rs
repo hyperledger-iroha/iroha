@@ -1,6 +1,7 @@
 //! Observer/sync-only node catches up behind a small validator swarm.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_config::base::toml::WriteExt as _;
 use iroha_primitives::unique_vec::UniqueVec;
@@ -10,8 +11,6 @@ use iroha_test_network::{
 use iroha_test_samples::ALICE_ID;
 use norito::json::Value as JsonValue;
 use toml::{Table, Value as TomlValue};
-
-use integration_tests::sandbox;
 
 #[test]
 #[allow(clippy::too_many_lines)]

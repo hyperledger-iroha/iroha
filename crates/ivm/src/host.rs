@@ -6,21 +6,23 @@
 //!
 //! The host also exposes basic hardware feature discovery and proof generation
 //! helpers used by some tests.
-use crate::axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest};
-use crate::error::VMError;
-use crate::ivm::IVM;
-use crate::parallel::{StateAccessSet, StateKey, StateUpdate};
-use crate::pointer_abi::{self, PointerType};
-use crate::syscalls;
-use crate::zk;
+use std::{any::Any, collections::HashSet};
+
 use iroha_crypto::{Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
 use iroha_data_model::{
     isi::transfer::TransferAssetBatch,
     nexus::{AxtPolicySnapshot, DataSpaceId},
 };
 use norito::{NoritoSerialize, decode_from_bytes};
-use std::any::Any;
-use std::collections::HashSet;
+
+use crate::{
+    axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
+    error::VMError,
+    ivm::IVM,
+    parallel::{StateAccessSet, StateKey, StateUpdate},
+    pointer_abi::{self, PointerType},
+    syscalls, zk,
+};
 
 /// Runtime record of logical state touches performed by a host during a transaction.
 #[derive(Clone, Default, Debug)]
@@ -691,8 +693,7 @@ impl IVMHost for DefaultHost {
 
                 // BLS helpers using blstrs
                 use blstrs::{Bls12, G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
-                use group::prime::PrimeCurveAffine;
-                use group::{Curve, Group as _};
+                use group::{Curve, Group as _, prime::PrimeCurveAffine};
                 use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
 
                 fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
@@ -862,8 +863,7 @@ impl IVMHost for DefaultHost {
 
                 // Shared helpers
                 use blstrs::{Bls12, G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
-                use group::prime::PrimeCurveAffine;
-                use group::{Curve, Group as _};
+                use group::{Curve, Group as _, prime::PrimeCurveAffine};
                 use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
                 fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
                     if bytes.len() != 48 {

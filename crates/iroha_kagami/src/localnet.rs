@@ -8,11 +8,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{
-    Outcome, RunArgs,
-    genesis::{build_line_from_env, generate_default},
-    tui,
-};
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
@@ -25,6 +20,12 @@ use iroha_genesis::{GenesisBuilder, GenesisPeerPop, RawGenesisTransaction};
 use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
 use iroha_version::BuildLine;
 use norito::literal;
+
+use crate::{
+    Outcome, RunArgs,
+    genesis::{build_line_from_env, generate_default},
+    tui,
+};
 
 /// User-facing options for generating a bare-metal localnet.
 #[derive(Debug, Clone)]
@@ -114,6 +115,8 @@ const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 1;
 const LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
 /// Default DA availability timeout floor (ms) for localnet configs.
 const LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 0;
+/// Torii pre-auth allowlist to keep localnet CLI traffic from tripping bans.
+const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// Multiplier applied to block+commit time for localnet commit inflight timeout.
 const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MULTIPLIER: u64 = 10;
 /// Lower bound for localnet commit inflight timeout to avoid overly aggressive aborts.
@@ -332,6 +335,10 @@ fn generate_localnet_with_line<T: Write>(
             )
         })
         .collect::<Vec<_>>();
+    let peer_telemetry_urls = peers
+        .iter()
+        .map(|p| format!("http://{}:{}/", opts.public_host, p.api_port))
+        .collect::<Vec<_>>();
     let bls_entries = peers
         .iter()
         .map(|p| BlsEntry {
@@ -346,6 +353,7 @@ fn generate_localnet_with_line<T: Write>(
         let rendered = render_peer_config(
             peer,
             &trusted,
+            &peer_telemetry_urls,
             &genesis_public_key,
             &genesis_signed_path,
             &bls_entries,
@@ -500,6 +508,7 @@ fn validate_port_ranges(peers: NonZeroU16, base_api_port: u16, base_p2p_port: u1
 fn render_peer_config(
     peer: &Peer,
     trusted_peers: &[String],
+    peer_telemetry_urls: &[String],
     genesis_public_key: &iroha_crypto::PublicKey,
     genesis_signed_path: &Path,
     bls_entries: &[BlsEntry],
@@ -678,6 +687,25 @@ fn render_peer_config(
     torii.insert(
         "address".into(),
         Value::String(addr_literal(bind_host, peer.api_port)),
+    );
+    torii.insert(
+        "peer_telemetry_urls".into(),
+        Value::Array(
+            peer_telemetry_urls
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect::<Vec<_>>(),
+        ),
+    );
+    torii.insert(
+        "preauth_allow_cidrs".into(),
+        Value::Array(
+            LOCALNET_PREAUTH_ALLOW_CIDRS
+                .iter()
+                .map(|cidr| Value::String((*cidr).to_string()))
+                .collect::<Vec<_>>(),
+        ),
     );
     // torii.transport.norito_rpc
     let mut norito_rpc = Table::new();
@@ -1014,7 +1042,15 @@ fn write_client_config(out_dir: &Path, base_api_port: u16, torii_host: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::{
+        env, fs,
+        io::BufWriter,
+        path::{Path, PathBuf},
+        time::Duration,
+    };
+
     use iroha_config::{base::toml::TomlSource, parameters::actual};
     use iroha_data_model::{
         block::decode_framed_signed_block,
@@ -1026,15 +1062,8 @@ mod tests {
         transaction::Executable,
     };
     use norito::derive::JsonDeserialize;
-    use std::{
-        env, fs,
-        io::BufWriter,
-        path::{Path, PathBuf},
-        time::Duration,
-    };
 
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    use super::*;
 
     #[test]
     fn generated_configs_parse_with_current_schema() {
@@ -1094,6 +1123,62 @@ mod tests {
         let source =
             TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
         actual::Root::from_toml_source(source).expect("generated config must parse");
+    }
+
+    #[test]
+    fn generated_peer_configs_include_peer_telemetry_urls() {
+        let temp = tempfile::tempdir().expect("make temp dir");
+        let opts = LocalnetOptions {
+            peers: NonZeroU16::new(2).expect("non-zero"),
+            seed: Some("kagami-peer-telemetry".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 19080,
+            base_p2p_port: 23337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let urls = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("peer_telemetry_urls"))
+            .and_then(toml::Value::as_array)
+            .expect("peer_telemetry_urls array");
+        let urls = urls
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            urls,
+            vec!["http://127.0.0.1:19080/", "http://127.0.0.1:19081/"],
+        );
+
+        let allowlist = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("preauth_allow_cidrs"))
+            .and_then(toml::Value::as_array)
+            .expect("preauth_allow_cidrs array");
+        let allowlist = allowlist
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(allowlist, LOCALNET_PREAUTH_ALLOW_CIDRS);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Host-side execution of Kaigi instruction family.
 use std::{collections::BTreeSet, convert::TryFrom};
 
+use iroha_crypto::Hash;
 use iroha_data_model::{
     HasMetadata,
     events::{
@@ -26,14 +27,12 @@ use iroha_data_model::{
     prelude::{AccountId, DomainId, Json, Name},
     query::error::FindError,
 };
-
-use iroha_crypto::Hash;
+use privacy::PrivacyArtifacts;
 
 use crate::{
     smartcontracts::limits,
     state::{StateTransaction, WorldReadOnly},
 };
-use privacy::PrivacyArtifacts;
 
 mod privacy;
 
@@ -986,8 +985,9 @@ fn process_leave(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::num::NonZeroU64;
+    use std::str::FromStr;
+
     use iroha_data_model::{
         events::{
             data::prelude::{DataEvent, DomainEvent, KaigiRelayRegistrationSummary},
@@ -997,8 +997,8 @@ mod tests {
         prelude::*,
     };
     use iroha_test_samples::{ALICE_ID, gen_account_in};
-    use std::str::FromStr;
 
+    use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,

@@ -4,13 +4,17 @@
 //! container. The full VOPRF/STARK pipeline is tracked in roadmap notes to keep
 //! incremental progress manageable.
 
-use std::collections::BTreeMap;
-use std::fmt;
-use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    str::FromStr,
+    sync::{Arc, RwLock},
+};
 
-use iroha_crypto::blake2::{Blake2b512, Digest as _};
-use iroha_crypto::{HashOf, Signature};
+use iroha_crypto::{
+    HashOf, Signature,
+    blake2::{Blake2b512, Digest as _},
+};
 use iroha_data_model::{
     account,
     alias::{
@@ -353,13 +357,15 @@ impl AliasService {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        str::FromStr,
+        sync::Arc,
+    };
+
+    use iroha_data_model::{account::AccountId, alias::AliasIndex, name::Name};
+
     use super::*;
-    use iroha_data_model::account::AccountId;
-    use iroha_data_model::alias::AliasIndex;
-    use iroha_data_model::name::Name;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::str::FromStr;
-    use std::sync::Arc;
 
     fn owner() -> AccountId {
         const SIGNATORY: &str =

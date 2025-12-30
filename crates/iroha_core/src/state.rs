@@ -14,61 +14,51 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::sumeragi::status;
-use crate::{
-    block::BlockValidationError,
-    commit_roster_journal::{CommitRosterJournal, CommitRosterSnapshot},
-    da::{
-        ConfidentialComputeError, DaShardCursorError, DaShardCursorIndex, DaShardCursorJournal,
-        LaneEpoch,
-        commitment_store::DaCommitmentStore,
-        confidential_store::ConfidentialComputeStore,
-        pin_store::DaPinStore,
-        receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
-    },
-};
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::actual::LaneConfig;
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::Sm2PublicKey;
 #[cfg(feature = "sm-ffi-openssl")]
 use iroha_crypto::sm::{OpenSslProvider, SmIntrinsicPolicy};
-use iroha_crypto::{Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey};
-use iroha_crypto::{blake2::Blake2b512, blake2::digest::Digest as _};
-use iroha_data_model::asset::Mintable;
-use iroha_data_model::da::{
-    commitment::DaCommitmentLocation, pin_intent::DaPinIntentWithLocation, types::StorageTicketId,
+use iroha_crypto::{
+    Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey,
+    blake2::{Blake2b512, digest::Digest as _},
 };
-use iroha_data_model::events::data::{
-    governance as governance_events, prelude as data_pre,
-    space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestExpired},
-};
-use iroha_data_model::fastpq::{TransferDeltaTranscript, TransferTranscript};
-use iroha_data_model::peer::PeerId;
 use iroha_data_model::{
     IntoKeyValue,
     account::{
         AccountController, AccountEntry, AccountValue,
         rekey::{AccountLabel, AccountRekeyRecord},
     },
-    asset::{Asset, AssetEntry, AssetValue},
+    asset::{Asset, AssetEntry, AssetValue, Mintable},
     block::{
         BlockHeader, SignedBlock,
+        consensus::EvidenceRecord,
         proofs::{BlockProofs, BlockReceiptProof, ExecutionReceiptProof},
     },
     confidential::ConfidentialFeatureDigest,
     consensus::{
         CommitCertificate, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
-        ConsensusKeyStatus, ValidatorSetCheckpoint,
+        ConsensusKeyStatus, ExecutionQcRecord, ValidatorSetCheckpoint,
     },
     content::{ContentBundleId, ContentBundleRecord, ContentChunk},
+    da::{
+        commitment::DaCommitmentLocation, pin_intent::DaPinIntentWithLocation,
+        types::StorageTicketId,
+    },
     events::{
         EventBox, SharedDataEvent,
+        data::{
+            governance as governance_events, prelude as data_pre,
+            space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestExpired},
+        },
         pipeline::{BlockEvent, MergeLedgerEvent, PipelineEventBox},
         time::TimeEvent,
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
     executor::ExecutorDataModel,
+    fastpq::{TransferDeltaTranscript, TransferTranscript},
+    governance::types::ParliamentBody,
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError, MathError},
         settlement::{SettlementId, SettlementLedger},
@@ -92,6 +82,7 @@ use iroha_data_model::{
         TwitterBindingRecord,
     },
     parameter::{CustomParameterId, Parameters, system::SumeragiNposParameters},
+    peer::PeerId,
     permission::{Permission, Permissions},
     prelude::*,
     query::error::{FindError, QueryExecutionFail},
@@ -114,10 +105,6 @@ use iroha_data_model::{
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
     transaction::signed::{SignedTransaction, TransactionEntrypoint},
-};
-use iroha_data_model::{
-    block::consensus::EvidenceRecord, consensus::ExecutionQcRecord,
-    governance::types::ParliamentBody,
 };
 use iroha_executor_data_model::permission::{
     asset_definition::CanRegisterAssetDefinition,
@@ -151,13 +138,25 @@ pub use range_bounds::{AsAssetIdAccountCompare, AssetByAccountBounds, RoleIdByAc
 pub use storage_transactions::TransactionsReadOnly;
 use thiserror::Error as ThisError;
 
+use crate::{
+    block::BlockValidationError,
+    commit_roster_journal::{CommitRosterJournal, CommitRosterSnapshot},
+    da::{
+        ConfidentialComputeError, DaShardCursorError, DaShardCursorIndex, DaShardCursorJournal,
+        LaneEpoch,
+        commitment_store::DaCommitmentStore,
+        confidential_store::ConfidentialComputeStore,
+        pin_store::DaPinStore,
+        receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
+    },
+    sumeragi::status,
+};
+
 mod tiered;
+use hex;
+use ivm::IVM;
 pub(crate) use tiered::TieredStateBackend;
 
-use crate::nexus::space_directory::{
-    SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
-};
-use crate::smartcontracts::isi::world::isi::apply_policy_if_due;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::ConfidentialTreeStats;
 #[allow(unused_imports)]
@@ -166,28 +165,30 @@ use crate::telemetry::StateTelemetry;
 use crate::telemetry::record_da_shard_cursor_lag;
 use crate::{
     Peers,
-    block::CommittedBlock,
-    block::ValidBlock,
+    block::{CommittedBlock, ValidBlock},
     executor::Executor,
     kura::Kura,
+    nexus::space_directory::{
+        SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
+    },
     query::store::LiveQueryStoreHandle,
     role::RoleIdWithOwner,
     settlement::SettlementEngine,
-    smartcontracts::triggers::{
-        set::{
-            ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
-            SetReadOnly as TriggerSetReadOnly, SetTransaction as TriggerSetTransaction,
-            SetView as TriggerSetView,
+    smartcontracts::{
+        isi::world::isi::apply_policy_if_due,
+        triggers::{
+            set::{
+                ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
+                SetReadOnly as TriggerSetReadOnly, SetTransaction as TriggerSetTransaction,
+                SetView as TriggerSetView,
+            },
+            specialized::{LoadedAction, LoadedActionTrait},
         },
-        specialized::{LoadedAction, LoadedActionTrait},
     },
     state::storage_transactions::{
         TransactionsBlock, TransactionsBlockError, TransactionsStorage, TransactionsView,
     },
 };
-use hex;
-
-use ivm::IVM;
 
 pub(crate) mod storage_transactions;
 
@@ -3509,9 +3510,9 @@ fn update_oracle_change_pipeline(
     now_h: u64,
     cfg: &iroha_config::parameters::actual::OracleGovernance,
 ) {
-    use iroha_data_model::events::data::oracle::{OracleChangeStageUpdated, OracleEvent};
-    use iroha_data_model::oracle::{
-        OracleChangeStage, OracleChangeStageFailure, OracleChangeStatus,
+    use iroha_data_model::{
+        events::data::oracle::{OracleChangeStageUpdated, OracleEvent},
+        oracle::{OracleChangeStage, OracleChangeStageFailure, OracleChangeStatus},
     };
 
     let changes: Vec<_> = wtx
@@ -3861,10 +3862,12 @@ impl CitizenshipRecord {
 
 #[cfg(feature = "json")]
 mod governance_locks_map_json {
-    use super::GovernanceLockRecord;
+    use std::collections::BTreeMap;
+
     use iroha_data_model::account::AccountId;
     use norito::json::{self, JsonSerialize as JsonSerializeTrait, MapVisitor, Parser};
-    use std::collections::BTreeMap;
+
+    use super::GovernanceLockRecord;
 
     pub fn serialize(locks: &BTreeMap<AccountId, GovernanceLockRecord>, out: &mut String) {
         out.push('{');
@@ -3932,10 +3935,12 @@ pub struct GovernanceSlashLedger {
 
 #[cfg(feature = "json")]
 mod governance_slash_map_json {
-    use super::GovernanceSlashEntry;
+    use std::collections::BTreeMap;
+
     use iroha_data_model::account::AccountId;
     use norito::json::{self, JsonSerialize as JsonSerializeTrait, MapVisitor, Parser};
-    use std::collections::BTreeMap;
+
+    use super::GovernanceSlashEntry;
 
     pub fn serialize(slashes: &BTreeMap<AccountId, GovernanceSlashEntry>, out: &mut String) {
         out.push('{');
@@ -4914,18 +4919,20 @@ impl StakeSnapshot for StateView<'_> {
 
 #[cfg(test)]
 mod stake_snapshot_tests {
-    use super::*;
     use core::num::NonZeroU32;
+
     use iroha_config::parameters::actual::{LaneConfig as DerivedLaneConfig, LaneValidatorMode};
     use iroha_crypto::KeyPair;
-    use iroha_data_model::account::AccountId as DMAccountId;
-    use iroha_data_model::metadata::Metadata;
     use iroha_data_model::{
+        account::AccountId as DMAccountId,
         consensus::ConsensusKeyStatus,
         domain::DomainId,
+        metadata::Metadata,
         nexus::{LaneCatalog, LaneMetadata, LaneVisibility},
     };
     use iroha_primitives::unique_vec::UniqueVec;
+
+    use super::*;
 
     fn seed_consensus_key(
         world_block: &mut WorldBlock<'_>,
@@ -5438,9 +5445,11 @@ mod stake_snapshot_tests {
 
 #[cfg(test)]
 mod accounts_snapshot_tests {
-    use super::*;
     use core::num::NonZeroU64;
+
     use iroha_test_samples::ALICE_ID;
+
+    use super::*;
 
     fn test_state_with_account() -> (State, AccountId) {
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -5488,7 +5497,8 @@ mod accounts_snapshot_tests {
 
 #[cfg(test)]
 mod storage_migration_tests {
-    use super::*;
+    use std::sync::Arc;
+
     use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{
         account::{AccountDetails, AccountId},
@@ -5496,7 +5506,8 @@ mod storage_migration_tests {
         metadata::Metadata,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
     };
-    use std::sync::Arc;
+
+    use super::*;
 
     #[test]
     fn uaid_bindings_rebuilt_from_manifests_on_startup() {
@@ -5641,9 +5652,11 @@ mod storage_migration_tests {
 
 #[cfg(test)]
 mod custom_parameter_tests {
-    use super::*;
     use core::str::FromStr;
+
     use iroha_primitives::json::Json;
+
+    use super::*;
 
     fn params_with_gas_limit(payload: Option<Json>) -> Parameters {
         let mut params = Parameters::default();
@@ -6245,18 +6258,19 @@ impl DetachedStateTransactionDelta {
         state_block: &mut StateBlock<'_>,
         authority: &iroha_data_model::account::AccountId,
     ) -> TransactionResultInner {
-        use iroha_data_model::transaction::error::TransactionRejectionReason;
         // Parallel-apply relies on this merge path to mirror sequential semantics for
         // supported ISIs. Tests exercise the same operations through both paths to
         // guarantee identical validation and event emission; extend cautiously and keep
         // the merge logic deterministic to avoid shared mutable state across workers.
-
-        use iroha_data_model::events::data::prelude::{
-            AccountEvent, AccountPermissionChanged, AccountRoleChanged, AssetChanged,
-            AssetDefinitionEvent, AssetDefinitionOwnerChanged, AssetEvent, DomainEvent,
-            DomainOwnerChanged, MetadataChanged, NftEvent, NftOwnerChanged, PeerEvent, RoleEvent,
+        use iroha_data_model::{
+            events::data::prelude::{
+                AccountEvent, AccountPermissionChanged, AccountRoleChanged, AssetChanged,
+                AssetDefinitionEvent, AssetDefinitionOwnerChanged, AssetEvent, ConfigurationEvent,
+                DomainEvent, DomainOwnerChanged, MetadataChanged, NftEvent, NftOwnerChanged,
+                ParameterChanged, PeerEvent, RoleEvent,
+            },
+            transaction::error::TransactionRejectionReason,
         };
-        use iroha_data_model::events::data::prelude::{ConfigurationEvent, ParameterChanged};
         let mut stx = state_block.transaction();
         let result: Result<(), iroha_data_model::ValidationFail> = (|| {
             let asset_adds = aggregate_numeric(&self.asset_add_ids, &self.asset_add_qtys);
@@ -14460,12 +14474,13 @@ impl StateTransaction<'_, '_> {
 
 #[cfg(test)]
 mod fragment_counter_tests {
-    use super::*;
     use std::sync::Arc;
 
-    use crate::kura::Kura;
     use iroha_data_model::block::BlockHeader;
     use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::kura::Kura;
 
     #[test]
     fn state_block_fragment_counter_updates_on_apply() {
@@ -14492,12 +14507,13 @@ mod fragment_counter_tests {
 
 #[cfg(test)]
 mod transfer_transcript_tests {
-    use super::*;
-    use crate::kura::Kura;
     use iroha_data_model::block::BlockHeader;
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::kura::Kura;
 
     #[test]
     fn transfer_transcripts_flush_into_block_map_on_apply() {
@@ -14619,8 +14635,6 @@ mod transfer_transcript_tests {
 
 #[cfg(all(test, feature = "transparent_api"))]
 mod block_proof_tests {
-    use super::*;
-    use crate::kura::Kura;
     use iroha_crypto::{KeyPair, SignatureOf};
     use iroha_data_model::{
         ChainId,
@@ -14630,6 +14644,9 @@ mod block_proof_tests {
         transaction::signed::{TransactionBuilder, TransactionResultInner},
     };
     use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::kura::Kura;
 
     #[test]
     fn block_proofs_for_entry_produce_valid_merkle_paths() {
@@ -14876,7 +14893,6 @@ mod replay_validation_tests {
 
 #[cfg(test)]
 mod permission_cache_tests {
-    use super::*;
     use iroha_data_model::{
         domain::DomainId,
         isi::{Grant, Revoke},
@@ -14892,8 +14908,11 @@ mod permission_cache_tests {
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
 
-    use crate::prelude::{AcceptedTransaction, StateReadOnly};
-    use crate::smartcontracts::Execute;
+    use super::*;
+    use crate::{
+        prelude::{AcceptedTransaction, StateReadOnly},
+        smartcontracts::Execute,
+    };
 
     #[test]
     fn revoke_permission_invalidates_trigger_cache() {
@@ -15177,10 +15196,11 @@ mod permission_cache_tests {
 
         let exec_path = temp_dir.path().join("executor.to");
         {
+            use std::mem::size_of;
+
             use iroha_data_model::ValidationFail;
             use ivm::{ProgramMetadata, encoding, instruction};
             use norito::codec::Encode as _;
-            use std::mem::size_of;
 
             fn build_program_from_encoded_result(bytes: &[u8]) -> Vec<u8> {
                 const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
@@ -17160,8 +17180,7 @@ pub(crate) mod deserialize {
 
     use norito::json::{self, JsonDeserialize};
 
-    use super::default_oracle;
-    use super::*;
+    use super::{default_oracle, *};
 
     #[derive(Clone, Copy)]
     pub struct IvmSeed<'e, T> {
@@ -17977,72 +17996,70 @@ mod tests {
         kura::InitMode,
         parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
     };
+    #[cfg(feature = "sm")]
+    use iroha_crypto::sm::Sm2PublicKey;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
-    use iroha_data_model::block::consensus::{LaneBlockCommitment, LaneSettlementReceipt};
-    use iroha_data_model::da::{
-        commitment::{
-            DaCommitmentBundle, DaCommitmentLocation, DaCommitmentRecord, DaProofScheme,
-            KzgCommitment, RetentionClass,
+    use iroha_data_model::{
+        block::{
+            BlockHeader, SignedBlock,
+            consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         },
-        confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
-        pin_intent::{DaPinIntent, DaPinIntentBundle},
-        types::{BlobDigest, StorageTicketId},
-    };
-    use iroha_data_model::events::data::prelude as data_pre;
-    use iroha_data_model::events::data::space_directory::SpaceDirectoryEvent;
-    use iroha_data_model::isi::error::InstructionExecutionError;
-    use iroha_data_model::nexus::{
-        AssetHandle, AssetPermissionManifest, AxtBinding, AxtDescriptor, AxtEnvelopeRecord,
-        AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot, AxtProofFragment,
-        AxtRejectReason, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog, DataSpaceId,
-        DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog,
-        LaneConfig as LaneMetadata, LaneId, LaneRelayEnvelope, LaneRelayError, LaneStorageProfile,
-        ManifestVersion, ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
-    };
-    use iroha_data_model::peer::PeerId;
-    use iroha_data_model::prelude::*;
-    use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus};
-    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
-    use iroha_data_model::{
-        block::{BlockHeader, SignedBlock},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        events::time::{ExecutionTime, Schedule, TimeEventFilter},
-        merge::MergeQuorumCertificate,
-        query::error::FindError,
-        transaction::ExecutionStep,
-    };
-    use iroha_data_model::{
+        da::{
+            commitment::{
+                DaCommitmentBundle, DaCommitmentLocation, DaCommitmentRecord, DaProofScheme,
+                KzgCommitment, RetentionClass,
+            },
+            confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
+            pin_intent::{DaPinIntent, DaPinIntentBundle},
+            types::{BlobDigest, StorageTicketId},
+        },
+        events::{
+            data::{prelude as data_pre, space_directory::SpaceDirectoryEvent},
+            time::{ExecutionTime, Schedule, TimeEventFilter},
+        },
         isi::{
             Burn, Mint, Register, RemoveAssetKeyValue, SetAssetKeyValue, SetKeyValue, Transfer,
-            Unregister,
+            Unregister, error::InstructionExecutionError,
         },
+        merge::MergeQuorumCertificate,
         name::Name,
+        nexus::{
+            AssetHandle, AssetPermissionManifest, AxtBinding, AxtDescriptor, AxtEnvelopeRecord,
+            AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot,
+            AxtProofFragment, AxtRejectReason, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog,
+            DataSpaceId, DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog,
+            LaneConfig as LaneMetadata, LaneId, LaneRelayEnvelope, LaneRelayError,
+            LaneStorageProfile, ManifestVersion, ProofBlob, RemoteSpendIntent, SpendOp,
+            TouchManifest,
+        },
+        peer::PeerId,
+        prelude::*,
+        proof::{ProofId, ProofRecord, ProofStatus},
+        query::error::FindError,
+        sorafs::pin_registry::ManifestDigest,
+        transaction::ExecutionStep,
     };
     use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric};
+    #[cfg(feature = "telemetry")]
+    use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
-
     use ivm::{IVM, IVMHost, encoding, pointer_abi::PointerType, syscalls};
+    use nonzero_ext::nonzero;
 
     use super::*;
-    use crate::da::DaShardCursorJournal;
-    use crate::kura::Kura;
-    use crate::nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet};
-    use crate::smartcontracts::Execute;
-    use crate::smartcontracts::ivm::host::CoreHost;
-    use crate::sumeragi::status;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
     use crate::{
         block::{BlockBuilder, BlockValidationError, ValidBlock, valid::validate_axt_envelopes},
+        da::DaShardCursorJournal,
+        kura::Kura,
+        nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         query::store::LiveQueryStore,
         role::RoleIdWithOwner,
-        sumeragi::network_topology::Topology,
+        smartcontracts::{Execute, ivm::host::CoreHost},
+        sumeragi::{network_topology::Topology, status},
     };
-    #[cfg(feature = "sm")]
-    use iroha_crypto::sm::Sm2PublicKey;
-    #[cfg(feature = "telemetry")]
-    use iroha_telemetry::metrics::Metrics;
-    use nonzero_ext::nonzero;
 
     fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
@@ -21313,11 +21330,12 @@ mod tests {
                 Some(&intent.storage_ticket)
             );
 
-            use crate::smartcontracts::ValidSingularQuery;
             use iroha_data_model::query::da::prelude::{
                 FindDaPinIntentByAlias, FindDaPinIntentByLaneEpochSequence,
                 FindDaPinIntentByManifest, FindDaPinIntentByTicket,
             };
+
+            use crate::smartcontracts::ValidSingularQuery;
 
             let ticket = intent.storage_ticket;
             let manifest_hash = intent.manifest_hash;
@@ -22493,8 +22511,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation() {
-        use iroha_data_model::nexus::LaneStorageProfile;
-        use iroha_data_model::nexus::LaneVisibility;
+        use iroha_data_model::nexus::{LaneStorageProfile, LaneVisibility};
         use iroha_primitives::time::TimeSource;
 
         fn build_block_with_envelope(
@@ -23335,8 +23352,10 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     #[test]
     fn detached_merge_matches_sequential_state_and_events() {
-        use iroha_data_model::isi::{Mint, RemoveKeyValue, SetKeyValue};
-        use iroha_data_model::prelude::*;
+        use iroha_data_model::{
+            isi::{Mint, RemoveKeyValue, SetKeyValue},
+            prelude::*,
+        };
         use iroha_primitives::{json::Json, numeric::Numeric};
         use iroha_test_samples::ALICE_ID;
 
@@ -23511,6 +23530,7 @@ mod tests {
     #[test]
     fn capture_exec_witness_stashes_reads_and_writes() {
         use core::str::FromStr as _;
+
         use iroha_data_model::{asset::AssetId, block::BlockHeader};
 
         let world = World::default();
@@ -24001,9 +24021,10 @@ mod tests {
     fn build_executor_verdict_program(
         verdict: &Result<(), iroha_data_model::ValidationFail>,
     ) -> Vec<u8> {
+        use std::mem::size_of;
+
         use ivm::{ProgramMetadata, encoding, instruction};
         use norito::codec::Encode as _;
-        use std::mem::size_of;
 
         const LITERAL_HEADER_LEN: usize = 4 + 12;
 
@@ -24179,9 +24200,11 @@ mod tests {
 
     #[test]
     fn block_rejects_failing_execute_trigger_and_rolls_back() {
-        use crate::{block::BlockBuilder, tx::AcceptedTransaction};
-        use iroha_test_samples::ALICE_KEYPAIR;
         use std::borrow::Cow;
+
+        use iroha_test_samples::ALICE_KEYPAIR;
+
+        use crate::{block::BlockBuilder, tx::AcceptedTransaction};
 
         // Seed the world with a domain and ALICE account to author the trigger.
         let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID);
@@ -25276,13 +25299,13 @@ mod tests {
 
     #[test]
     fn ivm_trigger_respects_pipeline_gas_cap() {
-        use iroha_data_model::events::execute_trigger::{
-            ExecuteTriggerEvent, ExecuteTriggerEventFilter,
-        };
-        use iroha_data_model::transaction::{Executable, IvmBytecode};
-        use iroha_data_model::trigger::{
-            Trigger,
-            action::{Action, Repeats},
+        use iroha_data_model::{
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
         };
 
         let kura = Kura::blank_kura_for_testing();
@@ -25414,8 +25437,10 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn delta_merge_set_parameter_emits_configuration_event() {
-        use iroha_data_model::events::data::prelude::ConfigurationEvent;
-        use iroha_data_model::parameter::{Parameter, TransactionParameter};
+        use iroha_data_model::{
+            events::data::prelude::ConfigurationEvent,
+            parameter::{Parameter, TransactionParameter},
+        };
         use nonzero_ext::nonzero;
 
         let kura = Kura::blank_kura_for_testing();

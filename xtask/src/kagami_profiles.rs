@@ -490,8 +490,9 @@ fn profile_slug_list() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn stub_genesis() -> RawGenesisTransaction {
         json::from_str(

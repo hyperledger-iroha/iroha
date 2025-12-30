@@ -33,6 +33,12 @@ import org.hyperledger.iroha.android.telemetry.KeystoreTelemetryEmitter;
  */
 public final class IrohaKeyManager {
 
+  private static final byte[] ED25519_SPKI_PREFIX =
+      new byte[] {
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
+      };
+  private static final int ED25519_SPKI_SIZE = 44;
+
   private final List<KeyProvider> providers;
   private final KeystoreTelemetryEmitter keystoreTelemetry;
 
@@ -122,6 +128,7 @@ public final class IrohaKeyManager {
       try {
         final Optional<KeyPair> existing = provider.load(alias);
         if (existing.isPresent()) {
+          ensureEd25519KeyPair(existing.get(), provider.metadata());
           return existing.get();
         }
       } catch (final KeyManagementException e) {
@@ -133,6 +140,7 @@ public final class IrohaKeyManager {
       try {
         final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
             provider.generateWithOutcome(alias, preference);
+        ensureEd25519KeyPair(outcome.keyPair(), provider.metadata());
         enforcePreference(preference, provider.metadata(), outcome);
         recordKeyGenerationTelemetry(alias, preference, provider.metadata(), outcome);
         return outcome.keyPair();
@@ -181,6 +189,31 @@ public final class IrohaKeyManager {
     keystoreTelemetry.recordKeyGeneration(alias, preference, metadata, outcome.route(), fallback);
   }
 
+  private static void ensureEd25519KeyPair(
+      final KeyPair keyPair, final KeyProviderMetadata metadata) throws KeyManagementException {
+    if (!isValidEd25519KeyPair(keyPair)) {
+      final String provider = metadata == null ? "unknown" : metadata.name();
+      throw new KeyManagementException(
+          "Provider " + provider + " returned non-Ed25519 key material");
+    }
+  }
+
+  private static boolean isValidEd25519KeyPair(final KeyPair keyPair) {
+    if (keyPair == null || keyPair.getPublic() == null) {
+      return false;
+    }
+    final byte[] encoded = keyPair.getPublic().getEncoded();
+    if (encoded == null || encoded.length != ED25519_SPKI_SIZE) {
+      return false;
+    }
+    for (int i = 0; i < ED25519_SPKI_PREFIX.length; i++) {
+      if (encoded[i] != ED25519_SPKI_PREFIX[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /**
    * Generates an ephemeral key pair suitable for offline transaction signing.
    *
@@ -191,7 +224,9 @@ public final class IrohaKeyManager {
     KeyManagementException lastError = null;
     for (final KeyProvider provider : providers) {
       try {
-        return provider.generateEphemeral();
+        final KeyPair keyPair = provider.generateEphemeral();
+        ensureEd25519KeyPair(keyPair, provider.metadata());
+        return keyPair;
       } catch (final KeyManagementException e) {
         lastError = e;
       }

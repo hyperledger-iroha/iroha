@@ -8,22 +8,26 @@
 
 // NonZero types are imported from core::num below
 
+use core::{
+    fmt::Write as _,
+    num::{NonZero, NonZeroU32, NonZeroU64},
+};
+use std::{collections::BTreeMap, str::FromStr};
+
 use hex;
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     Level, compute::ComputePriceWeights, name::Name, soranet::vpn::VpnExitClassV1,
 };
-use norito::json::{self, Arena, FastFromJson, FastJsonWrite, JsonDeserialize, TapeWalker};
+use norito::{
+    Error as NoritoError,
+    json::{self, Arena, FastFromJson, FastJsonWrite, JsonDeserialize, TapeWalker},
+};
 
 use crate::{
     logger::Directives,
     parameters::{actual as base, defaults},
 };
-use core::fmt::Write as _;
-use core::num::{NonZero, NonZeroU32, NonZeroU64};
-use norito::Error as NoritoError;
-use std::collections::BTreeMap;
-use std::str::FromStr;
 
 fn parse_via_fast<T>(parser: &mut json::Parser<'_>) -> Result<T, json::Error>
 where
@@ -3243,9 +3247,11 @@ impl JsonDeserialize for SoranetHandshakeSummary {
 
 #[cfg(test)]
 mod test {
-    use iroha_crypto::KeyPair;
-    use iroha_crypto::soranet::handshake::{
-        DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
+    use iroha_crypto::{
+        KeyPair,
+        soranet::handshake::{
+            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
+        },
     };
     use iroha_data_model::Level;
     use nonzero_ext::nonzero;

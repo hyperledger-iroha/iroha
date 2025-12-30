@@ -3,8 +3,9 @@
 
 #[tokio::test]
 async fn rbc_sessions_endpoint_shape() {
-    use axum::{Router, routing::get};
     use std::time::SystemTime;
+
+    use axum::{Router, routing::get};
     use tower::ServiceExt;
 
     // Seed one session into the global snapshot

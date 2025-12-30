@@ -522,9 +522,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use norito::json::{from_json, to_json};
+
     use super::*;
     use crate::storage::StorageReadOnly;
-    use norito::json::{from_json, to_json};
 
     fn sample_storage() -> Storage<String, i32> {
         let storage = Storage::default();

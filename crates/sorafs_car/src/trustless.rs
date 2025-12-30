@@ -6,7 +6,11 @@
 //! verifier TOML used in the SNNet-15 pack so operators and CI share the
 //! same thresholds.
 
-use crate::{CarVerificationReport, CarVerifier, StoredChunk};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
+
 use hex::encode as hex_encode;
 use norito::{
     Error as NoritoError,
@@ -17,12 +21,10 @@ use sorafs_manifest::{
     ManifestV1,
     pin_registry::{PinRecordV1, PinRecordValidationError},
 };
-use std::{
-    fs, io,
-    path::{Path, PathBuf},
-};
 use thiserror::Error;
 use toml::Value as TomlValue;
+
+use crate::{CarVerificationReport, CarVerifier, StoredChunk};
 
 /// Configuration used to guide trustless verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -408,8 +410,9 @@ fn read_string(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sorafs_manifest::pin_registry::PinRecordValidationError;
+
+    use super::*;
 
     #[test]
     fn parses_gateway_config() {

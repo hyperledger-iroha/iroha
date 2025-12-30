@@ -1,5 +1,7 @@
 //! Oracle ISI integration tests.
 
+use std::{num::NonZeroU64, str::FromStr, sync::Arc};
+
 use iroha_config::parameters::{
     actual::{
         Oracle as OracleConfig, OracleChangeThresholds, OracleEconomics, OracleGovernance,
@@ -15,16 +17,16 @@ use iroha_core::{
     telemetry::StateTelemetry,
 };
 use iroha_crypto::{Hash, KeyPair, SignatureOf};
-use iroha_data_model::isi::{
-    AggregateOracleFeed, OpenOracleDispute, ProposeOracleChange, RecordTwitterBinding,
-    RegisterOracleFeed, ResolveOracleDispute, RevokeTwitterBinding, SubmitOracleObservation,
-    VoteOracleChangeStage,
-};
 use iroha_data_model::{
     account::Account,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
     domain::Domain,
+    isi::{
+        AggregateOracleFeed, OpenOracleDispute, ProposeOracleChange, RecordTwitterBinding,
+        RegisterOracleFeed, ResolveOracleDispute, RevokeTwitterBinding, SubmitOracleObservation,
+        VoteOracleChangeStage,
+    },
     nexus::UniversalAccountId,
     oracle::{
         AbsoluteOutlier, AggregationRule, FeedConfig, FeedConfigVersion, FeedEventOutcome, FeedId,
@@ -38,7 +40,6 @@ use iroha_primitives::numeric::Numeric;
 use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::{num::NonZeroU64, str::FromStr, sync::Arc};
 
 fn test_telemetry() -> StateTelemetry {
     StateTelemetry::new(Arc::new(Metrics::default()), false)

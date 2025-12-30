@@ -4,11 +4,11 @@
 //! and now use the canonical Poseidon2 sponge over Goldilocks with the
 //! `fastpq:v1:ordering` domain tag.
 
+use ::core::convert::TryInto as _;
 use iroha_crypto::Hash;
 use norito::core;
 
 use crate::{Result, TransitionBatch, pack_bytes, poseidon};
-use ::core::convert::TryInto as _;
 
 /// Domain separation tag for ordering commitments.
 const ORDERING_DOMAIN: &[u8] = b"fastpq:v1:ordering";

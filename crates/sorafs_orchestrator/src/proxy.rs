@@ -7,19 +7,6 @@
 
 #![allow(unexpected_cfgs)]
 
-use crate::soranet::{GuardCacheKey, GuardCacheKeyError};
-use hex::ToHex;
-use iroha_logger::{info, warn};
-use iroha_telemetry::metrics::{global_or_default, global_sorafs_fetch_otel};
-use norito::{
-    NoritoDeserialize, NoritoSerialize, core::DecodeFromSlice, decode_from_bytes, to_bytes,
-};
-use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use quinn::{ConnectionError, Endpoint, ServerConfig, VarInt};
-use rand::rand_core::TryRngCore;
-use rand::rngs::OsRng;
-use rcgen::generate_simple_self_signed;
-use sha2::{Digest, Sha256};
 use std::{
     net::SocketAddr,
     path::{Component, Path, PathBuf},
@@ -28,6 +15,20 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
+
+use hex::ToHex;
+use iroha_logger::{info, warn};
+use iroha_telemetry::metrics::{global_or_default, global_sorafs_fetch_otel};
+use norito::{
+    NoritoDeserialize, NoritoSerialize, core::DecodeFromSlice, decode_from_bytes, to_bytes,
+};
+use quinn::{
+    ConnectionError, Endpoint, ServerConfig, VarInt,
+    rustls::pki_types::{CertificateDer, PrivateKeyDer},
+};
+use rand::{rand_core::TryRngCore, rngs::OsRng};
+use rcgen::generate_simple_self_signed;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{
     fs,
@@ -36,6 +37,8 @@ use tokio::{
     sync::{Mutex, watch},
     task::JoinHandle,
 };
+
+use crate::soranet::{GuardCacheKey, GuardCacheKeyError};
 
 const PROXY_HANDSHAKE_VERSION: u8 = 1;
 const PROXY_ALPN_LABEL: &str = "sorafs-proxy/1";
@@ -2182,22 +2185,26 @@ impl ProxyStreamService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{io, net::SocketAddr, sync::Arc};
+
     use tempfile::TempDir;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
 
+    use super::*;
+
     const TEST_GUARD_KEY: &str = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
 
     use quinn::{
         ClientConfig, Endpoint, VarInt, crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
     };
-    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-    use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
+    use rustls::{
+        DigitallySignedStruct, Error as RustlsError, SignatureScheme,
+        client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+        pki_types::{CertificateDer, ServerName, UnixTime},
+    };
 
     fn should_skip_socket_permission(message: &str) -> bool {
         message.contains("Operation not permitted") || message.contains("Permission denied")

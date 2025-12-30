@@ -1,20 +1,22 @@
 //! Persist VRF-derived council into WSV and verify `current` returns it.
 #![cfg(all(feature = "app_api", feature = "gov_vrf"))]
 
-use norito::json;
 use std::sync::Arc;
 
-use iroha_data_model::account::AccountId;
-
-use axum::{Router, routing::get, routing::post};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use http_body_util::BodyExt as _;
-use iroha_core::governance::parliament;
 use iroha_core::{
+    governance::parliament,
     kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
     state::{State, World},
 };
+use iroha_data_model::account::AccountId;
+use norito::json;
 use tower::ServiceExt as _;
 
 #[tokio::test]

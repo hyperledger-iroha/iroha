@@ -1,11 +1,12 @@
 //! `CoreHost` Norito serialization helper syscall coverage.
 
+use std::convert::TryFrom;
+
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, IVMHost, PointerType, ProgramMetadata, syscalls};
-use std::convert::TryFrom;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);

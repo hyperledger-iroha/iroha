@@ -1421,20 +1421,22 @@ pub(crate) fn revoke_permissions<V: Execute + ?Sized>(
 
 #[cfg(test)]
 mod tests {
-    use super::{OnlyGenesis, PassCondition, has_permission_in_roles, permission_owned_in_sources};
     use std::{num::NonZeroU64, vec::Vec};
 
     use iroha_crypto::PublicKey;
     use iroha_executor_data_model::permission::{domain::CanRegisterDomain, peer::CanManagePeers};
 
+    use super::{OnlyGenesis, PassCondition, has_permission_in_roles, permission_owned_in_sources};
     use crate::{
         data_model::ValidationFail,
         prelude::Context,
-        smart_contract::Iroha,
-        smart_contract::data_model::{
-            block::BlockHeader,
-            permission::Permission as PermissionObject,
-            prelude::{AccountId, DomainId, RoleId},
+        smart_contract::{
+            Iroha,
+            data_model::{
+                block::BlockHeader,
+                permission::Permission as PermissionObject,
+                prelude::{AccountId, DomainId, RoleId},
+            },
         },
     };
 

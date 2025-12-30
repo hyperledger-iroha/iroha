@@ -2,6 +2,20 @@
 
 mod config;
 
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    convert::TryFrom,
+    env,
+    ffi::OsString,
+    fs,
+    num::{NonZeroU32, NonZeroU64},
+    path::{Path, PathBuf},
+    process,
+    str::FromStr,
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH},
+};
+
 use config::{
     BinaryOverrides, BundleConfig, ResolvedBundleConfig, default_config_path, load_bundle_config,
     load_bundle_config_at,
@@ -46,12 +60,6 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::isi::multisig::MultisigSpec;
-use mochi_core::ToriiClient;
-use mochi_core::supervisor::RestartPolicy;
-use mochi_core::torii::{
-    ReadinessOptions, ReadinessSmokeOutcome, SmokeCommitOptions, StatusMetrics, ToriiErrorInfo,
-    ToriiErrorKind, ToriiMetricsSnapshot, ToriiStatusSnapshot,
-};
 use mochi_core::{
     BlockDecodeStage, BlockStreamDecodeError, BlockStreamEvent, BlockSummary, EventCategory,
     EventDecodeStage, EventStreamDecodeError, EventStreamEvent, EventSummary, ExposedPrivateKey,
@@ -59,23 +67,15 @@ use mochi_core::{
     LogStreamKind, ManagedBlockStream, ManagedEventStream, ManagedStatusStream, NetworkProfile,
     PeerLogEvent, PeerState, PrivateKey, ProfilePreset, SigningAuthority, StateCursor, StateEntry,
     StatePage, StateQueryKind, StatusStreamEvent, Supervisor, SupervisorBuilder, SupervisorError,
-    TransactionComposeOptions, TransactionPreview, compose_preview_with_options,
+    ToriiClient, TransactionComposeOptions, TransactionPreview, compose_preview_with_options,
     development_signing_authorities, drafts_from_json_str, drafts_to_pretty_json, run_state_query,
+    supervisor::RestartPolicy,
+    torii::{
+        ReadinessOptions, ReadinessSmokeOutcome, SmokeCommitOptions, StatusMetrics, ToriiErrorInfo,
+        ToriiErrorKind, ToriiMetricsSnapshot, ToriiStatusSnapshot,
+    },
 };
 use norito::json::{self, Map, Value};
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
-    convert::TryFrom,
-    env,
-    ffi::OsString,
-    fs,
-    num::{NonZeroU32, NonZeroU64},
-    path::{Path, PathBuf},
-    process,
-    str::FromStr,
-    sync::{Arc, LazyLock, Mutex},
-    time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH},
-};
 use tokio::{
     runtime::{Handle, Runtime},
     sync::{
@@ -1998,13 +1998,14 @@ fn socket_bind_available() -> bool {
 
 #[cfg(test)]
 mod cli_tests {
-    use super::*;
     use std::{
         env,
         ffi::OsString,
         path::{Path, PathBuf},
         sync::{Mutex, OnceLock},
     };
+
+    use super::*;
 
     fn cli_env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -9397,8 +9398,9 @@ fn current_unix_timestamp_ms() -> u64 {
 
 #[cfg(test)]
 mod timestamp_tests {
-    use super::{current_unix_timestamp_ms, unix_timestamp_ms, unix_timestamp_ms_from_duration};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use super::{current_unix_timestamp_ms, unix_timestamp_ms, unix_timestamp_ms_from_duration};
 
     #[test]
     fn unix_timestamp_ms_clamps_before_epoch() {
@@ -11114,12 +11116,14 @@ impl EventSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ActiveView, CliOverrides, InstructionPermission, MaintenanceCommand, MaintenanceState,
-        MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm, SignerEntryState,
-        StatePageCache, StateQueryKind, SupervisorBuilder, filter_state_entries,
-        reset_cli_overrides_for_tests,
+    use std::{
+        collections::VecDeque,
+        num::NonZeroU64,
+        path::Path,
+        sync::Arc,
+        time::{Duration, Instant},
     };
+
     use egui::{CentralPanel, Color32, Context, FontFamily, TextStyle};
     use iroha_data_model::{
         account::{AccountAdmissionMode, admission::ImplicitAccountFeeDestination},
@@ -11141,16 +11145,17 @@ mod tests {
         role::RoleId,
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-    use mochi_core::ToriiError;
-    use mochi_core::torii::{GovernanceStatus, StatusMetrics, Uptime};
-    use mochi_core::{ExposedPrivateKey, TelemetryStatus, TxGossipSnapshot};
+    use mochi_core::{
+        ExposedPrivateKey, TelemetryStatus, ToriiError, TxGossipSnapshot,
+        torii::{GovernanceStatus, StatusMetrics, Uptime},
+    };
     use norito::json::{self, Value};
-    use std::{
-        collections::VecDeque,
-        num::NonZeroU64,
-        path::Path,
-        sync::Arc,
-        time::{Duration, Instant},
+
+    use super::{
+        ActiveView, CliOverrides, InstructionPermission, MaintenanceCommand, MaintenanceState,
+        MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm, SignerEntryState,
+        StatePageCache, StateQueryKind, SupervisorBuilder, filter_state_entries,
+        reset_cli_overrides_for_tests,
     };
 
     #[test]
@@ -13596,7 +13601,6 @@ mod tests {
         );
     }
 
-    use super::*;
     use std::{
         env, fs,
         io::{Read, Write},
@@ -13604,6 +13608,8 @@ mod tests {
         path::PathBuf,
         sync::{Mutex, OnceLock},
     };
+
+    use super::*;
 
     #[test]
     fn applying_settings_persists_config_and_rebuilds_supervisor() {

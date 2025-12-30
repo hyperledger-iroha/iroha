@@ -5,6 +5,7 @@
 //! verification flows that mirror the Python and JavaScript SDKs.
 
 use core::fmt;
+
 use iroha_crypto::{
     Algorithm, PublicKey,
     error::{Error as CryptoError, ParseError},
@@ -176,10 +177,12 @@ pub enum Sm2VerifyError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{fs, path::PathBuf};
+
     use hex::FromHex;
     use norito::{derive::JsonDeserialize, json};
-    use std::{fs, path::PathBuf};
+
+    use super::*;
 
     #[derive(Debug, JsonDeserialize)]
     struct Fixture {

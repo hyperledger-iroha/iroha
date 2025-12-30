@@ -11,8 +11,7 @@ use color_eyre::eyre::{Context as _, Result};
 use inquire::{Select, Text};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use norito::json::{self, Value as JsonValue};
-use toml::Value as TomlValue;
-use toml::value::Table as TomlTable;
+use toml::{Value as TomlValue, value::Table as TomlTable};
 
 use crate::{Outcome, RunArgs, tui};
 

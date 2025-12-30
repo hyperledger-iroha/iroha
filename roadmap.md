@@ -27,7 +27,15 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Kagami alignment: auto-pass `--profile`/lane args to Kagami generation/verify and track the resulting chain id/fingerprint in rendered configs.
    - [x] Docs/samples: expand sample-config and bundle README with new presets, lane/DA switches, and usage recipes for 1/3/4/5-node and Nexus lane runs.
 
-4. **LOCALNET-DEMO-FLOW — Verify training-script localnet bootstrap** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
+2. **OFFLINE-SECURITY-HARDENING — Close remaining offline receipt threat gaps** (Core/SDK, Line: Shared, Owner: Offline WG, Priority: High, Status: 🈺 In Progress, target TBD)
+   - [x] Bind receipt challenges to `chain_id` across core, SDKs, and FFI helpers.
+   - [x] Enforce `policy.max_tx_value` during settlement and surface `max_tx_value_exceeded` rejections.
+   - [x] Add range-proof verification for `resulting_commitment` (non-negative/bounded balance) and update docs/tests.
+   - [x] Document operational guardrails for front-running/rollback risk and rooted-device privacy exposure.
+   - [ ] Add receipt age/refresh guardrails to reduce front-running and replay risk; update SDK UX and docs.
+   - [ ] Mitigate memory exposure for commitment witness material (zeroization and optional hardware paths).
+
+4. **LOCALNET-DEMO-FLOW — Verify training-script localnet bootstrap** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Align consensus rebroadcast cooldowns (RBC/pending/precommit) to on-chain `block_time` with a 200ms floor and 2x base multiplier, keeping payload replays at an additional 2x to avoid queue saturation on 1s targets.
    - [x] Widen Sumeragi worker loop drain budgets and block `BlockSyncUpdate` enqueue under backpressure to prevent DA-localnet asset test hangs.【crates/iroha_core/src/sumeragi/mod.rs】
    - [x] Switch localnet + defaults to per-queue Sumeragi channel caps (votes/payload/RBC/block) tuned for 20k TPS and 1s block times.【crates/iroha_kagami/src/localnet.rs】【crates/iroha_config/src/parameters/defaults.rs】
@@ -51,6 +59,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Re-run localnet after the availability-vote emission fixes (including deferred-validation votes) to confirm missing-availability QC warnings and DAG fingerprint mismatch warnings are gone (0 missing-availability warnings; 0 DAG fingerprint mismatches).
    - [x] Re-run the seven-peer DA consistency test after restoring the DA quorum timeout multiplier to confirm view-change stalls no longer stretch commits (pass: `cargo test -p integration_tests --test mod seven_peer_cross_peer_consistency_basic`).【crates/iroha_core/src/sumeragi/main_loop.rs】
    - [x] Eliminate remaining tx status timeouts (approve/propose/register) and rare >40s block gaps observed during the 20-run localnet sweep.【crates/iroha/src/client.rs】【crates/iroha_kagami/src/localnet.rs】【crates/iroha_kagami/README.md】
+   - [x] Seed peer telemetry with explicit Torii URLs in localnet configs so peer monitors stop hitting P2P ports during demos.【crates/iroha_torii/src/lib.rs】【crates/iroha_kagami/src/localnet.rs】【docs/source/telemetry.md】
 
 5. **INTEGRATION-TEST-STABILITY — Replace transient skips with deterministic readiness** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Audit integration tests that now skip on timeouts (events pipeline, sumeragi_da, unstable_network, genesis/offline peers, triggers/time triggers) and replace with deterministic readiness probes or tuned deadlines.
@@ -139,7 +148,20 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraFS orchestrator tuning guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS multi-source rollout runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS orchestrator configuration guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
-   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond quickstart/runbooks index/capacity simulation/manifest pipeline/orchestrator ops/orchestrator tuning/multi-source rollout/orchestrator config, then fill remaining portal stubs per locale.
+   - [x] Portal SoraFS node operations runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS dispute & revocation runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS capacity reconciliation runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS gateway & DNS kickoff runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Taikai anchor observability runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS operations playbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS observability plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS node-client protocol translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS staging manifest playbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS chunker registry rollout checklist translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS chunker registry translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS chunker registry charter translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS chunker conformance translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond quickstart/runbooks index/capacity simulation/manifest pipeline/orchestrator ops/orchestrator tuning/multi-source rollout/orchestrator config/node operations/dispute revocation runbook/capacity reconciliation/gateway & DNS kickoff runbook/taikai anchor runbook/operations playbook/observability plan/node-client protocol/staging manifest playbook/chunker registry rollout checklist/chunker registry/chunker registry charter/chunker conformance, then fill remaining portal stubs per locale.
     - [x] Ensure Akkadian translations are semantic and written in cuneiform (no transliteration).
     - [x] Extend CLI i18n coverage (remaining messages and clap help output).
     - [x] Fill governance schedule placeholders in scripts/templates that currently say TBD.

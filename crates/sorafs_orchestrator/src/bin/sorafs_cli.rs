@@ -1,10 +1,24 @@
 //! Aggregated CLI entry point for SoraFS packaging helpers.
 #![allow(unexpected_cfgs)]
 
-use base64::Engine;
-use base64::engine::general_purpose::{
-    STANDARD as BASE64_STANDARD, URL_SAFE as BASE64_URL_SAFE,
-    URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
+use std::{
+    convert::TryInto,
+    env,
+    fmt::Write as FmtWrite,
+    fs::{self, File},
+    io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write},
+    path::{Path, PathBuf},
+    process,
+    str::FromStr,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use base64::{
+    Engine,
+    engine::general_purpose::{
+        STANDARD as BASE64_STANDARD, URL_SAFE as BASE64_URL_SAFE,
+        URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
+    },
 };
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -29,12 +43,13 @@ use iroha_data_model::{
     },
 };
 use ivm::kotodama::compiler::Compiler;
-use norito::decode_from_bytes;
-use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use norito::json::{Map, Number, Value, from_slice, to_string_pretty, to_value, to_vec};
-use norito::to_bytes;
-use reqwest::blocking::Client as HttpClient;
-use reqwest::header::CONTENT_TYPE;
+use norito::{
+    decode_from_bytes,
+    derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},
+    json::{Map, Number, Value, from_slice, to_string_pretty, to_value, to_vec},
+    to_bytes,
+};
+use reqwest::{blocking::Client as HttpClient, header::CONTENT_TYPE};
 use rust_decimal::Decimal;
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
@@ -74,19 +89,7 @@ use sorafs_orchestrator::{
     },
     fetch_via_gateway,
     proxy::{ProxyKaigiBridgeConfig, ProxyMode, ProxyNoritoBridgeConfig},
-    taikai_cache::TaikaiPullQueueStats,
-    taikai_cache::{TaikaiCacheConfig, TaikaiCacheStatsSnapshot},
-};
-use std::{
-    convert::TryInto,
-    env,
-    fmt::Write as FmtWrite,
-    fs::{self, File},
-    io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write},
-    path::{Path, PathBuf},
-    process,
-    str::FromStr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    taikai_cache::{TaikaiCacheConfig, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats},
 };
 use tokio::runtime::Runtime;
 
@@ -3854,13 +3857,14 @@ fn format_decimal(value: Decimal, places: u32) -> String {
 
 #[cfg(test)]
 mod manifest_tests {
-    use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::domain::DomainId;
     use norito::json::{Map, Value};
     use sorafs_orchestrator::proxy::LocalQuicProxyConfig;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn account_string(label: u8) -> String {
         let domain: DomainId = "panel".parse().expect("domain id");
@@ -6365,14 +6369,16 @@ fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{fs, path::Path};
+
     use norito::json::Map;
     use sorafs_manifest::{
         GovernanceProofs, PinPolicy as ManifestPinPolicy, StorageClass as ManifestStorageClass,
     };
     use sorafs_orchestrator::{PolicyReport, PolicyStatus};
-    use std::{fs, path::Path};
     use tempfile::tempdir;
+
+    use super::*;
 
     fn sample_manifest() -> ManifestV1 {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();

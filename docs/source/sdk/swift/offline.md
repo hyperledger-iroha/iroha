@@ -38,7 +38,7 @@ try journal.markCommitted(txId: txId)
 - Hash chain: `chain = BLAKE2b-256(prev_chain || tx_id)`.
 - Auth: `HMAC-SHA256(prev_chain || record_without_hmac)`.
 - Opening or appending beyond limits raises `OfflineJournalError.integrityViolation`; export and rotate the file before retrying.
- - Use `OfflineWallet.buildSignedReceipt(..., journal: journal)` to sign receipts and append them to the journal in one call.
+- Use `OfflineWallet.buildSignedReceipt(chainId: ..., journal: journal)` to sign receipts and append them to the journal in one call.
 
 ## Pipeline retry queue
 ```swift

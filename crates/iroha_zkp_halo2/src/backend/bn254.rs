@@ -6,13 +6,17 @@
 
 use core::fmt;
 
-use halo2curves::bn256::{Fr, G1, G1Affine};
-use halo2curves::ff::{Field, FromUniformBytes, PrimeField};
-use halo2curves::group::{Group as HaloGroup, GroupEncoding};
+use halo2curves::{
+    bn256::{Fr, G1, G1Affine},
+    ff::{Field, FromUniformBytes, PrimeField},
+    group::{Group as HaloGroup, GroupEncoding},
+};
 
-use crate::backend::{IpaBackend, IpaGroup, IpaScalar};
-use crate::errors::Error;
-use crate::norito_types::ZkCurveId;
+use crate::{
+    backend::{IpaBackend, IpaGroup, IpaScalar},
+    errors::Error,
+    norito_types::ZkCurveId,
+};
 
 /// Scalar field element over BN254 (`Fr`).
 #[derive(Copy, Clone, PartialEq, Eq, Default)]

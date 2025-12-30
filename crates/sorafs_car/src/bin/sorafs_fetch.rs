@@ -26,41 +26,39 @@ use ed25519_dalek::{
 };
 use hex::encode as hex_encode;
 use iroha_crypto::HybridSuite;
-use norito::decode_from_bytes;
-use norito::json::{Map, Value, from_slice, to_string_pretty};
-use sorafs_car::fetch_plan::{
-    chunk_fetch_specs_from_json, expected_payload_digest_from_json, expected_payload_len_from_json,
-    parse_digest_hex,
+use norito::{
+    decode_from_bytes,
+    json::{Map, Value, from_slice, to_string_pretty},
 };
-use sorafs_car::gateway::{
-    GatewayFetchConfig, GatewayFetchContext, GatewayFetchError, GatewayProviderInput,
-};
-use sorafs_car::multi_fetch;
-use sorafs_car::multi_fetch::{
-    ChunkDelivery, ChunkObserver, ChunkResponse, FetchOutcome, FetchRequest, MultiSourceError,
-    ObserverError, ProviderMetadata, ProviderReport, ProviderScoreContext, ProviderScoreDecision,
-    RangeCapability, ScorePolicy, StreamBudget, TransportHint,
-};
-use sorafs_car::policy::{
-    AnonymityPolicy, PolicyLabelSummary, TransportPolicy, anonymity_policy_labels,
-    transport_policy_labels,
-};
-use sorafs_car::scoreboard::{self, ProviderTelemetry, TelemetrySnapshot};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerificationReport, CarVerifier, CarWriteStats,
     ChunkFetchSpec, FilePlan, chunker_registry,
+    fetch_plan::{
+        chunk_fetch_specs_from_json, expected_payload_digest_from_json,
+        expected_payload_len_from_json, parse_digest_hex,
+    },
+    gateway::{GatewayFetchConfig, GatewayFetchContext, GatewayFetchError, GatewayProviderInput},
+    multi_fetch,
+    multi_fetch::{
+        ChunkDelivery, ChunkObserver, ChunkResponse, FetchOutcome, FetchRequest, MultiSourceError,
+        ObserverError, ProviderMetadata, ProviderReport, ProviderScoreContext,
+        ProviderScoreDecision, RangeCapability, ScorePolicy, StreamBudget, TransportHint,
+    },
+    policy::{
+        AnonymityPolicy, PolicyLabelSummary, TransportPolicy, anonymity_policy_labels,
+        transport_policy_labels,
+    },
+    scoreboard::{self, ProviderTelemetry, TelemetrySnapshot},
 };
 use sorafs_chunker::ChunkProfile;
-use sorafs_manifest::hybrid_envelope::{
-    HYBRID_PAYLOAD_ENVELOPE_VERSION_V1, HybridPayloadEnvelopeV1,
-};
-use sorafs_manifest::provider_admission::{
-    AdmissionRecord, ProviderAdmissionEnvelopeV1, verify_advert_against_record,
-};
-use sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1;
 use sorafs_manifest::{
     AvailabilityTier, CapabilityType, ManifestV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
     SignatureAlgorithm, TransportHintV1, TransportProtocol,
+    hybrid_envelope::{HYBRID_PAYLOAD_ENVELOPE_VERSION_V1, HybridPayloadEnvelopeV1},
+    provider_admission::{
+        AdmissionRecord, ProviderAdmissionEnvelopeV1, verify_advert_against_record,
+    },
+    provider_advert::ProviderCapabilitySoranetPqV1,
 };
 
 const KNOWN_CAPABILITIES: &[CapabilityType; 5] = &[
@@ -2802,7 +2800,13 @@ fn parse_u64(value: &Value, field: &str, idx: usize) -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{
+        collections::HashMap,
+        env,
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
+
     use assert_cmd::Command as AssertCommand;
     use ed25519_dalek::{Signer, SigningKey};
     use norito::to_bytes;
@@ -2810,22 +2814,17 @@ mod tests {
         CarWriter,
         multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderId, ProviderReport},
     };
-    use sorafs_manifest::hybrid_envelope::HybridKemBundleV1;
-    use sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1;
     use sorafs_manifest::{
         AdvertEndpoint, AdvertSignature, CapabilityTlv, DagCodecId, EndpointKind, EndpointMetadata,
         EndpointMetadataKey, GovernanceProofs, ManifestBuilder, PROVIDER_ADVERT_VERSION_V1,
         PathDiversityPolicy, PinPolicy, ProviderAdvertBodyV1, ProviderCapabilityRangeV1, QosHints,
         RendezvousTopic, SignatureAlgorithm, StakePointer, StorageClass, StreamBudgetV1,
-        TransportHintV1, TransportProtocol,
-    };
-    use std::{
-        collections::HashMap,
-        env,
-        path::{Path, PathBuf},
-        sync::Arc,
+        TransportHintV1, TransportProtocol, hybrid_envelope::HybridKemBundleV1,
+        provider_advert::ProviderCapabilitySoranetPqV1,
     };
     use tempfile::{NamedTempFile, tempdir};
+
+    use super::*;
 
     fn sorafs_fetch_cmd() -> AssertCommand {
         if let Ok(path) = env::var("CARGO_BIN_EXE_sorafs_fetch") {

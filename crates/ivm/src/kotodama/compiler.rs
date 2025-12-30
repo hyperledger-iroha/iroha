@@ -10,22 +10,8 @@
 //! module emit the canonical wide encoding introduced for the first release; no
 //! deprecated instruction layouts are generated.
 
-use super::{
-    ast::{
-        BinaryOp, ContractFeature, FunctionKind, FunctionModifiers, FunctionVisibility, Program,
-        UnaryOp,
-    },
-    i18n::{self, Language, Message},
-    ir::{self, Instr, Terminator},
-    parser, policy,
-    regalloc::{self, ARG_REGS},
-    semantic::{self, TypedItem, TypedProgram},
-};
-use crate::encoding;
-use crate::instruction;
-use crate::metadata::{self, LITERAL_SECTION_MAGIC, ProgramMetadata};
-use crate::pointer_abi::PointerType;
-use crate::syscalls;
+use std::collections::{BTreeSet, HashMap};
+
 use indexmap::IndexSet;
 use iroha_crypto as _; // for Hash types in new APIs
 use iroha_data_model::{
@@ -39,7 +25,24 @@ use iroha_data_model::{
     smart_contract::manifest::{AccessSetHints, EntryPointKind, EntrypointDescriptor},
     trigger::TriggerId,
 };
-use std::collections::{BTreeSet, HashMap};
+
+use super::{
+    ast::{
+        BinaryOp, ContractFeature, FunctionKind, FunctionModifiers, FunctionVisibility, Program,
+        UnaryOp,
+    },
+    i18n::{self, Language, Message},
+    ir::{self, Instr, Terminator},
+    parser, policy,
+    regalloc::{self, ARG_REGS},
+    semantic::{self, TypedItem, TypedProgram},
+};
+use crate::{
+    encoding, instruction,
+    metadata::{self, LITERAL_SECTION_MAGIC, ProgramMetadata},
+    pointer_abi::PointerType,
+    syscalls,
+};
 
 const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;
@@ -380,8 +383,7 @@ impl Default for CompilerOptions {
 #[cfg(test)]
 mod tests {
     use super::{Compiler, CompilerOptions, DEFAULT_MAX_CYCLES, pointer_type_for_kind};
-    use crate::IVM;
-    use crate::pointer_abi::PointerType;
+    use crate::{IVM, pointer_abi::PointerType};
 
     #[test]
     fn pointer_types_cover_all_data_ref_kinds() {
@@ -1909,9 +1911,9 @@ impl Compiler {
                             proof,
                             vk,
                         } => {
-                            use iroha_data_model::isi::zk as DMZk;
-                            use iroha_data_model::proof::{
-                                ProofAttachment, ProofBox, VerifyingKeyBox,
+                            use iroha_data_model::{
+                                isi::zk as DMZk,
+                                proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
                             };
                             // Gather inputs from literals/datarefs
                             let eid = string_map
@@ -1970,10 +1972,10 @@ impl Compiler {
                             proof,
                             vk,
                         } => {
-                            use iroha_data_model::isi::zk as DMZk;
-                            use iroha_data_model::prelude::*;
-                            use iroha_data_model::proof::{
-                                ProofAttachment, ProofBox, VerifyingKeyBox,
+                            use iroha_data_model::{
+                                isi::zk as DMZk,
+                                prelude::*,
+                                proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
                             };
                             // Parse typed ids from literals
                             let asset_id_str = string_map

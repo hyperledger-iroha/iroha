@@ -7,8 +7,10 @@ use derive_more::Constructor;
 use eyre::Result;
 use iroha_crypto::{HashOf, PublicKey, SignatureOf};
 use iroha_data_model::block::BlockHeader;
-use norito::codec::{Decode, Encode};
-use norito::core::{self as ncore, DecodeFromSlice};
+use norito::{
+    codec::{Decode, Encode},
+    core::{self as ncore, DecodeFromSlice},
+};
 use thiserror::Error;
 
 use super::network_topology::Topology;
@@ -326,6 +328,7 @@ impl ProofChain {
 
 mod candidate {
     use core::fmt;
+
     use indexmap::IndexSet;
 
     use super::*;
@@ -410,8 +413,9 @@ mod candidate {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
         use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
+
+        use super::*;
 
         #[test]
         fn missing_signatures_is_error() {

@@ -13,10 +13,9 @@
 //! - `type_id` must be known in the table below.
 //! - Hash must match `iroha_crypto::Hash::new(payload)`.
 
+use std::{cell::Cell, collections::HashSet, sync::OnceLock};
+
 use crate::{SyscallPolicy, error::VMError};
-use std::cell::Cell;
-use std::collections::HashSet;
-use std::sync::OnceLock;
 
 /// Known pointer-ABI types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

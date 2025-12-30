@@ -1,24 +1,23 @@
 //! Governance instruction validation tests.
 #![allow(clippy::items_after_statements)]
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STD;
 use core::convert::TryInto;
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, WorldReadOnly},
 };
-use iroha_crypto::KeyPair;
-use iroha_crypto::blake2::Digest as _;
-use iroha_data_model::prelude::*;
+use iroha_crypto::{KeyPair, blake2::Digest as _};
 use iroha_data_model::{
     governance::types::{
         AbiVersion, AtWindow, ContractAbiHash, ContractCodeHash, DeployContractProposal,
         ProposalKind,
     },
     permission::Permission,
+    prelude::*,
 };
 use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanProposeContractDeployment, CanSubmitGovernanceBallot,

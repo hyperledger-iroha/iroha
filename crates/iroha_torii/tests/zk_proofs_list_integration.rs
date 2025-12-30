@@ -4,10 +4,9 @@
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use iroha_config::parameters::defaults;
-
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
+use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,

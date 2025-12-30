@@ -3,9 +3,6 @@
 //! These tests prove that `iroha taikai cek-rotate` and `iroha taikai rpt-attest`
 //! emit deterministic Norito artefacts with the expected digests and metadata.
 
-use blake3::Hasher;
-use iroha_data_model::taikai::{CekRotationReceiptV1, ReplicationProofTokenV1};
-use norito::json::Value;
 use std::{
     borrow::Cow,
     fs::{self, File},
@@ -13,6 +10,10 @@ use std::{
     path::Path,
     process::Command,
 };
+
+use blake3::Hasher;
+use iroha_data_model::taikai::{CekRotationReceiptV1, ReplicationProofTokenV1};
+use norito::json::Value;
 use tempfile::tempdir;
 
 fn cli_binary() -> &'static str {

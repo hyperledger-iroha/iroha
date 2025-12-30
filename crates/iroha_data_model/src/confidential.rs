@@ -7,6 +7,7 @@
 //! wallets and validators must verify before accepting an upgrade.
 
 use core::fmt::{self, Display, Formatter};
+
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -549,8 +550,9 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::codec::{decode_adaptive, encode_adaptive};
+
+    use super::*;
 
     #[test]
     fn pedersen_roundtrip() {

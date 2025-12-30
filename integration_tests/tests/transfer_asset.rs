@@ -1,5 +1,6 @@
 //! Tests for transferring assets between accounts.
 
+use integration_tests::sandbox;
 use iroha::data_model::{
     Registered,
     account::{Account, AccountId},
@@ -9,8 +10,6 @@ use iroha::data_model::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
-
-use integration_tests::sandbox;
 
 fn start_default(
     context: &'static str,

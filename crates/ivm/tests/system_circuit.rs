@@ -1,6 +1,8 @@
 #![cfg(feature = "ivm_zk_tests")]
-use ivm::Memory;
-use ivm::halo2::{AllocCircuit, GetGasCircuit};
+use ivm::{
+    Memory,
+    halo2::{AllocCircuit, GetGasCircuit},
+};
 
 #[test]
 fn test_alloc_circuit_ok() {

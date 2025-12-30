@@ -9,19 +9,20 @@
 //! The worker verifies `ProofAttachment` payloads (single or list, Norito or JSON)
 //! using core backend verifiers and records per-proof metadata. It never mutates WSV.
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::{
     fs,
     io::Read as _,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{NoritoQuery, routing::MaybeTelemetry};
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use iroha_core::{
     state::{State as CoreState, WorldReadOnly},
@@ -32,14 +33,13 @@ use iroha_data_model::proof::{
 };
 use mv::storage::StorageReadOnly;
 use norito::json;
-use std::sync::OnceLock;
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use tokio::{
     runtime::{Handle, RuntimeFlavor},
     sync::Semaphore,
     task::{self, JoinSet},
 };
+
+use crate::{NoritoQuery, routing::MaybeTelemetry};
 
 #[derive(
     Debug,
@@ -1293,11 +1293,11 @@ pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoRe
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use crate::test_utils::TestDataDirGuard;
     use iroha_core::zk::test_utils::halo2_fixture_envelope;
     use iroha_data_model::proof::ProofAttachment;
+
+    use super::*;
+    use crate::test_utils::TestDataDirGuard;
 
     fn init_test_cfg() {
         let _ = super::configure(

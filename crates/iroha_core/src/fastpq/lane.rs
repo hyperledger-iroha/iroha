@@ -238,12 +238,13 @@ pub fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::fastpq::{
         TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle,
     };
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+    use super::*;
 
     #[tokio::test]
     async fn lane_processes_transcripts_with_mock_engine() {

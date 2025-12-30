@@ -7,13 +7,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::soranet_gateway_chaos::{self, ChaosScenario, ScenarioPack, ScheduleEntry};
 use eyre::{Result, WrapErr, eyre};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, Value},
 };
 use time::OffsetDateTime;
+
+use crate::soranet_gateway_chaos::{self, ChaosScenario, ScenarioPack, ScheduleEntry};
 
 #[derive(Debug)]
 pub struct GatewayOpsOptions {
@@ -998,10 +999,11 @@ fn summarize_path(path: &Path, root: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::collections::HashSet;
-    use std::fs;
+    use std::{collections::HashSet, fs};
+
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn writes_chaos_assets() {

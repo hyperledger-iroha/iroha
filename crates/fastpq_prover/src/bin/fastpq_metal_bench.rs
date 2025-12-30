@@ -21,21 +21,22 @@ fn main() {
 
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod tests {
-    use fastpq_prover::{
-        ColumnStagingStats, KernelKind, KernelStatsSample, PostTileSample, QueueDepthStats,
-        QueueLaneStats, TwiddleCacheStats,
-    };
     use std::{
         env,
         sync::{Mutex, OnceLock},
     };
+
+    use fastpq_prover::{
+        ColumnStagingStats, KernelKind, KernelStatsSample, PostTileSample, QueueDepthStats,
+        QueueLaneStats, TwiddleCacheStats,
+    };
+    use norito::json::Value;
 
     use super::harness::{
         self, BenchOperation, Config, OperationFilter, QueueDeltaAccumulator, RunState, Summary,
         ZeroFillSummary, bn254_metrics_value, classify_run, kernel_stats_value, queue_stats_value,
         round3, twiddle_cache_value, zero_fill_value,
     };
-    use norito::json::Value;
 
     fn assert_close(actual: f64, expected: f64) {
         let delta = (actual - expected).abs();
@@ -650,12 +651,20 @@ mod heuristics_value_tests {
 
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod harness {
+    use std::{
+        collections::BTreeMap,
+        env, fs,
+        hint::black_box,
+        mem,
+        path::{Path, PathBuf},
+        process::{Command, Stdio},
+        sync::{Arc, Mutex},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    };
+
     use fastpq_isi::{
         find_by_name,
         poseidon::{FIELD_MODULUS as GOLDILOCKS_MODULUS, PoseidonSponge as CpuPoseidonSponge},
-    };
-    use fastpq_prover::trace::{
-        PoseidonColumnBatch, hash_columns_gpu_batch, hash_columns_gpu_fused,
     };
     use fastpq_prover::{
         AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, ColumnStagingPhaseStats,
@@ -668,21 +677,12 @@ mod harness {
         set_execution_mode_observer, snapshot_queue_depth_stats, take_column_staging_stats,
         take_kernel_stats, take_lde_host_stats, take_poseidon_pipeline_stats, take_post_tile_stats,
         take_queue_depth_stats, take_twiddle_cache_stats,
+        trace::{PoseidonColumnBatch, hash_columns_gpu_batch, hash_columns_gpu_fused},
     };
     use iroha_crypto::Hash;
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     use metal::{Device, MTLDeviceLocation};
     use norito::json::{self, Value};
-    use std::{
-        collections::BTreeMap,
-        env, fs,
-        hint::black_box,
-        mem,
-        path::{Path, PathBuf},
-        process::{Command, Stdio},
-        sync::{Arc, Mutex},
-        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-    };
 
     fn debug_env_var(name: &str) -> Option<String> {
         overrides::debug_env_string(name)

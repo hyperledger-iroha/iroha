@@ -1,13 +1,14 @@
 //! WsvHost durable state syscalls: STATE_GET/SET/DEL with pointer-ABI.
 
+use std::{
+    fs,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{MockWorldStateView, WsvHost},
     syscalls,
-};
-use std::{
-    fs,
-    time::{SystemTime, UNIX_EPOCH},
 };
 mod common;
 use common::assemble_syscalls;

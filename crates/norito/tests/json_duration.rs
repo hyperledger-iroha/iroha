@@ -1,5 +1,6 @@
-use norito::json;
 use std::time::Duration;
+
+use norito::json;
 
 #[test]
 fn duration_roundtrip() {

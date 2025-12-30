@@ -1,5 +1,7 @@
 //! Validate that by-call trigger execution emits both the trigger event and resulting data events.
 
+use std::borrow::Cow;
+
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     query::store::LiveQueryStore,
@@ -9,7 +11,6 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use mv::storage::StorageReadOnly;
-use std::borrow::Cow;
 
 fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
     let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);

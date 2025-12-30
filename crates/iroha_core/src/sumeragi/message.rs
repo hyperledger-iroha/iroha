@@ -215,14 +215,18 @@ pub struct FetchPendingBlock {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+    use iroha_data_model::{
+        da::{
+            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
+            types::{BlobDigest, RetentionPolicy, StorageTicketId},
+        },
+        nexus::LaneId,
+        sorafs::pin_registry::ManifestDigest,
+    };
+
     use super::*;
     use crate::block::BlockBuilder;
-    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
-    use iroha_data_model::da::{
-        commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
-        types::{BlobDigest, RetentionPolicy, StorageTicketId},
-    };
-    use iroha_data_model::{nexus::LaneId, sorafs::pin_registry::ManifestDigest};
 
     #[test]
     fn block_created_from_newblock_ref_and_move_equivalent() {

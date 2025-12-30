@@ -1,6 +1,8 @@
 #![allow(clippy::manual_div_ceil)]
-use norito::codec::{Decode as _, DecodeAll as _, Encode as _};
-use norito::{Decode, Encode};
+use norito::{
+    Decode, Encode,
+    codec::{Decode as _, DecodeAll as _, Encode as _},
+};
 
 #[derive(Encode, Decode, PartialEq, Debug, iroha_schema::IntoSchema)]
 struct Sample(u32);

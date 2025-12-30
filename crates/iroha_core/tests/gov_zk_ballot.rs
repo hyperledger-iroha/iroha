@@ -5,8 +5,9 @@
 
 mod zk_testkit;
 
-use base64::Engine as _;
 use core::num::NonZeroU64;
+
+use base64::Engine as _;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,

@@ -1,5 +1,7 @@
 //! Roundtrip coverage for streaming capability ticket events.
 
+use std::str::FromStr;
+
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
     metadata::Metadata,
@@ -16,7 +18,6 @@ use norito::{
     codec::encode_with_header_flags,
     core::{decode_from_bytes, frame_bare_with_header_flags},
 };
-use std::str::FromStr;
 
 fn sample_hash(seed: u8) -> Hash {
     Hash::prehashed([seed; 32])

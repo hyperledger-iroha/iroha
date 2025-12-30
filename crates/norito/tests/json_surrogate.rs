@@ -1,8 +1,7 @@
 //! Surrogate pair handling tests for Norito JSON parser and helpers.
 #![cfg(feature = "json")]
 
-use norito::json::TapeWalker;
-use norito::json::{Arena, Parser, unescape_json_string};
+use norito::json::{Arena, Parser, TapeWalker, unescape_json_string};
 
 #[test]
 fn parse_string_surrogate_pair_ok() {

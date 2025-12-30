@@ -1,13 +1,15 @@
 //! Verify Kotodama lowering of `state Map<int,int>` writes into durable host state.
 
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 use iroha_data_model::prelude::Name;
-use ivm::kotodama::{compiler::Compiler as KotodamaCompiler, ir, parser, semantic};
-use ivm::mock_wsv::{AccountId, MockWorldStateView, WsvHost};
-use ivm::{CoreHost, IVM, PointerType, encoding, instruction, syscalls};
+use ivm::{
+    CoreHost, IVM, PointerType, encoding, instruction,
+    kotodama::{compiler::Compiler as KotodamaCompiler, ir, parser, semantic},
+    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+    syscalls,
+};
 use norito::codec::Encode as NoritoEncode;
-use std::collections::HashMap;
 mod common;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {

@@ -14,7 +14,10 @@
 //! println!("{} instructions", report.instruction_count);
 //! println!("load64 count {}", report.memory.load64);
 //! for syscall in &report.syscalls {
-//!     println!("syscall 0x{:02x} used {} times", syscall.number, syscall.count);
+//!     println!(
+//!         "syscall 0x{:02x} used {} times",
+//!         syscall.number, syscall.count
+//!     );
 //! }
 //! # }
 //! ```
@@ -22,11 +25,12 @@
 use core::convert::TryFrom as _;
 use std::{collections::BTreeMap, error::Error, fmt, num::NonZeroUsize};
 
-use crate::VMError;
-use crate::encoding;
-use crate::instruction::wide;
-use crate::ivm_cache::{DecodedOp, IvmCache};
-use crate::metadata::ProgramMetadata;
+use crate::{
+    VMError, encoding,
+    instruction::wide,
+    ivm_cache::{DecodedOp, IvmCache},
+    metadata::ProgramMetadata,
+};
 
 /// Aggregate register usage counters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -421,8 +425,7 @@ impl ProgramAnalysisBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encoding::wide as wide_enc;
-    use crate::instruction::wide;
+    use crate::{encoding::wide as wide_enc, instruction::wide};
 
     fn base_analysis(instruction_count: usize) -> ProgramAnalysis {
         ProgramAnalysis {

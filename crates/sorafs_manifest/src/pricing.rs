@@ -1,10 +1,11 @@
 //! Pricing manifests and probabilistic micropayment policies for SoraFS.
 
+use std::{collections::HashSet, num::NonZeroU32};
+
 use norito::{
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
     json::{Map, Value},
 };
-use std::{collections::HashSet, num::NonZeroU32};
 use thiserror::Error;
 
 /// SoraFS pricing manifest schema version.

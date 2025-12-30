@@ -320,14 +320,17 @@ fn operation_from_dto(operation: &FastpqOperationKind) -> OperationKind {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_data_model::block::consensus::ExecWitness;
-    use iroha_data_model::fastpq::{TransferTranscript, TransferTranscriptBundle};
+    use std::{collections::BTreeMap, str::FromStr};
+
+    use iroha_data_model::{
+        block::consensus::ExecWitness,
+        fastpq::{TransferTranscript, TransferTranscriptBundle},
+    };
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::decode_from_bytes;
-    use std::collections::BTreeMap;
-    use std::str::FromStr;
+
+    use super::*;
 
     #[test]
     fn authority_digest_matches_known_vector() {

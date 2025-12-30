@@ -24,14 +24,13 @@ use std::{
     time::Duration,
 };
 
-use crate::da::DaShardCursorError;
+use http::StatusCode;
 use iroha_config::parameters::actual::{DataspaceGossipFallback, RestrictedPublicPayload};
 use iroha_crypto::Hash;
 #[cfg(debug_assertions)]
 use iroha_crypto::HashOf;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use iroha_data_model::da::types::DaRentQuote;
-use iroha_data_model::events::data::sorafs::SorafsProofHealthAlert;
 #[cfg(feature = "telemetry")]
 use iroha_data_model::events::data::{
     DataEvent, governance::GovernanceEvent, social::SocialEvent,
@@ -64,9 +63,10 @@ use iroha_data_model::{
     kaigi::KaigiRelayHealthStatus,
     name::Name,
 };
+use iroha_data_model::{events::data::sorafs::SorafsProofHealthAlert, oracle::OraclePenaltyKind};
 use iroha_futures::supervisor::{Child, OnShutdown};
 use iroha_p2p::OnlinePeers;
-use iroha_primitives::{json::Json, time::TimeSource};
+use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::GaugeVec;
 #[cfg(feature = "telemetry")]
@@ -81,19 +81,24 @@ pub use iroha_telemetry::metrics::{
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError, SoranetSecureAggregator};
 use ivm::host::{ZkCurve, ZkHalo2Backend, ZkHalo2Config};
 use mv::storage::StorageReadOnly;
+#[cfg(feature = "telemetry")]
+use norito::streaming::{
+    ContentKeyUpdate, EncryptionSuite, SyncDiagnostics, TelemetryAuditOutcome,
+    TelemetryDecodeStats, TelemetryEncodeStats, TelemetryEnergyStats, TelemetryEvent,
+    TelemetryNetworkStats, TelemetrySecurityStats,
+};
 use rust_decimal::{Decimal, prelude::ToPrimitive};
+use settlement_router::policy::BufferStatus;
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
-use http::StatusCode;
-
-use crate::da::DaPinIntentValidationError;
-use crate::gossiper::{GossipPlane, gossip_plane_label};
-use crate::governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus};
 #[cfg(feature = "telemetry")]
 use crate::pipeline::access::AccessSetSource;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use crate::smartcontracts::isi::settlement::{SETTLEMENT_KIND_DVP, SETTLEMENT_KIND_PVP};
 use crate::{
+    da::{DaPinIntentValidationError, DaShardCursorError},
+    gossiper::{GossipPlane, gossip_plane_label},
+    governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
     json_macros::{JsonDeserialize, JsonSerialize},
     kura::Kura,
     nexus::space_directory::SpaceDirectoryManifestSet,
@@ -108,15 +113,6 @@ use crate::{
         },
     },
 };
-use iroha_data_model::oracle::OraclePenaltyKind;
-use iroha_primitives::numeric::Numeric;
-#[cfg(feature = "telemetry")]
-use norito::streaming::{
-    ContentKeyUpdate, EncryptionSuite, SyncDiagnostics, TelemetryAuditOutcome,
-    TelemetryDecodeStats, TelemetryEncodeStats, TelemetryEnergyStats, TelemetryEvent,
-    TelemetryNetworkStats, TelemetrySecurityStats,
-};
-use settlement_router::policy::BufferStatus;
 
 const PHASE_PREVOTE: &str = "prevote";
 const PHASE_PRECOMMIT: &str = "precommit";
@@ -8308,10 +8304,6 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_telemetry::metrics::Collector;
-
-    #[cfg(feature = "telemetry")]
-    use super::StreamingTelemetry;
     use iroha_config::parameters::actual::{
         ConfidentialGas as ActualConfidentialGas, ConsensusMode,
     };
@@ -8345,6 +8337,7 @@ mod tests {
         addr::{SocketAddr, socket_addr},
         time::{MockTimeHandle, TimeSource},
     };
+    use iroha_telemetry::metrics::Collector;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
     #[cfg(feature = "telemetry")]
@@ -8354,12 +8347,14 @@ mod tests {
     };
     use tokio::task::spawn_blocking;
 
+    #[cfg(feature = "telemetry")]
+    use super::StreamingTelemetry;
     use super::*;
-    use crate::pipeline::access::AccessSetSource;
     use crate::{
         block::{BlockBuilder, CommittedBlock, NewBlock},
         governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus},
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
+        pipeline::access::AccessSetSource,
         prelude::World,
         query::store::LiveQueryStore,
         sumeragi::{
@@ -8667,15 +8662,18 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn status_exposes_tx_gossip_targets_with_aliases() {
-        use super::StateTelemetry;
-        use iroha_data_model::nexus::{
-            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
-            LaneVisibility,
+        use iroha_data_model::{
+            nexus::{
+                DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+                LaneVisibility,
+            },
+            peer::PeerId,
         };
-        use iroha_data_model::peer::PeerId;
         use iroha_telemetry::metrics::Status;
         use iroha_test_samples::PEER_KEYPAIR;
         use nonzero_ext::nonzero;
+
+        use super::StateTelemetry;
 
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -10758,11 +10756,13 @@ mod tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn governance_events_drive_metrics_via_ingest() {
-        use crate::state::GovernanceProposalStatus as GPS;
+        use std::sync::Arc;
+
         use iroha_data_model::events::data::governance::{
             GovernanceEvent, GovernanceProposalApproved, GovernanceProposalEnacted,
         };
-        use std::sync::Arc;
+
+        use crate::state::GovernanceProposalStatus as GPS;
 
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -10810,11 +10810,12 @@ mod tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn council_persist_event_updates_gauges() {
-        use iroha_data_model::events::data::governance::{
-            GovernanceCouncilPersisted, GovernanceEvent,
-        };
-        use iroha_data_model::isi::governance::CouncilDerivationKind;
         use std::sync::Arc;
+
+        use iroha_data_model::{
+            events::data::governance::{GovernanceCouncilPersisted, GovernanceEvent},
+            isi::governance::CouncilDerivationKind,
+        };
 
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -10840,10 +10841,11 @@ mod tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn governance_bond_events_increment() {
+        use std::sync::Arc;
+
         use iroha_data_model::events::data::governance::{
             GovernanceEvent, GovernanceLockCreated, GovernanceLockExtended, GovernanceLockUnlocked,
         };
-        use std::sync::Arc;
 
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -10898,8 +10900,9 @@ mod tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn citizen_service_events_increment() {
-        use iroha_data_model::isi::governance::CitizenServiceEvent;
         use std::sync::Arc;
+
+        use iroha_data_model::isi::governance::CitizenServiceEvent;
 
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -11627,8 +11630,7 @@ mod tests {
 
     #[tokio::test]
     async fn p2p_overflow_label_matrix_reflects_counters() {
-        use iroha_p2p::network::inc_post_overflow_for_test as bump;
-        use iroha_p2p::network::message::Topic;
+        use iroha_p2p::network::{inc_post_overflow_for_test as bump, message::Topic};
         let sut = SystemUnderTest::new();
         // Baseline read
         let metrics = sut.telemetry.metrics().await;
@@ -12274,9 +12276,10 @@ mod tests {
     }
 
     fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
+        use std::num::NonZeroU64;
+
         use iroha_crypto::SignatureOf;
         use iroha_data_model::block::{BlockHeader, BlockSignature};
-        use std::num::NonZeroU64;
 
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("height must be > 0"),
@@ -12293,13 +12296,14 @@ mod tests {
     }
 
     fn block_with_transactions(height: u64) -> iroha_data_model::block::SignedBlock {
+        use std::num::NonZeroU64;
+
         use iroha_crypto::SignatureOf;
         use iroha_data_model::{
             ChainId, DomainId,
             block::{BlockHeader, BlockSignature},
             transaction::signed::SignedTransaction,
         };
-        use std::num::NonZeroU64;
 
         fn dummy_transaction() -> SignedTransaction {
             let chain_id: ChainId = "test-chain".parse().expect("chain id");

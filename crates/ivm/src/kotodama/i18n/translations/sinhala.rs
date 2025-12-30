@@ -1,5 +1,4 @@
-use super::super::Messages;
-use super::english;
+use super::{super::Messages, english};
 
 pub const MESSAGES: Messages = Messages {
     no_functions: "සම්පාදනයට ක්‍රියාකාරකම් කිසිවක් නොමැත",

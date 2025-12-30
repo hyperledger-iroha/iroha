@@ -8,8 +8,7 @@ use std::{
 use eyre::{Context as _, ensure};
 use integration_tests::sandbox;
 use iroha::data_model::{
-    isi::staking::RegisterPublicLaneValidator,
-    isi::{Mint, Register},
+    isi::{Mint, Register, staking::RegisterPublicLaneValidator},
     metadata::Metadata,
     name::Name,
     prelude::*,

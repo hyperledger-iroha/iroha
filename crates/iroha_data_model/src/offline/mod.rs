@@ -1,8 +1,10 @@
 //! Offline allowance certificates, platform proofs, and deposit bundles.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 #[allow(unused_imports)]
 use core::{fmt, str::FromStr};
+use std::collections::{BTreeMap, BTreeSet};
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash, PublicKey, Signature};
 use iroha_data_model_derive::model;
 use iroha_primitives::{json::Json, numeric::Numeric};
@@ -11,14 +13,13 @@ use norito::{
     codec::{Decode, Encode},
     to_bytes,
 };
-use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
-use crate::{
-    account::AccountId, asset::AssetId, metadata::Metadata, name::Name, proof::ProofAttachmentList,
-};
-
 pub use self::model::*;
+use crate::{
+    ChainId, account::AccountId, asset::AssetId, metadata::Metadata, name::Name,
+    proof::ProofAttachmentList,
+};
 
 mod poseidon;
 pub use poseidon::*;
@@ -93,6 +94,8 @@ pub struct OfflineSpendReceiptPayload {
     pub asset: AssetId,
     /// Amount received.
     pub amount: Numeric,
+    /// Unix timestamp (ms) when the receipt was issued.
+    pub issued_at_ms: u64,
     /// Invoice identifier provided by the receiver.
     pub invoice_id: String,
     /// Platform-specific counter proof.
@@ -109,6 +112,7 @@ impl From<&OfflineSpendReceipt> for OfflineSpendReceiptPayload {
             to: receipt.to.clone(),
             asset: receipt.asset.clone(),
             amount: receipt.amount.clone(),
+            issued_at_ms: receipt.issued_at_ms,
             invoice_id: receipt.invoice_id.clone(),
             platform_proof: receipt.platform_proof.clone(),
             sender_certificate: receipt.sender_certificate.clone(),
@@ -127,6 +131,8 @@ pub struct OfflineReceiptChallengePreimage {
     pub asset: AssetId,
     /// Amount credited to the receiver.
     pub amount: Numeric,
+    /// Unix timestamp (ms) when the receipt was issued.
+    pub issued_at_ms: u64,
     /// Nonce supplied by the sender (currently the receipt transaction id).
     pub nonce: Hash,
 }
@@ -140,6 +146,7 @@ impl OfflineReceiptChallengePreimage {
             receiver: receipt.to.clone(),
             asset: receipt.asset.clone(),
             amount: receipt.amount.clone(),
+            issued_at_ms: receipt.issued_at_ms,
             nonce: receipt.tx_id,
         }
     }
@@ -162,6 +169,26 @@ impl OfflineReceiptChallengePreimage {
         let bytes = self.to_bytes()?;
         Ok(Hash::new(bytes))
     }
+
+    /// Compute a chain-bound challenge hash using `Hash(chain_id) || preimage_bytes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when serialization fails.
+    pub fn hash_with_chain_id(&self, chain_id: &ChainId) -> Result<Hash, norito::Error> {
+        let bytes = self.to_bytes()?;
+        Ok(chain_bound_receipt_hash(chain_id, &bytes))
+    }
+}
+
+/// Derive a chain-bound receipt challenge hash using `Hash(chain_id) || preimage_bytes`.
+#[must_use]
+pub fn chain_bound_receipt_hash(chain_id: &ChainId, preimage_bytes: &[u8]) -> Hash {
+    let context = Hash::new(chain_id.as_str().as_bytes());
+    let mut data = Vec::with_capacity(Hash::LENGTH + preimage_bytes.len());
+    data.extend_from_slice(context.as_ref());
+    data.extend_from_slice(preimage_bytes);
+    Hash::new(data)
 }
 
 /// Canonical payload operators sign when publishing POS backend manifests.
@@ -337,6 +364,15 @@ impl OfflineSpendReceipt {
     /// Returns an error when serialization fails.
     pub fn challenge_hash(&self) -> Result<Hash, norito::Error> {
         self.challenge_preimage().hash()
+    }
+
+    /// Canonical hash derived from the receipt payload and chain context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when serialization fails.
+    pub fn challenge_hash_with_chain_id(&self, chain_id: &ChainId) -> Result<Hash, norito::Error> {
+        self.challenge_preimage().hash_with_chain_id(chain_id)
     }
 }
 
@@ -859,8 +895,9 @@ fn parse_hash_or_digest(
 
 #[model]
 mod model {
-    use super::*;
     use core::fmt;
+
+    use super::*;
 
     /// Operator-issued binding commitment to an offline allowance.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -1394,6 +1431,8 @@ mod model {
         pub asset: AssetId,
         /// Amount received.
         pub amount: Numeric,
+        /// Unix timestamp (ms) when the receipt was issued.
+        pub issued_at_ms: u64,
         /// Invoice identifier provided by the receiver.
         pub invoice_id: String,
         /// Platform-specific counter proof.
@@ -1422,6 +1461,7 @@ mod model {
             to: AccountId,
             asset: AssetId,
             amount: Numeric,
+            issued_at_ms: u64,
             invoice_id: String,
             platform_proof: OfflinePlatformProof,
             platform_snapshot: Option<OfflinePlatformTokenSnapshot>,
@@ -1434,6 +1474,7 @@ mod model {
                 to,
                 asset,
                 amount,
+                issued_at_ms,
                 invoice_id,
                 platform_proof,
                 platform_snapshot,
@@ -1456,7 +1497,10 @@ mod model {
         pub resulting_commitment: Vec<u8>,
         /// Claimed delta \(\Delta\) that is being deposited online.
         pub claimed_delta: Numeric,
-        /// Optional zero-knowledge proof blob attesting to the delta.
+        /// Versioned zero-knowledge proof blob (delta + range proofs).
+        ///
+        /// The payload is required for ledger settlement and must use the v1 layout:
+        /// `version (1 byte) || delta_proof (96 bytes) || range_proof (64 * 192 bytes)`.
         #[norito(default)]
         pub zk_proof: Option<Vec<u8>>,
     }
@@ -1865,6 +1909,8 @@ mod model {
         NonUniformAsset,
         /// A receipt amount was zero or negative.
         InvalidReceiptAmount,
+        /// A receipt amount exceeded the policy max transaction value.
+        MaxTxValueExceeded,
         /// Claimed delta mismatched the sum of receipt amounts.
         DeltaMismatch,
         /// Receipts referenced multiple certificates.
@@ -1881,10 +1927,16 @@ mod model {
         ReceiptSenderMismatch,
         /// Receipt asset does not match the registered allowance asset.
         ReceiptAssetMismatch,
+        /// Receipt timestamp is missing or violates allowed windows.
+        ReceiptTimestampInvalid,
+        /// Receipt exceeded the maximum allowed age.
+        ReceiptExpired,
         /// Balance proof asset mismatch.
         BalanceAssetMismatch,
         /// Balance proof commitment mismatch.
         CommitmentMismatch,
+        /// Balance proof is missing or invalid.
+        BalanceProofInvalid,
         /// Platform hardware counter progression is invalid.
         CounterViolation,
         /// Spend-key signature failed verification.
@@ -1928,6 +1980,7 @@ mod model {
                 Self::EmptyBundle => "empty_bundle",
                 Self::NonUniformAsset => "non_uniform_asset",
                 Self::InvalidReceiptAmount => "invalid_receipt_amount",
+                Self::MaxTxValueExceeded => "max_tx_value_exceeded",
                 Self::DeltaMismatch => "delta_mismatch",
                 Self::MixedCertificates => "mixed_certificates",
                 Self::AllowanceNotRegistered => "allowance_not_registered",
@@ -1936,8 +1989,11 @@ mod model {
                 Self::ReceiptReceiverMismatch => "receipt_receiver_mismatch",
                 Self::ReceiptSenderMismatch => "receipt_sender_mismatch",
                 Self::ReceiptAssetMismatch => "receipt_asset_mismatch",
+                Self::ReceiptTimestampInvalid => "receipt_timestamp_invalid",
+                Self::ReceiptExpired => "receipt_expired",
                 Self::BalanceAssetMismatch => "balance_asset_mismatch",
                 Self::CommitmentMismatch => "commitment_mismatch",
+                Self::BalanceProofInvalid => "balance_proof_invalid",
                 Self::CounterViolation => "counter_violation",
                 Self::ReceiptSignatureInvalid => "receipt_signature_invalid",
                 Self::PlatformChallengeMismatch => "platform_challenge_mismatch",
@@ -1967,6 +2023,7 @@ mod model {
                 "empty_bundle" => Ok(Self::EmptyBundle),
                 "non_uniform_asset" => Ok(Self::NonUniformAsset),
                 "invalid_receipt_amount" => Ok(Self::InvalidReceiptAmount),
+                "max_tx_value_exceeded" => Ok(Self::MaxTxValueExceeded),
                 "delta_mismatch" => Ok(Self::DeltaMismatch),
                 "mixed_certificates" => Ok(Self::MixedCertificates),
                 "allowance_not_registered" => Ok(Self::AllowanceNotRegistered),
@@ -1975,8 +2032,11 @@ mod model {
                 "receipt_receiver_mismatch" => Ok(Self::ReceiptReceiverMismatch),
                 "receipt_sender_mismatch" => Ok(Self::ReceiptSenderMismatch),
                 "receipt_asset_mismatch" => Ok(Self::ReceiptAssetMismatch),
+                "receipt_timestamp_invalid" => Ok(Self::ReceiptTimestampInvalid),
+                "receipt_expired" => Ok(Self::ReceiptExpired),
                 "balance_asset_mismatch" => Ok(Self::BalanceAssetMismatch),
                 "commitment_mismatch" => Ok(Self::CommitmentMismatch),
+                "balance_proof_invalid" => Ok(Self::BalanceProofInvalid),
                 "counter_conflict" | "counter_violation" => Ok(Self::CounterViolation),
                 "receipt_signature_invalid" => Ok(Self::ReceiptSignatureInvalid),
                 "platform_challenge_mismatch" => Ok(Self::PlatformChallengeMismatch),
@@ -2019,7 +2079,6 @@ mod model {
         #[norito(default)]
         pub archived_at_height: Option<u64>,
         /// Ordered lifecycle history recorded for auditing purposes.
-        ///
         #[norito(default)]
         pub history: Vec<OfflineTransferLifecycleEntry>,
         /// POS importer verdict snapshots captured per receipt bundle (one entry per provided certificate).
@@ -2263,6 +2322,10 @@ mod model {
 
     #[cfg(test)]
     mod tests {
+        use core::str::FromStr;
+
+        use iroha_crypto::{Hash, Signature};
+
         #[allow(unused_imports)]
         use super::{
             OfflineBalanceProof, OfflineProofRequestError, OfflineProofRequestKind,
@@ -2271,8 +2334,6 @@ mod model {
             OfflineVerdictRevocationReason, OfflineWalletCertificate, OfflineWalletPolicy,
         };
         use crate::{AccountId, Metadata};
-        use core::str::FromStr;
-        use iroha_crypto::{Hash, Signature};
 
         #[test]
         fn status_label_roundtrip() {
@@ -2311,6 +2372,14 @@ mod model {
             assert_eq!(
                 OfflineTransferRejectionReason::from_str("allowance_exceeded").unwrap(),
                 OfflineTransferRejectionReason::AllowanceDepleted
+            );
+            assert_eq!(
+                OfflineTransferRejectionReason::from_str("max_tx_value_exceeded").unwrap(),
+                OfflineTransferRejectionReason::MaxTxValueExceeded
+            );
+            assert_eq!(
+                OfflineTransferRejectionReason::from_str("balance_proof_invalid").unwrap(),
+                OfflineTransferRejectionReason::BalanceProofInvalid
             );
         }
 
@@ -2695,10 +2764,12 @@ impl From<&OfflineAllowanceRecord> for OfflineCounterSummary {
 
 #[cfg(test)]
 mod android_metadata_tests {
-    use super::*;
     use core::str::FromStr;
-    use iroha_primitives::json::Json;
     use std::iter::FromIterator;
+
+    use iroha_primitives::json::Json;
+
+    use super::*;
 
     fn name(key: &str) -> Name {
         Name::from_str(key).expect("metadata key")
@@ -2934,12 +3005,14 @@ mod android_metadata_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{asset::AssetDefinitionId, domain::DomainId};
+    use std::str::FromStr;
+
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::decode_from_bytes;
-    use std::str::FromStr;
+
+    use super::*;
+    use crate::{asset::AssetDefinitionId, domain::DomainId};
 
     fn sample_signature(seed: u8) -> Signature {
         let mut payload = [0u8; 64];
@@ -2988,6 +3061,7 @@ mod tests {
             to: account_from_key(&receiver_key, "sbp"),
             asset: sample_asset("sbp"),
             amount: Numeric::new(250, 0),
+            issued_at_ms: 1_700_000_500,
             invoice_id: "inv-001".into(),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
                 key_id: "AA_KEY".into(),
@@ -3253,9 +3327,10 @@ mod tests {
 
 #[cfg(test)]
 mod pos_manifest_tests {
+    use core::str::FromStr;
+
     use super::*;
     use crate::domain::DomainId;
-    use core::str::FromStr;
 
     #[test]
     fn operator_signing_payload_roundtrips() {
@@ -3297,14 +3372,16 @@ mod pos_manifest_tests {
 
 #[cfg(test)]
 mod receipt_challenge_tests {
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_primitives::numeric::Numeric;
+
     use super::*;
     use crate::{
+        ChainId,
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         metadata::Metadata,
     };
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_primitives::numeric::Numeric;
 
     fn sample_account() -> AccountId {
         let key_pair = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
@@ -3371,6 +3448,7 @@ mod receipt_challenge_tests {
             to: receiver,
             asset: asset.clone(),
             amount: Numeric::from(75_u32),
+            issued_at_ms: 1_700_000_500_000,
             invoice_id: "INV-42".into(),
             platform_proof: sample_platform_proof(Hash::new(vec![0x33; 32])),
             platform_snapshot: None,
@@ -3386,6 +3464,7 @@ mod receipt_challenge_tests {
             receiver: sample_receiver(),
             asset: sample_asset(&sample_account()),
             amount: Numeric::from(123_u32),
+            issued_at_ms: 1_700_000_400_000,
             nonce: Hash::new(vec![0x10; 32]),
         };
         let raw = preimage.to_bytes().expect("serialize preimage");
@@ -3403,6 +3482,20 @@ mod receipt_challenge_tests {
             receipt.challenge_hash().expect("hash receipt"),
             expected_hash
         );
+    }
+
+    #[test]
+    fn receipt_hash_binds_chain_id() {
+        let receipt = sample_receipt();
+        let chain_a: ChainId = "alpha".parse().expect("chain id");
+        let chain_b: ChainId = "beta".parse().expect("chain id");
+        let hash_a = receipt
+            .challenge_hash_with_chain_id(&chain_a)
+            .expect("hash receipt alpha");
+        let hash_b = receipt
+            .challenge_hash_with_chain_id(&chain_b)
+            .expect("hash receipt beta");
+        assert_ne!(hash_a, hash_b, "chain context must affect receipt hash");
     }
 
     #[test]

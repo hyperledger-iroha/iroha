@@ -6,12 +6,12 @@
 
 use std::fmt::Debug;
 
+pub use bridge_filters_model::BridgeEventFilter;
 use getset::Getters;
 use iroha_data_model_derive::model;
 
 pub use self::model::*;
 use super::*;
-pub use bridge_filters_model::BridgeEventFilter;
 
 #[model]
 mod model {
@@ -1584,26 +1584,25 @@ fn governance_matches(
 }
 
 pub mod prelude {
-    pub use super::{
-        AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, ConfidentialEventFilter,
-        ConfigurationEventFilter, DataEventFilter, DomainEventFilter, ExecutorEventFilter,
-        NftEventFilter, OfflineTransferEventFilter, OracleEventFilter, PeerEventFilter,
-        ProofEventFilter, RoleEventFilter, SocialEventFilter, SoradnsDirectoryEventFilter,
-        SorafsGatewayEventFilter, TriggerEventFilter, VerifyingKeyEventFilter,
-    };
-
-    pub use super::BridgeEventFilter;
     #[cfg(feature = "governance")]
     pub use super::GovernanceEventFilter;
+    pub use super::{
+        AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
+        ConfidentialEventFilter, ConfigurationEventFilter, DataEventFilter, DomainEventFilter,
+        ExecutorEventFilter, NftEventFilter, OfflineTransferEventFilter, OracleEventFilter,
+        PeerEventFilter, ProofEventFilter, RoleEventFilter, SocialEventFilter,
+        SoradnsDirectoryEventFilter, SorafsGatewayEventFilter, TriggerEventFilter,
+        VerifyingKeyEventFilter,
+    };
 }
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod tests {
-    use crate::nexus::UniversalAccountId;
     use iroha_crypto::{Hash, KeyPair};
     use iroha_primitives::numeric::Numeric;
 
     use super::*;
+    use crate::nexus::UniversalAccountId;
 
     #[test]
     #[cfg(feature = "transparent_api")]
@@ -1656,8 +1655,12 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn verifying_key_filter_matches_by_id() {
-        use crate::events::data::verifying_keys::{VerifyingKeyEvent, VerifyingKeyRegistered};
-        use crate::{confidential::ConfidentialStatus, proof::VerifyingKeyRecord, zk::BackendTag};
+        use crate::{
+            confidential::ConfidentialStatus,
+            events::data::verifying_keys::{VerifyingKeyEvent, VerifyingKeyRegistered},
+            proof::VerifyingKeyRecord,
+            zk::BackendTag,
+        };
         let id = crate::proof::VerifyingKeyId::new("halo2/ipa", "vk_test");
         let mut rec = VerifyingKeyRecord::new(
             1,
@@ -1686,13 +1689,16 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn offline_filter_matches_platform_policy() {
-        use crate::account::AccountId;
-        use crate::asset::AssetDefinitionId;
-        use crate::events::data::offline::{
-            OfflineTransferArchived, OfflineTransferEvent, OfflineTransferSettled,
-        };
-        use crate::offline::{AndroidIntegrityPolicy, OfflinePlatformTokenSnapshot};
         use core::str::FromStr;
+
+        use crate::{
+            account::AccountId,
+            asset::AssetDefinitionId,
+            events::data::offline::{
+                OfflineTransferArchived, OfflineTransferEvent, OfflineTransferSettled,
+            },
+            offline::{AndroidIntegrityPolicy, OfflinePlatformTokenSnapshot},
+        };
 
         let controller = AccountId::from_str(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland",
@@ -1901,8 +1907,10 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn oracle_filter_matches_feed_id() {
-        use crate::events::data::oracle::OracleEvent;
-        use crate::oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome};
+        use crate::{
+            events::data::oracle::OracleEvent,
+            oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome},
+        };
 
         let feed_id: crate::oracle::FeedId = "price_xor_usd".parse().unwrap();
         let event = DataEvent::Oracle(OracleEvent::FeedProcessed(
@@ -1929,10 +1937,11 @@ mod tests {
 
 #[allow(dead_code)]
 mod bridge_filters_model {
-    use crate::events::data::events::HasOrigin;
     use iroha_data_model_derive::model;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
+
+    use crate::events::data::events::HasOrigin;
 
     #[model]
     mod model {

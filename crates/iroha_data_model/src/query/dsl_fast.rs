@@ -6,12 +6,10 @@
 
 #[cfg(feature = "ids_projection")]
 use std::any::TypeId as StdTypeId;
-use std::marker::PhantomData;
-use std::{any::Any, sync::Arc};
+use std::{any::Any, marker::PhantomData, sync::Arc};
 
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
-
 #[cfg(feature = "json")]
 use norito::json::{self, JsonSerialize, Value};
 
@@ -938,14 +936,12 @@ mod tests {
 
 #[cfg(all(test, feature = "json"))]
 mod predicate_tests {
-    use super::*;
-    use crate::Registrable;
-    use crate::account::AccountId;
-    use crate::domain::Domain;
-    use crate::query::json::PredicateJson;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::json::Json;
     use norito::json;
+
+    use super::*;
+    use crate::{Registrable, account::AccountId, domain::Domain, query::json::PredicateJson};
 
     fn test_authority() -> AccountId {
         let domain = "wonderland".parse().expect("domain id");

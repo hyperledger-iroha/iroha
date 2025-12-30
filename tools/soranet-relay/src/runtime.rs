@@ -2,6 +2,67 @@
 
 #![allow(unexpected_cfgs)]
 
+use std::{
+    fmt::Write as _,
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU16, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+use blake3::Hasher;
+use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
+use iroha_crypto::{
+    Algorithm, KeyPair, PrivateKey,
+    soranet::{
+        certificate::RelayCertificateBundleV2,
+        handshake::{
+            HandshakeSuite, HarnessError as NoiseHandshakeError,
+            RuntimeParams as NoiseRuntimeParams, SessionSecrets, process_client_hello,
+            relay_finalize_handshake,
+        },
+        pow::{self, Parameters as PowParameters, Ticket as PowTicket},
+        puzzle::{self, ChallengeBinding as PuzzleBinding},
+        token::{self, AdmissionToken, DecodeError as TokenDecodeError},
+    },
+};
+use iroha_data_model::{
+    metadata::Metadata,
+    prelude::Name,
+    soranet::{
+        RelayId,
+        incentives::{RelayBandwidthProofV1, RelayComplianceStatusV1, RelayEpochMetricsV1},
+        privacy_metrics::{
+            SoranetPowFailureReasonV1, SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1,
+            SoranetPrivacyThrottleScopeV1,
+        },
+    },
+};
+use iroha_primitives::json::Json;
+use norito::{
+    NoritoDeserialize, NoritoSerialize, codec::Decode, streaming::SoranetAccessKind, to_bytes,
+};
+use quinn::{ClosedStream, Connection, Endpoint, Incoming, RecvStream, SendStream, VarInt};
+use rand::{SeedableRng, rngs::StdRng};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use thiserror::Error;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    sync::{Mutex, Notify},
+    task::JoinHandle,
+    time::{Instant as TokioInstant, MissedTickBehavior, interval, interval_at, sleep, timeout},
+};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{self, protocol::Message},
+};
+use tracing::{debug, info, warn};
+
 use crate::{
     capability::{
         self, CapabilityError, CapabilityWarning, GreaseEntry, NegotiatedCapabilities,
@@ -37,62 +98,6 @@ use crate::{
     vpn::{VpnOverlay, VpnSession, VpnSessionHandle},
     vpn_adapter::VpnAdapter,
 };
-use blake3::Hasher;
-use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
-use iroha_crypto::{
-    Algorithm, KeyPair, PrivateKey,
-    soranet::{
-        certificate::RelayCertificateBundleV2,
-        handshake::{
-            HandshakeSuite, HarnessError as NoiseHandshakeError,
-            RuntimeParams as NoiseRuntimeParams, SessionSecrets, process_client_hello,
-            relay_finalize_handshake,
-        },
-        pow::{self, Parameters as PowParameters, Ticket as PowTicket},
-        puzzle::{self, ChallengeBinding as PuzzleBinding},
-        token::{self, AdmissionToken, DecodeError as TokenDecodeError},
-    },
-};
-use iroha_data_model::soranet::{
-    RelayId,
-    incentives::{RelayBandwidthProofV1, RelayComplianceStatusV1, RelayEpochMetricsV1},
-    privacy_metrics::{
-        SoranetPowFailureReasonV1, SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1,
-        SoranetPrivacyThrottleScopeV1,
-    },
-};
-use iroha_data_model::{metadata::Metadata, prelude::Name};
-use iroha_primitives::json::Json;
-use norito::{
-    NoritoDeserialize, NoritoSerialize, codec::Decode, streaming::SoranetAccessKind, to_bytes,
-};
-use quinn::{ClosedStream, Connection, Endpoint, Incoming, RecvStream, SendStream, VarInt};
-use rand::{SeedableRng, rngs::StdRng};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use std::{
-    fmt::Write as _,
-    net::{IpAddr, SocketAddr},
-    str::FromStr,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU16, Ordering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-use thiserror::Error;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
-    sync::{Mutex, Notify},
-    task::JoinHandle,
-    time::{Instant as TokioInstant, MissedTickBehavior, interval, interval_at, sleep, timeout},
-};
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{self, protocol::Message},
-};
-use tracing::{debug, info, warn};
 
 struct AdminRenderContext<'a> {
     metrics: &'a Metrics,
@@ -3720,10 +3725,15 @@ fn pow_failure_reason(error: &pow::Error) -> SoranetPowFailureReasonV1 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::constant_rate;
-    use crate::privacy::{PrivacyAggregator, PrivacyConfig, ProxyPolicyEventBuffer};
-    use crate::scheduler::CellClass;
+    use std::{
+        io::ErrorKind,
+        net::TcpListener as StdTcpListener,
+        num::NonZeroU32,
+        str::FromStr,
+        sync::Arc,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
+
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{
         Signature,
@@ -3751,19 +3761,18 @@ mod tests {
     use norito::{codec::Encode, decode_from_bytes, to_bytes};
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
-    use std::{
-        io::ErrorKind,
-        net::TcpListener as StdTcpListener,
-        num::NonZeroU32,
-        str::FromStr,
-        sync::Arc,
-        time::{Duration, SystemTime, UNIX_EPOCH},
-    };
     use tempfile::NamedTempFile;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,
         time::sleep,
+    };
+
+    use super::*;
+    use crate::{
+        constant_rate,
+        privacy::{PrivacyAggregator, PrivacyConfig, ProxyPolicyEventBuffer},
+        scheduler::CellClass,
     };
 
     const TEST_RELAY_ID: RelayId = [0xAB; 32];

@@ -58,6 +58,8 @@ int32_t connect_norito_account_address_render(
 
 // ---------------- Offline allowance helpers ----------------
 int32_t connect_norito_offline_receipt_challenge(
+    const char* chain_id,
+    unsigned long chain_id_len,
     const char* invoice_id,
     unsigned long invoice_len,
     const char* receiver_account_id,
@@ -66,6 +68,7 @@ int32_t connect_norito_offline_receipt_challenge(
     unsigned long asset_len,
     const char* amount,
     unsigned long amount_len,
+    uint64_t issued_at_ms,
     const char* nonce_hex,
     unsigned long nonce_len,
     uint8_t** out_preimage_ptr,
@@ -80,6 +83,36 @@ int32_t connect_norito_offline_receipts_root(
     unsigned long receipts_len,
     uint8_t* out_root_ptr,
     unsigned long out_root_len);
+
+int32_t connect_norito_offline_commitment_update(
+    const uint8_t* initial_commitment_ptr,
+    unsigned long initial_commitment_len,
+    const char* claimed_delta,
+    unsigned long claimed_delta_len,
+    const uint8_t* initial_blinding_ptr,
+    unsigned long initial_blinding_len,
+    const uint8_t* resulting_blinding_ptr,
+    unsigned long resulting_blinding_len,
+    uint8_t** out_commitment_ptr,
+    unsigned long* out_commitment_len);
+
+int32_t connect_norito_offline_balance_proof(
+    const char* chain_id,
+    unsigned long chain_id_len,
+    const uint8_t* initial_commitment_ptr,
+    unsigned long initial_commitment_len,
+    const uint8_t* resulting_commitment_ptr,
+    unsigned long resulting_commitment_len,
+    const char* claimed_delta,
+    unsigned long claimed_delta_len,
+    const char* resulting_value,
+    unsigned long resulting_value_len,
+    const uint8_t* initial_blinding_ptr,
+    unsigned long initial_blinding_len,
+    const uint8_t* resulting_blinding_ptr,
+    unsigned long resulting_blinding_len,
+    uint8_t** out_proof_ptr,
+    unsigned long* out_proof_len);
 
 // ---------------- Ciphertext frame ----------------
 int32_t connect_norito_encode_ciphertext_frame(

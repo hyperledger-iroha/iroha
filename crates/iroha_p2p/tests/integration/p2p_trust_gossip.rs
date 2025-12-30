@@ -1,15 +1,18 @@
 //! Trust-gossip capability gating integration tests.
 #![allow(unexpected_cfgs)]
 
-use super::next_port;
-use iroha_config::parameters::actual::{
-    LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
-    SoranetPow, SoranetPrivacy, SoranetVpn,
-};
-use iroha_config::parameters::defaults::network::{
-    ACCEPT_BUCKET_IDLE, ACCEPT_PREFIX_V4_BITS, ACCEPT_PREFIX_V6_BITS, MAX_ACCEPT_BUCKETS,
-    PEER_GOSSIP_PERIOD, RELAY_TTL, TRUST_DECAY_HALF_LIFE, TRUST_GOSSIP, TRUST_MIN_SCORE,
-    TRUST_PENALTY_BAD_GOSSIP, TRUST_PENALTY_UNKNOWN_PEER,
+use std::{collections::HashSet, num::NonZeroUsize};
+
+use iroha_config::parameters::{
+    actual::{
+        LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
+        SoranetPow, SoranetPrivacy, SoranetVpn,
+    },
+    defaults::network::{
+        ACCEPT_BUCKET_IDLE, ACCEPT_PREFIX_V4_BITS, ACCEPT_PREFIX_V6_BITS, MAX_ACCEPT_BUCKETS,
+        PEER_GOSSIP_PERIOD, RELAY_TTL, TRUST_DECAY_HALF_LIFE, TRUST_GOSSIP, TRUST_MIN_SCORE,
+        TRUST_PENALTY_BAD_GOSSIP, TRUST_PENALTY_UNKNOWN_PEER,
+    },
 };
 use iroha_config_base::WithOrigin;
 use iroha_crypto::{
@@ -28,8 +31,9 @@ use iroha_p2p::{
 };
 use iroha_primitives::addr::{SocketAddr, socket_addr};
 use norito::codec::{Decode, Encode};
-use std::{collections::HashSet, num::NonZeroUsize};
 use tokio::{sync::mpsc, time::Duration};
+
+use super::next_port;
 
 #[derive(Clone, Debug, Decode, Encode)]
 enum TrustTestMessage {

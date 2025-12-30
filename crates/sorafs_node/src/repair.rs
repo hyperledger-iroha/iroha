@@ -6,6 +6,14 @@
 //! canonical durability layer (Postgres) will be introduced once Torii wiring
 //! and governance integration mature.
 
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
 use blake3::hash;
 use hex;
 use iroha_logger::debug;
@@ -17,13 +25,6 @@ use sorafs_manifest::{
         InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_TASK_VERSION_V1, RepairEvidenceV1,
         RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTaskStateV1,
         RepairTicketId, RepairValidationError,
-    },
-};
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
     },
 };
 use thiserror::Error;

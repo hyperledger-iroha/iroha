@@ -148,8 +148,9 @@ fn sanitize(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::{Duration, SystemTime};
+
+    use super::*;
 
     #[test]
     fn header_serialisation() {

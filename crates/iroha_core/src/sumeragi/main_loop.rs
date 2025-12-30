@@ -28,9 +28,8 @@ use iroha_config::parameters::actual::{
     LaneConfig as LaneConfigSnapshot, ProofPolicy, Sumeragi as SumeragiConfig,
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree, PrivateKey, Signature};
-use iroha_data_model::Encode as _;
 use iroha_data_model::{
-    ChainId,
+    ChainId, Encode as _,
     account::AccountId,
     block::{BlockHeader, SignedBlock},
     consensus::{
@@ -50,13 +49,12 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use iroha_logger::prelude::*;
-#[cfg(all(test, feature = "telemetry"))]
-use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
-use thiserror::Error;
-
 use iroha_p2p::{Broadcast, Post, Priority, UpdateTopology};
 use iroha_primitives::time::TimeSource;
+#[cfg(all(test, feature = "telemetry"))]
+use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use sha2::{Digest as ShaDigest, Sha256};
+use thiserror::Error;
 
 // BLS signatures are mandatory for validators; consensus does not support non-BLS builds.
 #[cfg(not(feature = "bls"))]
@@ -64,41 +62,40 @@ compile_error!(
     "The `bls` feature is mandatory for iroha_core consensus; rebuild with `--features bls`"
 );
 
-use super::collectors::{CollectorPlan, deterministic_collectors};
-use super::consensus::{
-    AvailableVote, ExecWitness, ExecWitnessMsg, NPOS_TAG, PERMISSIONED_TAG, RbcDeliver, RbcInit,
-    RbcReady, ValidatorIndex, available_vote_preimage, new_view_preimage, qc_signer_count,
-    rbc_deliver_preimage, rbc_ready_preimage, vote_preimage,
-};
-use super::da::{GateReason, ManifestGateKind};
-use super::exec::{
-    build_exec_vote_from_witness, parent_state_from_witness, post_state_from_witness,
-};
-use super::penalties::PenaltyApplier;
+use iroha_data_model::consensus::CommitCertificate;
+use iroha_genesis::GENESIS_DOMAIN_ID;
+
 use super::{
     BackgroundPost, BackgroundRequest, GenesisWithPubKey, RbcStoreConfig, VotingBlock,
-    WsvEpochRosterAdapter, election,
+    WsvEpochRosterAdapter,
+    collectors::{CollectorPlan, deterministic_collectors},
+    consensus::{
+        AvailableVote, ExecWitness, ExecWitnessMsg, NPOS_TAG, PERMISSIONED_TAG, RbcDeliver,
+        RbcInit, RbcReady, ValidatorIndex, available_vote_preimage, new_view_preimage,
+        qc_signer_count, rbc_deliver_preimage, rbc_ready_preimage, vote_preimage,
+    },
+    da::{GateReason, ManifestGateKind},
+    election,
     epoch::{EpochManager, EpochSnapshot, VrfNoteResult},
-    epoch_report, rbc_status, *,
+    epoch_report,
+    exec::{build_exec_vote_from_witness, parent_state_from_witness, post_state_from_witness},
+    penalties::PenaltyApplier,
+    rbc_status, *,
 };
-use crate::nexus::lane_relay::LaneRelayBroadcaster;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use crate::telemetry::Telemetry;
-use crate::telemetry::{MissingBlockFetchOutcome, MissingBlockFetchTargetKind};
 use crate::{
     EventsSender, IrohaNetwork, NetworkMessage,
+    block::{BlockBuilder, BlockValidationError, ValidBlock},
     kura::{BlockCount, Kura},
+    nexus::lane_relay::LaneRelayBroadcaster,
     peers_gossiper::PeersGossiperHandle,
     queue::{BackpressureState, Queue, RoutingDecision},
     state::{CellVecExt, StakeSnapshot, State, StateView, compute_confidential_feature_digest},
     sumeragi::evidence::EvidenceStore,
-};
-use crate::{
-    block::{BlockBuilder, BlockValidationError, ValidBlock},
+    telemetry::{MissingBlockFetchOutcome, MissingBlockFetchTargetKind},
     tx::AcceptedTransaction,
 };
-use iroha_data_model::consensus::CommitCertificate;
-use iroha_genesis::GENESIS_DOMAIN_ID;
 
 mod background;
 mod block_sync;
@@ -164,8 +161,10 @@ use vrf::derive_vrf_material_from_key;
 
 #[cfg(feature = "dev-tests")]
 pub(crate) mod test_time {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::Duration;
+    use std::{
+        sync::atomic::{AtomicU64, Ordering},
+        time::Duration,
+    };
 
     static SCALE: AtomicU64 = AtomicU64::new(1);
 

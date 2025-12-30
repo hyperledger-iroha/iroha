@@ -5,8 +5,10 @@
 //! With timings/logs:
 //!   cargo run -p norito --example telemetry_watch --features adaptive-telemetry,adaptive-telemetry-log
 
-use std::time::Instant;
-use std::{thread, time::Duration};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 fn main() {
     let config = match CliConfig::from_env() {

@@ -1,11 +1,14 @@
+use std::sync::Arc;
+
 use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
     VpnFlowLabelV1,
 };
-use soranet_relay::config::VpnConfig;
-use soranet_relay::metrics::Metrics;
-use soranet_relay::vpn::{VpnFrameIoError, VpnOverlay, read_frame, write_frame};
-use std::sync::Arc;
+use soranet_relay::{
+    config::VpnConfig,
+    metrics::Metrics,
+    vpn::{VpnFrameIoError, VpnOverlay, read_frame, write_frame},
+};
 use tokio::{
     io::{AsyncWriteExt, duplex},
     runtime::Runtime,

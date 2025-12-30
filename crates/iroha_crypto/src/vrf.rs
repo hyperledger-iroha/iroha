@@ -27,15 +27,16 @@
 use core::convert::TryInto;
 use std::vec::Vec;
 
+use group::Curve;
+#[allow(unused_imports)]
+use w3f_bls::SerializableToBytes as _;
+
 use crate::{
     hash::Hash,
     signature::bls::{
         BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmallPrivateKey, BlsSmallPublicKey,
     },
 };
-use group::Curve;
-#[allow(unused_imports)]
-use w3f_bls::SerializableToBytes as _;
 
 // Domain separation tags (DST) for VRF hash_to_curve operations
 const DST_G2: &[u8] = b"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
@@ -190,8 +191,7 @@ pub fn output_from_proof(proof: &VrfProof) -> VrfOutput {
 
 fn verify_vrf_normal_pairing(pk: &BlsNormalPublicKey, msg: &[u8], sig: &[u8; 96]) -> bool {
     use blstrs::{G1Affine, G1Projective, G2Prepared};
-    use group::prime::PrimeCurveAffine;
-    use group::{Curve, Group as _};
+    use group::{Curve, Group as _, prime::PrimeCurveAffine};
     use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
 
     // pk in G1, signature in G2
@@ -213,8 +213,7 @@ fn verify_vrf_normal_pairing(pk: &BlsNormalPublicKey, msg: &[u8], sig: &[u8; 96]
 
 fn verify_vrf_small_pairing(pk: &BlsSmallPublicKey, msg: &[u8], sig: &[u8; 48]) -> bool {
     use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared};
-    use group::prime::PrimeCurveAffine;
-    use group::{Curve, Group as _};
+    use group::{Curve, Group as _, prime::PrimeCurveAffine};
     use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
 
     // pk in G2, signature in G1

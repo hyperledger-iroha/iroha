@@ -879,14 +879,16 @@ struct PolicyConflictRef {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::Write;
+
     use hex::FromHex;
     use iroha_data_model::ministry::{
         AGENDA_PROPOSAL_VERSION_V1, AgendaEvidenceAttachment, AgendaEvidenceKind,
         AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget,
     };
-    use std::io::Write;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     const TEST_ROSTER: &str = r#"{
         "format_version": 1,

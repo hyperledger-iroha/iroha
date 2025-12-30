@@ -1,12 +1,10 @@
 //! Round-trip tests for DA ingest/manifest Norito types.
 
+use std::{convert::TryFrom, str::FromStr};
+
 use iroha_crypto::{PublicKey, Signature};
-use iroha_data_model::da::prelude::*;
-use iroha_data_model::{nexus::LaneId, sorafs::pin_registry::StorageClass};
-use norito::core::NoritoDeserialize;
-use norito::from_bytes;
-use std::convert::TryFrom;
-use std::str::FromStr;
+use iroha_data_model::{da::prelude::*, nexus::LaneId, sorafs::pin_registry::StorageClass};
+use norito::{core::NoritoDeserialize, from_bytes};
 
 fn sample_digest(seed: u8) -> BlobDigest {
     let mut bytes = [0u8; 32];

@@ -7,10 +7,12 @@
 
 #![allow(clippy::size_of_ref)]
 
-use crate::provider_advert::SignatureAlgorithm;
-use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use std::fmt;
+
+use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
+
+use crate::provider_advert::SignatureAlgorithm;
 
 /// Schema version for [`RepairEvidenceV1`].
 pub const REPAIR_EVIDENCE_VERSION_V1: u8 = 1;

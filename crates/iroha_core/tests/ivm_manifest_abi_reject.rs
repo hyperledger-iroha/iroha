@@ -1,20 +1,23 @@
 //! Admission-time rejection when on-chain manifest `abi_hash` mismatches node policy.
 
 use core::str::FromStr;
-use iroha_core::prelude::World;
+use std::borrow::Cow;
+
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
-use iroha_core::smartcontracts::ivm::cache::IvmCache;
-use iroha_core::state::State;
-use iroha_core::tx::TransactionRejectionReason;
+use iroha_core::{
+    prelude::World, smartcontracts::ivm::cache::IvmCache, state::State,
+    tx::TransactionRejectionReason,
+};
 use iroha_crypto::KeyPair;
-use iroha_data_model::metadata::Metadata;
-use iroha_data_model::prelude::*;
-use iroha_data_model::smart_contract::manifest;
-use iroha_data_model::validation_fail::{IvmAdmissionError, ValidationFail};
+use iroha_data_model::{
+    metadata::Metadata,
+    prelude::*,
+    smart_contract::manifest,
+    validation_fail::{IvmAdmissionError, ValidationFail},
+};
 use iroha_primitives::json::Json;
 use ivm::{ProgramMetadata, encoding};
 use nonzero_ext::nonzero;
-use std::borrow::Cow;
 
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 
@@ -63,11 +66,12 @@ fn metadata_with_gas_limit(limit: u64) -> Metadata {
 
 #[test]
 fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode;
-    use iroha_data_model::permission;
-    use iroha_data_model::transaction::{Executable, TransactionBuilder};
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
+    use iroha_data_model::{
+        isi::smart_contract_code::RegisterSmartContractCode,
+        permission,
+        transaction::{Executable, TransactionBuilder},
+    };
 
     // Build world with a domain and an authority account
     let kura = Kura::blank_kura_for_testing();
@@ -149,11 +153,12 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
 
 #[test]
 fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode;
-    use iroha_data_model::permission;
-    use iroha_data_model::transaction::{Executable, TransactionBuilder};
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
+    use iroha_data_model::{
+        isi::smart_contract_code::RegisterSmartContractCode,
+        permission,
+        transaction::{Executable, TransactionBuilder},
+    };
 
     // Build world with a domain and an authority account
     let kura = Kura::blank_kura_for_testing();
@@ -226,11 +231,12 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
 
 #[test]
 fn ivm_manifest_without_abi_hash_allows_admission() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode;
-    use iroha_data_model::permission;
-    use iroha_data_model::transaction::{Executable, TransactionBuilder};
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
+    use iroha_data_model::{
+        isi::smart_contract_code::RegisterSmartContractCode,
+        permission,
+        transaction::{Executable, TransactionBuilder},
+    };
 
     // Build world with a domain and an authority account
     let kura = Kura::blank_kura_for_testing();
@@ -301,11 +307,12 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
 
 #[test]
 fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode;
-    use iroha_data_model::permission;
-    use iroha_data_model::transaction::{Executable, TransactionBuilder};
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
+    use iroha_data_model::{
+        isi::smart_contract_code::RegisterSmartContractCode,
+        permission,
+        transaction::{Executable, TransactionBuilder},
+    };
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -372,11 +379,12 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
 
 #[test]
 fn ivm_manifest_unknown_syscall_rejected_before_execution() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode;
-    use iroha_data_model::permission;
-    use iroha_data_model::transaction::{Executable, TransactionBuilder};
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
+    use iroha_data_model::{
+        isi::smart_contract_code::RegisterSmartContractCode,
+        permission,
+        transaction::{Executable, TransactionBuilder},
+    };
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

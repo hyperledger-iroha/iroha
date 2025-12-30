@@ -1,7 +1,8 @@
 //! Shared helpers for serialising and parsing PoR proofs and trees.
 
-use crate::{PorChunkTree, PorLeaf, PorMerkleTree, PorProof, PorSegment};
 use norito::json::{Map, Value};
+
+use crate::{PorChunkTree, PorLeaf, PorMerkleTree, PorProof, PorSegment};
 
 /// Convert the full PoR tree into a Norito JSON value (root → chunks → segments → leaves).
 #[must_use]

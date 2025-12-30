@@ -1,8 +1,7 @@
 //! Validate struct index against on-disk golden fixtures (.json + .tape).
 #![cfg(feature = "json")]
 
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 use norito::json::build_struct_index;
 

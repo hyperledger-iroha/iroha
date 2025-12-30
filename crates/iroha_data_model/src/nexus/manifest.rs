@@ -2,14 +2,15 @@
 
 use std::{convert::TryFrom, fmt, str::FromStr};
 
-use super::DataSpaceId;
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{asset::AssetDefinitionId, name::Name};
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+
+use super::DataSpaceId;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use crate::{asset::AssetDefinitionId, name::Name};
 
 /// Universal account identifier shared across all dataspaces.
 ///
@@ -496,8 +497,9 @@ pub enum DenyReason {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use proptest::prelude::*;
+
+    use super::*;
 
     fn sample_uaid() -> UniversalAccountId {
         UniversalAccountId::from_hash(Hash::new(b"uaid::sample"))

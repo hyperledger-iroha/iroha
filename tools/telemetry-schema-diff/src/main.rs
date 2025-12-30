@@ -1,18 +1,22 @@
 //! CLI utility for comparing Android vs Rust telemetry schema definitions.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
-use std::fmt::Write as FmtWrite;
-use std::fs::{File, create_dir_all};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::OsStr,
+    fmt::Write as FmtWrite,
+    fs::{File, create_dir_all},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use clap::{Parser, ValueEnum};
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json;
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
+};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Diff Android vs Rust telemetry schemas", long_about = None)]
@@ -1342,8 +1346,9 @@ mod policy {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
 
     fn schema_from_signals(signals: Vec<Signal>) -> TelemetrySchema {
         TelemetrySchema {

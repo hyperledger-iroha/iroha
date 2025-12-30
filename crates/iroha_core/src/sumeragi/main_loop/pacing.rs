@@ -5,12 +5,11 @@ use std::time::{Duration, Instant};
 use iroha_config::parameters::actual::AdaptiveObservability;
 use tokio::sync::watch;
 
-use crate::{queue::BackpressureState, sumeragi::status};
-
 use super::{
     PROPOSE_ATTEMPT_LOG_COOLDOWN, TICK_COST_LOG_THRESHOLD, TICK_LAG_LOG_THRESHOLD,
     TICK_TIMING_LOG_COOLDOWN,
 };
+use crate::{queue::BackpressureState, sumeragi::status};
 
 /// Track queue backpressure so proposal assembly can be deferred under saturation.
 pub(super) struct BackpressureGate {

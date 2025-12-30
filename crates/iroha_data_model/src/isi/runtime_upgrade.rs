@@ -1,7 +1,8 @@
-use super::*;
-use crate::runtime::RuntimeUpgradeId;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
+
+use super::*;
+use crate::runtime::RuntimeUpgradeId;
 
 isi! {
     /// Propose a runtime upgrade by submitting a manifest.

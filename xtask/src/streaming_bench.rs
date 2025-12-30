@@ -1,17 +1,24 @@
-use std::error::Error;
-use std::io::{BufRead, Read, Write};
-use std::time::Instant;
-
-use norito::codec::encode_with_header_flags;
-use norito::core::Header;
-use norito::json::{self, Value};
-use norito::streaming::chunk::BaselineDecoder;
-use norito::streaming::codec::{
-    BaselineEncoder, BaselineEncoderConfig, Chroma420Frame, EncodedSegment, FrameDimensions,
-    RawFrame, SegmentBundle,
+use std::{
+    error::Error,
+    io::{BufRead, Read, Write},
+    time::Instant,
 };
-use norito::streaming::{BUNDLED_RANS_BUILD_AVAILABLE, BundleAcceleration, EntropyMode};
-use norito::{Archived, NoritoSerialize, crc64_fallback, decode_from_bytes};
+
+use norito::{
+    Archived, NoritoSerialize,
+    codec::encode_with_header_flags,
+    core::Header,
+    crc64_fallback, decode_from_bytes,
+    json::{self, Value},
+    streaming::{
+        BUNDLED_RANS_BUILD_AVAILABLE, BundleAcceleration, EntropyMode,
+        chunk::BaselineDecoder,
+        codec::{
+            BaselineEncoder, BaselineEncoderConfig, Chroma420Frame, EncodedSegment,
+            FrameDimensions, RawFrame, SegmentBundle,
+        },
+    },
+};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 

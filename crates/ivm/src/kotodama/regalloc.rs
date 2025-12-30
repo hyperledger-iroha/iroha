@@ -1,6 +1,7 @@
 //! Linear-scan register allocator and stack frame layout for Kotodama IR.
-use super::ir::{Function, Instr, Temp, Terminator};
 use std::collections::HashMap;
+
+use super::ir::{Function, Instr, Temp, Terminator};
 
 /// Result of register allocation for a function.
 #[derive(Debug, PartialEq)]

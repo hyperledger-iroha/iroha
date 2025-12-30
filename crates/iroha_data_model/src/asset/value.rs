@@ -8,7 +8,6 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
-
 use super::id::AssetId;
 use crate::{Identifiable, IntoKeyValue, Registered};
 

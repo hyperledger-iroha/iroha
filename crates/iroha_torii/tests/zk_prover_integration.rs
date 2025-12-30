@@ -2,6 +2,8 @@
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::similar_names, unused_imports)]
 
+use std::sync::Once;
+
 use axum::{
     Router,
     response::IntoResponse,
@@ -10,7 +12,6 @@ use axum::{
 use http_body_util::BodyExt as _;
 use iroha_core::zk::test_utils::halo2_fixture_envelope;
 use iroha_data_model::proof::ProofAttachment;
-use std::sync::Once;
 use tower::ServiceExt as _;
 
 fn ensure_quota_config() {

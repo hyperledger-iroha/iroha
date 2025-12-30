@@ -1,11 +1,12 @@
 //! Seeded fuzz-ish regression for adaptive bare codec encode/decode.
 
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
-
-use norito::codec::{decode_adaptive, encode_with_header_flags};
-use norito::core::DecodeFlagsGuard;
-use norito::core::{self};
+use norito::{
+    codec::{decode_adaptive, encode_with_header_flags},
+    core::{
+        DecodeFlagsGuard, {self},
+    },
+};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
 type SampleEntry = (u16, Vec<u8>, Vec<Vec<u8>>, Option<String>);
 type Sample = Vec<SampleEntry>;

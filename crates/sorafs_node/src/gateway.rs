@@ -7,11 +7,12 @@
 use std::{
     collections::{HashMap, hash_map::Entry},
     ops::RangeInclusive,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime},
 };
-
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use axum::{
     Router,
@@ -2069,10 +2070,12 @@ fn populate_success_headers(
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::PathBuf};
+
+    use tempfile::TempDir;
+
     use super::*;
     use crate::config::StorageConfig;
-    use std::{fs, path::PathBuf};
-    use tempfile::TempDir;
 
     #[test]
     fn capability_refusal_status_and_code_exposed() {

@@ -4,11 +4,12 @@
 //! `/v1/sorafs/proof/stream` endpoint together with lightweight aggregation
 //!\//! utilities used by the CLI and SDK integrations.
 
-use crate::{PorProof, por_json::proof_from_value};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use norito::json::{Map, Value, from_slice, to_vec};
 use std::collections::BTreeMap;
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use norito::json::{Map, Value, from_slice, to_vec};
+
+use crate::{PorProof, por_json::proof_from_value};
 
 /// Proof flavour emitted by the gateway.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]

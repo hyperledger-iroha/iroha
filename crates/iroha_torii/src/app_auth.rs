@@ -19,17 +19,16 @@
 use std::sync::Arc;
 
 use axum::http::HeaderMap;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_core::state::{State as CoreState, WorldReadOnly};
 use iroha_crypto::Signature;
 use iroha_data_model::{
     ValidationFail,
     account::{AccountController, AccountId},
-    query::error::{FindError, QueryExecutionFail},
     query::{
         ErasedIterQuery, Query, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
         dsl::{CompoundPredicate, HasProjection, PredicateMarker, SelectorMarker, SelectorTuple},
+        error::{FindError, QueryExecutionFail},
         parameters::QueryParams,
     },
 };
@@ -201,20 +200,21 @@ pub fn verify_canonical_request(
 
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
-    use super::*;
     use axum::http::Uri;
-    use iroha_core::sumeragi::network_topology::Topology;
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::Execute as _,
         state::{State, StateReadOnly, World},
+        sumeragi::network_topology::Topology,
     };
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         Registrable, account::Account, domain::Domain, isi::Register, prelude::DomainId,
     };
     use nonzero_ext::nonzero;
+
+    use super::*;
 
     fn minimal_state_with_account(account: &AccountId) -> Arc<State> {
         let domain_id: DomainId = "wonderland".parse().unwrap();

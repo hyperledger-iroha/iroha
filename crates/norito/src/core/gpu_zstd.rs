@@ -7,6 +7,10 @@
 
 #[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
 use std::ffi::CStr;
+#[cfg(unix)]
+use std::ffi::{c_char, c_int};
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+use std::process::{Command, Stdio};
 #[cfg(windows)]
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr};
 use std::{
@@ -15,12 +19,6 @@ use std::{
     mem,
     sync::OnceLock,
 };
-
-#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-use std::process::{Command, Stdio};
-
-#[cfg(unix)]
-use std::ffi::{c_char, c_int};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[link(name = "objc")]
 unsafe extern "C" {
@@ -451,9 +449,10 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
 
 #[cfg(all(test, feature = "gpu-compression"))]
 mod tests {
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
     use super::*;
     use crate::core::hw;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
 
     #[test]
     fn raw_roundtrip() {
@@ -544,8 +543,9 @@ mod tests {
 
 #[cfg(test)]
 mod self_test {
-    use super::*;
     use std::{io, ptr, slice};
+
+    use super::*;
 
     unsafe extern "C" fn compress_stub(
         src: *const u8,

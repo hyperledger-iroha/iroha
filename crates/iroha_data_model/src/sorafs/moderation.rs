@@ -6,10 +6,11 @@
 //! `validate` helper to enforce schema versioning and signature coverage before
 //! accepting a new reproducibility package.
 
+use std::collections::BTreeSet;
+
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use std::collections::BTreeSet;
 use thiserror::Error;
 
 #[cfg(feature = "json")]
@@ -392,8 +393,9 @@ impl AdversarialCorpusManifestV1 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::KeyPair;
+
+    use super::*;
 
     fn sample_body() -> ModerationReproBodyV1 {
         ModerationReproBodyV1 {

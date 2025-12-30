@@ -3,8 +3,7 @@
 
 use std::{env, fs, path::Path};
 
-use iroha_core::kura::BlockStore;
-use iroha_core::kura::PipelineRecoverySidecar;
+use iroha_core::kura::{BlockStore, PipelineRecoverySidecar};
 use iroha_data_model::{
     asset::AssetId,
     block::{SignedBlock, decode_framed_signed_block},

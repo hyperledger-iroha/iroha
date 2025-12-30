@@ -1,7 +1,8 @@
-use super::*;
-use crate::prelude::{Execute, Visit};
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 use iroha_smart_contract::data_model::{isi::CustomInstruction, prelude::InstructionBox};
+
+use super::*;
+use crate::prelude::{Execute, Visit};
 
 /// Dispatches a custom instruction through the default executor pipeline.
 pub fn visit_custom_instruction<V: Execute + Visit + ?Sized>(
@@ -89,12 +90,14 @@ mod multisig;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::prelude::Context;
+    use std::{num::NonZeroU64, str::FromStr};
+
     use iroha_data_model::{
         account::AccountId, block::BlockHeader, executor, prelude::ValidationFail,
     };
-    use std::{num::NonZeroU64, str::FromStr};
+
+    use super::*;
+    use crate::prelude::Context;
 
     #[derive(Debug, Clone)]
     struct DummyInstruction;

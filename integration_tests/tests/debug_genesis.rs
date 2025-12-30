@@ -1,15 +1,16 @@
 //! Inspect genesis encoding/decoding behaviour for troubleshooting.
 
 use eyre::Result;
-use iroha_data_model::block::{
-    decode_versioned_signed_block, deframe_versioned_signed_block_bytes,
-    frame_versioned_signed_block_bytes,
+use integration_tests::sandbox;
+use iroha_data_model::{
+    block::{
+        decode_versioned_signed_block, deframe_versioned_signed_block_bytes,
+        frame_versioned_signed_block_bytes,
+    },
+    transaction::Executable,
 };
-use iroha_data_model::transaction::Executable;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::codec::encode_adaptive;
-
-use integration_tests::sandbox;
 
 #[test]
 fn genesis_roundtrip_inspection() -> Result<()> {

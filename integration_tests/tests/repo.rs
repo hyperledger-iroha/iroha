@@ -1,6 +1,13 @@
 //! Integration coverage for repo and reverse-repo instructions.
 
+use std::{
+    convert::TryFrom,
+    sync::{Mutex, OnceLock},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
 use eyre::{Result, eyre};
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     data_model::{
@@ -14,11 +21,6 @@ use iroha_crypto::KeyPair;
 use iroha_data_model::isi::RepoMarginCallIsi;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID, CARPENTER_KEYPAIR};
-use std::convert::TryFrom;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use integration_tests::sandbox;
 
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static START_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();

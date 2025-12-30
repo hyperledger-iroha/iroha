@@ -1,11 +1,14 @@
 //! Ensure overlay construction with different `pipeline.workers` settings yields
 //! identical outcomes (events and final state), preserving determinism.
 
-use iroha_core::block::{BlockBuilder, ValidBlock};
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use std::borrow::Cow;
+
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    state::{StateReadOnly, WorldReadOnly},
+};
 use iroha_data_model::prelude::*;
 use mv::storage::StorageReadOnly; // trait for .get()
-use std::borrow::Cow;
 
 mod snapshots;
 

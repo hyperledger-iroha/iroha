@@ -2900,13 +2900,15 @@ impl From<norito::json::Error> for DirectoryReleaseError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs;
+
     use blake3::hash as blake3_hash;
     use iroha_primitives::soradns::{
         canonical_gateway_suffix, canonical_gateway_wildcard_pattern, pretty_gateway_suffix,
     };
-    use std::fs;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn derives_host_summaries_with_normalisation() {

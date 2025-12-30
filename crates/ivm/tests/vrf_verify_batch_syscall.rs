@@ -1,13 +1,10 @@
 #![cfg(feature = "ivm_vrf_tests")]
-use ivm::host::DefaultHost;
-use ivm::{IVM, Memory, PointerType};
+use ivm::{IVM, Memory, PointerType, host::DefaultHost};
 
 mod common;
-use common::assemble_syscalls;
-
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
-use group::prime::PrimeCurveAffine;
-use group::{Curve, Group};
+use common::assemble_syscalls;
+use group::{Curve, Group, prime::PrimeCurveAffine};
 use ivm::vrf::{VrfVerifyBatchRequest, VrfVerifyRequest};
 
 fn hash_to_g1(msg: &[u8]) -> G1Affine {

@@ -16,10 +16,9 @@ use std::{
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     ChainId,
-    account::admission::ImplicitAccountFeeDestination,
     account::{
         ACCOUNT_ADMISSION_POLICY_METADATA_KEY, Account, AccountAdmissionMode,
-        AccountAdmissionPolicy, AccountId,
+        AccountAdmissionPolicy, AccountId, admission::ImplicitAccountFeeDestination,
     },
     asset::{
         definition::{AssetDefinition, Mintable, NewAssetDefinition},
@@ -1520,12 +1519,15 @@ pub fn drafts_from_json_str(input: &str) -> Result<Vec<InstructionDraft>, Compos
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_data_model::account::AccountAdmissionMode;
-    use iroha_data_model::account::admission::ImplicitAccountCreationFee;
-    use iroha_data_model::asset::prelude::AssetDefinitionId;
-    use iroha_version::Version;
     use std::{collections::BTreeMap, num::NonZeroU32, time::Duration};
+
+    use iroha_data_model::{
+        account::{AccountAdmissionMode, admission::ImplicitAccountCreationFee},
+        asset::prelude::AssetDefinitionId,
+    };
+    use iroha_version::Version;
+
+    use super::*;
 
     const FIXTURE_ADMISSION_POLICY: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

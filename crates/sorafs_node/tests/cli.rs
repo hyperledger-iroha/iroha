@@ -1,16 +1,19 @@
 //! End-to-end checks for the sorafs-node CLI helpers.
 
+use std::{fs, path::Path};
+
 use assert_cmd::cargo::cargo_bin_cmd;
 use blake3::hash;
 use sorafs_car::CarBuildPlan;
 use sorafs_chunker::ChunkProfile;
-use sorafs_manifest::por::{
-    POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1,
-    derive_challenge_id, derive_challenge_seed,
+use sorafs_manifest::{
+    BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy,
+    por::{
+        POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1,
+        PorProofV1, derive_challenge_id, derive_challenge_seed,
+    },
+    provider_advert::{AdvertSignature, SignatureAlgorithm},
 };
-use sorafs_manifest::provider_advert::{AdvertSignature, SignatureAlgorithm};
-use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
-use std::{fs, path::Path};
 use tempfile::TempDir;
 
 fn ingest_tests_enabled() -> bool {

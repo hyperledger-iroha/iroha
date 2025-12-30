@@ -317,19 +317,22 @@ impl LaneRouter for ConfigLaneRouter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::Hash;
-    use iroha_data_model::nexus::LaneMetadata;
     use iroha_data_model::{
-        isi::prelude::{Mint, Register},
-        isi::smart_contract_code::RegisterSmartContractBytes,
+        isi::{
+            prelude::{Mint, Register},
+            smart_contract_code::RegisterSmartContractBytes,
+        },
         metadata::Metadata,
+        nexus::LaneMetadata,
         prelude::*,
         transaction::TransactionBuilder,
     };
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
+
+    use super::*;
 
     fn sample_transaction(
         authority: &AccountId,

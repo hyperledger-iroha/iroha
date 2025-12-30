@@ -7,6 +7,7 @@
 #![allow(unsafe_code)]
 
 use core::{convert::TryInto, mem, ops::RangeFrom};
+
 use norito::codec::{DecodeAll, Encode};
 
 /// Encode the given value with a `usize` length prefix.

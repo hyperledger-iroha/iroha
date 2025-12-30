@@ -5,9 +5,10 @@
 //! surface a consistent unsupported error so the planner can return to the CPU
 //! path without linking GPU backends.
 
-use crate::backend::GpuBackend;
 use core::marker::PhantomData;
 use std::fmt;
+
+use crate::backend::GpuBackend;
 
 /// GPU execution failure used when GPU support is not compiled in.
 #[derive(Debug, Clone)]

@@ -4,19 +4,17 @@
 #[path = "sm2_negative_vector_fixture.rs"]
 mod negative_fixture;
 
+use std::sync::{Arc, OnceLock};
+
 use hex::decode as hex_decode;
 use iroha_crypto::{
     Algorithm, Error, KeyPair, Signature, Sm2PrivateKey, Sm2PublicKey, Sm2Signature,
 };
-use proptest::collection::vec;
-use proptest::{prelude::*, proptest};
-use sm2::dsa::Signature as Sm2RawSignature;
-use sm2::dsa::signature::hazmat::PrehashVerifier;
-use sm3::{Digest, Sm3};
-use std::sync::{Arc, OnceLock};
-
 use negative_fixture::{NegativeVector, apply_mutation, load_negative_vectors};
 use norito::json::Value;
+use proptest::{collection::vec, prelude::*, proptest};
+use sm2::dsa::{Signature as Sm2RawSignature, signature::hazmat::PrehashVerifier};
+use sm3::{Digest, Sm3};
 
 fn sm2_keypair() -> KeyPair {
     KeyPair::random_with_algorithm(Algorithm::Sm2)

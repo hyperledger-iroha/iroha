@@ -2,7 +2,12 @@
 
 //! Capacity registry helpers exposed via Torii.
 
-use crate::{routing::MaybeTelemetry, sorafs::capability_name};
+use std::{
+    collections::HashSet,
+    str::FromStr,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use hex::ToHex;
 use iroha_core::state::{WorldReadOnly, WorldView};
@@ -29,7 +34,6 @@ use norito::{
     decode_from_bytes,
     json::{self, Map, Value},
 };
-
 use sorafs_manifest::{
     capacity::{
         CapacityDeclarationV1, CapacityMetadataEntry, ChunkerCommitmentV1, LaneCommitmentV1,
@@ -38,13 +42,10 @@ use sorafs_manifest::{
     pin_registry::ReplicationOrderV1,
     provider_advert::{CapabilityType, StakePointer},
 };
-use std::{
-    collections::HashSet,
-    str::FromStr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+use crate::{routing::MaybeTelemetry, sorafs::capability_name};
 
 const METADATA_STATUS_TIMESTAMP_KEY: &str = "sorafs_status_timestamp_unix";
 const METADATA_GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
@@ -1832,16 +1833,19 @@ fn storage_class_label(class: StorageClass) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::str::FromStr;
+
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
     use iroha_data_model::{
         account::AccountId,
         metadata::Metadata,
-        sorafs::capacity::{CapacityDeclarationRecord, CapacityFeeLedgerEntry},
-        sorafs::pin_registry::{
-            ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, PinManifestRecord,
-            PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
-            ReplicationOrderStatus, StorageClass,
+        sorafs::{
+            capacity::{CapacityDeclarationRecord, CapacityFeeLedgerEntry},
+            pin_registry::{
+                ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, PinManifestRecord,
+                PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
+                ReplicationOrderStatus, StorageClass,
+            },
         },
     };
     use sorafs_manifest::{
@@ -1851,7 +1855,8 @@ mod tests {
         pin_registry::ReplicationOrderV1,
         provider_advert::StakePointer,
     };
-    use std::str::FromStr;
+
+    use super::*;
 
     fn sample_declaration() -> (ProviderId, CapacityDeclarationRecord, CapacityDeclarationV1) {
         let provider_id = ProviderId::new([0x11; 32]);

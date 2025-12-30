@@ -6,13 +6,12 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{BlockHeader, SignedBlock};
 use iroha_logger::prelude::*;
 
+use super::{Actor, pending_block::PendingBlock};
 use crate::{
     queue::Queue,
     state::{State, StateReadOnly},
     sumeragi::status,
 };
-
-use super::{Actor, pending_block::PendingBlock};
 
 pub(super) const KURA_STAGE_ROLLBACK_REASON_STORE: &str = "store_failure";
 pub(super) const KURA_STAGE_ROLLBACK_REASON_STATE: &str = "state_commit_failure";

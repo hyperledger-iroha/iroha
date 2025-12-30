@@ -5,17 +5,17 @@
 //! buffer, while [`SmallVec`] can be tuned to store a handful of elements on
 //! the stack before spilling onto the heap.
 use core::fmt;
-use std::{format, string::String, vec::Vec};
+use std::{format, io::Write, string::String, vec::Vec};
 
 use iroha_schema::{IntoSchema, TypeId};
-use norito::core as ncore;
-use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{
+    NoritoDeserialize, NoritoSerialize, core as ncore,
+    json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
+};
 pub use small_string::SmallStr;
 pub use small_vector::SmallVec;
 use smallstr::SmallString;
 pub use smallvec::{Array, smallvec};
-use std::io::Write;
 
 /// The go-to size for `SmallVec`. When in doubt, use this.
 pub const SMALL_SIZE: usize = 8_usize;
@@ -105,12 +105,15 @@ mod small_string {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use norito::codec::{Decode, Encode};
-    use norito::core as ncore;
-    use norito::json;
-    use norito::{NoritoDeserialize, NoritoSerialize};
     use std::io::Write;
+
+    use norito::{
+        NoritoDeserialize, NoritoSerialize,
+        codec::{Decode, Encode},
+        core as ncore, json,
+    };
+
+    use super::*;
 
     // Encoding and decoding a `SmallVec` should produce an identical vector.
     #[test]

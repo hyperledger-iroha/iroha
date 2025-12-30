@@ -1,8 +1,7 @@
 //! Parliament body derivation should emit rosters for every governance body.
 
 use iroha_config::parameters::actual::Governance;
-use iroha_core::governance::draw::derive_parliament_bodies;
-use iroha_core::governance::state::ParliamentTerm;
+use iroha_core::governance::{draw::derive_parliament_bodies, state::ParliamentTerm};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ChainId, account::AccountId, domain::DomainId, governance::types::ParliamentBody,

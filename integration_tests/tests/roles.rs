@@ -3,13 +3,12 @@ use std::time::Duration;
 
 use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::{prelude::*, transaction::error::TransactionRejectionReason};
 use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use tokio::{fs, runtime::Runtime, time::timeout};
-
-use integration_tests::sandbox;
 
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()

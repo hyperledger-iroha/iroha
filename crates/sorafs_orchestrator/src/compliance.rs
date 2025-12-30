@@ -12,8 +12,9 @@
 //! transport was overridden and which assurances were provided by each
 //! operator.
 
-use iroha_core::prelude::Hash;
 use std::collections::BTreeSet;
+
+use iroha_core::prelude::Hash;
 
 /// Decision emitted after evaluating the compliance policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -21,14 +21,15 @@ public final class OfflineBalanceProofTest {
         OfflineBalanceProof.advanceCommitment(
             "sdk-chain",
             "5",
+            "5",
             hexZeros(64),
             hexZeros(64),
             "01" + hexZeros(62));
     expectNotNull(artifacts, "artifacts");
     expectEquals(32, artifacts.getResultingCommitment().length, "commitment bytes");
-    expectEquals(96, artifacts.getProof().length, "proof bytes");
+    expectEquals(12385, artifacts.getProof().length, "proof bytes");
     expectEquals(64, artifacts.getResultingCommitmentHex().length(), "commitment hex");
-    expectEquals(192, artifacts.getProofHex().length(), "proof hex");
+    expectEquals(24770, artifacts.getProofHex().length(), "proof hex");
   }
 
   private static String hexZeros(final int count) {

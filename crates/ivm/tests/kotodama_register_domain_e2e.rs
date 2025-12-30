@@ -1,8 +1,9 @@
+use std::collections::HashMap;
+
 use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
 };
-use std::collections::HashMap;
 
 #[test]
 fn kotodama_register_domain_e2e() {

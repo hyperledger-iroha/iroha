@@ -345,6 +345,15 @@ pub(super) fn ensure_receiving_account(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::admission::ImplicitAccountCreationFee, permission::Permissions,
+    };
+    use iroha_test_samples::ALICE_ID;
+    use nonzero_ext::nonzero;
+
     use super::*;
     use crate::{
         kura::Kura,
@@ -352,12 +361,6 @@ mod tests {
         smartcontracts::Execute,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::account::admission::ImplicitAccountCreationFee;
-    use iroha_data_model::permission::Permissions;
-    use iroha_test_samples::ALICE_ID;
-    use nonzero_ext::nonzero;
-    use std::collections::BTreeMap;
 
     fn open_domain(domain_id: DomainId, policy: AccountAdmissionPolicy) -> Domain {
         let mut metadata = Metadata::default();

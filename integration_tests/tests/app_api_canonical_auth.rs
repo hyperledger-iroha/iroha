@@ -7,9 +7,9 @@ use integration_tests::sandbox;
 use iroha_crypto::Signature;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-use iroha_torii::filter::{Pagination, QueryEnvelope};
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_SIGNATURE, Method, Uri, canonical_request_message,
+    filter::{Pagination, QueryEnvelope},
     signature_header_value,
 };
 use norito::json::Value as JsonValue;

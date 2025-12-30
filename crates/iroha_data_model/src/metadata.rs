@@ -1,7 +1,6 @@
 //! Metadata: key-value pairs that can be attached to accounts, transactions and assets.
 
-use std::{borrow::Borrow, str::FromStr};
-use std::{collections::BTreeMap, format, string::String, vec::Vec};
+use std::{borrow::Borrow, collections::BTreeMap, format, str::FromStr, string::String, vec::Vec};
 
 use iroha_data_model_derive::model;
 use iroha_primitives::json::Json;
@@ -15,9 +14,10 @@ pub type Path = [Name];
 
 #[model]
 mod model {
-    use super::*;
     use derive_more::Display;
     use iroha_schema::IntoSchema;
+
+    use super::*;
 
     /// Collection of parameters by their names with checked insertion.
     #[derive(Debug, Display, Clone, Default, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
@@ -245,8 +245,9 @@ fn entry_len_exact(name: &Name, json: &Json) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::codec::{decode_adaptive, encode_adaptive};
+
+    use super::*;
 
     #[test]
     fn metadata_serialization_matches_vec_layout() {

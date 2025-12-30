@@ -1,8 +1,9 @@
 //! Tests for slice-based decoders honoring COMPACT_SEQ_LEN varint sequence headers.
 #![cfg(feature = "compact-len")]
 
-use norito::core::{self, DecodeFlagsGuard};
 use std::collections::{BinaryHeap, LinkedList, VecDeque};
+
+use norito::core::{self, DecodeFlagsGuard};
 
 #[test]
 fn vecdeque_decode_from_slice_compact_seq_len() {

@@ -362,8 +362,9 @@ fn ensure_hex_string(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn detects_sequence_gap() {

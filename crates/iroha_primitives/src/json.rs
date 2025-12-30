@@ -9,8 +9,10 @@ use std::{string::String, vec::Vec};
 
 use derive_more::Display;
 use iroha_schema::IntoSchema;
-use norito::json::{self, JsonDeserializeOwned, JsonSerialize, Parser, Value};
-use norito::{Decode, Encode};
+use norito::{
+    Decode, Encode,
+    json::{self, JsonDeserializeOwned, JsonSerialize, Parser, Value},
+};
 
 const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
 

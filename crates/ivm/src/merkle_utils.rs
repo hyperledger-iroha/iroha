@@ -1,8 +1,9 @@
 //! Utilities for working with Merkle proofs emitted by the VM.
 
-use crate::{Memory, Registers};
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf};
 use sha2::Digest as _;
+
+use crate::{Memory, Registers};
 
 /// Decode a compact Merkle proof from bytes written by the GET_MERKLE_COMPACT syscall.
 ///

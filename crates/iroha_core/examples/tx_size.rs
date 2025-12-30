@@ -1,9 +1,10 @@
 //! Compute the encoded size of a single Log instruction transaction with a custom payload.
 
+use std::str::FromStr;
+
 use iroha_crypto::KeyPair;
 use iroha_data_model::{Level, domain::DomainId, prelude::*};
 use iroha_version::codec::EncodeVersioned;
-use std::str::FromStr;
 
 fn main() {
     let bytes: usize = std::env::args()

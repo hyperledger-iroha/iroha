@@ -8,13 +8,14 @@
 //! This code is **not** constant‑time and is intended for regression testing only.
 
 #[cfg(feature = "sm")]
+use std::fmt::Write as _;
+
+#[cfg(feature = "sm")]
 use hex::FromHex;
 #[cfg(feature = "sm")]
 use num_bigint::BigUint;
 #[cfg(feature = "sm")]
 use sm3::{Digest, Sm3};
-#[cfg(feature = "sm")]
-use std::fmt::Write as _;
 
 #[cfg(feature = "sm")]
 #[derive(Clone, Debug)]

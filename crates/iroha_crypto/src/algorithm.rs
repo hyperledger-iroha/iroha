@@ -1,13 +1,12 @@
 use core::{fmt, str::FromStr};
-
-#[cfg(not(feature = "ffi_import"))]
-use norito::json::{
-    self, JsonDeserialize as NoritoJsonDeserialize, JsonSerialize as NoritoJsonSerialize,
-};
 #[cfg(not(feature = "ffi_import"))]
 use std::string::String;
 
 use iroha_schema::{IntoSchema, TypeId};
+#[cfg(not(feature = "ffi_import"))]
+use norito::json::{
+    self, JsonDeserialize as NoritoJsonDeserialize, JsonSerialize as NoritoJsonSerialize,
+};
 #[cfg(not(feature = "ffi_import"))]
 use norito::{Decode, Encode, core as norito_core};
 

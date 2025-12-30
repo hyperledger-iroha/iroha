@@ -25,16 +25,19 @@ pub use domain::{
 };
 /// Re-export upgrade visitor helper.
 pub use executor::visit_upgrade;
-use iroha_smart_contract::data_model::isi::bridge::RecordBridgeReceipt;
-use iroha_smart_contract::data_model::isi::{
-    ActivatePublicLaneValidator, ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder,
-    ExitPublicLaneValidator, IssueReplicationOrder, RecordCapacityTelemetry,
-    RecordReplicationReceipt, RegisterCapacityDeclaration, RegisterCapacityDispute,
-    RegisterOfflineAllowance, RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
-    RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue, SetPricingSchedule,
-    SubmitOfflineToOnlineTransfer, UnregisterProviderOwner, UpsertProviderCredit,
+use iroha_smart_contract::data_model::{
+    isi::{
+        ActivatePublicLaneValidator, ApprovePinManifest, BindManifestAlias,
+        CompleteReplicationOrder, ExitPublicLaneValidator, IssueReplicationOrder,
+        RecordCapacityTelemetry, RecordReplicationReceipt, RegisterCapacityDeclaration,
+        RegisterCapacityDispute, RegisterOfflineAllowance, RegisterPeerWithPop,
+        RegisterPinManifest, RegisterProviderOwner, RemoveAssetKeyValue, RetirePinManifest,
+        SetAssetKeyValue, SetPricingSchedule, SubmitOfflineToOnlineTransfer,
+        UnregisterProviderOwner, UpsertProviderCredit, bridge::RecordBridgeReceipt,
+    },
+    prelude::*,
+    visit::Visit,
 };
-use iroha_smart_contract::data_model::{prelude::*, visit::Visit};
 /// Re-export dispatch for custom instructions.
 pub use isi::visit_custom_instruction;
 /// Re-export logging instruction visitor helper.
@@ -1272,12 +1275,13 @@ pub mod asset {
         CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanTransferAsset,
         CanTransferAssetWithDefinition,
     };
-    use iroha_smart_contract::data_model::isi::BuiltInInstruction;
+    use iroha_smart_contract::data_model::isi::{
+        BuiltInInstruction, RemoveAssetKeyValue, SetAssetKeyValue,
+    };
     use iroha_smart_contract_utils::Encode;
 
     use super::*;
     use crate::permission::{asset::is_asset_owner, asset_definition::is_asset_definition_owner};
-    use iroha_smart_contract::data_model::isi::{RemoveAssetKeyValue, SetAssetKeyValue};
 
     fn execute_mint_asset<V, Q>(executor: &mut V, isi: &Mint<Q, Asset>)
     where
@@ -1507,25 +1511,29 @@ pub mod asset {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
-        use crate::data_model::{
-            ValidationFail,
-            account::AccountId,
-            asset::{AssetDefinitionId, AssetId},
-            block::BlockHeader,
-            bridge::BridgeReceipt,
-            domain::DomainId,
-            executor::Result as ExecResult,
-            isi::{InstructionBox, bridge::RecordBridgeReceipt},
-            name::Name,
-            nexus::LaneId,
-            peer::PeerId,
-            prelude::Json,
-        };
-        use crate::prelude::{Context, Visit};
-        use crate::{Execute, Iroha};
         use core::num::NonZeroU64;
+
         use iroha_crypto::{Algorithm, KeyPair};
+
+        use super::*;
+        use crate::{
+            Execute, Iroha,
+            data_model::{
+                ValidationFail,
+                account::AccountId,
+                asset::{AssetDefinitionId, AssetId},
+                block::BlockHeader,
+                bridge::BridgeReceipt,
+                domain::DomainId,
+                executor::Result as ExecResult,
+                isi::{InstructionBox, bridge::RecordBridgeReceipt},
+                name::Name,
+                nexus::LaneId,
+                peer::PeerId,
+                prelude::Json,
+            },
+            prelude::{Context, Visit},
+        };
 
         struct StubExecutor {
             host: Iroha,
@@ -2408,17 +2416,10 @@ pub mod trigger {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
-        use crate::data_model::{
-            account::AccountId,
-            asset::{AssetDefinitionId, AssetId},
-            domain::DomainId,
-        };
         use core::str::FromStr as _;
-        use iroha_executor_data_model::permission::asset::{
-            CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
-        };
+
         use iroha_executor_data_model::permission::{
+            asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
             sorafs::{
                 CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
                 CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute,
@@ -2428,6 +2429,13 @@ pub mod trigger {
                 CanUpsertSorafsProviderCredit,
             },
             soranet::CanIngestSoranetPrivacy,
+        };
+
+        use super::*;
+        use crate::data_model::{
+            account::AccountId,
+            asset::{AssetDefinitionId, AssetId},
+            domain::DomainId,
         };
 
         fn sora_permissions() -> Vec<AnyPermission> {
@@ -2522,10 +2530,9 @@ pub mod trigger {
 
 #[cfg(test)]
 mod sorafs_permission_tests {
-    use super::*;
-    use crate::{Iroha, prelude, tests::with_mock_permissions};
     use core::num::NonZeroU64;
-    use iroha_data_model::permission::Permission as PermissionObject;
+    use std::str::FromStr;
+
     use iroha_data_model::{
         account::AccountId,
         block::BlockHeader,
@@ -2536,6 +2543,7 @@ mod sorafs_permission_tests {
             SetPricingSchedule, UnregisterProviderOwner, UpsertProviderCredit,
         },
         metadata::Metadata,
+        permission::Permission as PermissionObject,
         prelude::ValidationFail,
         sorafs::{
             capacity::{
@@ -2557,7 +2565,9 @@ mod sorafs_permission_tests {
         CanSetSorafsPricing, CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
         CanUpsertSorafsProviderCredit,
     };
-    use std::str::FromStr;
+
+    use super::*;
+    use crate::{Iroha, prelude, tests::with_mock_permissions};
 
     const AUTHORITY_ID: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland";

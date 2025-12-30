@@ -2,9 +2,8 @@
 
 use std::fs;
 
-use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-
 use integration_tests::sandbox;
+use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 
 #[test]
 fn config_layer_overrides_concurrency_settings() {

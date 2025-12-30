@@ -5,13 +5,13 @@
 //! declares a policy and that commitments carry non-zero digests/tickets.
 
 use iroha_config::parameters::actual::LaneConfig;
-use iroha_data_model::sorafs::pin_registry::ManifestDigest;
 use iroha_data_model::{
     da::{
         commitment::DaCommitmentRecord, confidential_compute::ConfidentialComputePolicy,
         types::StorageTicketId,
     },
     nexus::LaneStorageProfile,
+    sorafs::pin_registry::ManifestDigest,
 };
 use thiserror::Error;
 
@@ -89,7 +89,6 @@ fn is_zero_manifest(digest: &ManifestDigest) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_config::parameters::actual::LaneConfig;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
@@ -100,6 +99,8 @@ mod tests {
         nexus::{DataSpaceId, LaneCatalog, LaneId, LaneMetadata, LaneStorageProfile},
         sorafs::pin_registry::ManifestDigest,
     };
+
+    use super::*;
 
     fn lane_config(confidential: bool, key_version: Option<u32>) -> LaneConfig {
         let mut metadata = std::collections::BTreeMap::new();

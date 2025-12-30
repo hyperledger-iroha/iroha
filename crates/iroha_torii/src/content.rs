@@ -22,8 +22,7 @@ use iroha_data_model::{
     nexus::UniversalAccountId,
 };
 use iroha_logger::{error, info};
-use norito::codec::Encode;
-use norito::derive::JsonDeserialize;
+use norito::{codec::Encode, derive::JsonDeserialize};
 
 use crate::{NoritoQuery, SharedAppState, limits};
 
@@ -588,7 +587,8 @@ fn mime_for_path(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::BTreeMap;
+
     use base64::Engine;
     use iroha_config::parameters::actual::ContentPow;
     use iroha_data_model::{
@@ -600,7 +600,8 @@ mod tests {
         nexus::{DataSpaceId, LaneId},
     };
     use norito::codec::Decode;
-    use std::collections::BTreeMap;
+
+    use super::*;
 
     fn sample_manifest() -> ContentBundleManifest {
         ContentBundleManifest {

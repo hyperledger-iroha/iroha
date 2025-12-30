@@ -452,14 +452,8 @@ fn jail_in_transaction(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::telemetry::StateTelemetry;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-        sumeragi::evidence::evidence_key,
-    };
+    use std::{collections::BTreeSet, time::Duration};
+
     use eyre::Result;
     use iroha_config::parameters::actual::{
         ConsensusMode, NodeRole, ProofPolicy, Sumeragi as SumeragiConfig, SumeragiNpos,
@@ -475,7 +469,15 @@ mod tests {
         prelude::{BlockHeader, DomainId, PeerId},
     };
     use iroha_primitives::numeric::Numeric;
-    use std::{collections::BTreeSet, time::Duration};
+
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+        sumeragi::evidence::evidence_key,
+        telemetry::StateTelemetry,
+    };
 
     fn fresh_state() -> State {
         let kura = Kura::blank_kura_for_testing();

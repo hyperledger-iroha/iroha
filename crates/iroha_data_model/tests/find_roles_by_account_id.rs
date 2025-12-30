@@ -1,7 +1,8 @@
 //! Query struct constructor sanity checks
+use std::str::FromStr;
+
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
-use std::str::FromStr;
 
 #[test]
 fn find_roles_by_account_id_constructor_returns_id() {

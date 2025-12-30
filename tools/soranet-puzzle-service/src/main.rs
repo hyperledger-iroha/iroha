@@ -21,18 +21,6 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake3::hash as blake3_hash;
 use clap::Parser;
 use color_eyre::eyre::{Context, Result, eyre};
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json;
-use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
-use soranet_pq::{MlDsaSuite, sign_mldsa, verify_mldsa};
-use soranet_relay::config::{
-    ConfigError as RelayConfigError, HandshakePolicy, PowConfig, RelayConfig,
-};
-use thiserror::Error;
-use tokio::{net::TcpListener, signal};
-use tracing::{info, warn};
-use tracing_subscriber::{EnvFilter, fmt::SubscriberBuilder};
-
 use hex::{decode, encode};
 use iroha_crypto::{
     Algorithm, KeyPair, PrivateKey,
@@ -42,6 +30,19 @@ use iroha_crypto::{
         token::{AdmissionToken, MintError as AdmissionTokenMintError, compute_issuer_fingerprint},
     },
 };
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
+};
+use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
+use soranet_pq::{MlDsaSuite, sign_mldsa, verify_mldsa};
+use soranet_relay::config::{
+    ConfigError as RelayConfigError, HandshakePolicy, PowConfig, RelayConfig,
+};
+use thiserror::Error;
+use tokio::{net::TcpListener, signal};
+use tracing::{info, warn};
+use tracing_subscriber::{EnvFilter, fmt::SubscriberBuilder};
 
 const FALLBACK_IDENTITY_SEED: [u8; 32] = [0x42; 32];
 
@@ -1270,10 +1271,12 @@ fn parse_revocation_contents(contents: &str) -> Result<HashSet<[u8; 32]>, String
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::num::NonZeroU32;
+
     use iroha_crypto::soranet::{pow::ChallengeBinding, token::AdmissionTokenVerifier};
     use soranet_pq::generate_mldsa_keypair;
-    use std::num::NonZeroU32;
+
+    use super::*;
 
     fn base_service() -> PuzzleService {
         let pow_params = PowParameters::new(5, Duration::from_secs(120), Duration::from_secs(30));
@@ -1482,8 +1485,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_puzzle_mint_binds_transcript() {
-        use axum::body::Bytes;
-        use axum::extract::State;
+        use axum::{body::Bytes, extract::State};
 
         let mut service = base_service();
         service.descriptor_commit = [0x01; 32];
@@ -1617,8 +1619,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_mint_signed_ticket_returns_signed_payload() {
-        use axum::body::Bytes;
-        use axum::extract::State;
+        use axum::{body::Bytes, extract::State};
 
         let (service, _secret, public) = signed_ticket_service();
         let state = Arc::new(service);
@@ -1662,8 +1663,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_mint_signed_ticket_without_secret_rejected() {
-        use axum::body::Bytes;
-        use axum::extract::State;
+        use axum::{body::Bytes, extract::State};
 
         let service = base_service();
         let state = Arc::new(service);
@@ -1714,8 +1714,9 @@ mod tests {
 
     #[tokio::test]
     async fn http_token_endpoints_issue_tokens() {
-        use axum::{body::Bytes, extract::State};
         use std::time::SystemTime;
+
+        use axum::{body::Bytes, extract::State};
 
         let (service, verifier) = token_service();
         let state = Arc::new(service);

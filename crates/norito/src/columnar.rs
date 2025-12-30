@@ -27,10 +27,11 @@
 //!   `compact-len` is enabled, or fixed u64 otherwise.
 //! - Tag values are an internal detail: `0x00` = AoS, `0x01` = columnar.
 
-use crate::core::ByteSink;
-use crate::core::Error;
 // Shared AoS helpers for ad-hoc small-row layouts
-use crate::aos;
+use crate::{
+    aos,
+    core::{ByteSink, Error},
+};
 
 #[inline]
 fn add_offset(base: usize, inc: usize) -> Result<usize, Error> {

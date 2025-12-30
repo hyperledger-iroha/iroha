@@ -3,6 +3,7 @@
 mod support;
 
 use std::fs;
+
 use tempfile::tempdir;
 
 #[test]

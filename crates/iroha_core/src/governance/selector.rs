@@ -1,16 +1,18 @@
 //! Governance body selector helpers (parliament seats + alternates) using VRF draws.
 
-use crate::governance::{
-    draw::{self, Draw},
-    parliament::CandidateRef,
-    state::ParliamentTerm,
-};
+use std::collections::BTreeMap;
+
 use iroha_config::parameters::actual::Governance;
 use iroha_data_model::{
     ChainId,
     governance::types::{ParliamentBodies, ParliamentBody, ParliamentRoster},
 };
-use std::collections::BTreeMap;
+
+use crate::governance::{
+    draw::{self, Draw},
+    parliament::CandidateRef,
+    state::ParliamentTerm,
+};
 
 /// Select parliament members/alternates using VRF draw and governance config.
 pub fn select_parliament<'a, I>(
@@ -62,8 +64,9 @@ pub fn derive_parliament_bodies(council: &ParliamentTerm) -> ParliamentBodies {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::{account::AccountId, domain::DomainId};
+
+    use super::*;
 
     fn mk_account(seed: u8) -> AccountId {
         use iroha_crypto::{Algorithm, KeyPair};

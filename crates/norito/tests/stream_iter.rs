@@ -1,5 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
-use std::io::Cursor;
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::Cursor,
+};
 
 use norito::{Compression, StreamMapIter, serialize_into, stream_seq_iter};
 

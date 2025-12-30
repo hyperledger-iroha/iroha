@@ -420,18 +420,19 @@ fn compute_chunk_root(chunks: &[[u8; 32]]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::da::prelude::DaStripeLayout;
-    use iroha_data_model::isi::content::{PublishContentBundle, RetireContentBundle};
-    use iroha_data_model::prelude::*;
+    use iroha_data_model::{
+        block::BlockHeader,
+        da::prelude::DaStripeLayout,
+        isi::content::{PublishContentBundle, RetireContentBundle},
+        prelude::*,
+    };
     use nonzero_ext::nonzero;
 
+    use super::*;
     use crate::{
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_data_model::block::BlockHeader;
-
-    use super::*;
 
     fn make_tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
         const HEADER_LEN: usize = 512;

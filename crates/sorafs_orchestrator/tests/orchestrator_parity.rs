@@ -5,13 +5,6 @@
 //! Instrumentation captures concurrency limits so the resulting metrics can be
 //! recorded in the GA parity report shared with other SDKs.
 
-use blake3::hash as blake3_hash;
-use norito::json::{self, Value};
-use sorafs_car::{
-    fixtures::MultiPeerFixture,
-    multi_fetch::{ChunkResponse, FetchRequest},
-};
-use sorafs_orchestrator::{Orchestrator, OrchestratorConfig, PolicyStatus};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -23,6 +16,14 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+use blake3::hash as blake3_hash;
+use norito::json::{self, Value};
+use sorafs_car::{
+    fixtures::MultiPeerFixture,
+    multi_fetch::{ChunkResponse, FetchRequest},
+};
+use sorafs_orchestrator::{Orchestrator, OrchestratorConfig, PolicyStatus};
 
 /// Maximum parallel chunk fetches enforced during the parity suite.
 const MAX_PARALLEL_FETCHES: usize = 3;

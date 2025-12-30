@@ -1,6 +1,9 @@
-use ivm::kotodama::compiler::Compiler;
-use ivm::kotodama::i18n::{self, Language, Message};
 use std::sync::Mutex;
+
+use ivm::kotodama::{
+    compiler::Compiler,
+    i18n::{self, Language, Message},
+};
 
 static LANG_LOCK: Mutex<()> = Mutex::new(());
 

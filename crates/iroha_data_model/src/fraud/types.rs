@@ -6,11 +6,11 @@
 
 use std::{string::String, vec::Vec};
 
-use crate::{account::AccountId, asset::AssetId};
+use norito::codec::{Decode, Encode};
 
 #[cfg(feature = "governance")]
 use crate::governance::types::{GovernanceEnactment, GovernanceParameters};
-use norito::codec::{Decode, Encode};
+use crate::{account::AccountId, asset::AssetId};
 
 /// Operation that triggered a fraud screening request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -174,13 +174,14 @@ pub struct DecisionAggregate {
 
 #[cfg(all(test, feature = "governance"))]
 mod tests {
+    use iroha_crypto::KeyPair;
+
     use super::*;
     use crate::{
         asset::id::AssetDefinitionId,
         domain::DomainId,
         governance::types::{AtWindow, ProposalId},
     };
-    use iroha_crypto::KeyPair;
 
     #[test]
     fn risk_query_encodes() {

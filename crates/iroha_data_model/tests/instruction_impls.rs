@@ -1,6 +1,9 @@
 //! Tests for instruction implementations
 
-use iroha_data_model::{isi::BuiltInInstruction, isi::register::RegisterPeerWithPop, prelude::*};
+use iroha_data_model::{
+    isi::{BuiltInInstruction, register::RegisterPeerWithPop},
+    prelude::*,
+};
 use iroha_primitives::numeric::Numeric;
 use norito::codec::Encode;
 

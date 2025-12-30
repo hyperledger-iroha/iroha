@@ -5053,18 +5053,12 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{
         collections::{BTreeMap, BTreeSet},
         net::SocketAddr,
         sync::Arc,
     };
 
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, StateReadOnly, World},
-    };
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, Registrable,
@@ -5076,6 +5070,13 @@ mod tests {
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_primitives::unique_vec::UniqueVec;
     use rand::{SeedableRng, rngs::StdRng};
+
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, StateReadOnly, World},
+    };
 
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
         let mut signers = Vec::new();

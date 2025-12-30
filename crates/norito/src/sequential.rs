@@ -5,11 +5,15 @@
 //! emit little-endian 64-bit length headers followed by element payloads
 //! encoded with [`NoritoSerialize`], and decode the inverse layout.
 
-use crate::core::{Error, NoritoDeserialize, NoritoSerialize, decode_field_canonical};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    convert::TryInto,
+    hash::Hash,
+};
+
 use byteorder::{LittleEndian, WriteBytesExt};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::convert::TryInto;
-use std::hash::Hash;
+
+use crate::core::{Error, NoritoDeserialize, NoritoSerialize, decode_field_canonical};
 
 fn write_len_u64(writer: &mut Vec<u8>, len: usize) -> Result<(), Error> {
     let len_u64 = u64::try_from(len).map_err(|_| Error::LengthMismatch)?;

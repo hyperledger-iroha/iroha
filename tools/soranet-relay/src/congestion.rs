@@ -5,14 +5,16 @@
 //! establish. It is intentionally conservative; production operators should
 //! tune the limits via configuration once traffic characteristics are known.
 
-use crate::config::CongestionConfig;
 use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
 use thiserror::Error;
+
+use crate::config::CongestionConfig;
 
 #[derive(Debug)]
 /// Per-remote circuit accounting state.

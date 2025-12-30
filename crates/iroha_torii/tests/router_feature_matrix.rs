@@ -8,9 +8,6 @@
 use std::sync::Arc;
 
 use axum::http::{Request, StatusCode, Uri};
-use norito::json;
-use tower::ServiceExt as _; // for Router::oneshot
-
 use iroha_core::{
     kiso::KisoHandle,
     kura::Kura,
@@ -21,6 +18,8 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::ChainId;
+use norito::json;
+use tower::ServiceExt as _; // for Router::oneshot
 
 #[path = "fixtures.rs"]
 mod fixtures;

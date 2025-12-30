@@ -4,8 +4,10 @@
 mod js_host_parity {
     //! SoraFS orchestrator parity coverage across Rust, JS, and FFI bridges.
 
-    use connect_norito_bridge::{connect_norito_free, connect_norito_sorafs_local_fetch};
     use core::ffi::c_ulong;
+    use std::{collections::HashMap, convert::TryFrom, mem, path::Path, time::Instant};
+
+    use connect_norito_bridge::{connect_norito_free, connect_norito_sorafs_local_fetch};
     use iroha_js_host::{
         JsLocalProviderSpec, JsMultiFetchChunkReceipt, JsMultiFetchOptions,
         JsMultiFetchProviderReport, JsProviderMetadata, JsRangeCapability, JsStreamBudget,
@@ -19,7 +21,6 @@ mod js_host_parity {
             ProviderMetadataInput,
         },
     };
-    use std::{collections::HashMap, convert::TryFrom, mem, path::Path, time::Instant};
     use tempfile::tempdir;
 
     fn js_metadata_from_provider(

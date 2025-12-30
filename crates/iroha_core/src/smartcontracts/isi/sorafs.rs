@@ -1,7 +1,7 @@
-use super::*;
-use crate::state::StateTransaction;
-use blake3::hash as blake3_hash;
 use core::convert::TryFrom;
+use std::{collections::BTreeSet, str::FromStr};
+
+use blake3::hash as blake3_hash;
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
     events::data::sorafs::{SorafsGatewayEvent, SorafsProofHealthAlert},
@@ -28,18 +28,20 @@ use norito::{
     decode_from_bytes,
     json::{self, Value},
 };
-use sorafs_manifest::alias_cache::decode_alias_proof;
 use sorafs_manifest::{
     ManifestValidationError, PinPolicy as ManifestPinPolicy,
     PinPolicyConstraints as ManifestPinPolicyConstraints, ProfileId,
     StorageClass as ManifestStorageClass,
+    alias_cache::decode_alias_proof,
     capacity::{
         CAPACITY_DISPUTE_VERSION_V1, CapacityDeclarationV1, CapacityDisputeEvidenceV1,
         CapacityDisputeKind, CapacityDisputeV1, CapacityMetadataEntry, ReplicationOrderV1,
     },
     validate_chunker_handle, validate_pin_policy,
 };
-use std::{collections::BTreeSet, str::FromStr};
+
+use super::*;
+use crate::state::StateTransaction;
 
 /// Convert governance configuration into manifest validation constraints.
 pub fn manifest_pin_policy_constraints_from_config(
@@ -1966,23 +1968,22 @@ impl Execute for iroha_data_model::isi::sorafs::UpsertProviderCredit {
 
 #[cfg(test)]
 mod sorafs_tests {
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
-    use blake3::hash as blake3_hash;
     use core::str::FromStr;
+    use std::convert::TryInto;
+
+    use blake3::hash as blake3_hash;
     use hex;
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
-        isi::error::{InstructionExecutionError, InvalidParameterError},
-        isi::sorafs::{
-            ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-            RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
-            RegisterPinManifest, RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
-            UnregisterProviderOwner, UpsertProviderCredit,
+        isi::{
+            error::{InstructionExecutionError, InvalidParameterError},
+            sorafs::{
+                ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder,
+                IssueReplicationOrder, RecordCapacityTelemetry, RegisterCapacityDeclaration,
+                RegisterCapacityDispute, RegisterPinManifest, RegisterProviderOwner,
+                RetirePinManifest, SetPricingSchedule, UnregisterProviderOwner,
+                UpsertProviderCredit,
+            },
         },
         metadata::Metadata,
         name::Name,
@@ -2020,7 +2021,13 @@ mod sorafs_tests {
         },
         provider_advert::{CapabilityType, StakePointer},
     };
-    use std::convert::TryInto;
+
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
 
     fn canonical_profile(handle: &ChunkerProfileHandle) -> String {
         format!("{}.{}@{}", handle.namespace, handle.name, handle.semver)

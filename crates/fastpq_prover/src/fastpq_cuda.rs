@@ -7,10 +7,11 @@
 //! [`CudaBackendError::Unavailable`] so the caller can fall back to the scalar implementation.
 
 #[cfg(feature = "fastpq-gpu")]
-use crate::trace::PoseidonColumnSlice;
-#[cfg(feature = "fastpq-gpu")]
 use core::convert::TryFrom;
 use core::fmt;
+
+#[cfg(feature = "fastpq-gpu")]
+use crate::trace::PoseidonColumnSlice;
 /// Result alias for CUDA operations.
 pub type Result<T> = core::result::Result<T, CudaBackendError>;
 

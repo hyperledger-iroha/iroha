@@ -5,11 +5,12 @@
 //! and optional chunk digest so callers can verify that block responses were
 //! produced by the expected policy snapshot.
 
+use std::fmt;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::Hasher;
 use hex::{FromHex, FromHexError};
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
-use std::fmt;
 
 const MODERATION_TOKEN_VERSION_V1: u8 = 1;
 

@@ -3,10 +3,13 @@
 #![allow(clippy::cast_possible_truncation)]
 //! `overlay_chunk_instructions` to a tiny value to force many chunks.
 
-use iroha_core::block::{BlockBuilder, ValidBlock};
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_data_model::prelude::*;
 use std::borrow::Cow;
+
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    state::{StateReadOnly, WorldReadOnly},
+};
+use iroha_data_model::prelude::*;
 
 #[test]
 fn overlay_apply_respects_chunking_and_preserves_effects() {

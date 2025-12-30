@@ -52,8 +52,9 @@ fn parallel_matches_sequential() {
 
 #[test]
 fn parallel_updates_thread_safe() {
-    use rayon::prelude::*;
     use std::sync::Arc;
+
+    use rayon::prelude::*;
 
     let tree = Arc::new(ByteMerkleTree::new(4, 32));
     (0..4usize).into_par_iter().for_each(|i| {

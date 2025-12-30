@@ -1,5 +1,7 @@
 //! Configuration retrieval and mutation integration tests.
 
+use std::{thread, time::Duration};
+
 use integration_tests::sandbox;
 use iroha_config::client_api::{
     ConfigUpdateDTO, Logger, NetworkUpdate, ResumeHashDirective, SoranetHandshakePowSummary,
@@ -8,7 +10,6 @@ use iroha_config::client_api::{
 use iroha_data_model::Level;
 use iroha_test_network::NetworkBuilder;
 use nonzero_ext::nonzero;
-use std::{thread, time::Duration};
 
 const TEST_POW_DIFFICULTY: u8 = 7;
 const TEST_POW_MAX_FUTURE_SKEW: u64 = 720;

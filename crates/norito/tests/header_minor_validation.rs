@@ -1,8 +1,10 @@
 //! Validate header minor-version compatibility handling.
 
 use crc64fast::Digest;
-use norito::core::{Compression, NoritoSerialize, VERSION_MAJOR, VERSION_MINOR, header_flags};
-use norito::{core::Error, decode_from_bytes};
+use norito::{
+    core::{Compression, Error, NoritoSerialize, VERSION_MAJOR, VERSION_MINOR, header_flags},
+    decode_from_bytes,
+};
 
 fn frame_payload<T: NoritoSerialize>(minor: u8, flags: u8, payload: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(norito::core::Header::SIZE + payload.len());

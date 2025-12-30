@@ -10,6 +10,7 @@ use std::{
 
 use eyre::{Context, Result, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
+use integration_tests::sandbox;
 use iroha_config_base::toml::WriteExt;
 use iroha_data_model::{
     Level,
@@ -24,8 +25,7 @@ use iroha_test_network::{
 };
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-use rand::SeedableRng;
-use rand::prelude::IteratorRandom;
+use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
 use relay::P2pRelay;
 use tokio::{
@@ -34,8 +34,6 @@ use tokio::{
     time::{sleep, timeout},
 };
 use toml::Table;
-
-use integration_tests::sandbox;
 
 mod relay {
     //! Utilities to build a peer-to-peer network relay using TCP proxies with ability to targetly

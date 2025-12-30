@@ -433,8 +433,9 @@ mod tests {
 }
 
 mod adpcm {
-    use super::{CodecError, EncoderConfig, MAX_CHANNELS};
     use std::cmp;
+
+    use super::{CodecError, EncoderConfig, MAX_CHANNELS};
 
     #[derive(Clone, Copy, Debug)]
     struct AdpcmState {
@@ -976,9 +977,11 @@ mod native {
 
 #[cfg(feature = "libopus")]
 mod opus_backend {
-    use super::{ChannelLayout, CodecError, EncoderConfig};
-    use opus::{Application, Channels, Decoder as LibOpusDecoder, Encoder as LibOpusEncoder};
     use std::sync::Arc;
+
+    use opus::{Application, Channels, Decoder as LibOpusDecoder, Encoder as LibOpusEncoder};
+
+    use super::{ChannelLayout, CodecError, EncoderConfig};
 
     const DEFAULT_OPUS_PACKET: usize = 1276;
 

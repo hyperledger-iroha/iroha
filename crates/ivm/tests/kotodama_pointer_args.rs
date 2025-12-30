@@ -1,12 +1,13 @@
-use std::collections::HashMap;
-use std::io::Cursor;
-use std::str::FromStr;
+use std::{collections::HashMap, io::Cursor, str::FromStr};
 
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::prelude::*;
-use ivm::kotodama::compiler::Compiler;
-use ivm::mock_wsv::{AccountId as HostAccountId, MockWorldStateView, WsvHost};
-use ivm::{IVM, PointerType, validate_tlv_bytes};
+use ivm::{
+    IVM, PointerType,
+    kotodama::compiler::Compiler,
+    mock_wsv::{AccountId as HostAccountId, MockWorldStateView, WsvHost},
+    validate_tlv_bytes,
+};
 use norito::codec::Decode as NoritoDecode;
 
 fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>> {

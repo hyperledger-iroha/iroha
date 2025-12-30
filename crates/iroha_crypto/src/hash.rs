@@ -1,5 +1,7 @@
-use std::{borrow::ToOwned as _, format, string::String};
-use std::{hash, marker::PhantomData, num::NonZeroU8, str::FromStr};
+use std::{
+    borrow::ToOwned as _, format, hash, marker::PhantomData, num::NonZeroU8, str::FromStr,
+    string::String,
+};
 
 #[cfg(not(feature = "ffi_import"))]
 use blake2::{
@@ -425,9 +427,9 @@ mod tests {
 
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
+    use norito::{json::FastJsonWrite, literal};
+
     use super::*;
-    use norito::json::FastJsonWrite;
-    use norito::literal;
 
     #[test]
     fn hash_json_roundtrip() {

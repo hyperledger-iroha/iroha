@@ -1,9 +1,11 @@
 #![cfg(feature = "ivm_zk_tests")]
-use ivm::halo2::{
-    BurnCircuit, BurnPublic, BurnWitness, ECPoint, compute_nullifier, derive_public_key,
-    verify_merkle_path,
+use ivm::{
+    halo2::{
+        BurnCircuit, BurnPublic, BurnWitness, ECPoint, compute_nullifier, derive_public_key,
+        verify_merkle_path,
+    },
+    pedersen_commit_truncated, poseidon,
 };
-use ivm::{pedersen_commit_truncated, poseidon};
 
 fn poseidon_hash(inputs: &[u64]) -> u64 {
     if inputs.is_empty() {

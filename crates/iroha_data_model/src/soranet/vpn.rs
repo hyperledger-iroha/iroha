@@ -14,7 +14,6 @@ use core::fmt::Write as FmtWrite;
 use blake3;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 #[cfg(feature = "json")]
 use norito::json;
 
@@ -819,7 +818,6 @@ impl std::error::Error for VpnCellError {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{fs, path::PathBuf};
 
     use hex::FromHex;
@@ -827,6 +825,8 @@ mod tests {
         derive::{JsonDeserialize, JsonSerialize},
         json::{self, to_string_pretty},
     };
+
+    use super::*;
 
     const FIXTURE_PATH: &str = "../../IrohaSwift/Tests/IrohaSwiftTests/Fixtures/vpn_vectors.json";
 

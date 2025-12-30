@@ -1,11 +1,14 @@
 //! Client-path-like query builder benches using a mock, in-process `QueryExecutor` (no network).
 use criterion::Criterion;
 use iroha_crypto::KeyPair;
-use iroha_data_model::prelude::*;
-use iroha_data_model::query::builder::{QueryBuilder, QueryExecutor};
-use iroha_data_model::query::{
-    QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams, account::prelude::FindAccounts,
-    parameters::FetchSize,
+use iroha_data_model::{
+    prelude::*,
+    query::{
+        QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams,
+        account::prelude::FindAccounts,
+        builder::{QueryBuilder, QueryExecutor},
+        parameters::FetchSize,
+    },
 };
 use nonzero_ext::nonzero;
 

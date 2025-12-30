@@ -41,29 +41,32 @@
 
 extern crate self as norito;
 
-use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
-use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap};
-use std::io::{Read, Write};
-use std::ptr;
-use std::sync::OnceLock;
+use std::{
+    alloc::{Layout, alloc, dealloc, handle_alloc_error},
+    cell::Cell,
+    collections::{BTreeMap, HashMap},
+    io::{Read, Write},
+    ptr,
+    sync::OnceLock,
+};
 // std imported selectively where needed
 pub mod aos;
 pub mod columnar;
 pub mod core;
 pub mod schema;
 pub mod streaming;
-pub use codec::disable_packed_struct_layout;
+// Expose heuristics configuration helpers for hosts
 pub use core::{
     Archived, Compression, CompressionConfig, Error, NoritoDeserialize, NoritoSerialize,
     crc64_fallback, default_encode_flags, from_bytes, from_compressed_bytes, hardware_crc64,
+    heuristics::{
+        Heuristics as HeuristicsConfig, get as get_heuristics,
+        select_layout_flags_for_size_with as select_layout_flags_with,
+    },
     to_bytes, to_bytes_auto, to_compressed_bytes,
 };
-// Expose heuristics configuration helpers for hosts
-pub use core::heuristics::{
-    Heuristics as HeuristicsConfig, get as get_heuristics,
-    select_layout_flags_for_size_with as select_layout_flags_with,
-};
+
+pub use codec::disable_packed_struct_layout;
 
 struct ArchiveSlice {
     ptr: *mut u8,
@@ -131,8 +134,9 @@ pub fn debug_trace_enabled() -> bool {
 
 #[cfg(test)]
 mod trace_tests {
-    use super::debug_trace_enabled;
     use std::env;
+
+    use super::debug_trace_enabled;
 
     #[test]
     fn debug_trace_follows_env_flag() {
@@ -160,12 +164,16 @@ pub mod sequential;
 /// Compatibility wrapper providing `Encode` and `Decode` traits analogous to the
 /// `parity-scale-codec` ones, but powered by Norito serialization.
 pub mod codec {
-    use super::{NoritoDeserialize, NoritoSerialize, core};
-    use std::io::{Read, Write};
-    use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::{
+        io::{Read, Write},
+        sync::{
+            OnceLock,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
 
     pub use super::Error;
+    use super::{NoritoDeserialize, NoritoSerialize, core};
     pub use crate::derive::{Decode, Encode};
 
     // Lightweight telemetry for the generic two-pass `encode_adaptive` path.
@@ -711,10 +719,11 @@ pub mod telemetry {
 /// - Number parsing is conservative and aims for correctness over breadth for
 ///   benchmarking scenarios.
 pub mod json {
-    pub use super::JsonDeserialize as Deserialize;
-    pub use super::JsonSerialize as Serialize;
-    pub use super::{JsonDeserialize, JsonSerialize};
     use url::Url;
+
+    pub use super::{
+        JsonDeserialize as Deserialize, JsonDeserialize, JsonSerialize as Serialize, JsonSerialize,
+    };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum UnexpectedToken {
@@ -973,9 +982,8 @@ pub mod json {
         }
     }
     pub mod value {
-        use super::{Error, Value, parse_value, to_json};
-
         pub use super::RawValue;
+        use super::{Error, Value, parse_value, to_json};
 
         pub fn to_raw_value(value: &Value) -> Result<Box<RawValue>, Error> {
             let json = to_json(value)?;
@@ -1014,10 +1022,10 @@ pub mod json {
         (pos, line, col)
     }
     pub mod native {
-        use super::ValueIndex;
         use core::mem;
-        use std::collections::BTreeMap;
-        use std::ops::Index;
+        use std::{collections::BTreeMap, ops::Index};
+
+        use super::ValueIndex;
 
         #[derive(Debug, Clone, Copy)]
         pub enum Number {
@@ -1455,16 +1463,16 @@ pub mod json {
     }
 
     mod schema_support {
-        use super::{JsonSerialize, Map, Number, Value};
-        use core::any::TypeId;
-        use core::convert::TryFrom;
+        use core::{any::TypeId, convert::TryFrom};
+        use std::collections::{BTreeMap, btree_map::Entry as BTreeEntry};
+
         use iroha_schema::{
             ArrayMeta, BitmapMask, BitmapMeta, EnumMeta, EnumVariant, FixedMeta, Ident, IntMode,
             IntoSchema, MapMeta, MetaMap, MetaMapEntry, Metadata, NamedFieldsMeta, ResultMeta,
             TypeId as SchemaTypeId, UnnamedFieldsMeta,
         };
-        use std::collections::BTreeMap;
-        use std::collections::btree_map::Entry as BTreeEntry;
+
+        use super::{JsonSerialize, Map, Number, Value};
 
         type EntryMap = BTreeMap<TypeId, MetaMapEntry>;
 
@@ -2231,8 +2239,7 @@ pub mod json {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::json;
-        use crate::json::JsonSerialize;
+        use crate::{json, json::JsonSerialize};
 
         #[test]
         fn parse_value_str_and_bytes_match() {
@@ -4852,8 +4859,9 @@ pub mod json {
 
     #[cfg(test)]
     mod stage1_gpu_min_tests {
-        use super::{STAGE1_GPU_MIN, stage1_gpu_min_bytes_locked};
         use std::sync::atomic::Ordering;
+
+        use super::{STAGE1_GPU_MIN, stage1_gpu_min_bytes_locked};
 
         #[test]
         fn defaults_when_env_missing() {
@@ -5332,9 +5340,12 @@ pub mod json {
 
     #[cfg(feature = "metal-stage1")]
     mod metal {
+        use std::{
+            ffi::{c_char, c_int, c_void},
+            sync::{Mutex, OnceLock},
+        };
+
         use super::StructIndex;
-        use std::ffi::{c_char, c_int, c_void};
-        use std::sync::{Mutex, OnceLock};
 
         #[cfg(unix)]
         unsafe extern "C" {
@@ -5478,9 +5489,12 @@ pub mod json {
 
     #[cfg(feature = "cuda-stage1")]
     mod cuda {
+        use std::{
+            ffi::{c_char, c_int, c_void},
+            sync::{Mutex, OnceLock},
+        };
+
         use super::StructIndex;
-        use std::ffi::{c_char, c_int, c_void};
-        use std::sync::{Mutex, OnceLock};
 
         #[cfg(unix)]
         unsafe extern "C" {
@@ -8576,9 +8590,10 @@ pub fn deserialize_stream<R: Read, T: for<'de> NoritoDeserialize<'de>>(
 
 /// Prelude with commonly used items.
 pub mod prelude {
-    pub use super::derive::{Decode, Encode};
     pub use super::{
-        Compression, Error, NoritoDeserialize, NoritoSerialize, deserialize_from, serialize_into,
+        Compression, Error, NoritoDeserialize, NoritoSerialize,
+        derive::{Decode, Encode},
+        deserialize_from, serialize_into,
     };
 }
 

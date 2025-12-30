@@ -7,9 +7,7 @@
 //! Run manually after building an artifact (e.g., via `make examples-run`):
 //!   cargo test -p `integration_tests` --test `ivm_header_decode` -- --ignored --nocapture
 
-use std::fs::File;
-use std::io::Read;
-use std::path::PathBuf;
+use std::{fs::File, io::Read, path::PathBuf};
 
 #[derive(Debug)]
 struct Header {

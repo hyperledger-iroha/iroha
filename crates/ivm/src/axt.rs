@@ -6,7 +6,11 @@
 //! TLVs exposed to the VM. As the end-to-end pipeline matures these models
 //! should converge with the canonical data-model crate.
 
-use crate::error::VMError;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU64,
+};
+
 use iroha_data_model::nexus::{
     AssetHandle as ModelAssetHandle, AxtBinding, AxtHandleFragment,
     AxtPolicyEntry as ModelAxtPolicyEntry, AxtPolicySnapshot as ModelAxtPolicySnapshot,
@@ -16,10 +20,8 @@ use iroha_data_model::nexus::{
     SpendOp as ModelSpendOp, compute_descriptor_binding,
 };
 use norito::codec::{Decode, Encode};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroU64,
-};
+
+use crate::error::VMError;
 
 /// Alias for the Norito proof envelope used in AXT proof verification.
 pub type AxtProofEnvelope = ModelAxtProofEnvelope;

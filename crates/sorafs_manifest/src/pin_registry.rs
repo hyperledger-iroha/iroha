@@ -658,10 +658,12 @@ pub enum ManifestPolicyValidationError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::convert::TryInto;
+
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
     use norito::{decode_from_bytes, to_bytes};
-    use std::convert::TryInto;
+
+    use super::*;
 
     fn sample_alias_binding() -> AliasBindingV1 {
         AliasBindingV1 {

@@ -1,7 +1,9 @@
 package org.hyperledger.iroha.android;
 
 import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.Signature;
+import java.security.spec.ECGenParameterSpec;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
@@ -59,6 +61,11 @@ public final class IrohaKeyManagerTests {
           + "FxdGTgtauVtYo24deQ==");
 
   private static final byte[] STRONGBOX_CHALLENGE = hex("4145454245");
+  private static final byte[] ED25519_SPKI_PREFIX =
+      new byte[] {
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
+      };
+  private static final int ED25519_SPKI_SIZE = 44;
 
   public static void main(final String[] args) throws Exception {
     shouldGenerateDistinctEphemeralKeys();
@@ -68,6 +75,7 @@ public final class IrohaKeyManagerTests {
     shouldPreferStrongBoxWhenAvailable();
     shouldRequireStrongBoxWhenRequested();
     shouldFailWhenStrongBoxUnavailable();
+    shouldFallbackWhenProviderReturnsNonEd25519Key();
     shouldVerifyAttestationViaManager();
     shouldGenerateAttestationViaManager();
     shouldSignPayloadViaAlias();
@@ -192,6 +200,23 @@ public final class IrohaKeyManagerTests {
         : "TEE provider must not service StrongBox-required aliases";
   }
 
+  private static void shouldFallbackWhenProviderReturnsNonEd25519Key() throws Exception {
+    final InvalidAlgorithmProviderStub invalidProvider =
+        new InvalidAlgorithmProviderStub(KeyProviderMetadata.trustedEnvironment("invalid-provider"));
+    final SoftwareKeyProvider softwareFallback = new SoftwareKeyProvider();
+    final IrohaKeyManager manager =
+        IrohaKeyManager.fromProviders(List.of(invalidProvider, softwareFallback));
+
+    final KeyPair generated =
+        manager.generateOrLoad(
+            "invalid-alias", IrohaKeyManager.KeySecurityPreference.HARDWARE_PREFERRED);
+
+    assert isEd25519Spki(generated.getPublic().getEncoded())
+        : "Manager must fall back to an Ed25519-capable provider";
+    assert invalidProvider.wasQueried()
+        : "Invalid provider should have been queried before fallback";
+  }
+
   private static void shouldVerifyAttestationViaManager() throws Exception {
     final AttestingBackend backend =
         new AttestingBackend(
@@ -290,6 +315,18 @@ public final class IrohaKeyManagerTests {
     return output;
   }
 
+  private static boolean isEd25519Spki(final byte[] encoded) {
+    if (encoded == null || encoded.length != ED25519_SPKI_SIZE) {
+      return false;
+    }
+    for (int i = 0; i < ED25519_SPKI_PREFIX.length; i++) {
+      if (encoded[i] != ED25519_SPKI_PREFIX[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private static final class RecordingProviderStub implements IrohaKeyManager.KeyProvider {
     private final SoftwareKeyProvider delegate = new SoftwareKeyProvider();
     private final KeyProviderMetadata metadata;
@@ -330,6 +367,59 @@ public final class IrohaKeyManagerTests {
     @Override
     public KeyPair generateEphemeral() throws KeyManagementException {
       return delegate.generateEphemeral();
+    }
+
+    @Override
+    public boolean isHardwareBacked() {
+      return metadata.hardwareBacked();
+    }
+
+    @Override
+    public KeyProviderMetadata metadata() {
+      return metadata;
+    }
+
+    @Override
+    public String name() {
+      return metadata.name();
+    }
+  }
+
+  private static final class InvalidAlgorithmProviderStub implements IrohaKeyManager.KeyProvider {
+    private final KeyPair invalidKeyPair;
+    private final KeyProviderMetadata metadata;
+    private final ConcurrentMap<String, Boolean> queriedAliases = new ConcurrentHashMap<>();
+
+    private InvalidAlgorithmProviderStub(final KeyProviderMetadata metadata) {
+      this.metadata = metadata;
+      try {
+        final KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+        generator.initialize(new ECGenParameterSpec("secp256r1"));
+        this.invalidKeyPair = generator.generateKeyPair();
+      } catch (final Exception ex) {
+        throw new IllegalStateException("Failed to create invalid keypair", ex);
+      }
+    }
+
+    boolean wasQueried() {
+      return !queriedAliases.isEmpty();
+    }
+
+    @Override
+    public Optional<KeyPair> load(final String alias) {
+      queriedAliases.put(alias, Boolean.TRUE);
+      return Optional.of(invalidKeyPair);
+    }
+
+    @Override
+    public KeyPair generate(final String alias) {
+      queriedAliases.put(alias, Boolean.TRUE);
+      return invalidKeyPair;
+    }
+
+    @Override
+    public KeyPair generateEphemeral() {
+      return invalidKeyPair;
     }
 
     @Override

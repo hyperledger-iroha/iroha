@@ -2,6 +2,7 @@
 
 use iroha_primitives::numeric::Numeric;
 
+use super::Visit;
 use crate::{
     isi::{
         Instruction, Log, RegisterPeerWithPop,
@@ -9,8 +10,6 @@ use crate::{
     },
     prelude::*,
 };
-
-use super::Visit;
 
 /// Dispatch a boxed instruction to the corresponding visitor hook.
 pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) {

@@ -8,8 +8,7 @@ use axum::{
     routing::get,
 };
 use http_body_util::BodyExt;
-use iroha_core::sumeragi::epoch_report;
-use iroha_core::sumeragi::epoch_report::VrfPenaltiesReport;
+use iroha_core::sumeragi::{epoch_report, epoch_report::VrfPenaltiesReport};
 use tower::ServiceExt as _;
 
 fn vrf_penalties_router() -> Router {

@@ -9,14 +9,8 @@
 //! The builtin audio path now renders a retro synthesizer arrangement of
 //! Etenraku as outlined in “Designing a Retro Synthesizer for Etenraku.”
 
-use crate::ascii::AsciiAnimator;
-use crate::etenraku;
-#[cfg(any(
-    target_os = "macos",
-    target_os = "windows",
-    all(target_os = "linux", feature = "linux-builtin-synth")
-))]
-use crate::synth;
+use std::io::Write as _;
+
 #[cfg(any(
     target_os = "macos",
     target_os = "windows",
@@ -24,9 +18,18 @@ use crate::synth;
 ))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use eyre::{Context as _, Result, eyre};
-use std::io::Write as _;
-use tokio::process::Child;
-use tokio::time::{Duration, sleep};
+use tokio::{
+    process::Child,
+    time::{Duration, sleep},
+};
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
+use crate::synth;
+use crate::{ascii::AsciiAnimator, etenraku};
 
 pub struct ThemeIntro;
 
@@ -326,8 +329,7 @@ mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support;
-    use super::*;
+    use super::{test_support, *};
 
     #[tokio::test]
     async fn intro_renders_without_audio() {

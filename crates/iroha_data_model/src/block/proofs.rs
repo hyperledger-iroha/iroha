@@ -7,10 +7,11 @@
 //! execution for scheduled entrypoints.
 
 use core::num::NonZeroU64;
+use std::collections::BTreeMap;
+
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use std::collections::BTreeMap;
 
 /// Maximum audit path length permitted for block-level Merkle proofs.
 ///
@@ -138,16 +139,20 @@ pub struct BlockProofs {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::FromIterator;
+
+    use iroha_crypto::{HashOf, KeyPair, MerkleTree};
+
     use super::*;
-    use crate::transaction::TransactionResultInner;
     use crate::{
         ChainId,
         account::AccountId,
         domain::DomainId,
-        transaction::signed::{TransactionBuilder, TransactionResult},
+        transaction::{
+            TransactionResultInner,
+            signed::{TransactionBuilder, TransactionResult},
+        },
     };
-    use iroha_crypto::{HashOf, KeyPair, MerkleTree};
-    use std::iter::FromIterator;
 
     fn sample_entrypoint_hash() -> HashOf<TransactionEntrypoint> {
         let keypair = KeyPair::random();

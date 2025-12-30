@@ -1,8 +1,9 @@
-use super::*;
-use iroha_crypto::Hash;
-use iroha_primitives::numeric::Numeric;
 use std::string::String;
 
+use iroha_crypto::Hash;
+use iroha_primitives::numeric::Numeric;
+
+use super::*;
 use crate::{
     account::AccountId,
     asset::AssetId,

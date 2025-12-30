@@ -32,9 +32,7 @@ use axum::{
     routing::post,
 };
 use base64::Engine as _;
-use iroha_config::{
-    parameters::actual::ComputeEconomics, parameters::defaults::compute as compute_defaults,
-};
+use iroha_config::parameters::{actual::ComputeEconomics, defaults::compute as compute_defaults};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     compute::{
@@ -1112,12 +1110,13 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use axum::{
         body,
         http::{Request, StatusCode},
     };
     use iroha_data_model::compute::ComputeOutcomeKind;
+
+    use super::*;
 
     fn gateway_for_tests() -> Arc<ComputeGateway> {
         let manifest: ComputeManifest = json::from_str(include_str!(

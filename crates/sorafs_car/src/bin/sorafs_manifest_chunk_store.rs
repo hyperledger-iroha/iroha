@@ -1,5 +1,11 @@
 //! CLI helper for ingesting payloads with the SoraFS chunk store prototype.
 
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
+
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_car::{
     ChunkStore, FilePayload, InMemoryPayload,
@@ -8,11 +14,6 @@ use sorafs_car::{
 use sorafs_manifest::{
     ProfileId,
     chunker_registry::{self, ChunkerProfileDescriptor},
-};
-use std::{
-    env, fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
 };
 
 fn main() {
@@ -460,8 +461,9 @@ fn parse_u64(value: &str) -> Result<u64, std::num::ParseIntError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::json::Value;
+
+    use super::*;
 
     #[test]
     fn registry_lookup_round_trips_profile_id() {

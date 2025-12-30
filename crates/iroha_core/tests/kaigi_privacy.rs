@@ -10,8 +10,10 @@ use std::str::FromStr;
 
 use halo2_proofs::{
     SerdeFormat,
-    halo2curves::ff::PrimeField as _,
-    halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+    halo2curves::{
+        ff::PrimeField as _,
+        pasta::{EqAffine as Curve, Fp as Scalar},
+    },
     plonk::{ProvingKey, VerifyingKey, create_proof, keygen_pk, keygen_vk},
     poly::{commitment::ParamsProver, ipa::commitment::ParamsIPA},
     transcript::{Blake2bWrite, Challenge255},
@@ -19,12 +21,12 @@ use halo2_proofs::{
 use iroha_config::parameters::actual::VerifyingKeyRef;
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::StateTelemetry;
-use iroha_core::zk::hash_vk;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
+    zk::hash_vk,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{

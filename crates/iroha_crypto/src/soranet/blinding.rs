@@ -6,9 +6,10 @@
 //! distinct circuits, while the exit gateway retains a deterministic cache key
 //! derived from the published salt.
 
+use std::fmt;
+
 use blake3::Hasher;
 use soranet_pq::{HkdfDomain, HkdfSuite, derive_labeled_hkdf};
-use std::fmt;
 use thiserror::Error;
 use zeroize::Zeroizing;
 

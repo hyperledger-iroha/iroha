@@ -1,10 +1,13 @@
-use pqcrypto_dilithium::{dilithium2, dilithium3, dilithium5};
-use pqcrypto_traits::Error as PqError;
-use pqcrypto_traits::sign::{
-    DetachedSignature as PrimitiveDetachedSignature, PublicKey as PrimitivePublicKey,
-    SecretKey as PrimitiveSecretKey, VerificationError,
-};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use pqcrypto_dilithium::{dilithium2, dilithium3, dilithium5};
+use pqcrypto_traits::{
+    Error as PqError,
+    sign::{
+        DetachedSignature as PrimitiveDetachedSignature, PublicKey as PrimitivePublicKey,
+        SecretKey as PrimitiveSecretKey, VerificationError,
+    },
+};
 use thiserror::Error;
 use zeroize::Zeroizing;
 

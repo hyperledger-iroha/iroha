@@ -1,6 +1,7 @@
+use std::sync::LazyLock;
+
 use blstrs::{G1Projective, Scalar};
 use group::{Curve, Group};
-use std::sync::LazyLock;
 
 static H_GENERATOR: LazyLock<G1Projective> = LazyLock::new(|| {
     // Fixed second generator derived from the curve generator.

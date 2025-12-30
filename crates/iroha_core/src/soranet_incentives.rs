@@ -7,6 +7,8 @@
 
 use std::{collections::BTreeMap, str::FromStr};
 
+#[cfg(test)]
+use iroha_data_model::isi::transfer::TransferBox;
 use iroha_data_model::{
     account::AccountId,
     isi::InstructionBox,
@@ -25,9 +27,6 @@ use iroha_primitives::{
     numeric::{Numeric, NumericSpec},
 };
 use thiserror::Error;
-
-#[cfg(test)]
-use iroha_data_model::isi::transfer::TransferBox;
 
 /// Weight distribution (basis points) applied to each reward component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -538,7 +537,8 @@ enum ScaleAdjust {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::str::FromStr;
+
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
         account::AccountId,
@@ -549,7 +549,8 @@ mod tests {
             RelayComplianceStatusV1, RelayRewardDisputeStatusV1, RelayRewardInstructionV1,
         },
     };
-    use std::str::FromStr;
+
+    use super::*;
 
     fn numeric(value: u64) -> Numeric {
         Numeric::from(value)

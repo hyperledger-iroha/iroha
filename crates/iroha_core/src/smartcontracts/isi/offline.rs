@@ -4,10 +4,12 @@ use super::prelude::*;
 use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 mod aggregate_proof;
 mod balance_proof;
-use self::aggregate_proof::{
-    verify_fastpq_counter_proof, verify_fastpq_replay_proof, verify_fastpq_sum_proof,
+use std::{
+    collections::{BTreeSet, btree_map::Entry},
+    str::FromStr,
+    time::Duration,
 };
-use self::balance_proof::{VerificationInputs, verify_balance_proof};
+
 use attestation::verify_platform_proof;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::actual::OfflineProofMode;
@@ -17,6 +19,7 @@ use iroha_crypto::{Algorithm, KeyPair, Signature};
 #[cfg(test)]
 use iroha_data_model::offline::{OfflineAllowanceCommitment, OfflineWalletPolicy};
 use iroha_data_model::{
+    ChainId,
     asset::AssetId,
     events::data::offline::{
         OfflineTransferArchived, OfflineTransferEvent, OfflineTransferPruned,
@@ -41,7 +44,7 @@ use iroha_data_model::{
         OfflineTransferRecord, OfflineTransferRejectionPlatform, OfflineTransferRejectionReason,
         OfflineTransferStatus, OfflineVerdictRevocation, OfflineVerdictSnapshot,
         OfflineWalletCertificate, PlayIntegrityAppVerdict, PlayIntegrityDeviceVerdict,
-        PlayIntegrityEnvironment, compute_receipts_root,
+        PlayIntegrityEnvironment, chain_bound_receipt_hash, compute_receipts_root,
     },
     query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
@@ -62,9 +65,13 @@ use iroha_telemetry::metrics;
 #[cfg(test)]
 use norito::to_bytes;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::{BTreeSet, btree_map::Entry},
-    str::FromStr,
+
+pub use self::balance_proof::{build_balance_proof, compute_commitment};
+use self::{
+    aggregate_proof::{
+        verify_fastpq_counter_proof, verify_fastpq_replay_proof, verify_fastpq_sum_proof,
+    },
+    balance_proof::{VerificationInputs, verify_balance_proof},
 };
 
 const IOS_TEAM_ID_KEY: &str = "ios.app_attest.team_id";
@@ -299,13 +306,19 @@ struct ReceiptChallenge {
 
 fn derive_receipt_challenge(
     receipt: &OfflineSpendReceipt,
+    chain_id: &ChainId,
 ) -> Result<ReceiptChallenge, InstructionExecutionError> {
+    if chain_id.as_str().trim().is_empty() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "offline receipt chain_id must not be empty".into(),
+        ));
+    }
     let bytes = receipt.challenge_bytes().map_err(|err| {
         InstructionExecutionError::InvariantViolation(
             format!("failed to encode receipt challenge: {err}").into(),
         )
     })?;
-    let iroha_hash = Hash::new(&bytes);
+    let iroha_hash = chain_bound_receipt_hash(chain_id, &bytes);
     let mut iroha_bytes = [0u8; Hash::LENGTH];
     iroha_bytes.copy_from_slice(iroha_hash.as_ref());
     let client_data_hash = Sha256::digest(iroha_hash.as_ref());
@@ -624,19 +637,21 @@ pub mod isi {
 
     #[cfg(test)]
     mod register_tests {
+        use std::{str::FromStr, sync::Arc};
+
+        use iroha_crypto::Algorithm;
+        use iroha_data_model::{
+            block::BlockHeader,
+            offline::{AppleAppAttestProof, OfflineVerdictRevocationReason},
+        };
+        use nonzero_ext::nonzero;
+
         use super::*;
         use crate::{
             kura::Kura,
             query::store::LiveQueryStore,
             state::{State, World},
         };
-        use iroha_crypto::Algorithm;
-        use iroha_data_model::{block::BlockHeader, offline::AppleAppAttestProof};
-        use std::str::FromStr;
-        use std::sync::Arc;
-
-        use iroha_data_model::offline::OfflineVerdictRevocationReason;
-        use nonzero_ext::nonzero;
 
         fn sample_account(seed: u8, domain: &str) -> AccountId {
             let keypair = iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
@@ -687,6 +702,7 @@ pub mod isi {
                 to: receiver.clone(),
                 asset: certificate.allowance.asset.clone(),
                 amount: Numeric::new(100, 0),
+                issued_at_ms: 1_700_000_100,
                 invoice_id: "INV-001".into(),
                 platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
                     key_id: "apple".into(),
@@ -745,6 +761,65 @@ pub mod isi {
         }
 
         #[test]
+        fn receipt_amount_exceeds_policy_max_is_rejected() {
+            let mut certificate = sample_certificate();
+            certificate.policy.max_tx_value = Numeric::new(100, 0);
+            let receiver = sample_account(0x02, "offline");
+            let deposit_account = sample_account(0x03, "offline");
+            let receipt = OfflineSpendReceipt {
+                tx_id: Hash::new(b"receipt-max"),
+                from: certificate.controller.clone(),
+                to: receiver.clone(),
+                asset: certificate.allowance.asset.clone(),
+                amount: Numeric::new(150, 0),
+                issued_at_ms: 1_700_000_100,
+                invoice_id: "INV-MAX".into(),
+                platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
+                    key_id: "apple".into(),
+                    counter: 1,
+                    assertion: vec![],
+                    challenge_hash: Hash::new(b"challenge"),
+                }),
+                platform_snapshot: None,
+                sender_certificate: certificate.clone(),
+                sender_signature: Signature::from_bytes(&[0; 64]),
+            };
+            let transfer = OfflineToOnlineTransfer {
+                bundle_id: Hash::new(b"bundle-max"),
+                receiver,
+                deposit_account,
+                receipts: vec![receipt],
+                balance_proof: OfflineBalanceProof {
+                    initial_commitment: certificate.allowance.clone(),
+                    resulting_commitment: vec![0; 32],
+                    claimed_delta: Numeric::new(150, 0),
+                    zk_proof: None,
+                },
+                aggregate_proof: None,
+                attachments: None,
+                platform_snapshot: None,
+            };
+            let record = OfflineAllowanceRecord {
+                certificate,
+                current_commitment: vec![0; 32],
+                registered_at_ms: 1_700_000_001,
+                remaining_amount: Numeric::new(1_000, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+
+            let err = super::ensure_receipt_targets(&transfer, &record)
+                .expect_err("receipt over max_tx_value should be rejected");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::MaxTxValueExceeded.as_label()
+            );
+            assert!(err.to_string().contains(&expected));
+        }
+
+        #[test]
         fn verdict_helper_detects_duplicates() {
             let verdict = Hash::new(b"duplicate");
             let record = record_with_verdict(Some(verdict));
@@ -756,8 +831,9 @@ pub mod isi {
 
         #[test]
         fn platform_snapshot_captures_play_integrity_payload() {
-            use base64::Engine as _;
             use std::collections::BTreeSet;
+
+            use base64::Engine as _;
 
             let mut certificate = sample_certificate();
             certificate.attestation_report = b"play-token".to_vec();
@@ -787,8 +863,9 @@ pub mod isi {
 
         #[test]
         fn platform_snapshot_captures_hms_payload() {
-            use base64::Engine as _;
             use std::collections::BTreeSet;
+
+            use base64::Engine as _;
 
             let mut certificate = sample_certificate();
             certificate.attestation_report = b"hms-token".to_vec();
@@ -1183,6 +1260,12 @@ pub mod isi {
             derive_platform_token_snapshot(&record.certificate, integrity_metadata.as_ref())
         });
         ensure_receipt_targets(&transfer, record)?;
+        ensure_receipt_timestamps(
+            &transfer,
+            record,
+            block_timestamp_ms,
+            &state_transaction.settlement.offline,
+        )?;
         ensure_commitment_alignment(&transfer.balance_proof, record)?;
 
         let mut staged_counters = record.counter_state.clone();
@@ -1200,6 +1283,7 @@ pub mod isi {
             verify_platform_proof(
                 receipt,
                 &record.certificate,
+                &state_transaction.chain_id,
                 block_timestamp_ms,
                 &state_transaction.settlement.offline,
                 attestation_snapshot,
@@ -1209,6 +1293,13 @@ pub mod isi {
         verify_balance_proof(&VerificationInputs {
             balance_proof: &transfer.balance_proof,
             chain_id: &state_transaction.chain_id,
+        })
+        .map_err(|err| {
+            rejection_error(
+                OfflineTransferRejectionReason::BalanceProofInvalid,
+                OfflineTransferRejectionPlatform::General,
+                err.to_string(),
+            )
         })?;
 
         verify_aggregate_proof_envelope(
@@ -1473,6 +1564,13 @@ pub mod isi {
                     "receipt asset does not match allowance asset",
                 ));
             }
+            if receipt.amount > record.certificate.policy.max_tx_value.clone() {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::MaxTxValueExceeded,
+                    OfflineTransferRejectionPlatform::General,
+                    "receipt amount exceeds policy max_tx_value",
+                ));
+            }
         }
         Ok(())
     }
@@ -1496,6 +1594,65 @@ pub mod isi {
             ));
         }
         Ok(())
+    }
+
+    fn ensure_receipt_timestamps(
+        transfer: &OfflineToOnlineTransfer,
+        record: &OfflineAllowanceRecord,
+        block_timestamp_ms: u64,
+        settlement_cfg: &actual::Offline,
+    ) -> Result<(), Error> {
+        let max_age_ms = duration_to_millis(settlement_cfg.max_receipt_age);
+        let expiry_bound = record
+            .certificate
+            .expires_at_ms
+            .min(record.certificate.policy.expires_at_ms);
+        for receipt in &transfer.receipts {
+            let issued_at_ms = receipt.issued_at_ms;
+            if issued_at_ms < record.certificate.issued_at_ms {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::ReceiptTimestampInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    "receipt issued before certificate issuance",
+                ));
+            }
+            if issued_at_ms < record.registered_at_ms {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::ReceiptTimestampInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    "receipt issued before allowance registration",
+                ));
+            }
+            if issued_at_ms > expiry_bound {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::ReceiptTimestampInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    "receipt issued after certificate/policy expiry",
+                ));
+            }
+            if issued_at_ms > block_timestamp_ms {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::ReceiptTimestampInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    "receipt timestamp is in the future",
+                ));
+            }
+            if max_age_ms != 0 {
+                let age = block_timestamp_ms.saturating_sub(issued_at_ms);
+                if age > max_age_ms {
+                    return Err(rejection_error(
+                        OfflineTransferRejectionReason::ReceiptExpired,
+                        OfflineTransferRejectionPlatform::General,
+                        "receipt exceeds max receipt age",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn duration_to_millis(duration: Duration) -> u64 {
+        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
     }
 
     fn enforce_certificate_window(
@@ -2229,8 +2386,8 @@ impl ValidQuery for FindOfflineToOnlineTransferById {
 }
 
 mod attestation {
-    use super::*;
-    use crate::smartcontracts::isi::error::InstructionExecutionError;
+    use std::{str, sync::LazyLock};
+
     use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
     #[cfg(test)]
     use ciborium::ser::into_writer;
@@ -2252,10 +2409,12 @@ mod attestation {
         DnType, IsCa, KeyPair as RcgenKeyPair,
     };
     use sha2::{Digest, Sha256};
-    use std::{str, sync::LazyLock};
     use x509_parser::{certificate::X509Certificate, prelude::FromDer, time::ASN1Time};
     #[cfg(test)]
     use yasna::Tag;
+
+    use super::*;
+    use crate::smartcontracts::isi::error::InstructionExecutionError;
 
     const APPLE_NONCE_OID: oid::Oid<'static> = oid!(1.2.840.113635.100.8.2);
     #[cfg(test)]
@@ -2390,19 +2549,20 @@ mod attestation {
     pub(super) fn verify_platform_proof(
         receipt: &OfflineSpendReceipt,
         certificate: &OfflineWalletCertificate,
+        chain_id: &ChainId,
         block_timestamp_ms: u64,
         settlement_cfg: &iroha_config::parameters::actual::Offline,
         submitted_snapshot: Option<&OfflinePlatformTokenSnapshot>,
     ) -> Result<(), InstructionExecutionError> {
         match &receipt.platform_proof {
             OfflinePlatformProof::AppleAppAttest(proof) => {
-                verify_apple_attestation(receipt, certificate, proof, block_timestamp_ms)
+                verify_apple_attestation(receipt, certificate, chain_id, proof, block_timestamp_ms)
             }
             OfflinePlatformProof::AndroidMarkerKey(proof) => {
                 let platform = OfflineTransferRejectionPlatform::Android;
                 let metadata = android_integrity_metadata(&certificate.metadata)?;
                 let challenge = map_platform_err(
-                    derive_receipt_challenge(receipt),
+                    derive_receipt_challenge(receipt, chain_id),
                     OfflineTransferRejectionReason::PlatformAttestationInvalid,
                     platform,
                 )?;
@@ -2498,7 +2658,13 @@ mod attestation {
                 let metadata = android_integrity_metadata(&certificate.metadata)?;
                 match metadata {
                     AndroidIntegrityMetadata::Provisioned(config) => {
-                        verify_provisioned_attestation(receipt, &config, proof, block_timestamp_ms)
+                        verify_provisioned_attestation(
+                            receipt,
+                            chain_id,
+                            &config,
+                            proof,
+                            block_timestamp_ms,
+                        )
                     }
                     _ => Err(rejection_error(
                         OfflineTransferRejectionReason::PlatformMetadataInvalid,
@@ -2513,6 +2679,7 @@ mod attestation {
     fn verify_apple_attestation(
         receipt: &OfflineSpendReceipt,
         certificate: &OfflineWalletCertificate,
+        chain_id: &ChainId,
         proof: &AppleAppAttestProof,
         block_timestamp_ms: u64,
     ) -> Result<(), InstructionExecutionError> {
@@ -2527,7 +2694,7 @@ mod attestation {
 
         let metadata = extract_ios_metadata(&certificate.metadata)?;
         let challenge = map_platform_err(
-            derive_receipt_challenge(receipt),
+            derive_receipt_challenge(receipt, chain_id),
             OfflineTransferRejectionReason::PlatformAttestationInvalid,
             platform,
         )?;
@@ -2886,6 +3053,7 @@ mod attestation {
 
     fn verify_provisioned_attestation(
         receipt: &OfflineSpendReceipt,
+        chain_id: &ChainId,
         metadata: &AndroidProvisionedMetadata,
         proof: &AndroidProvisionedProof,
         block_timestamp_ms: u64,
@@ -2935,7 +3103,7 @@ mod attestation {
             }
         }
         let challenge = map_platform_err(
-            derive_receipt_challenge(receipt),
+            derive_receipt_challenge(receipt, chain_id),
             OfflineTransferRejectionReason::PlatformAttestationInvalid,
             platform,
         )?;
@@ -4651,8 +4819,12 @@ mod attestation {
     #[cfg(test)]
     #[allow(clippy::items_after_test_module)]
     mod tests {
-        use super::*;
-        use crate::smartcontracts::offline::isi::is_offline_allowance_authority;
+        use std::{
+            fs,
+            path::{Path, PathBuf},
+            sync::LazyLock,
+        };
+
         use ciborium::value::Value;
         use iroha_config::parameters::actual;
         use iroha_data_model::{
@@ -4664,23 +4836,32 @@ mod attestation {
         };
         use iroha_primitives::numeric::Numeric;
         use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
-        use p256::EncodedPoint;
-        use p256::pkcs8::DecodePrivateKey;
+        use p256::{EncodedPoint, pkcs8::DecodePrivateKey};
         use rcgen::{
             BasicConstraints, CertificateParams, CertifiedIssuer, CustomExtension,
             DistinguishedName, DnType, IsCa, KeyPair as RcgenKeyPair,
         };
-        use std::{
-            fs,
-            path::{Path, PathBuf},
-            sync::LazyLock,
-        };
+
+        use super::*;
+        use crate::smartcontracts::offline::isi::is_offline_allowance_authority;
 
         const TEAM_ID: &str = "TEAMID1234";
         const BUNDLE_ID: &str = "com.example.wallet";
         pub(super) const ANDROID_PACKAGE: &str = "com.example.wallet.android";
         pub(super) const ANDROID_SIGNING_DIGEST: [u8; 32] = [0x55; 32];
         pub(super) const ANDROID_KEY_DESCRIPTION_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 11129, 2, 1, 17];
+        const TEST_CHAIN_ID: &str = "testnet";
+
+        fn sample_chain_id() -> ChainId {
+            TEST_CHAIN_ID.parse().expect("chain id")
+        }
+
+        #[test]
+        fn receipt_challenge_rejects_empty_chain_id() {
+            let fixture = AndroidFixture::new();
+            let empty_chain_id: ChainId = "".parse().expect("chain id");
+            assert!(derive_receipt_challenge(&fixture.receipt, &empty_chain_id).is_err());
+        }
 
         #[test]
         fn genesis_height_allows_non_controller_authority() {
@@ -4700,9 +4881,11 @@ mod attestation {
         fn apple_attestation_verifies() {
             let fixture = AppleFixture::new();
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             verify_platform_proof(
                 &fixture.receipt,
                 &fixture.certificate,
+                &chain_id,
                 fixture.certificate.issued_at_ms + 1_000,
                 &cfg,
                 None,
@@ -4718,10 +4901,12 @@ mod attestation {
                 proof.challenge_hash = Hash::new(b"wrong");
             }
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             assert!(
                 verify_platform_proof(
                     &fixture.receipt,
                     &fixture.certificate,
+                    &chain_id,
                     fixture.certificate.issued_at_ms + 1_000,
                     &cfg,
                     None,
@@ -4734,9 +4919,11 @@ mod attestation {
         fn android_attestation_verifies() {
             let fixture = AndroidFixture::new();
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             verify_platform_proof(
                 &fixture.receipt,
                 &fixture.certificate,
+                &chain_id,
                 fixture.certificate.issued_at_ms + 5_000,
                 &cfg,
                 None,
@@ -4751,9 +4938,11 @@ mod attestation {
             let fixture = AndroidFixture::from_chain(&chain);
             let mut cfg = default_offline_policy();
             cfg.android_trust_anchors = vec![root_anchor];
+            let chain_id = sample_chain_id();
             verify_platform_proof(
                 &fixture.receipt,
                 &fixture.certificate,
+                &chain_id,
                 fixture.certificate.issued_at_ms + 5_000,
                 &cfg,
                 None,
@@ -4766,10 +4955,12 @@ mod attestation {
             let mut fixture = AndroidFixture::new();
             fixture.receipt.invoice_id = "tampered".into();
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             assert!(
                 verify_platform_proof(
                     &fixture.receipt,
                     &fixture.certificate,
+                    &chain_id,
                     fixture.certificate.issued_at_ms + 5_000,
                     &cfg,
                     None,
@@ -4787,10 +4978,12 @@ mod attestation {
                 IrohaJson::new(vec!["com.fake.wallet".to_string()]),
             );
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             assert!(
                 verify_platform_proof(
                     &fixture.receipt,
                     &fixture.certificate,
+                    &chain_id,
                     fixture.certificate.issued_at_ms + 5_000,
                     &cfg,
                     None,
@@ -4811,10 +5004,12 @@ mod attestation {
                 IrohaJson::new("play_integrity"),
             );
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             assert!(
                 verify_platform_proof(
                     &fixture.receipt,
                     &fixture.certificate,
+                    &chain_id,
                     fixture.certificate.issued_at_ms + 5_000,
                     &cfg,
                     None,
@@ -4828,10 +5023,12 @@ mod attestation {
             let chain = AndroidIssuerChain::unregistered_for_tests();
             let fixture = AndroidFixture::from_chain(&chain);
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             assert!(
                 verify_platform_proof(
                     &fixture.receipt,
                     &fixture.certificate,
+                    &chain_id,
                     fixture.certificate.issued_at_ms + 5_000,
                     &cfg,
                     None,
@@ -4847,9 +5044,11 @@ mod attestation {
             let fixture = AndroidFixture::from_chain(&chain);
             let mut cfg = default_offline_policy();
             cfg.android_trust_anchors = vec![chain.root_der_bytes().to_vec()];
+            let chain_id = sample_chain_id();
             verify_platform_proof(
                 &fixture.receipt,
                 &fixture.certificate,
+                &chain_id,
                 fixture.certificate.issued_at_ms + 5_000,
                 &cfg,
                 None,
@@ -4898,9 +5097,11 @@ mod attestation {
         fn play_integrity_attestation_verifies() {
             let fixture = PlayIntegrityFixture::new();
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             verify_platform_proof(
                 &fixture.receipt,
                 &fixture.certificate,
+                &chain_id,
                 fixture.certificate.issued_at_ms + 20_000,
                 &cfg,
                 None,
@@ -4912,9 +5113,11 @@ mod attestation {
         fn hms_safety_detect_attestation_verifies() {
             let fixture = HmsIntegrityFixture::new();
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             verify_platform_proof(
                 &fixture.receipt,
                 &fixture.certificate,
+                &chain_id,
                 fixture.certificate.issued_at_ms + 20_000,
                 &cfg,
                 None,
@@ -4926,9 +5129,11 @@ mod attestation {
         fn provisioned_attestation_verifies() {
             let fixture = ProvisionedFixture::new();
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             verify_platform_proof(
                 &fixture.receipt,
                 &fixture.certificate,
+                &chain_id,
                 fixture.certificate.issued_at_ms + 15_000,
                 &cfg,
                 None,
@@ -4945,10 +5150,12 @@ mod attestation {
                 IrohaJson::new(Hash::new(b"mismatch").to_string()),
             );
             let cfg = default_offline_policy();
+            let chain_id = sample_chain_id();
             assert!(
                 verify_platform_proof(
                     &fixture.receipt,
                     &fixture.certificate,
+                    &chain_id,
                     fixture.certificate.issued_at_ms + 15_000,
                     &cfg,
                     None,
@@ -5028,7 +5235,8 @@ mod attestation {
                 let certificate = chain.build_certificate(&metadata, &spend_pair, &operator_pair);
                 let mut receipt =
                     chain.build_receipt(&certificate, &spend_pair, marker_pair.public_key());
-                let challenge = derive_receipt_challenge(&receipt).expect("challenge");
+                let chain_id = sample_chain_id();
+                let challenge = derive_receipt_challenge(&receipt, &chain_id).expect("challenge");
                 let attestation = chain.issue_attestation(&challenge, &metadata);
                 let digest = Sha256::digest(challenge.iroha_hash.as_ref());
                 let marker_signature = Signature::new(marker_pair.private_key(), digest.as_ref());
@@ -5138,7 +5346,8 @@ mod attestation {
                 certificate.refresh_at_ms =
                     Some(certificate.issued_at_ms + PROVISIONED_MAX_AGE.saturating_sub(30_000));
 
-                let challenge = derive_receipt_challenge(&receipt).expect("challenge");
+                let chain_id = sample_chain_id();
+                let challenge = derive_receipt_challenge(&receipt, &chain_id).expect("challenge");
                 let mut proof = AndroidProvisionedProof {
                     manifest_schema: PROVISIONED_SCHEMA.to_string(),
                     manifest_version: Some(PROVISIONED_VERSION),
@@ -5377,7 +5586,8 @@ mod attestation {
                     SigningKey::from_pkcs8_der(&signing_key_der).expect("decode leaf key");
                 let mut certificate = CHAIN.build_certificate(&spend_pair, &operator_pair);
                 let mut receipt = CHAIN.build_receipt(&certificate, &spend_pair, &signing_key, 7);
-                let challenge = derive_receipt_challenge(&receipt).expect("challenge");
+                let chain_id = sample_chain_id();
+                let challenge = derive_receipt_challenge(&receipt, &chain_id).expect("challenge");
                 certificate.attestation_report = build_attestation_report(
                     &leaf_keypair,
                     &CHAIN.intermediate,
@@ -5523,6 +5733,7 @@ mod attestation {
                     to: test_account_id("sbp", 0xB1),
                     asset: certificate.allowance.asset.clone(),
                     amount: Numeric::new(250, 0),
+                    issued_at_ms: certificate.issued_at_ms + 1_000,
                     invoice_id: "inv-app-attest".into(),
                     platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
                         key_id: BASE64_STANDARD.encode(&self.credential_id),
@@ -5534,7 +5745,8 @@ mod attestation {
                     sender_certificate: certificate.clone(),
                     sender_signature: Signature::from_bytes(&[0; 64]),
                 };
-                let challenge = derive_receipt_challenge(&receipt).expect("challenge");
+                let chain_id = sample_chain_id();
+                let challenge = derive_receipt_challenge(&receipt, &chain_id).expect("challenge");
                 let assertion = build_assertion(
                     signing_key,
                     &self.rp_id_hash,
@@ -5847,6 +6059,7 @@ mod attestation {
                 to: test_account_id("sbp", 0xD1),
                 asset: certificate.allowance.asset.clone(),
                 amount: Numeric::new(250, 0),
+                issued_at_ms: certificate.issued_at_ms + 1_000,
                 invoice_id: "inv-android-attest".into(),
                 platform_proof: OfflinePlatformProof::AndroidMarkerKey(AndroidMarkerKeyProof {
                     series: "series-A".into(),
@@ -6086,8 +6299,8 @@ mod attestation {
 
     #[cfg(test)]
     mod counter_state_tests {
-        use super::super::isi::stage_receipt_counters;
-        use super::*;
+        use std::str::FromStr;
+
         use iroha_data_model::{
             account::AccountId,
             asset::{AssetDefinitionId, AssetId},
@@ -6098,7 +6311,8 @@ mod attestation {
             },
         };
         use iroha_primitives::numeric::Numeric;
-        use std::str::FromStr;
+
+        use super::{super::isi::stage_receipt_counters, *};
 
         #[test]
         fn counter_state_rejects_non_contiguous_increment() {
@@ -6153,6 +6367,7 @@ mod attestation {
                 to: receiver,
                 asset,
                 amount: Numeric::new(1, 0),
+                issued_at_ms: 1,
                 invoice_id: "inv-counter".into(),
                 platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
                     key_id: key_id.to_string(),
@@ -6177,8 +6392,8 @@ mod attestation {
 
 #[cfg(test)]
 mod aggregate_proof_tests {
-    use super::*;
-    use crate::smartcontracts::isi::offline::isi::verify_aggregate_proof_envelope;
+    use std::{str::FromStr, sync::OnceLock};
+
     use blake2::{
         Blake2bVar,
         digest::{Update, VariableOutput},
@@ -6206,7 +6421,9 @@ mod aggregate_proof_tests {
     };
     use iroha_primitives::numeric::Numeric;
     use sha2::Sha512;
-    use std::{str::FromStr, sync::OnceLock};
+
+    use super::*;
+    use crate::smartcontracts::isi::offline::isi::verify_aggregate_proof_envelope;
 
     const OFFLINE_GENERATOR_LABEL: &[u8] = b"iroha.offline.balance.generator.H.v1";
 
@@ -6456,6 +6673,7 @@ mod aggregate_proof_tests {
             to: receiver.clone(),
             asset: asset.clone(),
             amount: Numeric::new(10, 0),
+            issued_at_ms: 1_700_000_100,
             invoice_id: "invoice-agg-a".into(),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
                 key_id: "agg-key".into(),
@@ -6473,6 +6691,7 @@ mod aggregate_proof_tests {
             to: receiver.clone(),
             asset: asset.clone(),
             amount: Numeric::new(15, 0),
+            issued_at_ms: 1_700_000_200,
             invoice_id: "invoice-agg-b".into(),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
                 key_id: "agg-key".into(),

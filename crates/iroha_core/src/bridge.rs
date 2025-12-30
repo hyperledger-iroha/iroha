@@ -1,22 +1,24 @@
 //! Helpers for bridge finality proofs built from commit certificates.
 
-use iroha_crypto::HashOf;
-use iroha_data_model::{
-    ChainId, bridge::BridgeFinalityProof, consensus::VALIDATOR_SET_HASH_VERSION_V1, peer::PeerId,
-};
 use std::{
     collections::BTreeSet,
     num::NonZeroUsize,
     sync::{Mutex, OnceLock},
 };
+
+use iroha_crypto::HashOf;
+use iroha_data_model::{
+    ChainId,
+    bridge::{
+        BridgeAuthoritySet, BridgeCommitment, BridgeCommitmentJustification, BridgeFinalityBundle,
+        BridgeFinalityProof,
+    },
+    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    peer::PeerId,
+};
 use thiserror::Error;
 
-use iroha_data_model::bridge::{
-    BridgeAuthoritySet, BridgeCommitment, BridgeCommitmentJustification, BridgeFinalityBundle,
-};
-
-use crate::mmr::BlockMmr;
-use crate::{state::StateReadOnly, sumeragi};
+use crate::{mmr::BlockMmr, state::StateReadOnly, sumeragi};
 
 struct MmrCache {
     mmr: BlockMmr,

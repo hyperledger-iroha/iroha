@@ -5,8 +5,7 @@ use std::{
     time::Duration,
 };
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex;
 use iroha_core::state::WorldReadOnly;
 use iroha_data_model::{
@@ -37,15 +36,17 @@ use norito::{
     codec::Encode,
     json::{self, Map, Value},
 };
-use qrcode::{EcLevel, QrCode};
 use qrcode::{
+    EcLevel, QrCode,
     render::svg,
     types::{QrError, Version},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::address_format::AddressFormatPreference;
-use crate::json_macros::{JsonDeserialize, JsonSerialize};
+use crate::{
+    address_format::AddressFormatPreference,
+    json_macros::{JsonDeserialize, JsonSerialize},
+};
 
 const ACCOUNT_QR_DIMENSION_PX: u32 = 192;
 const ACCOUNT_QR_ERROR_CORRECTION: EcLevel = EcLevel::M;
@@ -1220,12 +1221,14 @@ fn saturating_usize_to_u32(value: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_data_model::asset::definition::MintabilityTokens;
+    use std::{
+        collections::BTreeSet, iter, num::NonZeroU32, str::FromStr, time::Duration as StdDuration,
+    };
+
     use iroha_data_model::{
-        ChainId,
+        ChainId, Registrable, ValidationFail,
         account::AccountDetails,
-        asset::{AssetDefinitionId, AssetId},
+        asset::{AssetDefinitionId, AssetId, definition::MintabilityTokens},
         block::{BlockHeader, builder::BlockBuilder},
         common::{Owned, Ref},
         domain::DomainId,
@@ -1238,13 +1241,11 @@ mod tests {
         },
         trigger::DataTriggerSequence,
     };
-    use iroha_data_model::{Registrable, ValidationFail};
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use nonzero_ext::nonzero;
-    use std::{
-        collections::BTreeSet, iter, num::NonZeroU32, str::FromStr, time::Duration as StdDuration,
-    };
+
+    use super::*;
 
     #[cfg(feature = "app_api")]
     #[test]

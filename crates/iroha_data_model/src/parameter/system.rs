@@ -9,18 +9,16 @@ use core::{
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use iroha_data_model_derive::model;
-
-#[cfg(feature = "json")]
-use super::custom::json_helpers;
-use super::custom::{CustomParameter, CustomParameterId, CustomParameters};
 use iroha_crypto::Algorithm;
+use iroha_data_model_derive::model;
 use iroha_primitives::json::Json;
-
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 
 pub use self::model::*;
+#[cfg(feature = "json")]
+use super::custom::json_helpers;
+use super::custom::{CustomParameter, CustomParameterId, CustomParameters};
 
 #[cfg(feature = "json")]
 mod json_support {
@@ -1460,9 +1458,10 @@ impl Parameters {
 
 /// Consensus handshake metadata helpers used during genesis provisioning.
 pub mod consensus_metadata {
+    use core::str::FromStr as _;
+
     use super::*;
     use crate::Name;
-    use core::str::FromStr as _;
 
     static HANDSHAKE_META_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
@@ -1479,9 +1478,10 @@ pub mod consensus_metadata {
 
 /// Cryptography snapshot metadata helpers used during genesis provisioning.
 pub mod crypto_metadata {
+    use core::str::FromStr as _;
+
     use super::*;
     use crate::Name;
-    use core::str::FromStr as _;
 
     static MANIFEST_META_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
@@ -1497,9 +1497,10 @@ pub mod crypto_metadata {
 
 /// Confidential registry metadata helpers used during genesis provisioning.
 pub mod confidential_metadata {
+    use core::str::FromStr as _;
+
     use super::*;
     use crate::Name;
-    use core::str::FromStr as _;
 
     static REGISTRY_ROOT_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
@@ -2072,14 +2073,18 @@ impl JsonDeserialize for SmartContractParameter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::name::Name;
-    use crate::parameter::custom::{CustomParameter, CustomParameterId};
     use core::str::FromStr as _;
+
     use iroha_primitives::json::Json;
     // Norito core helpers for header-framed encode/decode in tests
     use norito::codec::{DecodeAll as _, Encode as _};
     use norito::core as norito_core;
+
+    use super::*;
+    use crate::{
+        name::Name,
+        parameter::custom::{CustomParameter, CustomParameterId},
+    };
 
     #[test]
     fn set_custom_parameter() {

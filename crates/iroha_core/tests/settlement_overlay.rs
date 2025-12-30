@@ -2,6 +2,8 @@
 
 #![allow(clippy::unwrap_used)]
 
+use std::str::FromStr as _;
+
 use iroha_core::{
     kura::Kura,
     pipeline::overlay::TxOverlay,
@@ -31,7 +33,6 @@ use iroha_data_model::{
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::str::FromStr as _;
 
 fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
     let domain_id: DomainId = "wonderland".parse().unwrap();

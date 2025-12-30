@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
 use iroha_crypto::Hash;
-use ivm::mock_wsv::DomainId;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 use norito::codec::Encode as NoritoEncode;

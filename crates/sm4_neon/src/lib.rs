@@ -65,8 +65,9 @@ const SM4_SBOX: [u8; 256] = [
 
 #[cfg(target_arch = "aarch64")]
 mod neon {
-    use super::{CK, SM4_SBOX};
     use std::sync::OnceLock;
+
+    use super::{CK, SM4_SBOX};
 
     type NeonTable = core::arch::aarch64::uint8x16x4_t;
 

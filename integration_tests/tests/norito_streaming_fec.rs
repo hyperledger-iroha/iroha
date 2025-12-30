@@ -3,10 +3,10 @@
 #[path = "streaming/mod.rs"]
 mod streaming;
 
-use streaming::{baseline_test_vector_with_frames, bundled_test_vector_with_frames};
+use std::convert::TryFrom;
 
 use norito::streaming::chunk::{chunk_commitments, chunk_leaf_hash};
-use std::convert::TryFrom;
+use streaming::{baseline_test_vector_with_frames, bundled_test_vector_with_frames};
 
 const GF_PRIMITIVE: u8 = 0x02;
 const GF_REDUCTION: u8 = 0x1d; // 0x11d without the leading bit used for modular reduction

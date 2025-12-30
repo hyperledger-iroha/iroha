@@ -2,13 +2,14 @@
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs)]
 
+use std::{convert::TryFrom, sync::Once};
+
 use axum::{
     Router,
     response::IntoResponse,
     routing::{get, post},
 };
 use http_body_util::BodyExt as _;
-use std::{convert::TryFrom, sync::Once};
 use tower::ServiceExt as _;
 
 fn ensure_quota_config() {

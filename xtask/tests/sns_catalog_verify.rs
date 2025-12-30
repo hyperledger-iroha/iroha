@@ -1,5 +1,6 @@
-use assert_cmd::cargo::cargo_bin_cmd;
 use std::path::PathBuf;
+
+use assert_cmd::cargo::cargo_bin_cmd;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

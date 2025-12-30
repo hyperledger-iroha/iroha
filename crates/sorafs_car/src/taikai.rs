@@ -1,4 +1,9 @@
-use crate::{CarWriter, RAW_CODEC, ingest_single_file, verifier::ParsedCar};
+use std::{
+    borrow::Cow,
+    fs::{self, File},
+    path::{Path, PathBuf},
+};
+
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
     da::types::{BlobDigest, ExtraMetadata, StorageTicketId},
@@ -9,11 +14,8 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, Map, Value};
-use std::{
-    borrow::Cow,
-    fs::{self, File},
-    path::{Path, PathBuf},
-};
+
+use crate::{CarWriter, RAW_CODEC, ingest_single_file, verifier::ParsedCar};
 
 /// Request describing a Taikai segment bundle operation.
 pub struct BundleRequest<'a> {
@@ -534,11 +536,15 @@ fn encode_base32_lower(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_data_model::name::Name;
-    use iroha_data_model::taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution};
     use std::str::FromStr;
+
+    use iroha_data_model::{
+        name::Name,
+        taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution},
+    };
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn bundle_writes_outputs() {

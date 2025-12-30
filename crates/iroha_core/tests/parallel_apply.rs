@@ -2,12 +2,15 @@
 //! Ensures that enabling the skeleton parallel-apply path yields identical
 //! outcomes to the sequential apply path.
 
-use iroha_core::block::{BlockBuilder, ValidBlock};
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use std::{borrow::Cow, collections::BTreeSet, time::Duration};
+
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    state::{StateReadOnly, WorldReadOnly},
+};
 use iroha_data_model::prelude::*;
 use iroha_primitives::{numeric::Numeric, time::TimeSource};
 use mv::storage::StorageReadOnly;
-use std::{borrow::Cow, collections::BTreeSet, time::Duration};
 mod snapshots;
 use snapshots::assert_events;
 

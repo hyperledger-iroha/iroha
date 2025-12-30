@@ -1,7 +1,6 @@
 //! Tests for the `model` and `model_single` derive macros.
 
 use iroha_data_model_derive::{model, model_single};
-
 use model::PublicItem;
 
 #[model]

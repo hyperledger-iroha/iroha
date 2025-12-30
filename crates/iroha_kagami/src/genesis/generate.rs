@@ -626,9 +626,10 @@ pub fn generate_default(
 
 #[cfg(test)]
 mod da_tests {
-    use super::*;
     use iroha_data_model::parameter::custom::CustomParameterId;
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+
+    use super::*;
 
     #[test]
     fn synthetic_genesis_includes_consensus_metadata() {
@@ -771,10 +772,12 @@ mod da_tests {
 
 #[cfg(test)]
 mod profile_cli_tests {
-    use super::*;
+    use std::io::{BufWriter, Write};
+
     use iroha_data_model::parameter::system::SumeragiNposParameters;
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-    use std::io::{BufWriter, Write};
+
+    use super::*;
 
     fn base_profile_args(profile: GenesisProfile) -> Args {
         Args {
@@ -919,8 +922,9 @@ mod profile_cli_tests {
 
 #[cfg(test)]
 mod helper_tests {
-    use super::*;
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+
+    use super::*;
 
     #[test]
     fn validate_consensus_cutover_rejects_missing_pairs() {

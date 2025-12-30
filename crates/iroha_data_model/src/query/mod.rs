@@ -7,15 +7,6 @@
 
 #![allow(clippy::missing_inline_in_public_items)]
 
-use derive_more::Constructor;
-use iroha_crypto::{HashOf, MerkleProof, PublicKey, SignatureOf};
-use iroha_data_model_derive::model;
-use iroha_macro::FromVariant;
-use iroha_primitives::{json::Json, numeric::Numeric};
-use iroha_schema::IntoSchema;
-use iroha_version::Version;
-use norito::codec::{Decode, Encode};
-use parameters::{ForwardCursor, QueryParams};
 use std::{
     any::Any,
     boxed::Box,
@@ -25,10 +16,20 @@ use std::{
     vec::{self, Vec},
 };
 
-pub use self::model::*;
+use derive_more::Constructor;
+use iroha_crypto::{HashOf, MerkleProof, PublicKey, SignatureOf};
+use iroha_data_model_derive::model;
+use iroha_macro::FromVariant;
+use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_schema::IntoSchema;
+use iroha_version::Version;
+use norito::codec::{Decode, Encode};
+use parameters::{ForwardCursor, QueryParams};
+
 // Ensure `QueryWithFilter` is publicly re-exported in fast mode as well.
 #[cfg(feature = "fast_dsl")]
 pub use self::model::QueryWithFilter;
+pub use self::model::*;
 use self::{
     account::*, asset::*, block::*, domain::*, dsl::*, executor::*, nft::*, peer::*, permission::*,
     role::*, transaction::*, trigger::*,
@@ -68,8 +69,9 @@ impl iroha_version::Version for SignedQuery {
 
 #[cfg(test)]
 mod signature_tests {
-    use super::*;
     use std::num::NonZeroU64;
+
+    use super::*;
 
     #[test]
     fn query_signature_decode_from_slice_roundtrip() {
@@ -389,14 +391,12 @@ pub mod json_wrappers {
     }
 
     pub(super) fn base64_encode(bytes: &[u8]) -> String {
-        use base64::engine::Engine;
-        use base64::engine::general_purpose::STANDARD;
+        use base64::engine::{Engine, general_purpose::STANDARD};
         STANDARD.encode(bytes)
     }
 
     pub(super) fn base64_decode(s: &str) -> Result<Vec<u8>, ()> {
-        use base64::engine::Engine;
-        use base64::engine::general_purpose::STANDARD;
+        use base64::engine::{Engine, general_purpose::STANDARD};
         STANDARD.decode(s.as_bytes()).map_err(|_| ())
     }
 }
@@ -2085,7 +2085,6 @@ mod candidate {
         use std::sync::LazyLock;
 
         use iroha_crypto::KeyPair;
-
         #[cfg(feature = "json")]
         use norito::json;
 
@@ -2218,12 +2217,14 @@ mod candidate {
 
 #[cfg(test)]
 mod json_roundtrip_tests {
+    use std::sync::LazyLock;
+
+    use iroha_crypto::KeyPair;
+
     use super::*;
     #[cfg(not(feature = "fast_dsl"))]
     use crate::query::domain::prelude::FindDomains;
     use crate::{account::AccountId, domain::Domain, query::json_wrappers::SignedQueryJson};
-    use iroha_crypto::KeyPair;
-    use std::sync::LazyLock;
 
     static ALICE_ID: LazyLock<AccountId> = LazyLock::new(|| {
         format!("{}@{}", ALICE_KEYPAIR.public_key(), "wonderland")
@@ -2413,9 +2414,10 @@ impl_singular_queries! {
 
 #[cfg(test)]
 mod trait_object_tests {
+    use norito::codec::Encode;
+
     use super::*;
     use crate::query::dsl::{HasProjection, PredicateMarker, SelectorMarker};
-    use norito::codec::Encode;
 
     #[test]
     fn query_dyn_encode_matches_encode() {
@@ -2553,10 +2555,11 @@ pub mod role {
 
     use std::{format, string::String, vec::Vec};
 
-    // Bring required IDs into scope for queries! items
-    use crate::AccountId;
     // prelude not needed here; keep imports minimal
     use derive_more::Display;
+
+    // Bring required IDs into scope for queries! items
+    use crate::AccountId;
 
     queries! {
             /// [`FindRoles`] Iroha Query finds all `Role`s presented.
@@ -2606,6 +2609,7 @@ pub mod permission {
     use std::{format, string::String, vec::Vec};
 
     use derive_more::Display;
+
     // Bring required IDs into scope for queries! items
     use crate::AccountId;
 
@@ -2645,6 +2649,7 @@ pub mod account {
     use std::{format, string::String, vec::Vec};
 
     use derive_more::Display;
+
     // Bring required IDs into scope for queries! items
     use crate::prelude::AssetDefinitionId;
 
@@ -3185,8 +3190,9 @@ pub mod sorafs {
     //!
     //! Queries related to `SoraFS` provider metadata.
 
-    use hex;
     use std::fmt;
+
+    use hex;
 
     use crate::sorafs::capacity::ProviderId;
 
@@ -3475,6 +3481,10 @@ pub mod prelude {
 
 #[cfg(all(test, feature = "fault_injection"))]
 mod fault_injection_tests {
+    use std::str::FromStr;
+
+    use iroha_crypto::{Hash, HashOf, MerkleProof};
+
     use super::*;
     use crate::{
         Level,
@@ -3482,8 +3492,6 @@ mod fault_injection_tests {
         prelude::{DataTriggerSequence, TimeTriggerEntrypoint},
         trigger::TriggerId,
     };
-    use iroha_crypto::{Hash, HashOf, MerkleProof};
-    use std::str::FromStr;
 
     fn zero_hash<T>() -> HashOf<T> {
         let zero = [0u8; 32];
@@ -3541,9 +3549,11 @@ mod fault_injection_tests {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use super::*;
-    use norito::json;
     use std::num::NonZeroU64;
+
+    use norito::json;
+
+    use super::*;
 
     #[test]
     fn query_output_batch_box_json_roundtrip() {

@@ -6,10 +6,11 @@
 //! lane/dataspace metadata. This module provides a global registry keyed by the
 //! transaction hash to keep those decisions alive across subsystem boundaries.
 
+use std::sync::LazyLock;
+
 use dashmap::DashMap;
 use iroha_crypto::HashOf;
 use iroha_data_model::transaction::SignedTransaction;
-use std::sync::LazyLock;
 
 use super::router::RoutingDecision;
 

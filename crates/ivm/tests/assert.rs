@@ -1,5 +1,4 @@
-use ivm::zk::MAX_CYCLES;
-use ivm::{IVM, VMError, encoding, instruction};
+use ivm::{IVM, VMError, encoding, instruction, zk::MAX_CYCLES};
 mod common;
 use common::{assemble, assemble_zk};
 

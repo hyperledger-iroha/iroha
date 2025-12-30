@@ -1,10 +1,14 @@
-use std::io::{BufWriter, Write};
-use std::num::NonZeroU16;
-use std::path::PathBuf;
+use std::{
+    io::{BufWriter, Write},
+    num::NonZeroU16,
+    path::PathBuf,
+};
 
 use clap::Args as ClapArgs;
 use color_eyre::eyre::WrapErr as _;
 use inquire::{Confirm, CustomType, Text};
+use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use iroha_test_samples::ALICE_ID;
 
 use crate::{
     Outcome, RunArgs,
@@ -13,8 +17,6 @@ use crate::{
     },
     tui,
 };
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
-use iroha_test_samples::ALICE_ID;
 
 /// Interactive TUI to generate a bare-metal local network (no Docker).
 #[derive(ClapArgs, Debug, Clone)]

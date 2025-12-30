@@ -1,4 +1,6 @@
 //! Reference SoraNet relay daemon entrypoint and CLI argument parsing.
+use std::path::PathBuf;
+
 use clap::Parser;
 use soranet_relay::{
     config::{ComplianceConfig, CongestionConfig, RelayConfig},
@@ -6,7 +8,6 @@ use soranet_relay::{
     error::RelayError,
     runtime::RelayRuntime,
 };
-use std::path::PathBuf;
 use tracing::info;
 
 #[derive(Parser, Debug)]

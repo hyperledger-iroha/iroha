@@ -71,73 +71,74 @@ mod vector;
 pub mod zk;
 mod zk_poseidon;
 pub mod zk_verify;
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
+
 use iroha_telemetry::metrics::{
     StackSettingsSnapshot, record_stack_gas_multiplier, record_stack_limits,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
 // Deterministic parallel execution utilities.
 pub mod parallel;
 pub mod tx_parallel;
 // Test/fixture helpers (public for tests and dev tools)
 pub mod predecoder_fixtures;
 // Re-export AES helpers used by benches and downstream users.
-pub use crate::aes::{
-    aes128_decrypt_many, aes128_encrypt_many, aes128_expand_key, aesdec, aesdec_impl,
-    aesdec_n_rounds_many, aesenc, aesenc_impl, aesenc_n_rounds_many, sbox,
-};
-pub use crate::ec::{
-    ec_add, ec_add_truncated, ec_mul, ec_mul_truncated, pairing_check, pairing_check_truncated,
-};
-pub use crate::pedersen::{pedersen_commit, pedersen_commit_truncated};
-pub use crate::poseidon::{
-    poseidon2, poseidon2_many, poseidon2_simd, poseidon6, poseidon6_many, poseidon6_simd,
-};
-pub use crate::sha3::{keccak_f1600, sha3_absorb_block};
-pub use crate::zk_poseidon::{pair_hash_bytes, pair_hash_u64};
-
 // Re-export main types for users of the crate
-pub use crate::branch_predictor::BranchPredictor;
-pub use crate::byte_merkle_tree::ByteMerkleTree;
-pub use crate::cuda::{
-    aesdec_cuda, aesenc_cuda, bn254_add_cuda, bn254_mul_cuda, bn254_sub_cuda, cuda_available,
-    cuda_disabled, cuda_last_error_message, ed25519_verify_batch_cuda, ed25519_verify_cuda,
-    keccak_f1600_cuda, poseidon2_cuda, poseidon2_cuda_many, poseidon6_cuda, poseidon6_cuda_many,
-    reset_cuda_backend_for_tests, sha256_compress_cuda, vector_add_f32,
-};
-pub use crate::error::{Perm, VMError};
-pub use crate::field_dispatch::{
-    Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field,
-};
+// Expose the instruction decoder helper at the crate root for tests.
+pub use crate::core_host::CoreHost;
 #[cfg(test)]
 pub use crate::field_dispatch::{clear_field_impl_for_tests, set_field_impl_for_tests};
+// Publicly expose gas schedule helper for tests and tooling.
+pub use crate::gas::{cost_of, cost_of_with_params};
 #[cfg(feature = "cuda")]
 pub use crate::gpu_manager::GpuManager;
 #[cfg(not(feature = "cuda"))]
 pub use crate::gpu_manager::GpuManager;
-pub use crate::host::IVMHost;
-pub use crate::iso20022::*;
-pub use crate::ivm::IVM;
-pub use crate::ivm::set_banner_enabled;
-pub use crate::ivm_cache::{
-    CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get_with_meta,
-    global_stats,
-};
-// Expose the instruction decoder helper at the crate root for tests.
-pub use crate::core_host::CoreHost;
-pub use crate::decoder::decode;
-pub use crate::kotodama::compiler::Compiler as KotodamaCompiler;
-pub use crate::memory::{AccessRange, Memory, WriteLogEntry};
-pub use crate::pointer_abi::{
-    PointerType, Tlv, is_type_allowed_for_policy, render_pointer_types_markdown_table,
-    validate_tlv_bytes,
-};
-// Publicly expose gas schedule helper for tests and tooling.
-pub use crate::gas::{cost_of, cost_of_with_params};
-// Re-export the canonical Merkle tree from iroha_crypto for general use.
-pub use crate::metadata::{MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX};
 // Re-export stable mode bits so tests/users can import `ivm::ivm_mode::*`.
 pub use crate::metadata::mode as ivm_mode;
+// Re-export the canonical Merkle tree from iroha_crypto for general use.
+pub use crate::metadata::{MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX};
+pub use crate::{
+    aes::{
+        aes128_decrypt_many, aes128_encrypt_many, aes128_expand_key, aesdec, aesdec_impl,
+        aesdec_n_rounds_many, aesenc, aesenc_impl, aesenc_n_rounds_many, sbox,
+    },
+    branch_predictor::BranchPredictor,
+    byte_merkle_tree::ByteMerkleTree,
+    cuda::{
+        aesdec_cuda, aesenc_cuda, bn254_add_cuda, bn254_mul_cuda, bn254_sub_cuda, cuda_available,
+        cuda_disabled, cuda_last_error_message, ed25519_verify_batch_cuda, ed25519_verify_cuda,
+        keccak_f1600_cuda, poseidon2_cuda, poseidon2_cuda_many, poseidon6_cuda,
+        poseidon6_cuda_many, reset_cuda_backend_for_tests, sha256_compress_cuda, vector_add_f32,
+    },
+    decoder::decode,
+    ec::{
+        ec_add, ec_add_truncated, ec_mul, ec_mul_truncated, pairing_check, pairing_check_truncated,
+    },
+    error::{Perm, VMError},
+    field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},
+    host::IVMHost,
+    iso20022::*,
+    ivm::{IVM, set_banner_enabled},
+    ivm_cache::{
+        CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get_with_meta,
+        global_stats,
+    },
+    kotodama::compiler::Compiler as KotodamaCompiler,
+    memory::{AccessRange, Memory, WriteLogEntry},
+    pedersen::{pedersen_commit, pedersen_commit_truncated},
+    pointer_abi::{
+        PointerType, Tlv, is_type_allowed_for_policy, render_pointer_types_markdown_table,
+        validate_tlv_bytes,
+    },
+    poseidon::{
+        poseidon2, poseidon2_many, poseidon2_simd, poseidon6, poseidon6_many, poseidon6_simd,
+    },
+    sha3::{keccak_f1600, sha3_absorb_block},
+    zk_poseidon::{pair_hash_bytes, pair_hash_u64},
+};
 
 /// Syscall policy determined by `ProgramMetadata.abi_version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,34 +148,33 @@ pub enum SyscallPolicy {
     /// Explicit ABI experiments keyed by header-version.
     Experimental(u8),
 }
-pub use crate::mock_wsv::{
-    AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
-};
-pub use crate::registers::Registers;
-pub use crate::segmented_memory::{Memory as SegmentedMemory, Segment};
+pub use iroha_crypto::{MerkleProof, MerkleTree};
+
 #[cfg(feature = "ed25519")]
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
-pub use crate::signature::{SignatureScheme, verify_signature};
-pub use crate::simple_instruction::Instruction;
-pub use crate::state_overlay::{DurableStateOverlay, DurableStateSnapshot};
-pub use crate::tx_parallel::{PostRunPhase, Transaction, execute_transactions_parallel};
-pub use crate::vector::{
-    SimdChoice, clear_forced_simd, clear_thread_forced_simd, forced_simd_test_lock,
-    set_forced_simd, set_thread_forced_simd, sha256_compress, simd_choice,
-};
 #[cfg(target_os = "macos")]
 pub use crate::vector::{
     bit_pipe_compile_count, metal_available, metal_disabled, release_metal_state,
     reset_metal_backend_for_tests,
 };
-pub use crate::vector::{simd_backend, vector_supported};
-pub use crate::vector::{
-    simd_bits, simd_lanes, vadd32_auto, vadd64_auto, vand_auto, vor_auto, vrot32_auto, vxor_auto,
-    zero_vector,
+pub use crate::{
+    mock_wsv::{
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
+    },
+    registers::Registers,
+    segmented_memory::{Memory as SegmentedMemory, Segment},
+    signature::{SignatureScheme, verify_signature},
+    simple_instruction::Instruction,
+    state_overlay::{DurableStateOverlay, DurableStateSnapshot},
+    tx_parallel::{PostRunPhase, Transaction, execute_transactions_parallel},
+    vector::{
+        SimdChoice, clear_forced_simd, clear_thread_forced_simd, forced_simd_test_lock,
+        set_forced_simd, set_thread_forced_simd, sha256_compress, simd_backend, simd_bits,
+        simd_choice, simd_lanes, vadd32, vadd32_auto, vadd64, vadd64_auto, vand, vand_auto,
+        vector_supported, vor, vor_auto, vrot32, vrot32_auto, vxor, vxor_auto, zero_vector,
+    },
+    zk::{MemEvent, RegEvent, RegisterState},
 };
-pub use crate::vector::{vadd32, vadd64, vand, vor, vrot32, vxor};
-pub use crate::zk::{MemEvent, RegEvent, RegisterState};
-pub use iroha_crypto::{MerkleProof, MerkleTree};
 
 /// Public Norito-typed request envelopes for VRF syscalls.
 pub mod vrf;

@@ -1,8 +1,7 @@
 //! Generate structural tape (offsets) from JSON input, printed to stdout.
 //! Usage: cargo run -p norito --example gen_struct_tape --features json -- <file.json>
 
-use std::env;
-use std::fs;
+use std::{env, fs};
 
 fn build_struct_index_scalar(input: &str) -> Vec<u32> {
     let b = input.as_bytes();

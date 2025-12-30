@@ -1,9 +1,5 @@
 use std::fmt::{Display, Formatter};
 
-use crate::{
-    emitter_ext::EmitterExt,
-    utils::{darling_result, parse_single_list_attr_opt},
-};
 use darling::{
     FromAttributes, FromDeriveInput, FromField, FromVariant, ast::Style, util::SpannedValue,
 };
@@ -18,11 +14,15 @@ use syn::{
     visit::Visit as _,
 };
 
-use crate::attr_parse::{
-    derive::DeriveAttrs,
-    doc::DocAttrs,
-    getset::{GetSetFieldAttrs, GetSetStructAttrs},
-    repr::{Repr, ReprKind, ReprPrimitive},
+use crate::{
+    attr_parse::{
+        derive::DeriveAttrs,
+        doc::DocAttrs,
+        getset::{GetSetFieldAttrs, GetSetStructAttrs},
+        repr::{Repr, ReprKind, ReprPrimitive},
+    },
+    emitter_ext::EmitterExt,
+    utils::{darling_result, parse_single_list_attr_opt},
 };
 
 #[derive(Debug)]

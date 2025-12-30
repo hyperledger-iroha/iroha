@@ -1,10 +1,11 @@
 //! End-to-end tests for Kotodama domain builtins: unregister_domain and transfer_domain.
 
+use std::collections::HashMap;
+
 use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
 };
-use std::collections::HashMap;
 
 #[test]
 fn kotodama_unregister_domain() {

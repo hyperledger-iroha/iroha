@@ -103,8 +103,9 @@ impl AddressFormatPreference {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_test_samples::ALICE_ID;
+
+    use super::*;
 
     #[test]
     fn from_param_defaults_and_accepts_aliases() {

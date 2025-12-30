@@ -302,11 +302,15 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGatewayEvent {
 
 #[cfg(feature = "json")]
 mod json_support {
-    use super::{SorafsGarViolation, SorafsGatewayEvent};
-    use base64::Engine as _;
-    use norito::codec::{Decode, Encode};
-    use norito::json::{Error, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser};
     use std::io::Cursor;
+
+    use base64::Engine as _;
+    use norito::{
+        codec::{Decode, Encode},
+        json::{Error, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser},
+    };
+
+    use super::{SorafsGarViolation, SorafsGatewayEvent};
 
     fn encode_base64<T: Encode>(value: &T) -> String {
         let bytes = value.encode();

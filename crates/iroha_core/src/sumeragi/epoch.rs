@@ -8,10 +8,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::sumeragi::consensus::{VrfCommit, VrfReveal};
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
-use iroha_data_model::ChainId;
-use iroha_data_model::consensus::VrfEpochRecord;
+use iroha_data_model::{ChainId, consensus::VrfEpochRecord};
+
+use crate::sumeragi::consensus::{VrfCommit, VrfReveal};
 
 #[derive(Debug, Clone)]
 struct LateRevealEntry {

@@ -1,7 +1,6 @@
 //! Helper test to dump the syscalls touched by executor fixtures.
 use core::num::NonZeroU64;
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use iroha_data_model::{block::BlockHeader, smart_contract::payloads::ExecutorContext};
 use iroha_test_samples::ALICE_ID;

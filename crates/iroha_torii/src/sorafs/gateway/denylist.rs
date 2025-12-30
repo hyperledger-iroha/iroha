@@ -251,7 +251,6 @@ impl DenylistEntryBuilder {
     }
 
     /// Sets the expiry using a relative duration offset from `issued_at`.
-    ///
     #[must_use]
     pub fn expires_in(mut self, offset: Duration) -> Self {
         let issued = self.issued_at.unwrap_or_else(SystemTime::now);

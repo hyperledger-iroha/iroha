@@ -5,10 +5,12 @@
 //! logic so callers (CLI, orchestrator, tests) can share a hardened
 //! implementation.
 
-use crate::proof_stream::ProofStreamItem;
-use flate2::read::{DeflateDecoder, GzDecoder};
 use std::{fmt, io::Read, str};
+
+use flate2::read::{DeflateDecoder, GzDecoder};
 use thiserror::Error;
+
+use crate::proof_stream::ProofStreamItem;
 
 /// Supported HTTP content-encoding values exposed by proof stream transports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,13 +167,15 @@ pub fn decode_transport_items(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::proof_stream::{ProofKind, ProofStreamItem, VerificationStatus};
+    use std::io::Write;
+
     use flate2::{
         Compression,
         write::{DeflateEncoder, GzEncoder},
     };
-    use std::io::Write;
+
+    use super::*;
+    use crate::proof_stream::{ProofKind, ProofStreamItem, VerificationStatus};
 
     fn sample_items() -> Vec<ProofStreamItem> {
         vec![

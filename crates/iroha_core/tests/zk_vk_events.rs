@@ -31,8 +31,7 @@ fn vk_register_update_deprecate_emit_events() {
     let exec = Executor::default();
 
     // Grant CanManageVerifyingKeys to ALICE using a generic permission token
-    use iroha_data_model::permission::Permission;
-    use iroha_data_model::prelude::Grant;
+    use iroha_data_model::{permission::Permission, prelude::Grant};
     let perm = Permission::new(
         "CanManageVerifyingKeys".parse().unwrap(),
         iroha_primitives::json::Json::new(()),

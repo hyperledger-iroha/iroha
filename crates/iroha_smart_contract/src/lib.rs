@@ -299,9 +299,10 @@ pub mod prelude {
 mod tests {
     use std::{mem::ManuallyDrop, slice};
 
-    use super::*;
     use data_model::{isi::Log, prelude::*};
     use iroha_data_model::query::{QueryOutput, QueryOutputBatchBox};
+
+    use super::*;
     // Removed unused import; tests perform explicit framing locally.
 
     const ISI_RESULT: Result<(), ValidationFail> = Ok(());

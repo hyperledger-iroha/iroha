@@ -1,5 +1,6 @@
 //! Integration tests covering Torii query APIs.
 
+use integration_tests::sandbox;
 use iroha::{
     client::QueryError,
     data_model::{
@@ -8,8 +9,6 @@ use iroha::{
     },
 };
 use iroha_test_network::*;
-
-use integration_tests::sandbox;
 
 /// Account query scenarios.
 mod account;

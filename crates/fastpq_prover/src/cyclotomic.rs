@@ -7,8 +7,9 @@
 
 #![allow(dead_code)]
 
-use crate::poseidon::FIELD_MODULUS as GOLDILOCKS_MODULUS;
 use rayon::prelude::*;
+
+use crate::poseidon::FIELD_MODULUS as GOLDILOCKS_MODULUS;
 
 const PARALLEL_THRESHOLD: usize = 1 << 12;
 

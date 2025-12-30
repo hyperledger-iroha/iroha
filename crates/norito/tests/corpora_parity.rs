@@ -2,9 +2,9 @@
 //! Looks for JSON and matching .tape files under `crates/norito/tests/corpora/`.
 #![cfg(feature = "json")]
 
+use std::{fs, path::Path};
+
 use norito::json::build_struct_index;
-use std::fs;
-use std::path::Path;
 
 #[test]
 fn corpora_parity_if_present() {

@@ -6,10 +6,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ivm::host::IVMHost;
 use ivm::{
-    IVM, Memory, MockWorldStateView, PointerType, WsvHost, encoding, instruction, syscalls,
-    validate_tlv_bytes,
+    IVM, Memory, MockWorldStateView, PointerType, WsvHost, encoding, host::IVMHost, instruction,
+    syscalls, validate_tlv_bytes,
 };
 
 mod common;

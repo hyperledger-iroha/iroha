@@ -1,5 +1,4 @@
-use super::super::Messages;
-use super::english;
+use super::{super::Messages, english};
 
 pub const MESSAGES: Messages = Messages {
     no_functions: "컴파일할 함수가 없습니다",

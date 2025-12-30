@@ -2,12 +2,11 @@
 
 use iroha_primitives::numeric::Numeric;
 
+use super::{definition::AssetDefinition, id::AssetDefinitionId, value::Asset};
 use crate::{
     account::Account,
     isi::{Burn, Mint, Register, Transfer, Unregister},
 };
-
-use super::{definition::AssetDefinition, id::AssetDefinitionId, value::Asset};
 
 /// Register a new [`AssetDefinition`].
 pub type RegisterAssetDefinition = Register<AssetDefinition>;

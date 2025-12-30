@@ -1,10 +1,11 @@
 //! Buffer sizing and guard-rail policies.
 
 use derive_more::{Display, From};
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    json::{JsonDeserialize, JsonSerialize},
+};
 use rust_decimal::Decimal;
-
-use norito::json::{JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize};
 
 use crate::MicroXor;
 

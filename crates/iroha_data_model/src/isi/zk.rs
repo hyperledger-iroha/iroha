@@ -3,11 +3,12 @@
 //! This module defines instructions for submitting proofs for verification
 //! against on-chain verifying keys.
 
+use iroha_crypto::Hash;
+
 use super::*;
 use crate::{
     asset::definition::ConfidentialPolicyMode, confidential::ConfidentialEncryptedPayload,
 };
-use iroha_crypto::Hash;
 
 isi! {
     /// Verify a zero-knowledge proof against a verifying key.

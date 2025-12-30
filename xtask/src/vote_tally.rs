@@ -138,7 +138,6 @@ fn deterministic_timestamp(summary: &BundleSummary) -> u64 {
 
 #[cfg(feature = "vote-tally")]
 mod vote_tally_backend {
-    use super::*;
     use halo2_proofs as halo2_axiom;
     use halo2_proofs::{
         SerdeFormat,
@@ -159,6 +158,8 @@ mod vote_tally_backend {
     use iroha_core::zk::depth::VoteBoolCommitMerkle;
     use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng as _};
     use sha2::{Digest as ShaDigest, Sha256};
+
+    use super::*;
 
     #[allow(dead_code)]
     fn _assert_scalar_hashable() {

@@ -3,8 +3,10 @@ mod common;
 
 use std::process::Command;
 
-use color_eyre::Result;
-use color_eyre::eyre::{WrapErr, ensure};
+use color_eyre::{
+    Result,
+    eyre::{WrapErr, ensure},
+};
 use common::{PopFixture, generate_pop, minimal_manifest_with_topology, write_raw_genesis_to};
 
 #[test]

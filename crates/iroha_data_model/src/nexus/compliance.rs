@@ -3,9 +3,12 @@
 use std::collections::BTreeSet;
 
 use iroha_crypto::{Hash, LaneCommitmentId};
+use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
@@ -13,10 +16,6 @@ use crate::{
     metadata::Metadata,
     nexus::{DataSpaceId, LaneId, UniversalAccountId},
 };
-use iroha_primitives::numeric::Numeric;
-
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 
 /// Identifier attached to a [`LaneCompliancePolicy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]

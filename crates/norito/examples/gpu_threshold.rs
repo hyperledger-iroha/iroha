@@ -2,15 +2,16 @@
 //! Run with `cargo run --release -p norito --example gpu_threshold` on a host
 //! that has Metal (Apple Silicon) or CUDA kernels available.
 
-#[cfg(feature = "gpu-compression")]
-use norito::core::{gpu_zstd, heuristics::compress_auto, hw};
-#[cfg(not(feature = "gpu-compression"))]
-use norito::core::{heuristics::compress_auto, hw};
 use std::{
     env,
     fmt::Write as _,
     time::{Duration, Instant},
 };
+
+#[cfg(feature = "gpu-compression")]
+use norito::core::{gpu_zstd, heuristics::compress_auto, hw};
+#[cfg(not(feature = "gpu-compression"))]
+use norito::core::{heuristics::compress_auto, hw};
 
 const SIZES: &[usize] = &[
     64 * 1024,

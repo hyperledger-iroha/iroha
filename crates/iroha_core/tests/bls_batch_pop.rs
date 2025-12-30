@@ -1,5 +1,7 @@
 //! Integration checks for BLS batching + `PoP` gating on transaction admission.
 use core::time::Duration;
+use std::sync::Arc;
+
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
@@ -7,15 +9,16 @@ use iroha_core::{
     sumeragi::network_topology::Topology,
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::Registrable;
-use iroha_data_model::prelude::{
-    Account, AccountId, AssetDefinition, Domain, DomainId, Level, Log, TransactionBuilder,
+use iroha_data_model::{
+    ChainId, Metadata, PeerId, Registrable,
+    block::builder::BlockBuilder,
+    prelude::{
+        Account, AccountId, AssetDefinition, BlockHeader, Domain, DomainId, HashOf, Level, Log,
+        SignedTransaction, TransactionBuilder,
+    },
 };
-use iroha_data_model::prelude::{BlockHeader, HashOf, SignedTransaction};
-use iroha_data_model::{ChainId, Metadata, PeerId, block::builder::BlockBuilder};
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
-use std::sync::Arc;
 
 fn mk_state_with_bls_batch() -> (State, ChainId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();

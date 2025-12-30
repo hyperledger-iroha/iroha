@@ -1,5 +1,7 @@
 #![cfg(feature = "cli")]
 
+use std::fs;
+
 use assert_cmd::cargo::cargo_bin_cmd;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use norito::{
@@ -10,7 +12,6 @@ use sorafs_manifest::capacity::{
     CapacityDeclarationV1, CapacityDisputeKind, CapacityDisputeV1, CapacityTelemetryV1,
     ReplicationOrderV1,
 };
-use std::fs;
 use tempfile::tempdir;
 
 #[test]

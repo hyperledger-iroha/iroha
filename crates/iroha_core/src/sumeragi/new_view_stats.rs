@@ -1,8 +1,10 @@
 //! Global, in-memory `NEW_VIEW` receipt tracker for operator introspection.
 //! Not consensus-critical. Used by Torii SSE to stream (height, view) counts.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Mutex, OnceLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Mutex, OnceLock},
+};
 
 type Key = (u64, u64); // (height, view)
 

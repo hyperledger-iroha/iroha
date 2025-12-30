@@ -4,9 +4,9 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Ident, Token, Type, parse_quote};
 
-use crate::emitter_ext::EmitterExt;
-use crate::utils::{
-    attr_struct, darling_result, parse_single_list_attr, parse_single_list_attr_opt,
+use crate::{
+    emitter_ext::EmitterExt,
+    utils::{attr_struct, darling_result, parse_single_list_attr, parse_single_list_attr_opt},
 };
 
 mod kw {

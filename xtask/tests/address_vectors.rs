@@ -1,6 +1,6 @@
+use std::{fs, path::PathBuf};
+
 use assert_cmd::cargo::cargo_bin_cmd;
-use std::fs;
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn workspace_root() -> PathBuf {

@@ -8,13 +8,12 @@ use std::{
 };
 
 use iroha_logger::{trace, warn};
+pub use sorafs_manifest::ProviderAdmissionAdvertError as AdmissionCheckError;
 use sorafs_manifest::{
     AdmissionRecord, ProviderAdmissionEnvelopeError, ProviderAdmissionEnvelopeV1, ProviderAdvertV1,
     verify_advert_against_record,
 };
 use thiserror::Error;
-
-pub use sorafs_manifest::ProviderAdmissionAdvertError as AdmissionCheckError;
 
 /// Admission registry loaded from governance envelopes.
 #[derive(Debug, Clone)]

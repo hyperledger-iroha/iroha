@@ -14,6 +14,15 @@
 
 use std::{string::String, vec::Vec};
 
+#[cfg(feature = "json")]
+use base64::engine::general_purpose::STANDARD;
+use derive_more::Constructor;
+use iroha_crypto::HashOf;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json::{self, JsonDeserialize, JsonSerialize};
+
 use crate::{
     account::AccountId,
     asset::id::{AssetDefinitionId, AssetId},
@@ -24,14 +33,6 @@ use crate::{
     transaction::signed::SignedTransaction,
     trigger::TriggerId,
 };
-#[cfg(feature = "json")]
-use base64::engine::general_purpose::STANDARD;
-use derive_more::Constructor;
-use iroha_crypto::HashOf;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
-use norito::json::{self, JsonDeserialize, JsonSerialize};
 
 #[cfg(feature = "json")]
 macro_rules! impl_state_json_via_norito_bytes {
@@ -241,10 +242,10 @@ impl StateAccessSetAdvisory {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::prelude::*;
-    use crate::role::RoleId;
     use iroha_crypto::Hash;
+
+    use super::*;
+    use crate::{prelude::*, role::RoleId};
 
     #[test]
     fn key_roundtrip_and_ordering() {

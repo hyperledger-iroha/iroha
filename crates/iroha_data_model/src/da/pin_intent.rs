@@ -1,13 +1,20 @@
-use crate::da::{commitment::DaCommitmentLocation, types::StorageTicketId};
-use crate::sorafs::pin_registry::ManifestDigest;
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, nexus::LaneId};
 use core::cmp::Ordering;
+
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use norito::to_bytes;
+use norito::{
+    codec::{Decode, Encode},
+    to_bytes,
+};
+
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use crate::{
+    account::AccountId,
+    da::{commitment::DaCommitmentLocation, types::StorageTicketId},
+    nexus::LaneId,
+    sorafs::pin_registry::ManifestDigest,
+};
 
 /// Pin intent emitted by the DA ingest pipeline to seed the `SoraFS` registry.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]

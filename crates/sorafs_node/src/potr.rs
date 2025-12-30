@@ -1,7 +1,9 @@
 //! PoTR receipt tracking for the embedded storage node.
 
-use std::collections::VecDeque;
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, RwLock},
+};
 
 use sorafs_manifest::{potr::PotrReceiptV1, proof_stream::ProofStreamTier};
 
@@ -51,8 +53,9 @@ impl PotrTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sorafs_manifest::potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptValidationError, PotrStatus};
+
+    use super::*;
 
     fn sample_receipt(tier: ProofStreamTier) -> PotrReceiptV1 {
         PotrReceiptV1 {

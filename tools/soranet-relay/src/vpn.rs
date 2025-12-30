@@ -6,16 +6,20 @@
 
 use std::{
     cmp::max,
-    sync::Arc,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
-use iroha_data_model::soranet::RelayId;
-use iroha_data_model::soranet::vpn::{
-    VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
-    VpnControlPlaneV1, VpnCoverPlanEntryV1, VpnCoverScheduleV1, VpnExitClassV1, VpnFlowLabelV1,
-    VpnPaddedCellV1, VpnRouteV1, VpnSessionReceiptV1,
+use iroha_data_model::soranet::{
+    RelayId,
+    vpn::{
+        VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
+        VpnControlPlaneV1, VpnCoverPlanEntryV1, VpnCoverScheduleV1, VpnExitClassV1, VpnFlowLabelV1,
+        VpnPaddedCellV1, VpnRouteV1, VpnSessionReceiptV1,
+    },
 };
 use thiserror::Error;
 use tokio::{

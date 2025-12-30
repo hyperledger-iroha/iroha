@@ -10,18 +10,22 @@ use std::{
 
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
-use iroha_data_model::query::QueryOutputBatchBoxTuple;
 use iroha_data_model::{
     executor::ExecutorDataModel,
-    parameter::{Parameters, SmartContractParameters, SumeragiParameters},
+    parameter::{
+        Parameters, SmartContractParameters, SumeragiParameters, system::SumeragiConsensusMode,
+    },
     proof::ProofRecord,
+    query::QueryOutputBatchBoxTuple,
     smart_contract::manifest::ContractManifest,
 };
 use iroha_torii_shared::uri as torii_uri;
 use iroha_version::codec::EncodeVersioned;
-use norito::codec::{DecodeAll, Error as NoritoDecodeError};
-use norito::json;
+use norito::{
+    codec::{DecodeAll, Error as NoritoDecodeError},
+    json,
+};
+use reqwest::Error as ReqwestError;
 use url::Url;
 
 use crate::{
@@ -41,7 +45,6 @@ use crate::{
     http::{Method as HttpMethod, RequestBuilder},
     http_default::DefaultRequestBuilder,
 };
-use reqwest::Error as ReqwestError;
 
 #[derive(Debug)]
 struct ClientQueryRequestHead {
@@ -298,13 +301,15 @@ fn is_decode_error(err: &QueryError) -> bool {
 /// Permissive decoder used to handle parameter payloads that may violate
 /// non-zero invariants by falling back to sensible defaults.
 mod compat {
-    use super::*;
-    use iroha_data_model::{Decode, Encode};
+    use std::collections::BTreeMap;
+
     use iroha_data_model::{
+        Decode, Encode,
         parameter::{CustomParameter, CustomParameterId},
         query::{QueryOutput, SingularQueryOutputBox},
     };
-    use std::collections::BTreeMap;
+
+    use super::*;
 
     #[derive(Debug, Encode, Decode)]
     pub(super) enum CompatQueryResponse {
@@ -572,8 +577,9 @@ mod compat {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
         use std::collections::BTreeMap;
+
+        use super::*;
 
         fn zeroed_compat_sumeragi() -> CompatSumeragiParameters {
             CompatSumeragiParameters {
@@ -828,8 +834,9 @@ impl QueryExecutor for Client {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
     use iroha_data_model::query::executor::prelude::FindExecutorDataModel;
+
+    use super::*;
 
     #[test]
     fn assemble_sets_norito_accept_header() {
@@ -1007,12 +1014,12 @@ mod query_errors_handling {
     use url::Url;
 
     use super::*;
-    use crate::query::compat;
     use crate::{
         client::APPLICATION_NORITO,
         data_model::ValidationFail,
         http::StatusCode as HttpStatusCode,
         http_default::{RequestSnapshot, set_send_hook},
+        query::compat,
     };
 
     #[test]

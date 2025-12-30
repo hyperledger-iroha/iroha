@@ -3,8 +3,7 @@
 
 use std::vec::Vec;
 
-use axum::extract::Path as AxPath;
-use axum::response::IntoResponse as _;
+use axum::{extract::Path as AxPath, response::IntoResponse as _};
 use iroha_data_model::runtime::{
     RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord, RuntimeUpgradeStatus,
 };

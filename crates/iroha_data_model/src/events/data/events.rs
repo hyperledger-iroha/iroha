@@ -2,14 +2,15 @@
 
 use std::{string::String, vec::Vec};
 
-pub use self::model::*;
-use super::*;
 use getset::Getters;
 use iroha_data_model_derive::{EventSet, HasOrigin, model};
 use iroha_primitives::{json::Json, numeric::Numeric};
 #[allow(unused_imports)]
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
+
+pub use self::model::*;
+use super::*;
 
 macro_rules! data_event {
     ($(#[$meta:meta])* $vis:vis enum $name:ident { $($body:tt)* }) => {
@@ -640,8 +641,7 @@ mod account {
     use iroha_data_model_derive::model;
 
     pub use self::model::*;
-    use super::repo_account::RepoAccountEvent;
-    use super::*;
+    use super::{repo_account::RepoAccountEvent, *};
 
     /// Metadata change associated with a specific account.
     type AccountMetadataChanged = MetadataChanged<AccountId>;
@@ -966,15 +966,18 @@ mod domain {
 
     #[model]
     mod model {
-        use super::*;
-        use crate::account::AccountId;
-        use crate::kaigi::{KaigiId, KaigiPrivacyMode, KaigiRelayHealthStatus};
-        use crate::soranet::ticket::TicketEnvelopeV1;
-        use crate::{DataSpaceId, LaneId};
         use iroha_crypto::Hash;
         use norito::streaming::{
             Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute, SoranetAccessKind,
             SoranetChannelId, SoranetRoute, SoranetStreamTag,
+        };
+
+        use super::*;
+        use crate::{
+            DataSpaceId, LaneId,
+            account::AccountId,
+            kaigi::{KaigiId, KaigiPrivacyMode, KaigiRelayHealthStatus},
+            soranet::ticket::TicketEnvelopeV1,
         };
 
         /// Event indicate that owner of the [`Domain`] is changed
@@ -2066,7 +2069,6 @@ impl DataEvent {
 
 #[allow(unused_imports)]
 pub mod prelude {
-    pub use super::bridge::{BridgeEvent, BridgeEventSet};
     pub use super::{
         DataEvent, HasOrigin, MetadataChanged,
         account::{AccountEvent, AccountEventSet, AccountPermissionChanged, AccountRoleChanged},
@@ -2075,6 +2077,7 @@ pub mod prelude {
             AssetDefinitionMintabilityChanged, AssetDefinitionOwnerChanged,
             AssetDefinitionTotalQuantityChanged, AssetEvent, AssetEventSet, AssetMetadataChanged,
         },
+        bridge::{BridgeEvent, BridgeEventSet},
         confidential::{
             ConfidentialEvent, ConfidentialEventSet, ConfidentialShielded, ConfidentialTransferred,
             ConfidentialUnshielded,

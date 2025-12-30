@@ -33,8 +33,11 @@ use iroha_data_model::{
     },
 };
 use iroha_primitives::numeric::Numeric;
-use iroha_torii::filter::{Pagination, QueryEnvelope};
-use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
+use iroha_torii::{
+    MaybeTelemetry, OnlinePeersProvider, Torii,
+    filter::{Pagination, QueryEnvelope},
+    test_utils,
+};
 use nonzero_ext::nonzero;
 use norito::json::{self, Map, Value};
 use tokio::sync::{broadcast, watch};

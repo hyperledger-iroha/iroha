@@ -1,10 +1,11 @@
 //! Demonstrates a conditional asset transfer using IVM host syscalls.
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
-use ivm::kotodama::wide as kwide;
-use ivm::{IVM, VMError, encoding, host::IVMHost, instruction, syscalls};
-use std::any::Any;
+use ivm::{IVM, VMError, encoding, host::IVMHost, instruction, kotodama::wide as kwide, syscalls};
 
 #[derive(Clone)]
 struct AssetHost {

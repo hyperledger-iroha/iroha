@@ -7,7 +7,10 @@ use std::{
 };
 
 use hex::encode;
-use norito::{core::NoritoSerialize, json::Map, json::Value, json::to_string_pretty};
+use norito::{
+    core::NoritoSerialize,
+    json::{Map, Value, to_string_pretty},
+};
 use sorafs_manifest::{
     CapacityMetadataEntry,
     governance::{

@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use eyre::{Result, WrapErr};
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     data_model::{Level, asset::AssetId, prelude::*},
@@ -14,8 +15,6 @@ use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
-
-use integration_tests::sandbox;
 
 use crate::triggers::get_asset_value;
 

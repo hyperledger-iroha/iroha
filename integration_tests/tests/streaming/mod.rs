@@ -1,7 +1,6 @@
 //! Norito Streaming integration test helpers and vectors.
 
 use core::convert::TryFrom;
-
 use std::path::PathBuf;
 
 use hex::encode as hex_encode;
@@ -441,11 +440,12 @@ pub fn seed_viewer_negotiation(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::streaming::{
         CapabilityFlags, CapabilityRole, HpkeSuite, PrivacyBucketGranularity,
         TransportCapabilityResolution,
     };
+
+    use super::*;
 
     #[test]
     fn baseline_snapshot_matches_golden_fixture() {

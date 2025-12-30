@@ -3,14 +3,14 @@
 mod config;
 pub mod fslock_ports;
 
-use core::{fmt, time::Duration};
-use std::io::{Read, Seek, SeekFrom};
+use core::{fmt, future::Future, time::Duration};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     ffi::OsString,
     fs,
     hash::{Hash, Hasher},
+    io::{Read, Seek, SeekFrom},
     iter,
     net::TcpListener,
     num::NonZero,
@@ -26,7 +26,6 @@ use std::{
 
 use color_eyre::eyre::{Context, Report, Result, eyre};
 pub use config::chain_id;
-use core::future::Future;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
@@ -4537,8 +4536,9 @@ impl Drop for PeerStderrBuffer {
 
 #[cfg(test)]
 mod post_genesis_liveness_tests {
-    use super::*;
     use tokio::sync::broadcast;
+
+    use super::*;
 
     #[tokio::test]
     async fn detects_none_when_timer_expires() {
@@ -4583,8 +4583,9 @@ mod post_genesis_liveness_tests {
 
 #[cfg(test)]
 mod diagnostics_tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn snapshot_dir_entries_are_sorted_and_truncated() {
@@ -4721,8 +4722,9 @@ mod sora_profile_tests {
 
 #[cfg(test)]
 mod retry_backoff_tests {
-    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     #[tokio::test]
     async fn retry_with_backoff_for_succeeds_before_timeout() {
@@ -5018,20 +5020,6 @@ pub async fn once_blocks_sync(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_config::parameters::defaults;
-    use iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params;
-    use iroha_crypto::Algorithm;
-    use iroha_data_model::block::{
-        decode_framed_signed_block, decode_versioned_signed_block,
-        deframe_versioned_signed_block_bytes,
-    };
-    use iroha_data_model::isi::Instruction;
-    use iroha_data_model::isi::SetParameter;
-    use iroha_data_model::parameter::{Parameter, system::consensus_metadata};
-    use iroha_data_model::transaction::Executable;
-    use iroha_version::{Version, codec::EncodeVersioned};
-    use norito::json::Value as JsonValue;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::{
@@ -5046,9 +5034,26 @@ mod tests {
         thread,
         time::Duration,
     };
+
+    use iroha_config::parameters::defaults;
+    use iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params;
+    use iroha_crypto::Algorithm;
+    use iroha_data_model::{
+        block::{
+            decode_framed_signed_block, decode_versioned_signed_block,
+            deframe_versioned_signed_block_bytes,
+        },
+        isi::{Instruction, SetParameter},
+        parameter::{Parameter, system::consensus_metadata},
+        transaction::Executable,
+    };
+    use iroha_version::{Version, codec::EncodeVersioned};
+    use norito::json::Value as JsonValue;
     use tempfile::tempdir;
     use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
     use toml::Value as TomlValue;
+
+    use super::*;
 
     static LOG_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
     /// Serializes async tests that override `TEST_NETWORK_BIN_*` variables so they

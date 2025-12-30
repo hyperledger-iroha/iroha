@@ -3,8 +3,7 @@
 //!   cargo run -p ivm --bin gen_header_doc -- --write
 //!   cargo run -p ivm --bin gen_header_doc -- --check
 
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED HEADER POLICY -->";
 const END: &str = "<!-- END GENERATED HEADER POLICY -->";

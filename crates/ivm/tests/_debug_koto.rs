@@ -1,7 +1,6 @@
 //! Temporary debug to inspect compiled words for specific snippets
 
-use ivm::kotodama::compiler::Compiler;
-use ivm::{encoding, instruction::wide};
+use ivm::{encoding, instruction::wide, kotodama::compiler::Compiler};
 
 #[test]
 fn debug_create_nfts_and_set_detail_words() {

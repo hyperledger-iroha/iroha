@@ -1,15 +1,20 @@
 //! Unit tests validating the deterministic IPA and polynomial opening flow.
 
+use core::num::NonZeroUsize;
+
 use super::*;
 #[cfg(feature = "goldilocks_backend")]
 use crate::backend::IpaGroup;
-use crate::backend::bn254::{self as bn254, Bn254Backend};
 #[cfg(feature = "goldilocks_backend")]
 use crate::backend::goldilocks::{self as gold, GoldilocksBackend};
-use crate::backend::pallas::{self as pallas, PallasBackend};
-use crate::errors::Error;
-use crate::norito_helpers as nh;
-use core::num::NonZeroUsize;
+use crate::{
+    backend::{
+        bn254::{self as bn254, Bn254Backend},
+        pallas::{self as pallas, PallasBackend},
+    },
+    errors::Error,
+    norito_helpers as nh,
+};
 
 fn sample_pallas_coeffs(n: usize) -> Vec<pallas::Scalar> {
     (0..n)

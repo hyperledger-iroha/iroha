@@ -5,18 +5,20 @@ use std::{convert::TryInto, str::FromStr};
 
 use hex;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-use norito::{json, json::JsonSerialize, json::Value};
-
-use crate::{
-    account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
-    domain::DomainId,
-    name::Name,
+use norito::{
+    json,
+    json::{JsonSerialize, Value},
 };
 
 use super::{
     AccountAddressError::*, COMPRESSED_BASE_U8, COMPRESSED_CHECKSUM_LEN, COMPRESSED_SENTINEL,
     CONTROLLER_MULTISIG_TAG, CONTROLLER_SINGLE_KEY_TAG, compressed_alphabet, compressed_to_digits,
     default_domain_guard, default_domain_name,
+};
+use crate::{
+    account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
+    domain::DomainId,
+    name::Name,
 };
 
 /// Default IH58 prefix used for deterministic vectors.
@@ -981,9 +983,10 @@ impl fmt::Display for AddressVectorBundle {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::account::address::{AccountAddress, AccountAddressFormat};
-    use proptest::prelude::*;
 
     #[test]
     fn json_value_serialises_borrowed_inputs() {

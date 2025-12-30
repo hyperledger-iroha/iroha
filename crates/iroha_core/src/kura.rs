@@ -27,32 +27,32 @@ use iroha_config::{
     },
 };
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::decode_framed_signed_block;
-use iroha_data_model::merge::MergeLedgerEntry;
-use iroha_data_model::transaction::signed::TransactionEntrypoint;
+#[cfg(test)]
+use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::{
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, SignedBlock, decode_framed_signed_block},
     consensus::{CommitCertificate, ValidatorSetCheckpoint},
+    merge::MergeLedgerEntry,
     peer::PeerId,
+    transaction::signed::TransactionEntrypoint,
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_logger::prelude::*;
 #[cfg(test)]
 use iroha_primitives::time::TimeSource;
-use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use norito::core::{Header, MAGIC};
-use norito::derive::JsonDeserialize;
-use norito::json::Value as JsonValue;
+use norito::{
+    codec::{Decode, Encode},
+    derive::JsonDeserialize,
+    json::Value as JsonValue,
+};
 use parking_lot::Mutex;
 
-use crate::block::CommittedBlock;
-use crate::commit_roster_journal::CommitRosterJournal;
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
-#[cfg(test)]
-use iroha_data_model::block::decode_versioned_signed_block;
+use crate::{block::CommittedBlock, commit_roster_journal::CommitRosterJournal};
 
 impl From<CommittedBlock> for Arc<SignedBlock> {
     fn from(value: CommittedBlock) -> Self {
@@ -3712,8 +3712,7 @@ mod tests {
         borrow::Cow,
         fs,
         io::{Seek, SeekFrom, Write},
-        num::NonZeroU32,
-        num::NonZeroUsize,
+        num::{NonZeroU32, NonZeroUsize},
         str::FromStr,
         sync::Arc,
         thread,
@@ -3729,13 +3728,13 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf, bls_normal_pop_prove};
-    use iroha_data_model::merge::MergeQuorumCertificate;
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
         consensus::CommitCertificate,
         domain::{Domain, DomainId},
         isi::{Log, Upgrade},
+        merge::MergeQuorumCertificate,
         nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId},
         peer::PeerId,
         prelude::{Executor, IvmBytecode},
@@ -3750,9 +3749,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::prelude::{AcceptedTransaction, StateReadOnly, World};
     use crate::{
         block::{BlockBuilder, ValidBlock},
+        prelude::{AcceptedTransaction, StateReadOnly, World},
         query::store::LiveQueryStore,
         smartcontracts::Registrable,
         state::State,

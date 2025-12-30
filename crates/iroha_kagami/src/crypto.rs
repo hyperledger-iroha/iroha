@@ -191,9 +191,10 @@ impl Args {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{Algorithm, AlgorithmArg};
     // Bring `ValueEnum` into scope so `AlgorithmArg::value_variants()` is callable in this module.
     use clap::ValueEnum;
+
+    use super::{Algorithm, AlgorithmArg};
 
     #[test]
     fn algorithm_arg_displays_as_algorithm() {

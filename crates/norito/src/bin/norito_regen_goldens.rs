@@ -1,7 +1,9 @@
-use std::env;
-use std::error::Error;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    env,
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use norito::json;
 

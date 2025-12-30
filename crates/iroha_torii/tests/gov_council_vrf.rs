@@ -1,17 +1,17 @@
 //! VRF-backed council derivation tests (feature: `gov_vrf` + `app_api`).
 #![cfg(all(feature = "app_api", feature = "gov_vrf"))]
 
-use norito::json;
 use std::sync::Arc;
 
 use axum::response::IntoResponse;
 use http_body_util::BodyExt as _;
-use iroha_core::governance::parliament;
 use iroha_core::{
+    governance::parliament,
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World},
 };
+use norito::json;
 
 #[tokio::test]
 async fn vrf_derive_orders_desc_and_tie_breaks_by_account() {

@@ -365,7 +365,7 @@ impl ShutdownSignal {
 /// use std::time::Duration;
 ///
 /// use iroha_futures::supervisor::{
-///     spawn_os_thread_as_future, Child, OnShutdown, ShutdownSignal, Supervisor,
+///     Child, OnShutdown, ShutdownSignal, Supervisor, spawn_os_thread_as_future,
 /// };
 ///
 /// fn spawn_heavy_work(shutdown_signal: ShutdownSignal) -> Child {

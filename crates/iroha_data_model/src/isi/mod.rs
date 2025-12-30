@@ -15,14 +15,17 @@
 //!   closed, visitable set. Despite the name, they are not heap boxes; they are
 //!   plain tagged unions that implement [`crate::isi::Instruction`].
 
-use std::{any::Any, cmp::Ordering, fmt::Debug};
-use std::{format, string::String, vec::Vec};
+use std::{
+    any::Any,
+    cmp::Ordering,
+    fmt::Debug,
+    format,
+    string::String,
+    sync::{OnceLock, RwLock, RwLockReadGuard},
+    vec::Vec,
+};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
-
-use std::sync::{OnceLock, RwLock, RwLockReadGuard};
-
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use derive_more::{Constructor, Display};
 use iroha_schema::{IntoSchema, Metadata as SchemaMetadata, UnnamedFieldsMeta};
 use norito::codec::{Decode, Encode};
@@ -49,9 +52,8 @@ pub mod governance;
 /// ```rust
 /// use iroha_data_model::prelude::*;
 ///
-/// let instruction: InstructionBox = InstructionBox::from(
-///     Log::new(Level::INFO, "trait objects".into())
-/// );
+/// let instruction: InstructionBox =
+///     InstructionBox::from(Log::new(Level::INFO, "trait objects".into()));
 /// ```
 #[repr(transparent)]
 pub struct InstructionBox(Box<dyn Instruction>);
@@ -1378,8 +1380,7 @@ enum_type! {
 pub mod error {
     //! Module containing errors that can occur during instruction evaluation
 
-    use std::fmt::Debug;
-    use std::{boxed::Box, format, string::String, vec::Vec};
+    use std::{boxed::Box, fmt::Debug, format, string::String, vec::Vec};
 
     use derive_more::Display;
     use iroha_data_model_derive::model;
@@ -1966,6 +1967,7 @@ pub mod prelude {
         RollbackOracleChange, SetKeyValue, SetKeyValueBox, SetParameter, SubmitOracleObservation,
         Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister,
         UnregisterBox, Upgrade, VoteOracleChangeStage,
+        bridge::{RecordBridgeReceipt, SubmitBridgeProof},
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
             SetPoseidonParamsLifecycle,
@@ -1998,15 +2000,14 @@ pub mod prelude {
         },
         staking::{ActivatePublicLaneValidator, ExitPublicLaneValidator},
     };
-
-    pub use super::bridge::{RecordBridgeReceipt, SubmitBridgeProof};
 }
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::const_vec::ConstVec;
+
     use super::*;
     use crate::prelude::*;
-    use iroha_primitives::const_vec::ConstVec;
     fn run_or_skip() -> bool {
         std::env::var("IROHA_RUN_IGNORED").ok().as_deref() == Some("1")
     }

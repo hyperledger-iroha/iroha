@@ -25,11 +25,10 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
 
 #[test]
 fn register_contract_code_bytes_stores_and_idempotent() {
-    use iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes;
-    use iroha_data_model::permission;
-    use iroha_data_model::prelude::*;
-
     use iroha_core::smartcontracts::Execute;
+    use iroha_data_model::{
+        isi::smart_contract_code::RegisterSmartContractBytes, permission, prelude::*,
+    };
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -100,10 +99,12 @@ fn register_contract_code_bytes_stores_and_idempotent() {
 #[test]
 fn register_contract_code_bytes_respects_size_cap() {
     use iroha_core::smartcontracts::Execute;
-    use iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes;
-    use iroha_data_model::parameter::custom::{CustomParameter, CustomParameterId};
-    use iroha_data_model::permission;
-    use iroha_data_model::prelude::*;
+    use iroha_data_model::{
+        isi::smart_contract_code::RegisterSmartContractBytes,
+        parameter::custom::{CustomParameter, CustomParameterId},
+        permission,
+        prelude::*,
+    };
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();

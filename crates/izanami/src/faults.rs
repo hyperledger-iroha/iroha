@@ -17,12 +17,11 @@ use iroha_config::base::toml::WriteExt;
 use iroha_data_model::prelude::*;
 use iroha_genesis::GenesisBlock;
 use iroha_test_network::NetworkPeer;
+use iroha_test_samples::ALICE_ID;
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use tokio::{task, time::sleep};
 use toml::Table;
 use tracing::{debug, error, info, warn};
-
-use iroha_test_samples::ALICE_ID;
 
 /// Configuration for periodic fault injection.
 #[derive(Clone, Debug)]
@@ -622,7 +621,6 @@ impl FaultPeer for NetworkPeer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{
         collections::HashSet,
         sync::{Arc, Mutex as StdMutex},
@@ -631,6 +629,8 @@ mod tests {
     use iroha_primitives::unique_vec::UniqueVec;
     use iroha_test_network::genesis_factory;
     use tokio::{sync::Mutex as AsyncMutex, time::timeout};
+
+    use super::*;
 
     #[derive(Debug, Clone, Default)]
     struct MockClient {

@@ -11,8 +11,7 @@ use std::{
     time::Duration,
 };
 
-use iroha_config::parameters::defaults;
-use iroha_config::parameters::defaults::zk::fastpq;
+use iroha_config::parameters::{defaults, defaults::zk::fastpq};
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
     queue::{Queue, TransactionGuard},
@@ -291,9 +290,10 @@ pub fn deploy_and_activate_request_json(
 /// The configuration mirrors the helpers used across integration tests and sets required
 /// fields for `Genesis`, `Torii`, and `Sumeragi` to current structures.
 pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
-    use iroha_config::base::WithOrigin;
-    use iroha_config::parameters::actual as A;
-    use iroha_config::parameters::defaults;
+    use iroha_config::{
+        base::WithOrigin,
+        parameters::{actual as A, defaults},
+    };
     use iroha_crypto::{
         KeyPair,
         soranet::handshake::{
@@ -456,6 +456,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             api_fee_amount: None,
             api_fee_receiver: None,
             api_allow_cidrs: Vec::new(),
+            peer_telemetry_urls: Vec::new(),
             soranet_privacy_ingest: A::SoranetPrivacyIngest::default(),
             strict_addresses: false,
             debug_match_filters: false,

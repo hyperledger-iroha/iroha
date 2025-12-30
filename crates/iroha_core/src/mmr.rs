@@ -1,8 +1,9 @@
 //! Minimal Merkle Mountain Range (MMR) accumulator for block hashes.
 
+use std::collections::VecDeque;
+
 use iroha_crypto::HashOf;
 use iroha_data_model::block::BlockHeader;
-use std::collections::VecDeque;
 
 /// Stored node in the MMR (either leaf or peak).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,8 +82,9 @@ fn hash_pair(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::HashOf;
+
+    use super::*;
 
     #[test]
     fn computes_root_for_two_leaves() {

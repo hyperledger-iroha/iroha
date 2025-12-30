@@ -8,8 +8,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-use iroha_data_model::block::BlockHeader;
-use iroha_data_model::proof::ProofBox;
+use iroha_data_model::{block::BlockHeader, proof::ProofBox};
 use nonzero_ext::nonzero;
 
 #[test]

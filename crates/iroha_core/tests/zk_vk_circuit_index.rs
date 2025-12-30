@@ -2,6 +2,8 @@
 #![cfg(feature = "zk-tests")]
 //! Verifying-key registry indexing by `(circuit_id, version)`.
 
+use std::sync::Arc;
+
 use iroha_core::{
     executor::Executor,
     kura::Kura,
@@ -14,8 +16,11 @@ use iroha_crypto::Hash as CryptoHash;
 use iroha_data_model::{
     ValidationFail,
     confidential::ConfidentialStatus,
-    isi::error::{InstructionExecutionError, InvalidParameterError},
-    isi::{Grant, verifying_keys},
+    isi::{
+        Grant,
+        error::{InstructionExecutionError, InvalidParameterError},
+        verifying_keys,
+    },
     permission::Permission,
     prelude::InstructionBox,
     proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
@@ -25,7 +30,6 @@ use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::sync::Arc;
 
 #[allow(clippy::disallowed_types)]
 type PreverifiedMap = std::collections::BTreeMap<[u8; 32], bool>;

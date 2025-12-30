@@ -54,8 +54,9 @@ fn build_rng(seed: &HedgedRngSeed, personalization: &[u8], os_entropy: &[u8; 32]
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rand::RngCore;
+
+    use super::*;
 
     #[test]
     fn personalization_affects_stream() {

@@ -3,16 +3,15 @@
 use std::{borrow::Cow, io::Write, path::PathBuf, sync::Arc};
 
 use eyre::{Result, eyre};
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_config::base::toml::WriteExt as _;
 use iroha_genesis::{GenesisBuilder, RawGenesisTransaction, init_instruction_registry};
 use iroha_primitives::numeric::NumericSpec;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-use tokio::time::timeout;
-
-use integration_tests::sandbox;
 use tempfile::NamedTempFile;
+use tokio::time::timeout;
 use toml::Table;
 
 fn ivm_build_profile_exists() -> bool {

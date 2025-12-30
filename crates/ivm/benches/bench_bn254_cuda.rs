@@ -1,8 +1,11 @@
 //! Benchmarks for BN254 field operations comparing CPU backends against the CUDA kernels.
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use ivm::bn254_vec::{self as field_vec, FieldElem};
-use ivm::field_dispatch::{self, FieldArithmetic, ScalarField};
 use std::hint::black_box;
+
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use ivm::{
+    bn254_vec::{self as field_vec, FieldElem},
+    field_dispatch::{self, FieldArithmetic, ScalarField},
+};
 
 #[cfg(feature = "cuda")]
 fn has_cuda_backend() -> bool {

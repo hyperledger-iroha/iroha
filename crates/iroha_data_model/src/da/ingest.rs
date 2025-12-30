@@ -1,13 +1,16 @@
-use crate::da::types::{
-    BlobClass, BlobCodec, BlobDigest, Compression, DaRentQuote, ErasureProfile, ExtraMetadata,
-    RetentionPolicy, StorageTicketId,
-};
-use crate::nexus::LaneId;
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{PublicKey, Signature};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use crate::{
+    da::types::{
+        BlobClass, BlobCodec, BlobDigest, Compression, DaRentQuote, ErasureProfile, ExtraMetadata,
+        RetentionPolicy, StorageTicketId,
+    },
+    nexus::LaneId,
+};
 
 /// Summary of the 2D erasure layout captured in DA manifests/receipts.
 #[derive(

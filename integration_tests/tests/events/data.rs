@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
-use integration_tests::sync::get_status_with_retry;
+use integration_tests::{sandbox, sync::get_status_with_retry};
 use iroha::data_model::{
     events::{
         EventBox,
@@ -19,8 +19,6 @@ use iroha_executor_data_model::permission::{
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use tokio::{task::spawn_blocking, time::Instant};
-
-use integration_tests::sandbox;
 
 fn produce_instructions() -> Vec<InstructionBox> {
     let domains = (0..4)

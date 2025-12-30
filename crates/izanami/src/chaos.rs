@@ -360,13 +360,15 @@ struct MetricsSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::{FaultToggles, NexusProfile};
+    use std::io;
+
     use color_eyre::eyre::{WrapErr, eyre};
     use iroha_data_model::{isi::SetParameter, parameter::SumeragiParameter};
     use iroha_test_network::init_instruction_registry;
-    use std::io;
     use tokio::time::timeout;
+
+    use super::*;
+    use crate::config::{FaultToggles, NexusProfile};
 
     fn allow_net_for_tests() -> bool {
         std::env::var("IZANAMI_ALLOW_NET")

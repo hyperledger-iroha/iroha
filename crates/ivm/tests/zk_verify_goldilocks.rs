@@ -1,9 +1,8 @@
 #![cfg(feature = "ivm_zk_tests")]
 
-use iroha_zkp_halo2::backend::goldilocks::GoldilocksBackend;
 use iroha_zkp_halo2::{
     GoldilocksParams, GoldilocksPolynomial, GoldilocksScalar, OpenVerifyEnvelope, Transcript,
-    norito_helpers as nh,
+    backend::goldilocks::GoldilocksBackend, norito_helpers as nh,
 };
 use ivm::{IVMHost, syscalls};
 

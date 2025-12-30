@@ -1,6 +1,8 @@
 #![allow(clippy::manual_div_ceil)]
-use norito::codec::{Decode as _, Encode as _};
-use norito::prelude::*;
+use norito::{
+    codec::{Decode as _, Encode as _},
+    prelude::*,
+};
 
 #[derive(Encode, Decode, PartialEq, Debug, iroha_schema::IntoSchema)]
 struct ViaPrelude(u64);

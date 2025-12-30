@@ -1,3 +1,13 @@
+use derive_more::{Constructor, Display, FromStr};
+use getset::{CopyGetters, Getters};
+use iroha_crypto::HashOf;
+use iroha_data_model_derive::model;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::derive::{JsonDeserialize, JsonSerialize};
+
+pub use self::model::SettlementId;
 use super::*;
 use crate::{
     Name,
@@ -5,17 +15,6 @@ use crate::{
     metadata::Metadata,
     prelude::{AccountId, AssetDefinitionId, Numeric},
 };
-use derive_more::{Constructor, Display, FromStr};
-use getset::{CopyGetters, Getters};
-use iroha_crypto::HashOf;
-use iroha_data_model_derive::model;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
-#[cfg(feature = "json")]
-use norito::derive::{JsonDeserialize, JsonSerialize};
-
-pub use self::model::SettlementId;
 
 #[model]
 mod model {

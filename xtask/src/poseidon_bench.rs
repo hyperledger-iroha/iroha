@@ -1,5 +1,3 @@
-use norito::json;
-use rand::{RngCore, SeedableRng, rngs::StdRng};
 use std::{
     error::Error,
     fs,
@@ -7,6 +5,9 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+
+use norito::json;
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use time::OffsetDateTime;
 
 #[derive(Clone, Debug)]
@@ -617,9 +618,10 @@ fn ops_per_second(total_ops: usize, elapsed: Duration) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::json::Value;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[test]
     fn inputs_are_deterministic() {

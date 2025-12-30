@@ -497,8 +497,9 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_primitives::soradns::derive_gateway_hosts;
+
+    use super::*;
 
     #[test]
     fn gateway_host_set_matches_bindings() {

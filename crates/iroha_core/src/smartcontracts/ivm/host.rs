@@ -8,40 +8,6 @@
 //!
 //! Helper syscalls that do not touch WSV are forwarded to the IVM default host.
 
-#[cfg(feature = "telemetry")]
-use crate::telemetry::StateTelemetry;
-use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
-use iroha_data_model::{
-    DataSpaceId, ValidationFail,
-    errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
-    isi::zk as DMZk,
-    isi::{
-        Burn, BurnBox, InstructionBox, Mint, MintBox, Register, RegisterBox, SetKeyValue,
-        SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
-        TransferBox, Unregister, UnregisterBox, smart_contract_code as scode,
-    },
-    nexus::{
-        AxtBinding, AxtDescriptor as ModelAxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
-        AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofFragment,
-        AxtRejectContext, AxtRejectReason, AxtReplayRecord, AxtTouchFragment,
-        AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
-        TouchManifest as ModelTouchManifest, proof_matches_manifest,
-    },
-    prelude::*,
-    proof::{VerifyingKeyId, VerifyingKeyRecord},
-    query::parameters::ForwardCursor,
-    zk::BackendTag,
-};
-use ivm::{
-    self, CoreHost as IvmCodecHost, IVM, PointerType,
-    analysis::{self, AmxLimits, ProgramAnalysis},
-    axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
-    host::IVMHost,
-    is_type_allowed_for_policy,
-};
-use mv::storage::StorageReadOnly;
-use norito::{codec::Decode as NoritoDecode, decode_from_bytes, streaming::CapabilityFlags};
-use sha2::{Digest, Sha256};
 use std::{
     any::Any,
     collections::{BTreeMap, VecDeque},
@@ -52,10 +18,43 @@ use std::{
     sync::Arc,
 };
 
-use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly, current_axt_slot_from_block};
-use iroha_data_model::prelude::AccountId;
+use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
+use iroha_data_model::{
+    DataSpaceId, ValidationFail,
+    errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
+    isi::{
+        Burn, BurnBox, InstructionBox, Mint, MintBox, Register, RegisterBox, SetKeyValue,
+        SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
+        TransferBox, Unregister, UnregisterBox, smart_contract_code as scode, zk as DMZk,
+    },
+    nexus::{
+        AxtBinding, AxtDescriptor as ModelAxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
+        AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofFragment,
+        AxtRejectContext, AxtRejectReason, AxtReplayRecord, AxtTouchFragment,
+        AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
+        TouchManifest as ModelTouchManifest, proof_matches_manifest,
+    },
+    prelude::{AccountId, *},
+    proof::{VerifyingKeyId, VerifyingKeyRecord},
+    query::parameters::ForwardCursor,
+    zk::BackendTag,
+};
 #[cfg(test)]
 use ivm::VMError;
+use ivm::{
+    self, CoreHost as IvmCodecHost, IVM, PointerType,
+    analysis::{self, AmxLimits, ProgramAnalysis},
+    axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
+    host::IVMHost,
+    is_type_allowed_for_policy,
+};
+use mv::storage::StorageReadOnly;
+use norito::{codec::Decode as NoritoDecode, decode_from_bytes, streaming::CapabilityFlags};
+use sha2::{Digest, Sha256};
+
+use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly, current_axt_slot_from_block};
+#[cfg(feature = "telemetry")]
+use crate::telemetry::StateTelemetry;
 
 const AXT_PROOF_CACHE_HIT: &str = "hit";
 const AXT_PROOF_CACHE_MISS: &str = "miss";
@@ -3470,20 +3469,24 @@ impl IVMHost for CoreHost {
 
 #[cfg(test)]
 mod pointer_abi_tests {
-    use super::tests::{begin_axt_envelope, make_policy_snapshot, norito_blob, store_tlv};
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
     use core::str::FromStr;
+
     use iroha_crypto::{Hash as IrohaHash, KeyPair};
     use iroha_data_model::smart_contract::manifest::ContractManifest;
     use iroha_primitives::json::Json;
     use ivm::{
         axt::{GroupBinding, HandleBudget, HandleSubject, SpendOp},
         syscalls as ivm_sys,
+    };
+
+    use super::{
+        tests::{begin_axt_envelope, make_policy_snapshot, norito_blob, store_tlv},
+        *,
+    };
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
     };
 
     pub(super) fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -4705,18 +4708,22 @@ fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use iroha_data_model::{
+        proof::{VerifyingKeyBox, VerifyingKeyId},
+        zk::BackendTag,
+    };
+    use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
+    use norito::codec::Encode as NoritoEncode;
+
     use super::*;
-    use crate::smartcontracts::ivm::host::pointer_abi_tests::make_tlv;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
+        smartcontracts::ivm::host::pointer_abi_tests::make_tlv,
         state::{State, World},
     };
-    use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyId};
-    use iroha_data_model::zk::BackendTag;
-    use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
-    use norito::codec::Encode as NoritoEncode;
-    use std::collections::BTreeMap;
 
     pub(super) fn norito_blob<T: NoritoEncode>(val: &T) -> Vec<u8> {
         val.encode()

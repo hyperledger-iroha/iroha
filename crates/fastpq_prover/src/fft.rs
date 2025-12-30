@@ -9,15 +9,16 @@
 use core::convert::TryFrom;
 use std::sync::MutexGuard;
 
-use crate::gpu;
-use crate::{
-    backend,
-    cyclotomic::{self, Domain},
-    poseidon::FIELD_MODULUS,
-};
 use fastpq_isi::StarkParameterSet;
 use rayon::{join, prelude::*};
 use tracing::{debug, info, warn};
+
+use crate::{
+    backend,
+    cyclotomic::{self, Domain},
+    gpu,
+    poseidon::FIELD_MODULUS,
+};
 
 /// Column-oriented FFT planner.
 #[derive(Clone)]
@@ -945,14 +946,15 @@ fn build_domain_cache(root: u64, max_log: u32) -> Vec<Domain> {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::catch_unwind;
+
+    use fastpq_isi::CANONICAL_PARAMETER_SETS;
+    use proptest::{collection::vec as pvec, prelude::*};
+
     use super::*;
     use crate::backend;
     #[cfg(feature = "fastpq-gpu")]
     use crate::gpu::{self, GpuError};
-    use fastpq_isi::CANONICAL_PARAMETER_SETS;
-    use proptest::collection::vec as pvec;
-    use proptest::prelude::*;
-    use std::panic::catch_unwind;
 
     const MAX_TRACE_LOG: u32 = 4;
 

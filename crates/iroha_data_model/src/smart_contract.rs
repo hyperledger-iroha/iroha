@@ -363,8 +363,9 @@ pub mod manifest {
 
     #[cfg(test)]
     mod manifest_signing_tests {
-        use super::*;
         use iroha_crypto::KeyPair;
+
+        use super::*;
 
         #[test]
         fn signature_payload_excludes_provenance_and_verifies() {

@@ -7,9 +7,9 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World},
 };
-use iroha_data_model::block::BlockHeader;
-use iroha_data_model::events::data::governance::GovernanceEvent;
-use iroha_data_model::isi::governance::CastPlainBallot;
+use iroha_data_model::{
+    block::BlockHeader, events::data::governance::GovernanceEvent, isi::governance::CastPlainBallot,
+};
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 

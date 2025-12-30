@@ -1,6 +1,7 @@
 //! Asset definitions and builders.
 
 use core::fmt;
+
 use derive_more::Display;
 use getset::{CopyGetters, Getters};
 use iroha_crypto::Hash;
@@ -12,13 +13,11 @@ use norito::codec::{Decode, Encode};
 use norito::json::Value;
 
 pub use self::model::*;
-
+use super::id::AssetDefinitionId;
 use crate::{
     HasMetadata, Identifiable, Registered, Registrable, account::prelude::*, ipfs::IpfsPath,
     isi::error::MintabilityError, metadata::Metadata,
 };
-
-use super::id::AssetDefinitionId;
 
 #[model]
 mod model {
@@ -710,11 +709,13 @@ impl HasMetadata for NewAssetDefinition {
 
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
-    use super::*;
-    use crate::{Name, domain::DomainId, metadata::Metadata};
+    use std::str::FromStr;
+
     use iroha_crypto::Hash;
     use norito::json::{Arena, FastFromJson, TapeWalker};
-    use std::str::FromStr;
+
+    use super::*;
+    use crate::{Name, domain::DomainId, metadata::Metadata};
 
     #[test]
     fn new_asset_definition_json_roundtrip_preserves_policy() {

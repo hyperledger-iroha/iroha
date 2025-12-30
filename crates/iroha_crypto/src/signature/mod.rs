@@ -22,6 +22,7 @@ use std::{format, string::String, vec, vec::Vec};
 use derive_more::{Deref, DerefMut};
 use iroha_primitives::const_vec::ConstVec;
 use iroha_schema::{IntoSchema, TypeId};
+use norito::core::{self as ncore, DecodeFromSlice};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 
@@ -30,7 +31,6 @@ use crate::sm::Sm2Signature;
 use crate::{
     Error, HashOf, PrivateKey, PublicKey, PublicKeyFull, error::ParseError, ffi, hex_decode,
 };
-use norito::core::{self as ncore, DecodeFromSlice};
 
 ffi::ffi_item! {
     /// Represents a signature of the data (`Block` or `Transaction` for example).
@@ -478,9 +478,11 @@ mod tests {
 
     #[test]
     fn signature_norito_roundtrip_preserves_payload() {
-        use norito::NoritoDeserialize;
-        use norito::codec::{Decode, Encode};
-        use norito::core::DecodeFromSlice as _;
+        use norito::{
+            NoritoDeserialize,
+            codec::{Decode, Encode},
+            core::DecodeFromSlice as _,
+        };
 
         let payload = (0u8..32).collect::<Vec<_>>();
         let signature = Signature::from_bytes(&payload);

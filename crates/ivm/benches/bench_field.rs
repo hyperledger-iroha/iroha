@@ -1,12 +1,14 @@
 //! Benchmarks for field arithmetic and Poseidon hashing in IVM.
 use criterion::{BenchmarkId, Criterion};
-use ivm::bn254_vec::{self as field_vec, FieldElem};
 #[cfg(target_arch = "aarch64")]
 use ivm::field_dispatch::NeonField;
-use ivm::field_dispatch::{self, FieldArithmetic, ScalarField};
 #[cfg(target_arch = "x86_64")]
 use ivm::field_dispatch::{Avx2Field, Avx512Field, Sse2Field};
-use ivm::{poseidon2, poseidon6};
+use ivm::{
+    bn254_vec::{self as field_vec, FieldElem},
+    field_dispatch::{self, FieldArithmetic, ScalarField},
+    poseidon2, poseidon6,
+};
 
 fn available_backends() -> Vec<(&'static dyn FieldArithmetic, &'static str)> {
     let mut backends: Vec<(&'static dyn FieldArithmetic, &'static str)> =

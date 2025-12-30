@@ -1,11 +1,15 @@
 //! Configuration handling for the SoraNet relay daemon.
 
-use crate::{
-    capability::{self, ConstantRateMode, GreaseEntry},
-    constant_rate::{CONSTANT_RATE_CELL_BYTES, ConstantRateProfileName},
-    incentive_log::IncentiveLogConfig,
-    token_tool::read_revocation_file,
+use std::{
+    fmt, fs,
+    net::SocketAddr,
+    num::NonZeroU32,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime},
 };
+
 use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
 use iroha_crypto::soranet::{
@@ -20,19 +24,19 @@ use iroha_data_model::soranet::{
     privacy_metrics::SoranetPrivacyModeV1,
     vpn::{VPN_CELL_LEN, VpnExitClassV1, VpnRouteV1},
 };
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json;
-use soranet_pq::MlDsaSuite;
-use std::{
-    fmt, fs,
-    net::SocketAddr,
-    num::NonZeroU32,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
 };
+use soranet_pq::MlDsaSuite;
 use thiserror::Error;
+
+use crate::{
+    capability::{self, ConstantRateMode, GreaseEntry},
+    constant_rate::{CONSTANT_RATE_CELL_BYTES, ConstantRateProfileName},
+    incentive_log::IncentiveLogConfig,
+    token_tool::read_revocation_file,
+};
 
 const DEFAULT_SELF_SIGNED_SUBJECT: &str = "soranet-relay.local";
 const ML_KEM_768_PUBLIC_LEN: usize = 1_184;
@@ -837,8 +841,9 @@ impl json::JsonDeserialize for PowBindingVersion {
 
 #[cfg(test)]
 mod pow_binding_tests {
-    use super::*;
     use norito::json;
+
+    use super::*;
 
     #[test]
     fn pow_binding_version_json_roundtrip() {
@@ -2981,11 +2986,13 @@ pub(crate) fn parse_signature_id(id: &str) -> Option<capability::SignatureId> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use hex::FromHex;
+    use tempfile::NamedTempFile;
+
     use super::*;
     use crate::vpn::VpnOverlay;
-    use hex::FromHex;
-    use std::time::Duration;
-    use tempfile::NamedTempFile;
 
     fn write_config(json: &str) -> PathBuf {
         let file = NamedTempFile::new().expect("create temp file");

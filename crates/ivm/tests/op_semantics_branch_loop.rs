@@ -1,5 +1,4 @@
-use ivm::kotodama::wide as kwide;
-use ivm::{IVM, ProgramMetadata, encoding, instruction};
+use ivm::{IVM, ProgramMetadata, encoding, instruction, kotodama::wide as kwide};
 
 #[test]
 fn backward_branch_negative_offset_loop() {

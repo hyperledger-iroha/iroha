@@ -26,8 +26,7 @@ use iroha_config::parameters::{
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
 };
 use iroha_config_base::{env::MockEnv, read::ConfigReader};
-use iroha_data_model::account::AccountId;
-use iroha_data_model::name::Name;
+use iroha_data_model::{account::AccountId, name::Name};
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
 use url::Url;
@@ -368,6 +367,7 @@ fn minimal_config_snapshot() {
                     allow_cidrs: [],
                 },
                 api_allow_cidrs: [],
+                peer_telemetry_urls: [],
                 strict_addresses: true,
                 debug_match_filters: false,
                 preauth_max_connections: None,
@@ -1684,6 +1684,7 @@ fn minimal_config_snapshot() {
                     cold_retention_blocks: 0,
                     prune_batch_size: 128,
                     proof_mode: Optional,
+                    max_receipt_age: 86400s,
                     android_trust_anchors: [],
                 },
                 router: Router {
@@ -1799,9 +1800,10 @@ fn torii_strict_addresses_enabled_by_default() {
 
 #[test]
 fn nexus_lane_requires_alias() {
+    use std::num::NonZeroU32;
+
     use iroha_config::parameters::user::{LaneDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
-    use std::num::NonZeroU32;
 
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
@@ -1821,9 +1823,10 @@ fn nexus_lane_requires_alias() {
 
 #[test]
 fn nexus_rejects_zero_axt_slot_length() {
+    use std::num::NonZeroU32;
+
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
     use iroha_config_base::util::Emitter;
-    use std::num::NonZeroU32;
 
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
@@ -1867,9 +1870,10 @@ fn nexus_rejects_negative_axt_slot_length() {
 
 #[test]
 fn nexus_rejects_axt_clock_skew_above_slot_length() {
+    use std::num::NonZeroU32;
+
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
     use iroha_config_base::util::Emitter;
-    use std::num::NonZeroU32;
 
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
@@ -1897,9 +1901,10 @@ fn nexus_rejects_axt_clock_skew_above_slot_length() {
 
 #[test]
 fn nexus_rejects_zero_axt_replay_retention_slots() {
+    use std::num::NonZeroU32;
+
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
     use iroha_config_base::util::Emitter;
-    use std::num::NonZeroU32;
 
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
@@ -2171,12 +2176,13 @@ fn soranet_handshake_invalid_kem_suite_rejected() {
 
 #[test]
 fn routing_policy_dataspace_resolution() {
+    use std::num::NonZeroU32;
+
     use iroha_config::parameters::user::{
         DataSpaceDescriptor, LaneDescriptor, Nexus, RouteMatcher, RoutingPolicy, RoutingRule,
     };
     use iroha_config_base::util::Emitter;
     use iroha_data_model::nexus::DataSpaceId;
-    use std::num::NonZeroU32;
 
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
@@ -2219,9 +2225,10 @@ fn routing_policy_dataspace_resolution() {
 
 #[test]
 fn routing_policy_unknown_dataspace_rejected() {
+    use std::num::NonZeroU32;
+
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, RoutingPolicy};
     use iroha_config_base::util::Emitter;
-    use std::num::NonZeroU32;
 
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
@@ -2246,9 +2253,10 @@ fn routing_policy_unknown_dataspace_rejected() {
 
 #[test]
 fn lane_registry_rejects_zero_poll_interval() {
+    use std::{num::NonZeroU32, time::Duration};
+
     use iroha_config::parameters::user::{LaneDescriptor, LaneRegistryConfig, Nexus};
     use iroha_config_base::util::Emitter;
-    use std::{num::NonZeroU32, time::Duration};
 
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
@@ -2272,9 +2280,10 @@ fn lane_registry_rejects_zero_poll_interval() {
 
 #[test]
 fn governance_default_module_must_exist() {
+    use std::num::NonZeroU32;
+
     use iroha_config::parameters::user::{GovernanceCatalogConfig, LaneDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
-    use std::num::NonZeroU32;
 
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
@@ -2298,11 +2307,12 @@ fn governance_default_module_must_exist() {
 
 #[test]
 fn governance_catalog_trims_and_parses_modules() {
+    use std::{collections::BTreeMap, num::NonZeroU32};
+
     use iroha_config::parameters::user::{
         GovernanceCatalogConfig, GovernanceModule, LaneDescriptor, Nexus,
     };
     use iroha_config_base::util::Emitter;
-    use std::{collections::BTreeMap, num::NonZeroU32};
 
     let mut modules = BTreeMap::new();
     modules.insert(
@@ -2739,8 +2749,10 @@ fn pipeline_workers_env_parses() {
 
 #[test]
 fn logger_level_env_accepts_lowercase() {
-    use iroha_config::logger::Level;
-    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config::{
+        logger::Level,
+        parameters::{actual::Root as Actual, user::Root as User},
+    };
     use iroha_config_base::{env::MockEnv, read::ConfigReader};
 
     let env = MockEnv::new().set("LOG_LEVEL", "info");

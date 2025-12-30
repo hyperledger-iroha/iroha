@@ -2,8 +2,7 @@
 //! byte to `VERSION_MINOR = 0x00`; layout selection lives in the header flags
 //! instead of the minor version.
 
-use norito::core::header_flags;
-use norito::{from_bytes, to_bytes};
+use norito::{core::header_flags, from_bytes, to_bytes};
 
 #[test]
 fn decode_rejects_nonzero_minor_version() {

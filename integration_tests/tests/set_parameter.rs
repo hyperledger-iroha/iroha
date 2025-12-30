@@ -1,14 +1,13 @@
 //! Integration tests for governance parameter updates.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::{
     parameter::{BlockParameter, Parameter, Parameters, SmartContractParameter},
     prelude::*,
 };
 use iroha_test_network::*;
 use nonzero_ext::nonzero;
-
-use integration_tests::sandbox;
 
 #[test]
 fn can_change_parameter_value() -> Result<()> {

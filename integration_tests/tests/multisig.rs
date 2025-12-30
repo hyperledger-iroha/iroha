@@ -7,6 +7,7 @@ use std::{
 };
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     crypto::KeyPair,
@@ -19,8 +20,6 @@ use iroha_test_samples::{
     ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in,
 };
 use tokio::runtime::Runtime;
-
-use integration_tests::sandbox;
 
 fn start_network(
     builder: NetworkBuilder,

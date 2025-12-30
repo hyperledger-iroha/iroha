@@ -8,30 +8,31 @@
 
 #![allow(unexpected_cfgs)]
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, HashMap, HashSet},
+    convert::TryFrom,
+    fmt,
+    num::{NonZeroU64, NonZeroUsize},
+    time::Duration,
+};
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::Hasher as Blake3Hasher;
 use ed25519_dalek::VerifyingKey as Ed25519VerifyingKey;
-use iroha_crypto::soranet::certificate::{
-    CertificateError, CertificateValidationPhase, RelayCertificateBundleV2,
+use iroha_crypto::soranet::{
+    certificate::{CertificateError, CertificateValidationPhase, RelayCertificateBundleV2},
+    directory::{
+        GuardDirectoryIssuerV1, GuardDirectorySnapshotV2, compute_issuer_fingerprint,
+        decode_validation_phase,
+    },
+    handshake::HandshakeSuite,
 };
-use iroha_crypto::soranet::directory::{
-    GuardDirectoryIssuerV1, GuardDirectorySnapshotV2, compute_issuer_fingerprint,
-    decode_validation_phase,
-};
-use iroha_crypto::soranet::handshake::HandshakeSuite;
 use iroha_data_model::soranet::prelude::{RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayId};
+use iroha_logger::info;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use rand::random;
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryFrom;
-use std::fmt;
-use std::num::{NonZeroU64, NonZeroUsize};
-use std::time::Duration;
 use thiserror::Error;
-
-use iroha_logger::info;
 
 use crate::{AnonymityPolicy, SORANET_BANDWIDTH_UNIT_BYTES};
 
@@ -2418,7 +2419,12 @@ fn select_relay<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        str::FromStr,
+        time::Duration,
+    };
+
     use ed25519_dalek::SigningKey;
     use iroha_crypto::soranet::{
         certificate::{
@@ -2437,9 +2443,8 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use rand::{RngCore, SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::str::FromStr;
-    use std::time::Duration;
+
+    use super::*;
 
     fn build_directory_snapshot(
         validation_phase: CertificateValidationPhase,

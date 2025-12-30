@@ -1,6 +1,10 @@
 //! PoR challenge/proof tracking for the embedded storage node.
 
-use crate::store::StoredManifest;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, RwLock},
+};
+
 use iroha_data_model::metadata::Metadata;
 use norito::json::Value as JsonValue;
 use rand::{RngCore, SeedableRng};
@@ -10,9 +14,9 @@ use sorafs_manifest::por::{
     AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1, PorProofValidationError,
     derive_challenge_id, derive_challenge_seed,
 };
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
 use thiserror::Error;
+
+use crate::store::StoredManifest;
 
 const SMALL_LEAF_MAX_LEN: u32 = 4 * 1024;
 const GIB: u64 = 1_073_741_824;
@@ -682,11 +686,12 @@ pub enum PorTrackerError {
 #[cfg(test)]
 /// Utilities used only in tests to build attested POR inputs.
 pub mod test_support {
-    use super::*;
-    use sorafs_manifest::por::{
-        AUDIT_VERDICT_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1,
+    use sorafs_manifest::{
+        por::{AUDIT_VERDICT_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1},
+        provider_advert::{AdvertSignature, SignatureAlgorithm},
     };
-    use sorafs_manifest::provider_advert::{AdvertSignature, SignatureAlgorithm};
+
+    use super::*;
 
     /// Deterministic PoR challenge used across unit tests.
     pub fn sample_challenge() -> PorChallengeV1 {
@@ -782,13 +787,17 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::por::test_support::{sample_challenge, sample_proof, sample_verdict};
+    use std::{convert::TryFrom, str::FromStr};
+
     use iroha_data_model::{metadata::Metadata, name::Name};
     use sorafs_car::{PorChunkTree, PorLeaf, PorMerkleTree, PorSegment};
-    use sorafs_manifest::por::AUDIT_VERDICT_VERSION_V1;
-    use sorafs_manifest::provider_advert::{AdvertSignature, SignatureAlgorithm};
-    use std::{convert::TryFrom, str::FromStr};
+    use sorafs_manifest::{
+        por::AUDIT_VERDICT_VERSION_V1,
+        provider_advert::{AdvertSignature, SignatureAlgorithm},
+    };
+
+    use super::*;
+    use crate::por::test_support::{sample_challenge, sample_proof, sample_verdict};
 
     const LARGE_LEAF_LEN: u32 = 64 * 1024;
 

@@ -393,10 +393,8 @@ impl Entry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::collections::BTreeSet;
     use std::{
+        collections::BTreeSet,
         num::NonZeroUsize,
         thread,
         time::{Duration, Instant},
@@ -404,6 +402,8 @@ mod tests {
 
     use iroha_data_model::nexus::LaneId;
     use proptest::{collection::vec, prelude::*};
+
+    use super::*;
 
     fn fingerprint(seed: u8) -> ReplayFingerprint {
         let mut hasher = blake3::Hasher::new();

@@ -1,3 +1,11 @@
+use std::{collections::BTreeMap, fmt, vec::Vec};
+
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
+use iroha_data_model_derive::model;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+
+use super::{SignedBlock, header::BlockHeader};
 use crate::{
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
@@ -10,15 +18,6 @@ use crate::{
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
-use iroha_data_model_derive::model;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use std::collections::BTreeMap;
-use std::fmt;
-use std::vec::Vec;
-
-use super::{SignedBlock, header::BlockHeader};
 
 #[model]
 mod model {

@@ -1,9 +1,8 @@
 //! Host execution for delivery-versus-payment and payment-versus-payment settlements.
 
-use super::*;
-use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
 #[cfg(feature = "telemetry")]
-use crate::sumeragi::status::SettlementOutcomeKind;
+use std::time::Instant;
+
 use iroha_data_model::{
     asset::AssetId,
     isi::{
@@ -16,8 +15,11 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
+
+use super::*;
+use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
 #[cfg(feature = "telemetry")]
-use std::time::Instant;
+use crate::sumeragi::status::SettlementOutcomeKind;
 
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 pub(crate) const SETTLEMENT_KIND_DVP: &str = "dvp";
@@ -729,10 +731,6 @@ impl Execute for PvpIsi {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::prelude::World;
-    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
-    use iroha_data_model::common::Owned;
     use iroha_data_model::{
         account::Account,
         asset::{
@@ -740,6 +738,7 @@ mod tests {
             prelude::{AssetDefinitionId, AssetId},
         },
         block::BlockHeader,
+        common::Owned,
         domain::{Domain, DomainId},
         isi::error::InstructionEvaluationError,
         metadata::Metadata,
@@ -747,6 +746,9 @@ mod tests {
     use iroha_primitives::numeric::{Numeric, NumericSpec};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
 
     #[test]
     fn enforce_atomicity_accepts_commit_variants() {
@@ -1598,8 +1600,7 @@ mod tests {
 
     #[test]
     fn settlement_failure_reason_classifies_errors() {
-        use iroha_data_model::isi::error::MathError;
-        use iroha_data_model::query::error::FindError;
+        use iroha_data_model::{isi::error::MathError, query::error::FindError};
 
         let insufficient = InstructionExecutionError::InvariantViolation(
             "settlement leg requires 10 but only 5 is available".into(),

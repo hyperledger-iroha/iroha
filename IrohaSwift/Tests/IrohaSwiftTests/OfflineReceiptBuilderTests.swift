@@ -5,6 +5,8 @@ import XCTest
 @testable import IrohaSwift
 
 final class OfflineReceiptBuilderTests: XCTestCase {
+    private let chainId = "testnet"
+
     func testBuildSignedReceiptMatchesSignature() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x01, count: 32))
         let certificate = try makeCertificate(signingKey: signingKey)
@@ -19,6 +21,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
 
         let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
             txId: txId,
+            chainId: chainId,
             receiverAccountId: certificate.controller,
             amount: amount,
             invoiceId: invoiceId,
@@ -120,6 +123,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
 
         let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
             txIdSeed: seed,
+            chainId: chainId,
             receiverAccountId: certificate.controller,
             amount: amount,
             invoiceId: invoiceId,
@@ -148,6 +152,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildSignedReceipt(
                 txId: txId,
+                chainId: chainId,
                 receiverAccountId: certificate.controller,
                 amount: amount,
                 invoiceId: invoiceId,
@@ -174,6 +179,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildSignedReceipt(
                 txId: txId,
+                chainId: chainId,
                 receiverAccountId: "invalid",
                 amount: "9",
                 invoiceId: "inv-invalid",
@@ -200,6 +206,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildSignedReceipt(
                 txId: txId,
+                chainId: chainId,
                 receiverAccountId: "\(certificate.controller) ",
                 amount: "4",
                 invoiceId: "inv-whitespace",
@@ -227,6 +234,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             to: receipt.to,
             assetId: receipt.assetId,
             amount: receipt.amount,
+            issuedAtMs: receipt.issuedAtMs,
             invoiceId: receipt.invoiceId,
             platformProof: receipt.platformProof,
             platformSnapshot: receipt.platformSnapshot,
@@ -234,7 +242,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             senderSignature: Data(repeating: 0x00, count: receipt.senderSignature.count)
         )
 
-        XCTAssertThrowsError(try OfflineReceiptBuilder.validateReceipt(tampered)) { error in
+        XCTAssertThrowsError(try OfflineReceiptBuilder.validateReceipt(tampered, chainId: chainId)) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError, .invalidSenderSignature)
         }
     }
@@ -270,6 +278,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildSignedReceipt(
                 txId: txId,
+                chainId: chainId,
                 receiverAccountId: certificate.controller,
                 amount: "8",
                 invoiceId: "inv-snapshot",
@@ -302,10 +311,68 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             initialCommitment: certificate.allowance,
             resultingCommitment: Data(repeating: 0x33, count: 32),
             receipts: [receiptA, receiptB],
-            zkProof: nil
+            zkProof: validZkProof()
         )
 
         XCTAssertEqual(balanceProof.claimedDelta, "5")
+    }
+
+    func testBuildTransferRejectsMissingBalanceProof() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x0B, count: 32))
+        let certificate = try makeCertificate(signingKey: signingKey)
+        let receipt = try makeReceipt(certificate: certificate,
+                                      signingKey: signingKey,
+                                      amount: "5",
+                                      invoiceId: "inv-missing",
+                                      seed: "tx-missing")
+        let claimedDelta = try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt])
+        let balanceProof = OfflineBalanceProof(
+            initialCommitment: certificate.allowance,
+            resultingCommitment: Data(repeating: 0x10, count: 32),
+            claimedDelta: claimedDelta,
+            zkProof: nil
+        )
+
+        XCTAssertThrowsError(
+            try OfflineReceiptBuilder.buildTransfer(
+                receiver: certificate.controller,
+                chainId: chainId,
+                depositAccount: certificate.controller,
+                receipts: [receipt],
+                balanceProof: balanceProof
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineReceiptBuilderError, .missingBalanceProof)
+        }
+    }
+
+    func testBuildTransferRejectsUnsupportedBalanceProofVersion() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x0C, count: 32))
+        let certificate = try makeCertificate(signingKey: signingKey)
+        let receipt = try makeReceipt(certificate: certificate,
+                                      signingKey: signingKey,
+                                      amount: "7",
+                                      invoiceId: "inv-version",
+                                      seed: "tx-version")
+        let claimedDelta = try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt])
+        let balanceProof = OfflineBalanceProof(
+            initialCommitment: certificate.allowance,
+            resultingCommitment: Data(repeating: 0x20, count: 32),
+            claimedDelta: claimedDelta,
+            zkProof: validZkProof(version: 2)
+        )
+
+        XCTAssertThrowsError(
+            try OfflineReceiptBuilder.buildTransfer(
+                receiver: certificate.controller,
+                chainId: chainId,
+                depositAccount: certificate.controller,
+                receipts: [receipt],
+                balanceProof: balanceProof
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineReceiptBuilderError, .unsupportedBalanceProofVersion(2))
+        }
     }
 
     func testBuildTransferRejectsClaimedDeltaMismatch() throws {
@@ -325,12 +392,13 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             initialCommitment: certificate.allowance,
             resultingCommitment: Data(repeating: 0x11, count: 32),
             claimedDelta: "2.0",
-            zkProof: nil
+            zkProof: validZkProof()
         )
         let bundleId = IrohaHash.hash(Data("bundle-id".utf8))
 
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildTransfer(bundleId: bundleId,
+                                                    chainId: chainId,
                                                     receiver: certificate.controller,
                                                     depositAccount: certificate.controller,
                                                     receipts: [receiptA, receiptB],
@@ -359,11 +427,12 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             initialCommitment: certificate.allowance,
             resultingCommitment: Data(repeating: 0x22, count: 32),
             claimedDelta: claimedDelta,
-            zkProof: nil
+            zkProof: validZkProof()
         )
 
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildTransfer(receiver: certificate.controller,
+                                                    chainId: chainId,
                                                     depositAccount: certificate.controller,
                                                     receipts: [receiptA, receiptB],
                                                     balanceProof: balanceProof)
@@ -386,13 +455,14 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             initialCommitment: certificate.allowance,
             resultingCommitment: Data(repeating: 0x44, count: 32),
             claimedDelta: claimedDelta,
-            zkProof: nil
+            zkProof: validZkProof()
         )
         let seed = Data("bundle-seed".utf8)
         let expected = OfflineReceiptBuilder.generateBundleId(seed: seed)
 
         let transfer = try OfflineReceiptBuilder.buildTransfer(
             bundleIdSeed: seed,
+            chainId: chainId,
             receiver: certificate.controller,
             depositAccount: certificate.controller,
             receipts: [receipt],
@@ -422,11 +492,12 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             initialCommitment: certificate.allowance,
             resultingCommitment: Data(repeating: 0x55, count: 32),
             claimedDelta: claimedDelta,
-            zkProof: nil
+            zkProof: validZkProof()
         )
 
         let transfer = try OfflineReceiptBuilder.buildTransfer(
             receiver: certificate.controller,
+            chainId: chainId,
             depositAccount: certificate.controller,
             receipts: [receiptHigh, receiptLow],
             balanceProof: balanceProof,
@@ -450,12 +521,13 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             initialCommitment: certificate.allowance,
             resultingCommitment: Data(repeating: 0x66, count: 32),
             claimedDelta: claimedDelta,
-            zkProof: nil
+            zkProof: validZkProof()
         )
         let root = try OfflineReceiptBuilder.computeReceiptsRoot(receipts: [receipt])
         let envelope = OfflineAggregateProofEnvelope(version: 1, receiptsRoot: root)
         let transfer = try OfflineReceiptBuilder.buildTransfer(
             receiver: certificate.controller,
+            chainId: chainId,
             depositAccount: certificate.controller,
             receipts: [receipt],
             balanceProof: balanceProof,
@@ -470,6 +542,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildTransfer(
                 receiver: certificate.controller,
+                chainId: chainId,
                 depositAccount: certificate.controller,
                 receipts: [receipt],
                 balanceProof: balanceProof,
@@ -603,6 +676,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
 
         let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
             txId: txId,
+            chainId: chainId,
             receiverAccountId: certificate.controller,
             amount: amount,
             invoiceId: invoiceId,
@@ -659,6 +733,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                   counter: counter)
         return try OfflineReceiptBuilder.buildSignedReceipt(
             txId: txId,
+            chainId: chainId,
             receiverAccountId: certificate.controller,
             amount: amount,
             invoiceId: invoiceId,
@@ -673,11 +748,14 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                            assetId: String,
                            amount: String,
                            invoiceId: String,
+                           issuedAtMs: UInt64 = 1_700_000_000_000,
                            counter: UInt64 = 1) throws -> OfflinePlatformProof {
         let challenge = try challengeHash(txId: txId,
+                                          chainId: chainId,
                                           receiver: receiver,
                                           assetId: assetId,
                                           amount: amount,
+                                          issuedAtMs: issuedAtMs,
                                           invoiceId: invoiceId)
         let proof = AppleAppAttestProof(keyId: "swift-tests",
                                         counter: counter,
@@ -687,21 +765,29 @@ final class OfflineReceiptBuilderTests: XCTestCase {
     }
 
     private func challengeHash(txId: Data,
+                               chainId: String,
                                receiver: String,
                                assetId: String,
                                amount: String,
+                               issuedAtMs: UInt64,
                                invoiceId: String) throws -> Data {
         let preimage = OfflineReceiptChallengePreimage(
             invoiceId: invoiceId,
             receiverAccountId: receiver,
             assetId: assetId,
             amount: amount,
+            issuedAtMs: issuedAtMs,
             nonceHex: txId.hexUppercased()
         )
         let payload = try preimage.noritoPayload()
         let bytes = OfflineNorito.wrap(typeName: OfflineReceiptChallengePreimage.noritoTypeName,
                                        payload: payload)
-        return IrohaHash.hash(bytes)
+        let context = IrohaHash.hash(Data(chainId.utf8))
+        var hashInput = Data()
+        hashInput.reserveCapacity(context.count + bytes.count)
+        hashInput.append(context)
+        hashInput.append(bytes)
+        return IrohaHash.hash(hashInput)
     }
 
     private func canonicalSpendKey(_ value: String) -> String {
@@ -717,6 +803,12 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             return "ED0120" + upper
         }
         return upper
+    }
+
+    private func validZkProof(version: UInt8 = 1) -> Data {
+        var proof = Data(repeating: 0, count: OfflineBalanceProofBuilder.proofLength)
+        proof[0] = version
+        return proof
     }
 
     private func makePoseidonSampleReceipt(seed: String, counter: UInt64) throws -> OfflineSpendReceipt {
@@ -742,7 +834,16 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             refreshAtMs: nil
         )
         let txId = IrohaHash.hash(Data("tx-\(seed)".utf8))
-        let challengeHash = IrohaHash.hash(Data("challenge".utf8))
+        let amount = "250"
+        let invoiceId = "invoice-\(seed)"
+        let issuedAtMs: UInt64 = 1_700_000_000_000
+        let challengeHash = try challengeHash(txId: txId,
+                                              chainId: chainId,
+                                              receiver: controller,
+                                              assetId: assetId,
+                                              amount: amount,
+                                              issuedAtMs: issuedAtMs,
+                                              invoiceId: invoiceId)
         let proof = AppleAppAttestProof(
             keyId: seed,
             counter: counter,
@@ -754,8 +855,9 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             from: controller,
             to: controller,
             assetId: assetId,
-            amount: "250",
-            invoiceId: "invoice-\(seed)",
+            amount: amount,
+            issuedAtMs: issuedAtMs,
+            invoiceId: invoiceId,
             platformProof: .appleAppAttest(proof),
             platformSnapshot: nil,
             senderCertificate: certificate,
@@ -879,6 +981,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             to: receipt.to,
             assetId: receipt.asset,
             amount: receipt.amount,
+            issuedAtMs: receipt.issuedAtMs,
             invoiceId: receipt.invoiceId,
             platformProof: proof,
             platformSnapshot: nil,
@@ -936,6 +1039,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
             let to: String
             let asset: String
             let amount: String
+            let issuedAtMs: UInt64
             let invoiceId: String
             let platformProof: PlatformProof
 
@@ -945,6 +1049,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                 case to
                 case asset
                 case amount
+                case issuedAtMs = "issued_at_ms"
                 case invoiceId = "invoice_id"
                 case platformProof = "platform_proof"
             }

@@ -307,15 +307,17 @@ fn read_indexed_sidecar(block_store_path: &Path, height: u64) -> Option<Pipeline
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_core::block::BlockBuilder;
-    use iroha_core::kura::PipelineDagSnapshot;
-    use iroha_core::tx::AcceptedTransaction;
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::block::{BlockHeader, SignedBlock};
-    use iroha_data_model::prelude::*;
-    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use std::{borrow::Cow, fs, sync::Arc};
+
+    use iroha_core::{block::BlockBuilder, kura::PipelineDagSnapshot, tx::AcceptedTransaction};
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        block::{BlockHeader, SignedBlock},
+        prelude::*,
+    };
+    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+
+    use super::*;
 
     fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
@@ -391,11 +393,13 @@ mod tests {
 
     #[test]
     fn sidecar_prints_to_file() {
-        use iroha_config::base::WithOrigin;
-        use iroha_config::kura::{FsyncMode, InitMode};
-        use iroha_config::parameters::actual::{Kura as KuraConfig, LaneConfig};
-        use iroha_config::parameters::defaults::kura::{
-            BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MERGE_LEDGER_CACHE_CAPACITY,
+        use iroha_config::{
+            base::WithOrigin,
+            kura::{FsyncMode, InitMode},
+            parameters::{
+                actual::{Kura as KuraConfig, LaneConfig},
+                defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MERGE_LEDGER_CACHE_CAPACITY},
+            },
         };
         use iroha_core::kura::Kura;
 

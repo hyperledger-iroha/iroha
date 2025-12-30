@@ -1,6 +1,7 @@
 //! Pagination behaviour integration tests for query iterators.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     data_model::{asset::AssetDefinition, prelude::*},
@@ -8,8 +9,6 @@ use iroha::{
 use iroha_data_model::query::dsl::SelectorTuple;
 use iroha_test_network::*;
 use nonzero_ext::nonzero;
-
-use integration_tests::sandbox;
 
 #[test]
 fn limits_should_work() -> Result<()> {
@@ -65,10 +64,10 @@ fn reported_length_should_be_accurate() -> Result<()> {
 #[test]
 fn fetch_size_should_work() -> Result<()> {
     // use the lower-level API to inspect the batch size
-    use iroha::data_model::query::dsl::CompoundPredicate;
     use iroha::data_model::query::{
         QueryBox, QueryOutputBatchBox, QueryWithFilter, QueryWithParams,
         builder::QueryExecutor as _,
+        dsl::CompoundPredicate,
         parameters::{FetchSize, QueryParams, Sorting},
     };
 

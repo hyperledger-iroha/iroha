@@ -2,6 +2,11 @@
 
 #![allow(clippy::restriction)]
 
+use std::{
+    sync::Arc,
+    time::{Instant, SystemTime},
+};
+
 use super::{
     denylist::{
         DenylistEntryBuilder, GatewayDenylist, PerceptualFamilyEntry, PerceptualObservation,
@@ -10,10 +15,6 @@ use super::{
     rate_limit::{ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter},
 };
 use crate::sorafs::{AdmissionRegistry, gateway::PerceptualMatchBasis};
-use std::{
-    sync::Arc,
-    time::{Instant, SystemTime},
-};
 
 fn sample_fingerprint() -> ClientFingerprint {
     ClientFingerprint::from_identifier("gateway-test-client")

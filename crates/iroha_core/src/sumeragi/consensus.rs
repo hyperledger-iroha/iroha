@@ -14,16 +14,13 @@ compile_error!(
     "The `bls` feature is mandatory for iroha_core consensus; rebuild with `--features bls`"
 );
 
+use std::time::Duration;
+
 use iroha_config::parameters::actual::{
     Common as CommonConfig, ConsensusMode, Sumeragi as SumeragiConfig,
 };
 #[cfg(test)]
 use iroha_crypto::HashOf;
-use iroha_data_model::prelude::*;
-use std::time::Duration;
-
-use crate::state::{StateView, WorldReadOnly};
-
 pub use iroha_data_model::block::consensus::{
     AvailableVote, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
     EvidencePayload, ExecKv, ExecVote, ExecWitness, ExecWitnessMsg, ExecutionQC, Height, NPOS_TAG,
@@ -31,6 +28,9 @@ pub use iroha_data_model::block::consensus::{
     QcHeaderRef, RbcChunk, RbcDeliver, RbcInit, RbcReady, Reconfig, ValidatorIndex, View, Vote,
     VrfCommit, VrfReveal, WitnessAvailAck, WitnessAvailQC,
 };
+use iroha_data_model::prelude::*;
+
+use crate::state::{StateView, WorldReadOnly};
 
 /// Count the number of validators encoded into a QC signer bitmap.
 pub fn qc_signer_count(qc: &Qc) -> usize {

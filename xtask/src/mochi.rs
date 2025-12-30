@@ -8,10 +8,9 @@ use std::{
 };
 
 use flate2::{Compression, write::GzEncoder};
+use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
-
-use norito::json::{self, Map, Value};
 
 use crate::workspace_root;
 

@@ -5,6 +5,20 @@
 //! single source of truth for converting plan/metadata JSON into orchestrator
 //! inputs.
 
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+    num::{NonZeroU32, NonZeroUsize},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+use blake3::hash as blake3_hash;
+use norito::json::Value;
+use sorafs_chunker::ChunkProfile;
+use thiserror::Error;
+
 use crate::{
     CarBuildPlan, CarChunk, ChunkFetchSpec, FilePlan, chunker_registry,
     fetch_plan::{FetchPlanError, chunk_fetch_specs_from_json},
@@ -14,18 +28,6 @@ use crate::{
     },
     scoreboard::{self, Eligibility, ProviderTelemetry, ScoreboardConfig},
 };
-use blake3::hash as blake3_hash;
-use norito::json::Value;
-use sorafs_chunker::ChunkProfile;
-use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    num::{NonZeroU32, NonZeroUsize},
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use thiserror::Error;
 
 /// Provider specification accepted by the local fetch harness.
 #[derive(Debug, Clone)]

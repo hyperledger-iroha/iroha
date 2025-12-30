@@ -6,17 +6,17 @@
 //! via test-only helpers. It demonstrates the expected gating behavior when
 //! a contract enqueues a ZK ISI via the vendor bridge after a prior verify.
 
+use std::sync::Arc;
+
 use iroha_core::{
     kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
     zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_crypto::Hash;
-use iroha_data_model::isi::BuiltInInstruction;
-use iroha_data_model::prelude::*;
+use iroha_data_model::{isi::BuiltInInstruction, prelude::*};
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, encoding, instruction, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
-use std::sync::Arc;
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);

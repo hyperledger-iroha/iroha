@@ -5,9 +5,12 @@
 
 mod zk_testkit;
 
-use iroha_core::state::StateReadOnly;
-use iroha_core::state::WorldReadOnly;
-use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
+use iroha_core::{
+    kura::Kura,
+    query::store::LiveQueryStore,
+    smartcontracts::Execute,
+    state::{State, StateReadOnly, WorldReadOnly},
+};
 use iroha_data_model::{
     asset::{Asset, AssetDefinition},
     events::data::DataEvent,
@@ -23,10 +26,13 @@ fn canonical_abi_hex() -> String {
 #[test]
 fn zk_ballot_nullifier_owner_salt_duplicate_rejected() {
     use core::num::NonZeroU64;
-    use iroha_data_model::events::data::governance::GovernanceEvent;
-    use iroha_data_model::isi::governance::{CastZkBallot, ProposeDeployContract, VotingMode};
-    use iroha_data_model::permission::Permission;
-    use iroha_data_model::prelude::Grant;
+
+    use iroha_data_model::{
+        events::data::governance::GovernanceEvent,
+        isi::governance::{CastZkBallot, ProposeDeployContract, VotingMode},
+        permission::Permission,
+        prelude::Grant,
+    };
     use iroha_executor_data_model::permission::governance::{
         CanProposeContractDeployment, CanSubmitGovernanceBallot,
     };

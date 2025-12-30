@@ -1,10 +1,12 @@
 //! On-chain oracle instruction handlers.
 
-use super::prelude::*;
-use crate::{
-    oracle::{FeedEventRecord, ObservationWindow, ObservationWindowKey},
-    state::{StateTransaction, WorldTransaction},
+#[cfg(feature = "telemetry")]
+use std::time::Instant;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
 };
+
 use blake3::Hasher;
 use iroha_data_model::{
     events::data::oracle::{
@@ -30,11 +32,11 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_primitives::numeric::Numeric;
-#[cfg(feature = "telemetry")]
-use std::time::Instant;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
+
+use super::prelude::*;
+use crate::{
+    oracle::{FeedEventRecord, ObservationWindow, ObservationWindowKey},
+    state::{StateTransaction, WorldTransaction},
 };
 
 fn aggregation_err(err: &iroha_data_model::oracle::OracleAggregationError) -> Error {

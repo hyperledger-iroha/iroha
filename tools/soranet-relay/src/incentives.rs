@@ -172,10 +172,12 @@ impl RelayPerformanceAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::str::FromStr;
+
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{account::AccountId, domain::DomainId, metadata::Metadata};
-    use std::str::FromStr;
+
+    use super::*;
 
     const RELAY: RelayId = [7_u8; 32];
 

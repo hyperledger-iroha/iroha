@@ -2,14 +2,17 @@
 use std::{thread, time::Duration};
 
 use eyre::{Result, bail, ensure};
-use iroha::client::{Client, SumeragiEvidenceListFilter};
-use iroha::data_model::{
-    isi::SetParameter,
-    parameter::{
-        Parameter,
-        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+use integration_tests::sandbox;
+use iroha::{
+    client::{Client, SumeragiEvidenceListFilter},
+    data_model::{
+        isi::SetParameter,
+        parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+        },
+        prelude::TransactionBuilder,
     },
-    prelude::TransactionBuilder,
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{
@@ -18,11 +21,8 @@ use iroha_data_model::block::{
 };
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-use norito::codec::Encode as _;
-use norito::json::Value;
+use norito::{codec::Encode as _, json::Value};
 use tokio::runtime::Runtime;
-
-use integration_tests::sandbox;
 
 fn evidence_count(value: &norito::json::Value) -> u64 {
     value

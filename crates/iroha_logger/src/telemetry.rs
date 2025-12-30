@@ -261,8 +261,9 @@ pub enum Channel {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::json::{self, Value};
+
+    use super::*;
 
     #[test]
     fn conditionally_redacts_sensitive_fields() {

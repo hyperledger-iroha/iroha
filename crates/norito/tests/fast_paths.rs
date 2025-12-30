@@ -1,6 +1,7 @@
 //! Tests for accelerated container serialization fast paths and CRC selection.
-use norito::{decode_from_bytes, to_bytes};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+use norito::{decode_from_bytes, to_bytes};
 
 #[test]
 fn vec_fastpath_roundtrip_and_determinism() {

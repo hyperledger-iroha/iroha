@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr, ensure, eyre};
+use integration_tests::sandbox;
 use iroha::data_model::{
     Level,
     isi::{InstructionBox, Log, SetParameter},
@@ -11,8 +12,6 @@ use iroha::data_model::{
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use nonzero_ext::nonzero;
 use tokio::time::sleep;
-
-use integration_tests::sandbox;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {

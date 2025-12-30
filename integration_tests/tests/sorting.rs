@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use eyre::{Result, WrapErr as _};
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     crypto::KeyPair,
@@ -11,12 +12,9 @@ use iroha::{
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-use rand::SeedableRng;
-use rand::seq::SliceRandom;
+use rand::{SeedableRng, seq::SliceRandom};
 use rand_chacha::ChaCha8Rng;
 use tokio::runtime::Runtime;
-
-use integration_tests::sandbox;
 
 fn start_network(
     builder: NetworkBuilder,

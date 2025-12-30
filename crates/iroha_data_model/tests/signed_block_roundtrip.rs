@@ -3,10 +3,13 @@
 //! `SignedBlock` decoding failing on transaction signatures.
 
 use iroha_crypto::{KeyPair, MerkleTree};
-use iroha_data_model::block::{SignedBlock, decode_framed_signed_block};
-use iroha_data_model::isi::InstructionBox;
-use iroha_data_model::transaction::signed::{SignedTransaction, TransactionBuilder};
-use iroha_data_model::{ChainId, account::AccountId};
+use iroha_data_model::{
+    ChainId,
+    account::AccountId,
+    block::{SignedBlock, decode_framed_signed_block},
+    isi::InstructionBox,
+    transaction::signed::{SignedTransaction, TransactionBuilder},
+};
 
 fn sample_signed_block_with_empty_instructions() -> (SignedBlock, Vec<SignedTransaction>) {
     let keypair = KeyPair::random();

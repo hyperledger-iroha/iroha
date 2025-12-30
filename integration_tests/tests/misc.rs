@@ -1,8 +1,7 @@
 //! Miscellaneous integration coverage for status endpoints and helpers.
 
-use integration_tests::sandbox;
-
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::{client, data_model::prelude::*};
 use iroha_telemetry::metrics::Status;
 use iroha_test_network::*;

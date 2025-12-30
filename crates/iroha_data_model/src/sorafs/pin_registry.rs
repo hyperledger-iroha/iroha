@@ -1,11 +1,12 @@
-use super::capacity::ProviderId;
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, metadata::Metadata};
 use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
+
+use super::capacity::ProviderId;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use crate::{account::AccountId, metadata::Metadata};
 
 /// Canonical BLAKE3-256 digest of a `sorafs_manifest::ManifestV1`.
 #[derive(
@@ -472,8 +473,9 @@ impl ReplicationOrderRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::str::FromStr;
+
+    use super::*;
 
     #[test]
     fn manifest_digest_round_trip() {

@@ -2,8 +2,9 @@
 
 #![allow(unexpected_cfgs)]
 
-use sorafs_chunker::ChunkProfile;
 use std::{collections::HashSet, sync::OnceLock};
+
+use sorafs_chunker::ChunkProfile;
 
 /// Multihash code used for CAR payload digests in the default profile.
 pub const DEFAULT_MULTIHASH_CODE: u64 = 0x1f;

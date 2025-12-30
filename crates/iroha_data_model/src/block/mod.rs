@@ -2,30 +2,35 @@
 //!
 //! `Block`s are organized into a linear sequence over time (also known as the block chain).
 
-use self::proofs::{BlockReceiptProof, ExecutionReceiptProof};
-use crate::da::commitment::{
-    DaCommitmentBundle, DaProofPolicy, DaProofPolicyBundle, DaProofScheme,
+use std::{
+    borrow::Cow,
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
+    convert::TryInto,
+    fmt, format,
+    string::String,
+    time::Duration,
+    vec::Vec,
 };
+
 #[cfg(feature = "transparent_api")]
 use iroha_crypto::Hash;
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use iroha_version::{UnsupportedVersion, Version};
-use norito::codec::{Decode, Encode};
-use norito::core::{
-    Compression, Error as NoritoFrameError, MAGIC, VERSION_MAJOR, VERSION_MINOR,
-    default_encode_flags, hardware_crc64 as norito_crc64,
+use norito::{
+    codec::{Decode, Encode},
+    core::{
+        Compression, Error as NoritoFrameError, MAGIC, VERSION_MAJOR, VERSION_MINOR,
+        default_encode_flags, hardware_crc64 as norito_crc64,
+    },
 };
-use std::{
-    borrow::Cow,
-    boxed::Box,
-    collections::{BTreeMap, BTreeSet},
-    format,
-    string::String,
-    vec::Vec,
+
+use self::proofs::{BlockReceiptProof, ExecutionReceiptProof};
+use crate::da::commitment::{
+    DaCommitmentBundle, DaProofPolicy, DaProofPolicyBundle, DaProofScheme,
 };
-use std::{convert::TryInto, fmt, time::Duration};
 
 pub mod proofs;
 
@@ -54,10 +59,8 @@ pub mod header;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
 
-pub use header::BlockHeader as Header;
-pub use header::{BlockHeader, BlockSignature};
-pub use payload::BlockPayload as Payload;
-pub use payload::{BlockPayload, BlockResult};
+pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
+pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
 
 #[cfg(feature = "transparent_api")]
 use crate::fastpq::TransferTranscript;
@@ -521,13 +524,13 @@ impl iroha_version::codec::DecodeVersioned for SignedBlock {
 pub mod stream {
     //! Blocks for streaming API.
 
+    use std::{io::Write, num::NonZeroU64, sync::Arc};
+
     use iroha_schema::IntoSchema;
     use norito::{
         codec::{Decode, Encode},
         core::{Error as NoritoError, NoritoSerialize},
     };
-    use std::num::NonZeroU64;
-    use std::{io::Write, sync::Arc};
 
     pub use self::model::*;
     use super::*;
@@ -1209,18 +1212,11 @@ pub mod prelude {
 mod tests {
     use std::num::NonZeroU64;
 
-    use super::*;
-    use crate::da::{
-        commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
-        pin_intent::{DaPinIntent, DaPinIntentBundle},
-        types::{BlobDigest, RetentionPolicy, StorageTicketId},
-    };
-    use crate::nexus::LaneId;
-    use crate::query::dsl::{HasProjection, PredicateMarker, SelectorMarker};
-    use crate::sorafs::pin_registry::ManifestDigest;
     use iroha_crypto::{Hash, HashOf, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use norito::codec::Encode;
+
+    use super::*;
     // Bring commonly used types referenced in transparent API tests.
     #[cfg(feature = "transparent_api")]
     use crate::ValidationFail;
@@ -1230,6 +1226,16 @@ mod tests {
     use crate::trigger::DataTriggerSequence;
     #[cfg(feature = "transparent_api")]
     use crate::trigger::TimeTriggerEntrypoint;
+    use crate::{
+        da::{
+            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
+            pin_intent::{DaPinIntent, DaPinIntentBundle},
+            types::{BlobDigest, RetentionPolicy, StorageTicketId},
+        },
+        nexus::LaneId,
+        query::dsl::{HasProjection, PredicateMarker, SelectorMarker},
+        sorafs::pin_registry::ManifestDigest,
+    };
 
     fn assert_predicate<T: HasProjection<PredicateMarker>>() {}
     fn assert_selector<T: HasProjection<SelectorMarker>>() {}
@@ -1292,10 +1298,11 @@ mod tests {
 
     #[test]
     fn genesis_defaults_confidential_digest() {
+        use iroha_crypto::KeyPair;
+
         use crate::{
             ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
-        use iroha_crypto::KeyPair;
 
         let chain: ChainId = "genesis-default-conf-digest".parse().expect("chain id");
         let keypair = KeyPair::random();
@@ -1475,10 +1482,11 @@ mod tests {
 
     #[test]
     fn canonical_wire_roundtrips_genesis_block() {
+        use iroha_crypto::KeyPair;
+
         use crate::{
             ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
-        use iroha_crypto::KeyPair;
 
         let keypair = KeyPair::random();
         let chain: ChainId = "genesis-canonical-wire".parse().expect("chain id");
@@ -1547,11 +1555,12 @@ mod tests {
 
     #[test]
     fn decode_versioned_signed_block_handles_genesis_like_payload() {
+        use iroha_crypto::KeyPair;
+
         use crate::{
             ChainId, account::AccountId, domain::DomainId, isi::InstructionBox,
             transaction::signed::TransactionBuilder,
         };
-        use iroha_crypto::KeyPair;
 
         let keypair = KeyPair::random();
         let chain: ChainId = "genesis-versioned-roundtrip"
@@ -1714,11 +1723,12 @@ mod tests {
 
     #[test]
     fn genesis_can_embed_da_commitments() {
+        use iroha_crypto::KeyPair;
+
         use crate::{
             ChainId, account::AccountId, domain::DomainId, isi::InstructionBox,
             transaction::signed::TransactionBuilder,
         };
-        use iroha_crypto::KeyPair;
 
         let keypair = KeyPair::random();
         let chain: ChainId = "genesis-da-commitments"
@@ -1741,9 +1751,9 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn signed_block_has_results_only_after_assignment() {
-        use crate::transaction::signed::TransactionEntrypoint;
-
         use iroha_crypto::KeyPair;
+
+        use crate::transaction::signed::TransactionEntrypoint;
 
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let keypair = KeyPair::random();
@@ -1768,16 +1778,17 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_records_fastpq_transcripts() {
+        use std::{collections::BTreeMap, num::NonZeroU64};
+
+        use iroha_crypto::{Hash, KeyPair, SignatureOf};
+        use iroha_primitives::numeric::Numeric;
+
         use crate::{
             account::AccountId,
             asset::id::AssetDefinitionId,
             domain::DomainId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
         };
-        use iroha_crypto::{Hash, KeyPair, SignatureOf};
-        use iroha_primitives::numeric::Numeric;
-        use std::collections::BTreeMap;
-        use std::num::NonZeroU64;
 
         fn fixture_account(domain: &DomainId) -> AccountId {
             let keypair = KeyPair::random();
@@ -1835,6 +1846,11 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn block_proofs_include_fastpq_transcripts() {
+        use std::{collections::BTreeMap, num::NonZeroU64};
+
+        use iroha_crypto::{Hash, KeyPair, SignatureOf};
+        use iroha_primitives::numeric::Numeric;
+
         use crate::{
             ChainId,
             account::AccountId,
@@ -1843,10 +1859,6 @@ mod tests {
             fastpq::{TransferDeltaTranscript, TransferTranscript},
             transaction::{TransactionResultInner, signed::TransactionBuilder},
         };
-        use iroha_crypto::{Hash, KeyPair, SignatureOf};
-        use iroha_primitives::numeric::Numeric;
-        use std::collections::BTreeMap;
-        use std::num::NonZeroU64;
 
         let keypair = KeyPair::random();
         let chain: ChainId = "chain".parse().expect("chain id");
@@ -1945,6 +1957,11 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_updates_merkle_roots_with_time_triggers() {
+        use std::num::NonZeroU64;
+
+        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
+        use iroha_primitives::const_vec::ConstVec;
+
         use crate::{
             ChainId,
             account::AccountId,
@@ -1955,9 +1972,6 @@ mod tests {
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
-        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
-        use iroha_primitives::const_vec::ConstVec;
-        use std::num::NonZeroU64;
 
         let keypair = KeyPair::random();
         let chain: ChainId = "test-chain".parse().expect("chain id");
@@ -2012,14 +2026,16 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_entry_hash_matches_merkle_roots() {
+        use std::num::NonZeroU64;
+
+        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
+
         use crate::{
             ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
-        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
-        use std::num::NonZeroU64;
 
         let keypair = KeyPair::random();
         let chain: ChainId = "proof-block".parse().expect("chain id");
@@ -2083,6 +2099,11 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_time_trigger_use_extended_root() {
+        use std::num::NonZeroU64;
+
+        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
+        use iroha_primitives::const_vec::ConstVec;
+
         use crate::{
             ChainId,
             account::AccountId,
@@ -2093,9 +2114,6 @@ mod tests {
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
-        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
-        use iroha_primitives::const_vec::ConstVec;
-        use std::num::NonZeroU64;
 
         let keypair = KeyPair::random();
         let chain: ChainId = "time-proof-block".parse().expect("chain id");
@@ -2163,14 +2181,16 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_entry_hash_missing_returns_none() {
+        use std::num::NonZeroU64;
+
+        use iroha_crypto::{Hash, KeyPair, SignatureOf};
+
         use crate::{
             ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
-        use iroha_crypto::{Hash, KeyPair, SignatureOf};
-        use std::num::NonZeroU64;
 
         let keypair = KeyPair::random();
         let chain: ChainId = "proof-miss".parse().expect("chain id");
@@ -2203,11 +2223,12 @@ mod tests {
 
     #[test]
     fn canonical_wire_and_deframe_preserve_layout_flags() {
+        use iroha_crypto::KeyPair;
+
         use crate::{
             ChainId, account::AccountId, block::deframe_versioned_signed_block_bytes,
             domain::DomainId, transaction::signed::TransactionBuilder,
         };
-        use iroha_crypto::KeyPair;
 
         let keypair = KeyPair::random();
         let chain: ChainId = "test-chain".parse().expect("chain id");
@@ -2237,10 +2258,11 @@ mod tests {
 
     #[test]
     fn framing_derives_flags_instead_of_reusing_tls_state() {
+        use iroha_crypto::KeyPair;
+
         use crate::{
             ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
-        use iroha_crypto::KeyPair;
 
         let keypair = KeyPair::random();
         let chain: ChainId = "stale-flags".parse().expect("chain id");

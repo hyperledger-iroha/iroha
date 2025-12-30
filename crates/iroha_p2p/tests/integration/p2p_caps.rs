@@ -2,11 +2,13 @@
 
 use std::{collections::HashSet, num::NonZeroUsize};
 
-use iroha_config::parameters::actual::{
-    LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
-    SoranetPow, SoranetPrivacy, SoranetVpn,
+use iroha_config::parameters::{
+    actual::{
+        LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
+        SoranetPow, SoranetPrivacy, SoranetVpn,
+    },
+    defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL},
 };
-use iroha_config::parameters::defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL};
 use iroha_config_base::WithOrigin;
 use iroha_crypto::{
     KeyPair,
@@ -614,10 +616,14 @@ async fn quic_global_frame_cap_disconnects() {
 async fn ws_global_frame_cap_disconnects() {
     use bytes::Bytes;
     use futures::{SinkExt, StreamExt};
-    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-    use tokio::net::TcpListener;
-    use tokio_tungstenite::accept_async;
-    use tokio_tungstenite::tungstenite::{Error as WsError, Message as WsMessage};
+    use tokio::{
+        io::{AsyncRead, AsyncWrite, ReadBuf},
+        net::TcpListener,
+    };
+    use tokio_tungstenite::{
+        accept_async,
+        tungstenite::{Error as WsError, Message as WsMessage},
+    };
 
     let chain = ChainId::from("test_chain_ws");
     let kp_listener = KeyPair::random();

@@ -1,7 +1,6 @@
 use std::io::Cursor;
 
-use norito::Error;
-use norito::codec::Decode as NoritoDecode;
+use norito::{Error, codec::Decode as NoritoDecode};
 
 #[derive(norito::derive::Encode, norito::derive::Decode)]
 struct Wrapper {

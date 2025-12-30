@@ -396,7 +396,6 @@ impl UnregisterProviderOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[cfg(feature = "json")]
     use crate::sorafs::pin_registry::StorageClass;
 

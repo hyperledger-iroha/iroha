@@ -1,9 +1,10 @@
 //! Shadow-price calculation for deterministic XOR liabilities.
 
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    json::{JsonDeserialize, JsonSerialize},
+};
 use rust_decimal::Decimal;
-
-use norito::json::{JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize};
 
 use crate::{
     MicroXor, config::SettlementConfig, haircut::HaircutTier, volatility::VolatilityBucket,
@@ -95,8 +96,7 @@ impl ShadowPriceCalculator {
 #[cfg(test)]
 mod tests {
     use expect_test::expect;
-    use rust_decimal::Decimal;
-    use rust_decimal::prelude::ToPrimitive;
+    use rust_decimal::{Decimal, prelude::ToPrimitive};
     use time::Duration;
 
     use crate::{

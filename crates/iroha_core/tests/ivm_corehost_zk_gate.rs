@@ -3,6 +3,8 @@
 //! `CoreHost` ZK verify gating tests: ensure Unshield/ZkTransfer are rejected
 //! without a prior successful `ZK_VERIFY_*` syscall.
 
+use std::sync::Arc;
+
 use iroha_core::{
     kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
     zk::test_utils::halo2_fixture_envelope,
@@ -11,7 +13,6 @@ use iroha_data_model::{isi::BuiltInInstruction, prelude::*};
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, encoding, instruction, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
-use std::sync::Arc;
 
 fn with_core_host<R>(vm: &mut IVM, f: impl FnOnce(&mut CoreHost) -> R) -> R {
     CoreHost::with_host(vm, f)

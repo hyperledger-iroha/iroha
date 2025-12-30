@@ -3,11 +3,12 @@
 
 #[tokio::test]
 async fn sumeragi_rbc_delivered_endpoint_shape() {
+    use std::time::SystemTime;
+
     use axum::{Router, routing::get};
     use iroha_core::sumeragi::rbc_status;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
-    use std::time::SystemTime;
     use tower::ServiceExt;
 
     // Seed a delivered RBC session summary for (height=10, view=2)

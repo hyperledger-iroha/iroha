@@ -4,14 +4,13 @@
 use std::{collections::VecDeque, format, string::String, vec, vec::Vec};
 
 use iroha_schema::{IntoSchema, TypeId};
-
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-
-use crate::{Hash, HashOf};
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
 use sha2::{Digest as _, Sha256};
+
+use crate::{Hash, HashOf};
 
 /// Array representation of [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree)
 /// for verifying elements of type `T`.

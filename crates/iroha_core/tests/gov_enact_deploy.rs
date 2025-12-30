@@ -3,8 +3,14 @@
 #![allow(clippy::items_after_statements)]
 
 use core::convert::TryInto;
-use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
-use iroha_core::{prelude::*, smartcontracts::Execute, state::WorldReadOnly};
+
+use iroha_core::{
+    kura::Kura,
+    prelude::*,
+    query::store::LiveQueryStore,
+    smartcontracts::Execute,
+    state::{State, WorldReadOnly},
+};
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     governance::types::{

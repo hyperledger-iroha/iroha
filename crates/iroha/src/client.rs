@@ -21,6 +21,18 @@ pub use iroha_config::client_api::{
 };
 use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_crypto::Hash;
+use iroha_data_model::{
+    block::consensus::{
+        EvidenceRecord, SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiQcEntry,
+        SumeragiQcSnapshot, SumeragiStatusWire,
+    },
+    da::{
+        ingest::{DaIngestReceipt, DaIngestRequest},
+        manifest::DaManifestV1,
+        types::{BlobDigest, ExtraMetadata},
+    },
+    nexus::AssetPermissionManifest,
+};
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 use iroha_torii_shared::{Version, uri as torii_uri};
@@ -33,6 +45,10 @@ use norito::{
     to_bytes,
 };
 use rand::Rng;
+use sorafs_manifest::{
+    alias_cache::{decode_alias_proof, unix_now_secs},
+    pdp::PdpCommitmentV1,
+};
 use sorafs_orchestrator::{
     AnonymityPolicy, OrchestratorConfig, PolicyOverride, RolloutPhase, TransportPolicy,
     WriteModeHint, fetch_via_gateway as orchestrator_fetch_via_gateway,
@@ -69,22 +85,6 @@ use crate::{
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
     http_default::{self, DefaultRequest, DefaultRequestBuilder, WebSocketError, WebSocketMessage},
     nexus::{CrossLaneTransferProof, verify_lane_relay_envelopes},
-};
-use iroha_data_model::{
-    block::consensus::{
-        EvidenceRecord, SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiQcEntry,
-        SumeragiQcSnapshot, SumeragiStatusWire,
-    },
-    da::{
-        ingest::{DaIngestReceipt, DaIngestRequest},
-        manifest::DaManifestV1,
-        types::{BlobDigest, ExtraMetadata},
-    },
-    nexus::AssetPermissionManifest,
-};
-use sorafs_manifest::{
-    alias_cache::{decode_alias_proof, unix_now_secs},
-    pdp::PdpCommitmentV1,
 };
 // (No query imports needed here)
 
@@ -2840,11 +2840,12 @@ impl Client {
 
 #[cfg(test)]
 mod status_tests {
-    use super::*;
     use http::Response as HttpResponse;
     use iroha_telemetry::metrics::{
         CryptoStatus, GovernanceStatus, Halo2Status, StackStatus, SumeragiConsensusStatus,
     };
+
+    use super::*;
 
     fn mk_response(
         status: StatusCode,
@@ -2971,9 +2972,10 @@ mod evidence_filter_tests {
 
 #[cfg(test)]
 mod evidence_response_tests {
-    use super::*;
     use http::Response as HttpResponse;
     use norito::json::Value;
+
+    use super::*;
 
     #[test]
     fn build_evidence_request_body_serializes_hex_field() {
@@ -3079,9 +3081,14 @@ fn default_alias_policy() -> sorafs_manifest::alias_cache::AliasCachePolicy {
 
 #[cfg(test)]
 mod evidence_http_tests {
-    use super::{default_alias_policy, *};
-    use crate::http::{Method as HttpMethod, Response as HttpResponse};
-    use crate::http_default::{RequestSnapshot, set_send_hook};
+    use std::{
+        collections::HashMap,
+        convert::TryInto,
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::{Arc, Mutex, OnceLock},
+        time::Duration,
+    };
+
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
     use iroha_data_model::block::consensus::{
@@ -3095,11 +3102,12 @@ mod evidence_http_tests {
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
     };
-    use std::collections::HashMap;
-    use std::convert::TryInto;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::sync::{Arc, Mutex, OnceLock};
-    use std::time::Duration;
+
+    use super::{default_alias_policy, *};
+    use crate::{
+        http::{Method as HttpMethod, Response as HttpResponse},
+        http_default::{RequestSnapshot, set_send_hook},
+    };
 
     pub(super) type SnapshotStore = Arc<Mutex<Vec<RequestSnapshot>>>;
 
@@ -7609,13 +7617,15 @@ fn hashes_match(target: &HashOf<SignedTransaction>, entry_hash: impl AsRef<[u8]>
 
 #[cfg(test)]
 mod tx_hash_tests {
+    use std::time::Duration;
+
+    use eyre::eyre;
+
     use super::hashes_match;
     use crate::{
         crypto::{Hash, HashOf},
         data_model::transaction::{SignedTransaction, TransactionEntrypoint},
     };
-    use eyre::eyre;
-    use std::time::Duration;
 
     #[test]
     fn hashes_match_compares_bytes() {
@@ -7864,6 +7874,8 @@ mod tx_hash_tests {
 
     #[test]
     fn committed_transaction_matches_signed_hash_for_external_entrypoint() {
+        use iroha_primitives::const_vec::ConstVec;
+
         use crate::{
             crypto::MerkleProof,
             data_model::{
@@ -7873,7 +7885,6 @@ mod tx_hash_tests {
                 trigger::DataTriggerSequence,
             },
         };
-        use iroha_primitives::const_vec::ConstVec;
 
         let chain: ChainId = "hash-chain".parse().unwrap();
         let domain: DomainId = "wonderland".parse().unwrap();
@@ -7930,6 +7941,12 @@ mod tx_hash_tests {
 
 #[cfg(test)]
 mod tx_confirmation_stream_tests {
+    use std::time::Duration;
+
+    use futures_util::stream;
+    use tokio::sync::mpsc;
+    use tokio_stream::wrappers::UnboundedReceiverStream;
+
     use super::{
         listen_for_tx_confirmation_stream, listen_for_tx_confirmation_stream_with_status_check,
     };
@@ -7944,10 +7961,6 @@ mod tx_confirmation_stream_tests {
             transaction::SignedTransaction,
         },
     };
-    use futures_util::stream;
-    use std::time::Duration;
-    use tokio::sync::mpsc;
-    use tokio_stream::wrappers::UnboundedReceiverStream;
 
     #[tokio::test]
     async fn queued_timeout_honors_max_duration() {
@@ -8071,8 +8084,9 @@ pub(crate) fn join_torii_url(url: &Url, path: &str) -> Url {
 
 #[cfg(test)]
 mod url_join_tests {
-    use super::join_torii_url;
     use url::Url;
+
+    use super::join_torii_url;
 
     #[test]
     fn join_prover_reports_paths() {
@@ -8451,7 +8465,42 @@ mod blocks_api {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::HashMap,
+        fs,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        block::{
+            BlockHeader,
+            consensus::{
+                LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
+                LaneVolatilityClass, SumeragiBlockSyncRosterStatus, SumeragiDaGateReason,
+                SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
+                SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
+                SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcStatus, SumeragiQcEntry,
+                SumeragiQcSnapshot, SumeragiRbcStoreStatus, SumeragiStatusWire,
+                SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+            },
+        },
+        da::{
+            ingest::DaStripeLayout,
+            manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
+            types::{
+                BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
+                ExtraMetadata, RetentionPolicy, StorageTicketId,
+            },
+        },
+        nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+    };
+    use iroha_telemetry::metrics::GovernanceStatus;
     use iroha_test_samples::gen_account_in;
+    use sorafs_car::multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport};
+    use sorafs_orchestrator::{PolicyReport, PolicyStatus, prelude::ChunkStore};
+    use tempfile::tempdir;
 
     use super::{
         default_alias_policy,
@@ -8463,42 +8512,10 @@ mod tests {
     };
     use crate::{
         config::{BasicAuth, Config},
-        da::PDP_COMMITMENT_HEADER,
-        da::{DaSampledChunk, DaSamplingPlan},
+        da::{DaSampledChunk, DaSamplingPlan, PDP_COMMITMENT_HEADER},
         http::{Method as HttpMethod, Response as HttpResponse, StatusCode},
         secrecy::SecretString,
     };
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::block::{
-        BlockHeader,
-        consensus::{
-            LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
-            LaneVolatilityClass, SumeragiBlockSyncRosterStatus, SumeragiDaGateReason,
-            SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
-            SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
-            SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiRbcStoreStatus,
-            SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
-        },
-    };
-    use iroha_data_model::da::{ingest::DaStripeLayout, manifest::ChunkRole};
-    use iroha_data_model::da::{
-        manifest::{ChunkCommitment, DaManifestV1},
-        types::{
-            BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
-            ExtraMetadata, RetentionPolicy, StorageTicketId,
-        },
-    };
-    use iroha_data_model::nexus::{DataSpaceId, LaneId, LaneRelayEnvelope};
-    use iroha_telemetry::metrics::GovernanceStatus;
-    use sorafs_car::multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport};
-    use sorafs_orchestrator::{PolicyReport, PolicyStatus, prelude::ChunkStore};
-    use std::collections::HashMap;
-    use std::fs;
-    use std::{
-        sync::{Arc, Mutex},
-        time::Duration,
-    };
-    use tempfile::tempdir;
 
     const LOGIN: &str = "mad_hatter";
     const PASSWORD: &str = "ilovetea";

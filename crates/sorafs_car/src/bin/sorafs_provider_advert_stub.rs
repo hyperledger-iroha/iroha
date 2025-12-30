@@ -1,14 +1,4 @@
 //! CLI helper for constructing SoraFS provider advertisements.
-use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, VerifyingKey};
-use norito::json::{Map, Value, to_string_pretty};
-use sorafs_car::{ProfileId, chunker_registry};
-use sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1;
-use sorafs_manifest::{
-    AdvertEndpoint, AvailabilityTier, CapabilityTlv, CapabilityType, EndpointKind,
-    EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ProviderAdvertBuildError,
-    ProviderAdvertV1, ProviderCapabilityRangeV1, REFRESH_RECOMMENDATION_SECS, RendezvousTopic,
-    SignatureAlgorithm, StreamBudgetV1, TransportHintV1, TransportProtocol,
-};
 use std::{
     env,
     fs::{self, File},
@@ -16,6 +6,17 @@ use std::{
     path::{Path, PathBuf},
     process,
     time::{SystemTime, UNIX_EPOCH},
+};
+
+use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, VerifyingKey};
+use norito::json::{Map, Value, to_string_pretty};
+use sorafs_car::{ProfileId, chunker_registry};
+use sorafs_manifest::{
+    AdvertEndpoint, AvailabilityTier, CapabilityTlv, CapabilityType, EndpointKind,
+    EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ProviderAdvertBuildError,
+    ProviderAdvertV1, ProviderCapabilityRangeV1, REFRESH_RECOMMENDATION_SECS, RendezvousTopic,
+    SignatureAlgorithm, StreamBudgetV1, TransportHintV1, TransportProtocol,
+    provider_advert::ProviderCapabilitySoranetPqV1,
 };
 
 fn main() {

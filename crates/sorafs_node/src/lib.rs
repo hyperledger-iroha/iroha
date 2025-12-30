@@ -83,16 +83,26 @@ pub struct PorIngestionProviderStatus {
     /// Consecutive failure streak length.
     pub consecutive_failures: u64,
 }
+use std::{
+    collections::HashMap,
+    io::Read,
+    sync::{Arc, RwLock},
+};
+
 use capacity::{
     CapacityError, CapacityManager, CapacityUsageSnapshot, DeclarationWindow, ReplicationPlan,
     ReplicationRelease,
 };
 use config::StorageConfig;
-use iroha_data_model::da::ingest::DaStripeLayout;
-use iroha_data_model::sorafs::{
-    capacity::{CapacityDeclarationRecord, ProviderId},
-    deal::{ClientId, DealId, DealProposal, DealRecord, DealUsageReport},
+use iroha_data_model::{
+    da::ingest::DaStripeLayout,
+    sorafs::{
+        capacity::{CapacityDeclarationRecord, ProviderId},
+        deal::{ClientId, DealId, DealProposal, DealRecord, DealUsageReport},
+    },
 };
+use iroha_telemetry::metrics::global_sorafs_node_otel;
+use norito::codec::Encode;
 pub use repair::{RepairManager, RepairSchedulerError};
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::{
@@ -104,14 +114,7 @@ use sorafs_manifest::{
     proof_stream::ProofStreamTier,
     repair::{RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTicketId},
 };
-use std::{
-    collections::HashMap,
-    io::Read,
-    sync::{Arc, RwLock},
-};
 use thiserror::Error;
-
-use norito::codec::Encode;
 
 use crate::{
     governance::FilesystemGovernancePublisher,
@@ -121,7 +124,6 @@ use crate::{
     store::{ChunkFileRecord, ChunkRoleMetadata, StorageBackend, StorageError, StoredManifest},
     telemetry::{TelemetryAccumulator, TelemetryError},
 };
-use iroha_telemetry::metrics::global_sorafs_node_otel;
 
 /// Interface for emitting settlement artefacts to the governance DAG.
 pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
@@ -1024,6 +1026,11 @@ impl NodeHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        str::FromStr,
+        sync::{Arc, Mutex},
+    };
+
     use iroha_data_model::{
         metadata::Metadata,
         name::Name,
@@ -1038,12 +1045,6 @@ mod tests {
     };
     use norito::{codec::Decode, to_bytes};
     use sorafs_car::CarBuildPlan;
-    use sorafs_manifest::repair::{
-        CompletedRepairStateV1, EscalatedRepairStateV1, InProgressRepairStateV1,
-        QueuedRepairStateV1, REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1,
-        REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairCauseV1, RepairEvidenceV1, RepairReportV1,
-        RepairSlashProposalV1, RepairTaskStateV1, RepairTicketId,
-    };
     use sorafs_manifest::{
         DagCodecId, ManifestBuilder, PinPolicy,
         capacity::{
@@ -1052,10 +1053,12 @@ mod tests {
             ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1,
         },
         deal::{DealSettlementStatusV1, DealSettlementV1},
-    };
-    use std::{
-        str::FromStr,
-        sync::{Arc, Mutex},
+        repair::{
+            CompletedRepairStateV1, EscalatedRepairStateV1, InProgressRepairStateV1,
+            QueuedRepairStateV1, REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1,
+            REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairCauseV1, RepairEvidenceV1, RepairReportV1,
+            RepairSlashProposalV1, RepairTaskStateV1, RepairTicketId,
+        },
     };
     use tempfile::TempDir;
 

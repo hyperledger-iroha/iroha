@@ -4,11 +4,14 @@
 //! `Numeric`. It supports negative values and a configurable decimal scale, while
 //! storing the mantissa in [`crate::bigint::BigInt`].
 
-use crate::bigint::{BigInt, BigIntError, MAX_BITS as BIGINT_MAX_BITS};
-use norito::codec;
-use norito::json::{self, FastJsonWrite, JsonDeserialize};
-use norito::{Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize};
 use std::io::Write;
+
+use norito::{
+    Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize, codec,
+    json::{self, FastJsonWrite, JsonDeserialize},
+};
+
+use crate::bigint::{BigInt, BigIntError, MAX_BITS as BIGINT_MAX_BITS};
 
 /// Error raised by [`BigNumeric`].
 #[derive(Debug, Clone, Copy, displaydoc::Display, thiserror::Error, PartialEq, Eq)]

@@ -1,15 +1,21 @@
 //! Integration tests for basic asset lifecycle operations.
 
+use std::{
+    sync::{Mutex, OnceLock},
+    thread::sleep,
+    time::{Duration, Instant},
+};
+
 use eyre::{Report, Result, eyre};
 use integration_tests::{
     sandbox,
     sync::{get_status_with_retry, sync_after_submission},
 };
-use iroha::client::Status;
-use iroha::data_model::ValidationFail;
 use iroha::{
+    client::Status,
     crypto::KeyPair,
     data_model::{
+        ValidationFail,
         parameter::{Parameter, system::SumeragiParameter},
         prelude::*,
     },
@@ -19,11 +25,6 @@ use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
-use std::{
-    sync::{Mutex, OnceLock},
-    thread::sleep,
-    time::{Duration, Instant},
-};
 use toml::Value as TomlValue;
 
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();

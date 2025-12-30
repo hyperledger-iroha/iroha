@@ -6,11 +6,13 @@
 
 use core::marker::PhantomData;
 
-use crate::backend::{IpaBackend, product};
-use crate::errors::Error;
-use crate::params::Params;
-use crate::transcript::Transcript;
-use crate::{IpaGroup, IpaScalar};
+use crate::{
+    IpaGroup, IpaScalar,
+    backend::{IpaBackend, product},
+    errors::Error,
+    params::Params,
+    transcript::Transcript,
+};
 
 /// Computes the inner product <a, b> in the prime field.
 fn inner_product<B: IpaBackend>(a: &[B::Scalar], b: &[B::Scalar]) -> B::Scalar {

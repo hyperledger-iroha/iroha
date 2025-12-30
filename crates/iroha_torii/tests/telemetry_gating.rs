@@ -3,8 +3,7 @@
 
 use std::sync::Arc;
 
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::{http::StatusCode, response::IntoResponse};
 use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::telemetry::Telemetry;
 use iroha_telemetry::metrics::Metrics;

@@ -1,8 +1,10 @@
 //! Benchmarks for core IVM VM operations and Merkle utilities.
 use criterion::{BatchSize, Criterion};
-use ivm::kotodama::wide as kwide;
-use ivm::parallel::{Block, State, StateAccessSet, Transaction};
-use ivm::{ByteMerkleTree, IVM, ProgramMetadata, encoding, instruction};
+use ivm::{
+    ByteMerkleTree, IVM, ProgramMetadata, encoding, instruction,
+    kotodama::wide as kwide,
+    parallel::{Block, State, StateAccessSet, Transaction},
+};
 
 fn loop_program() -> Vec<u8> {
     let mut prog = ProgramMetadata::default().encode();

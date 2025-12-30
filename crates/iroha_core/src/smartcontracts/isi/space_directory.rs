@@ -1,20 +1,24 @@
 //! Space Directory manifest publication flow.
 
-use super::*;
-use crate::{nexus::space_directory::SpaceDirectoryManifestRecord, state::StateTransaction};
 use iroha_data_model::{
     account::AccountId,
     events::data::space_directory::{
         SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
     },
-    isi::error::InstructionExecutionError,
-    isi::space_directory::{
-        ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest, RevokeSpaceDirectoryManifest,
+    isi::{
+        error::InstructionExecutionError,
+        space_directory::{
+            ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
+            RevokeSpaceDirectoryManifest,
+        },
     },
     nexus::{DataSpaceId, UniversalAccountId},
     permission::{Permission, Permissions},
 };
 use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
+
+use super::*;
+use crate::{nexus::space_directory::SpaceDirectoryManifestRecord, state::StateTransaction};
 
 impl Execute for PublishSpaceDirectoryManifest {
     fn execute(
@@ -220,11 +224,6 @@ fn permissions_allow_manifest<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        nexus::space_directory::SpaceDirectoryManifestSet,
-        state::{State, World},
-    };
     use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{
         account::NewAccount,
@@ -241,6 +240,12 @@ mod tests {
     };
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::{
+        nexus::space_directory::SpaceDirectoryManifestSet,
+        state::{State, World},
+    };
 
     fn test_state() -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();

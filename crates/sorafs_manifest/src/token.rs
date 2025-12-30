@@ -78,8 +78,9 @@ pub enum StreamTokenError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::SigningKey;
+
+    use super::*;
 
     fn sample_body() -> StreamTokenBodyV1 {
         StreamTokenBodyV1 {

@@ -1,9 +1,9 @@
 use iroha_core::sumeragi::consensus::{
     PERMISSIONED_TAG, compute_consensus_fingerprint_from_params,
 };
-use iroha_data_model::block::consensus::ConsensusGenesisParams;
-use iroha_data_model::parameter::system::Parameters;
-use iroha_data_model::prelude::ChainId;
+use iroha_data_model::{
+    block::consensus::ConsensusGenesisParams, parameter::system::Parameters, prelude::ChainId,
+};
 
 fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);

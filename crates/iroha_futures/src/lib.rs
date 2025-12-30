@@ -11,9 +11,11 @@ use std::{
 
 pub use iroha_derive::telemetry_future;
 use iroha_logger::telemetry::{Event as Telemetry, Fields as TelemetryFields};
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json::Value;
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    derive::{JsonDeserialize, JsonSerialize},
+    json::Value,
+};
 
 /// Future which sends info with telemetry about number and length of polls
 #[derive(Debug, Clone, Copy)]
@@ -147,8 +149,9 @@ impl<F: Future> Future for TelemetryFuture<F> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use super::*;
     #[test]
     fn future_poll_telemetry_json_roundtrip() {
         let sample = FuturePollTelemetry {

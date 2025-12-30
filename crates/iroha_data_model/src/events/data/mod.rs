@@ -2,18 +2,17 @@
 
 use std::{format, string::String, vec, vec::Vec};
 
-#[cfg(not(feature = "json"))]
-#[cfg(feature = "transparent_api")]
-use super::EventFilter;
-pub use crate::Registered;
-use crate::prelude::*;
-pub use events::DataEvent;
+pub use events::{DataEvent, confidential};
 pub use filters::{DataEventFilter, OfflineTransferEventFilter};
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-pub use events::confidential;
+#[cfg(not(feature = "json"))]
+#[cfg(feature = "transparent_api")]
+use super::EventFilter;
+pub use crate::Registered;
+use crate::prelude::*;
 mod events;
 mod filters;
 #[cfg(feature = "governance")]

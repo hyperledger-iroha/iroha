@@ -1,14 +1,16 @@
-use crate::{
-    config::{FreezeMetadata, FreezeState, StaticZone},
-    dns,
-};
+use std::collections::HashMap;
+
 use hickory_proto::{
     op::{Message, MessageType, Query, ResponseCode},
     rr::Record,
 };
 use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use std::collections::HashMap;
 use tracing::warn;
+
+use crate::{
+    config::{FreezeMetadata, FreezeState, StaticZone},
+    dns,
+};
 
 /// In-memory resolver state shared between tasks.
 #[derive(Debug, Default)]
@@ -386,11 +388,8 @@ struct ProofBundle {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::bundle::{
-        DelegationProofV1, FreshnessProofV1, KskEntryV1, ProofBundleV1, ZskSignatureV1,
-    };
-    use crate::config::StaticZone;
+    use std::net::Ipv4Addr;
+
     use hickory_proto::{
         op::{Message, Query},
         rr::{Name, RData, Record, RecordType, rdata::A},
@@ -405,7 +404,12 @@ mod tests {
         },
     };
     use iroha_primitives::soradns::derive_gateway_hosts;
-    use std::net::Ipv4Addr;
+
+    use super::*;
+    use crate::{
+        bundle::{DelegationProofV1, FreshnessProofV1, KskEntryV1, ProofBundleV1, ZskSignatureV1},
+        config::StaticZone,
+    };
 
     fn sample_bundle(version: u64) -> ProofBundleV1 {
         ProofBundleV1 {

@@ -1,6 +1,8 @@
 #![cfg(feature = "ivm_zk_tests")]
-use ivm::field;
-use ivm::halo2::{FieldCircuit, FieldOp};
+use ivm::{
+    field,
+    halo2::{FieldCircuit, FieldOp},
+};
 
 #[test]
 fn test_field_add_sub_mul_inv() {

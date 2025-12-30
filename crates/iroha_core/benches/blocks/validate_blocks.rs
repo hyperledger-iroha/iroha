@@ -1,12 +1,13 @@
 #[path = "./common.rs"]
 mod common;
 
+use std::sync::{Arc, OnceLock};
+
 use common::*;
 use iroha_core::{prelude::*, state::State, sumeragi::network_topology::Topology};
 use iroha_crypto::Algorithm;
 use iroha_data_model::{isi::InstructionBox, prelude::*};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-use std::sync::{Arc, OnceLock};
 
 type InstructionBatch = Arc<[InstructionBox]>;
 

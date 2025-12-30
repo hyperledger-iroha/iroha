@@ -8,10 +8,11 @@
 //! consensus payloads without depending on the core runtime crate.
 
 use core::fmt;
+use std::{string::String, vec::Vec};
+
 use iroha_crypto::{Hash, HashOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, DecodeAll, Encode};
-use std::{string::String, vec::Vec};
 
 use super::Header as BlockHeader;
 use crate::{
@@ -1809,9 +1810,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::KeyPair;
     use norito::core::DecodeFromSlice;
+
+    use super::*;
 
     fn dummy_hash() -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32]))

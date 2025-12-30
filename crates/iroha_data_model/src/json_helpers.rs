@@ -4,16 +4,16 @@
 //! `#[cfg_attr(feature = "json", norito(with = "..."))]` attribute. For base64 encoding, use
 //! `#[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]` on `Vec<u8>` fields.
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as B64;
+#[cfg(feature = "json")]
+use std::collections::BTreeMap;
+use std::{format, string::String, vec::Vec};
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize, Parser, Value};
-use std::{format, string::String, vec::Vec};
 
 #[cfg(feature = "json")]
 use crate::soranet::privacy_metrics::SoranetPrivacyModeV1;
-#[cfg(feature = "json")]
-use std::collections::BTreeMap;
 
 /// Serialize a `Vec<u8>` as a base64 string and deserialize from base64.
 #[cfg(feature = "json")]
@@ -218,9 +218,10 @@ pub mod secret_string {
 #[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod account_metadata_map {
+    use std::str::FromStr;
+
     use super::*;
     use crate::{account::AccountId, metadata::Metadata};
-    use std::str::FromStr;
 
     pub fn serialize(value: &BTreeMap<AccountId, Metadata>, out: &mut String) {
         let string_keyed: BTreeMap<String, Metadata> = value
@@ -257,8 +258,9 @@ pub mod account_metadata_map {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use super::*;
     use norito::json;
+
+    use super::*;
 
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct Base64Wrapper {

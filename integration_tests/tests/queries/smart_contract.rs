@@ -1,11 +1,10 @@
 //! Smart contract query behaviour checks.
 
 use eyre::{Result, WrapErr};
+use integration_tests::sandbox;
 use iroha::{client::QueryError, data_model::prelude::*};
 use iroha_test_network::*;
 use iroha_test_samples::load_sample_ivm;
-
-use integration_tests::sandbox;
 
 #[test]
 fn live_query_is_dropped_after_smart_contract_end() -> Result<()> {

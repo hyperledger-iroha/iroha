@@ -5,13 +5,6 @@
 //! transcript hash and is signed with an ML-DSA key managed by the relay or a
 //! delegated issuer.
 
-use blake3::Hasher;
-use norito::{
-    codec::{decode_adaptive, encode_adaptive},
-    derive::{NoritoDeserialize, NoritoSerialize},
-};
-use rand::{CryptoRng, RngCore};
-use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa, verify_mldsa};
 use std::{
     collections::HashMap,
     fs, io,
@@ -19,6 +12,14 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use blake3::Hasher;
+use norito::{
+    codec::{decode_adaptive, encode_adaptive},
+    derive::{NoritoDeserialize, NoritoSerialize},
+};
+use rand::{CryptoRng, RngCore};
+use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa, verify_mldsa};
 use thiserror::Error;
 
 const TOKEN_MAGIC: &[u8; 4] = b"SNTK";
@@ -979,10 +980,11 @@ pub fn frame_looks_like_token(frame: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair;
     use tempfile::tempdir;
+
+    use super::*;
 
     const RELAY_ID: [u8; 32] = [0xAB; 32];
     const TRANSCRIPT: [u8; 32] = [0xCD; 32];

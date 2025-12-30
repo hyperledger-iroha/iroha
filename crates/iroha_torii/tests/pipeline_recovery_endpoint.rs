@@ -1,8 +1,7 @@
 //! Tests for the pipeline recovery endpoint: `/v1/pipeline/recovery/{height}`.
 
 use axum::{Router, routing::get};
-use http_body_util::BodyExt as _;
-use http_body_util::Full;
+use http_body_util::{BodyExt as _, Full};
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::kura::{Kura, PipelineDagSnapshot, PipelineRecoverySidecar};
 use iroha_crypto::{Hash, HashOf};

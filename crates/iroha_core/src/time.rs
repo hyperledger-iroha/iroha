@@ -9,9 +9,11 @@
 //! - Aggregates offsets via trimmed median; exposes `now()` for Torii and
 //!   timers.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::OnceLock;
-use std::time::Instant;
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    sync::OnceLock,
+    time::Instant,
+};
 
 use iroha_data_model::peer::Peer;
 use norito::codec::{Decode, Encode};

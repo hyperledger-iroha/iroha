@@ -8,8 +8,7 @@ use iroha_core::{
     executor::Executor, kura::Kura, query::store::LiveQueryStore, state::State,
     zk::test_utils::halo2_fixture_envelope,
 };
-use iroha_data_model::transaction::signed::TransactionBuilder;
-use iroha_data_model::{ValidationFail, prelude::*};
+use iroha_data_model::{ValidationFail, prelude::*, transaction::signed::TransactionBuilder};
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 

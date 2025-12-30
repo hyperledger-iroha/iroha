@@ -8,6 +8,7 @@
 //! long-term public keys.
 
 use core::{fmt, str::FromStr};
+
 use hkdf::Hkdf;
 use rand::{CryptoRng, RngCore};
 use sha3::{Digest, Sha3_256};
@@ -559,9 +560,10 @@ fn derive_material(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
+
+    use super::*;
 
     #[test]
     fn generated_keys_roundtrip() {

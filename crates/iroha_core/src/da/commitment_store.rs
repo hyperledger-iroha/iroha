@@ -145,15 +145,19 @@ impl DaCommitmentStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
-        da::commitment::{
-            DaCommitmentBundle, DaCommitmentLocation, DaProofScheme, KzgCommitment, RetentionClass,
+        da::{
+            commitment::{
+                DaCommitmentBundle, DaCommitmentLocation, DaProofScheme, KzgCommitment,
+                RetentionClass,
+            },
+            types::{BlobDigest, StorageTicketId},
         },
-        da::types::{BlobDigest, StorageTicketId},
         nexus::LaneId,
     };
+
+    use super::*;
 
     fn sample_record(id: u32, epoch: u64, seq: u64) -> DaCommitmentRecord {
         let id_u8 = u8::try_from(id).expect("lane id fits in u8 for test");

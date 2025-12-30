@@ -1,8 +1,9 @@
 //! Benchmark CRC64 over large payloads with zstd enabled (SIMD-accelerated CRC64).
 
+use std::io::Cursor;
+
 use crc64fast::Digest as Crc64Digest;
 use criterion::{BenchmarkId, Criterion};
-use std::io::Cursor;
 
 fn random_bytes(n: usize) -> Vec<u8> {
     // Deterministic pseudo-random bytes

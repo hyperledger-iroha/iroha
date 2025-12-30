@@ -8,9 +8,9 @@ use norito::{NoritoDeserialize, NoritoSerialize};
 use crate::{
     Error, Result, TransitionBatch,
     backend::{
-        self, Backend, BackendArtifact, BackendConfig, LOOKUP_PRODUCT_DOMAIN, StarkBackend,
-        TRANSCRIPT_TAG_ALPHA_PREFIX, TRANSCRIPT_TAG_GAMMA, TRANSCRIPT_TAG_INIT,
-        TRANSCRIPT_TAG_ROOTS,
+        self, Backend, BackendArtifact, BackendConfig, ExecutionMode, LOOKUP_PRODUCT_DOMAIN,
+        PoseidonExecutionMode, StarkBackend, TRANSCRIPT_TAG_ALPHA_PREFIX, TRANSCRIPT_TAG_GAMMA,
+        TRANSCRIPT_TAG_INIT, TRANSCRIPT_TAG_ROOTS,
     },
     ordering,
     trace::{
@@ -19,8 +19,6 @@ use crate::{
     },
     trace_commitment,
 };
-
-use crate::backend::{ExecutionMode, PoseidonExecutionMode};
 
 /// Protocol version advertised by the Stage 2 prover implementation.
 const PROTOCOL_VERSION: u16 = 1;

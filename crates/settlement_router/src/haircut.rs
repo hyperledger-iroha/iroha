@@ -1,8 +1,10 @@
 //! Liquidity haircut tiers applied to conversion results.
 
 use derive_more::{Display, From};
-use norito::json::{JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    json::{JsonDeserialize, JsonSerialize},
+};
 
 /// Available liquidity profiles for deterministic haircut application.
 #[derive(

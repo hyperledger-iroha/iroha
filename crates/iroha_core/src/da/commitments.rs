@@ -129,7 +129,6 @@ fn is_da_commitment_file(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
@@ -141,6 +140,8 @@ mod tests {
     };
     use norito::to_bytes;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn sample_record(lane: u32, seq: u64) -> DaCommitmentRecord {
         DaCommitmentRecord::new(

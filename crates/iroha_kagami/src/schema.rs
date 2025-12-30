@@ -1,9 +1,10 @@
-use super::*;
 use std::{collections::HashSet, fs::File, path::PathBuf};
 
-use crate::tui;
 use iroha_genesis::RawGenesisTransaction;
 use iroha_schema::{IntoSchema, MetaMap, Metadata};
+
+use super::*;
+use crate::tui;
 
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {

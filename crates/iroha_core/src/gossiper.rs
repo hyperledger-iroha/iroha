@@ -1257,8 +1257,8 @@ fn partition_gossip_batch(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::queue::RoutingDecision;
+    use std::{borrow::Cow, collections::BTreeSet, num::NonZeroUsize};
+
     use iroha_config::parameters::actual::{
         DataspaceGossipFallback, LaneConfig as LaneGeometry, RestrictedPublicPayload,
     };
@@ -1266,7 +1266,9 @@ mod tests {
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
     };
-    use std::{borrow::Cow, collections::BTreeSet, num::NonZeroUsize};
+
+    use super::*;
+    use crate::queue::RoutingDecision;
 
     fn build_transaction(message: &str) -> (SignedTransaction, AcceptedTransaction<'static>) {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");

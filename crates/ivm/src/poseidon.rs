@@ -5,11 +5,13 @@
 //! This mirrors the circuit implementation used by Halo2 and allows
 //! tests to exercise the same arithmetic on CPUs with SSE2, AVX2, AVX-512 or NEON.
 
-use crate::bn254_vec::{self as field_vec, FieldElem};
+use std::sync::OnceLock;
+
 use ff::{Field, PrimeField};
 use halo2curves::bn256::Fr;
 use poseidon_primitives::poseidon::primitives::Spec;
-use std::sync::OnceLock;
+
+use crate::bn254_vec::{self as field_vec, FieldElem};
 
 #[derive(Debug)]
 struct FrSpec;

@@ -6,19 +6,16 @@
     clippy::map_unwrap_or
 )]
 
-use iroha_core::smartcontracts::ivm::host::CoreHost;
-use iroha_core::state::WorldReadOnly;
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, World},
+    smartcontracts::ivm::host::CoreHost,
+    state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::metadata::Metadata;
-use iroha_data_model::nft::NftId;
-use iroha_data_model::{account::NewAccount, prelude::*};
+use iroha_data_model::{account::NewAccount, metadata::Metadata, nft::NftId, prelude::*};
 use ivm::{IVM, PointerType, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode as NoritoEncode;

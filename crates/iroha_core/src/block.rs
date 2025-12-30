@@ -49,6 +49,8 @@
 //! Flow: Having [`SignedBlock`], [`ValidBlock::validate_unchecked`] (infallible),
 //! [`ValidBlock::commit_unchecked`] (infallible)
 use core::fmt;
+#[cfg(feature = "bls")]
+use std::sync::LazyLock;
 #[cfg(feature = "telemetry")]
 use std::time::Instant;
 use std::{
@@ -63,20 +65,15 @@ use iroha_crypto::{HashOf, KeyPair, MerkleTree};
 #[cfg(feature = "bls")]
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
-    ChainId,
+    ChainId, Identifiable,
     account::{AccountController, AccountId},
     asset::{AssetDefinitionId, AssetId},
-    block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
-    consensus::{ConsensusKeyRole, ExecutionQcRecord},
-    nexus::{
-        AssetHandle, AxtBinding, AxtHandleReplayKey, AxtPolicyEntry, AxtRejectReason, DataSpaceId,
-        LaneId, LaneMetadata, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
+    block::{
+        consensus::{LaneBlockCommitment, LaneSettlementReceipt},
+        *,
     },
-};
-use iroha_data_model::{
-    Identifiable,
-    block::*,
     confidential::ConfidentialFeatureDigest,
+    consensus::{ConsensusKeyRole, ExecutionQcRecord},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -84,6 +81,10 @@ use iroha_data_model::{
     domain::DomainId,
     events::prelude::*,
     isi::{GrantBox, register::RegisterBox, transfer::TransferBox},
+    nexus::{
+        AssetHandle, AxtBinding, AxtHandleReplayKey, AxtPolicyEntry, AxtRejectReason, DataSpaceId,
+        LaneId, LaneMetadata, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
+    },
     peer::PeerId,
     permission::Permission,
     transaction::{
@@ -92,8 +93,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::asset_definition::CanRegisterAssetDefinition;
-use iroha_primitives::numeric::Numeric;
-use iroha_primitives::small::SmallVec;
+use iroha_primitives::{numeric::Numeric, small::SmallVec};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 #[cfg(feature = "telemetry")]
@@ -102,8 +102,6 @@ use mv::storage::StorageReadOnly;
 #[cfg(feature = "bls")]
 use norito::json::Value as JsonValue;
 use rust_decimal::Decimal;
-#[cfg(feature = "bls")]
-use std::sync::LazyLock;
 
 #[cfg(feature = "bls")]
 fn bls_pop_from_metadata(
@@ -171,11 +169,12 @@ fn map_overlay_error(
 
 #[cfg(test)]
 mod overlay_error_tests {
-    use super::*;
     use iroha_data_model::{
         ValidationFail,
         nexus::{AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
     };
+
+    use super::*;
 
     #[test]
     fn map_overlay_error_preserves_axt_context() {
@@ -216,8 +215,6 @@ fn bls_small_pop_from_metadata(
 const PIPELINE_LAYER_WIDTH_THRESHOLDS: [u64; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
 const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
     iroha_data_model::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST;
-use crate::da::DaShardCursorError;
-use crate::fees::SwapEvidence;
 use iroha_genesis::GENESIS_DOMAIN_ID;
 #[cfg(feature = "telemetry")]
 use settlement_router::haircut::LiquidityProfile;
@@ -234,6 +231,7 @@ use crate::telemetry::{
     DataspacePipelineSummary, DataspaceTeuGaugeUpdate, LanePipelineSummary, LaneTeuGaugeUpdate,
     SchedulerLayerWidthBuckets,
 };
+use crate::{da::DaShardCursorError, fees::SwapEvidence};
 #[derive(Default)]
 struct LaneSummary {
     tx_vertices: u64,
@@ -468,6 +466,13 @@ fn record_lane_settlement_metrics(
         );
     }
 }
+// Quarantine lane: classification hook (opt-in).
+// By default, no transaction is classified as quarantine.
+// Tests or embedding code may set a classifier at runtime.
+use std::sync::{Arc, Mutex, OnceLock};
+
+use iroha_data_model::Encode as _;
+
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
@@ -485,12 +490,6 @@ use crate::{
     sumeragi::{VotingBlock, network_topology::Topology, status},
     tx::{AcceptTransactionFail, LaneAssignment, enforce_fraud_policy},
 };
-use iroha_data_model::Encode as _;
-
-// Quarantine lane: classification hook (opt-in).
-// By default, no transaction is classified as quarantine.
-// Tests or embedding code may set a classifier at runtime.
-use std::sync::{Arc, Mutex, OnceLock};
 type QuarantineClassifier = fn(&iroha_data_model::transaction::SignedTransaction) -> bool;
 type CommittedBlockEval = Result<CommittedBlock, (Box<ValidBlock>, Box<BlockValidationError>)>;
 type WithCommittedBlockEvents = WithEvents<CommittedBlockEval>;
@@ -746,7 +745,6 @@ fn prefetch_account_stores(state_block: &StateBlock<'_>, account_id: &AccountId)
 
 #[cfg(test)]
 mod prefetch_tests {
-    use super::*;
     use iroha_data_model::{
         account::{AccountDetails, AccountId, AccountValue},
         block::BlockHeader,
@@ -758,6 +756,7 @@ mod prefetch_tests {
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
+    use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -1047,8 +1046,7 @@ fn schedule_components_ready_heap(
         iroha_data_model::transaction::signed::TransactionEntrypoint,
     >],
 ) -> Option<Vec<usize>> {
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
+    use std::{cmp::Reverse, collections::BinaryHeap};
 
     let n = call_hashes.len();
     debug_assert_eq!(
@@ -1236,8 +1234,7 @@ fn schedule_ready_heap_global(
         iroha_data_model::transaction::signed::TransactionEntrypoint,
     >],
 ) -> Vec<usize> {
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
+    use std::{cmp::Reverse, collections::BinaryHeap};
 
     let n = indeg.len();
     debug_assert_eq!(
@@ -2011,14 +2008,16 @@ mod new {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
-        use crate::{block::BlockBuilder, tx::AcceptedTransaction};
+        use std::{borrow::Cow, time::Duration};
+
         use iroha_crypto::KeyPair;
         use iroha_data_model::{ChainId, isi::Log, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::time::TimeSource;
         use iroha_test_samples::gen_account_in;
-        use std::{borrow::Cow, time::Duration};
+
+        use super::*;
+        use crate::{block::BlockBuilder, tx::AcceptedTransaction};
 
         #[test]
         fn into_signed_block_preserves_transactions() {
@@ -2090,18 +2089,19 @@ mod new {
 }
 
 pub(crate) mod valid {
-    use iroha_primitives::time::TimeSource;
-
     use commit::CommittedBlock;
     use iroha_data_model::{
         ChainId,
         account::AccountId,
         events::pipeline::PipelineEventBox,
-        nexus::{GroupBinding, HandleBudget, HandleSubject},
+        nexus::{AxtPolicySnapshot, GroupBinding, HandleBudget, HandleSubject},
     };
+    use iroha_primitives::time::TimeSource;
 
-    use super::event::{map_block_err_to_reason, map_sig_err_to_reason};
-    use super::*;
+    use super::{
+        event::{map_block_err_to_reason, map_sig_err_to_reason},
+        *,
+    };
     use crate::{
         smartcontracts::ivm::cache::IvmCache,
         state::{
@@ -2110,7 +2110,6 @@ pub(crate) mod valid {
         },
         sumeragi::network_topology::Role,
     };
-    use iroha_data_model::nexus::AxtPolicySnapshot;
 
     /// Block that was validated and accepted
     #[derive(Debug, Clone)]
@@ -4217,13 +4216,12 @@ pub(crate) mod valid {
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
         ) {
-            use crate::pipeline::access::{
-                AccessSetSource, IvmStrategy, derive_for_transaction_with_source,
-            };
-            use crate::pipeline::overlay::{
-                TxOverlay, build_overlay_for_transaction_with_accounts_zk,
-            };
             use rayon::prelude::*;
+
+            use crate::pipeline::{
+                access::{AccessSetSource, IvmStrategy, derive_for_transaction_with_source},
+                overlay::{TxOverlay, build_overlay_for_transaction_with_accounts_zk},
+            };
 
             let _ivm_cache = IvmCache::new();
             if block.has_results() {
@@ -5351,8 +5349,9 @@ pub(crate) mod valid {
             // Apply overlays either via parallel-detached path (per conflict-free layer)
             // or via the sequential path based on the `pipeline.parallel_apply` knob.
             if state_block.pipeline.parallel_apply {
-                use crate::state::DetachedStateTransactionDelta;
                 use rayon::prelude::*;
+
+                use crate::state::DetachedStateTransactionDelta;
 
                 #[derive(Clone)]
                 struct PreparedEntry {
@@ -6715,8 +6714,32 @@ pub(crate) mod valid {
             time::Duration,
         };
 
-        use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, SignatureOf};
+        use iroha_crypto::{
+            Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf,
+        };
+        use iroha_data_model::{
+            block::error::BlockRejectionReason as Reason,
+            consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
+            da::{
+                commitment::{
+                    DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment,
+                    RetentionClass,
+                },
+                types::{BlobDigest, StorageTicketId},
+            },
+            isi::{Log, error::Mismatch},
+            nexus::LaneId,
+            parameter::Parameters,
+            prelude::PeerId,
+            sorafs::pin_registry::ManifestDigest,
+            transaction::{TransactionBuilder, error::TransactionLimitError},
+        };
+        use iroha_logger::Level;
+        use iroha_primitives::time::TimeSource;
+        use iroha_schema::Ident;
+        use iroha_test_samples::{ALICE_ID, gen_account_in};
         use mv::cell::Cell;
+        use nonzero_ext::nonzero;
 
         use super::*;
         use crate::{
@@ -6726,32 +6749,6 @@ pub(crate) mod valid {
             sumeragi::network_topology::{Topology, test_topology_with_keys},
             tx::AcceptedTransaction,
         };
-        use iroha_crypto::Signature;
-        use iroha_data_model::consensus::{
-            ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
-        };
-        use iroha_data_model::da::{
-            commitment::{
-                DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment,
-                RetentionClass,
-            },
-            types::{BlobDigest, StorageTicketId},
-        };
-        use iroha_data_model::nexus::LaneId;
-        use iroha_data_model::parameter::Parameters;
-        use iroha_data_model::prelude::PeerId;
-        use iroha_data_model::sorafs::pin_registry::ManifestDigest;
-        use iroha_data_model::{
-            block::error::BlockRejectionReason as Reason,
-            isi::{Log, error::Mismatch},
-            transaction::TransactionBuilder,
-            transaction::error::TransactionLimitError,
-        };
-        use iroha_logger::Level;
-        use iroha_primitives::time::TimeSource;
-        use iroha_schema::Ident;
-        use iroha_test_samples::{ALICE_ID, gen_account_in};
-        use nonzero_ext::nonzero;
 
         fn insert_consensus_key(
             world: &mut World,
@@ -8263,11 +8260,12 @@ pub(crate) mod valid {
 
     #[test]
     fn rejected_block_emits_rejection_event() {
-        use crate::kura::Kura;
-        use crate::query::store::LiveQueryStore;
-        use crate::sumeragi::network_topology::Topology;
         use iroha_data_model::peer::PeerId;
         use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+
+        use crate::{
+            kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
+        };
 
         // Build a fresh state (height = 0)
         let kura = Kura::blank_kura_for_testing();
@@ -8358,19 +8356,21 @@ mod commit {
 
     #[cfg(all(test, feature = "app_api"))]
     mod axt_validation_tests {
-        use super::*;
-        use crate::block::valid::validate_axt_envelopes;
-        use crate::{
-            kura::Kura,
-            query::store::LiveQueryStore,
-            state::{State, World},
-        };
+        use std::collections::BTreeMap;
+
         use iroha_data_model::nexus::{
             AssetHandle, AxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment, AxtPolicyBinding,
             AxtPolicyEntry, AxtPolicySnapshot, AxtProofFragment, GroupBinding, HandleBudget,
             HandleSubject, ProofBlob, RemoteSpendIntent, SpendOp,
         };
-        use std::collections::BTreeMap;
+
+        use super::*;
+        use crate::{
+            block::valid::validate_axt_envelopes,
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+        };
 
         fn sample_handle(
             binding: AxtBinding,
@@ -9666,9 +9666,10 @@ mod dag_tests {
 
 #[cfg(test)]
 mod dsu_tests {
+    use iroha_primitives::small::SmallVec;
+
     use super::{DisjointSet, intern_access};
     use crate::pipeline::access::AccessSet;
-    use iroha_primitives::small::SmallVec;
 
     fn ids(reads: &[&str], writes: &[&str]) -> AccessSet {
         let mut s = AccessSet::new();
@@ -9802,8 +9803,7 @@ mod scheduler_variant_tests {
 
     #[test]
     fn ready_heap_scheduler_topo_order() {
-        use std::cmp::Reverse;
-        use std::collections::BinaryHeap;
+        use std::{cmp::Reverse, collections::BinaryHeap};
         let (row_offsets, cols, indeg, call_hashes) = sample_graph();
         let n = indeg.len();
         let mut indeg_s = indeg.clone();
@@ -9864,18 +9864,18 @@ mod scheduler_variant_tests {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::errors::AmxStage;
-    use iroha_data_model::prelude::*;
+    use std::borrow::Cow;
+
+    use iroha_data_model::{errors::AmxStage, prelude::*};
     use iroha_genesis::GENESIS_DOMAIN_ID;
     #[cfg(feature = "bls")]
     use iroha_primitives::json::Json;
     use iroha_primitives::time::TimeSource;
     use iroha_test_samples::gen_account_in;
-    use std::borrow::Cow;
 
     use super::*;
-    use crate::block::event::map_sig_err_to_reason;
     use crate::{
+        block::event::map_sig_err_to_reason,
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
@@ -10640,9 +10640,10 @@ mod tests {
     #[cfg(feature = "bls")]
     #[test]
     fn verify_validator_signatures_accepts_bls_normal() {
-        use crate::sumeragi::network_topology::Topology;
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::prelude::PeerId;
+
+        use crate::sumeragi::network_topology::Topology;
 
         // 3 BLS peers
         let kp0 = KeyPair::from_seed(b"seed0".to_vec(), Algorithm::BlsNormal);
@@ -10678,15 +10679,17 @@ mod tests {
 
 #[cfg(test)]
 mod commit_signature_tally_tests {
+    use std::collections::BTreeSet;
+
+    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+    use iroha_data_model::block::builder::BlockBuilder as DataBlockBuilder;
+    use nonzero_ext::nonzero;
+
     use super::*;
     use crate::{
         block::valid::commit_signature_tally,
         sumeragi::{consensus::ValidatorIndex, network_topology::Topology},
     };
-    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
-    use iroha_data_model::block::builder::BlockBuilder as DataBlockBuilder;
-    use nonzero_ext::nonzero;
-    use std::collections::BTreeSet;
 
     #[cfg(feature = "bls")]
     #[test]

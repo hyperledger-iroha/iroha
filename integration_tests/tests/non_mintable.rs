@@ -1,11 +1,10 @@
 //! Integration tests covering single-mint asset semantics.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::{isi::InstructionBox, prelude::*};
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-
-use integration_tests::sandbox;
 
 #[test]
 fn non_mintable_asset_can_be_minted_once_but_not_twice() -> Result<()> {

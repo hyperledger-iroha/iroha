@@ -3,8 +3,7 @@
 //!   cargo run -p ivm --bin gen_syscalls_doc -- --write
 //!   cargo run -p ivm --bin gen_syscalls_doc -- --check
 
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED SYSCALLS -->";
 const END: &str = "<!-- END GENERATED SYSCALLS -->";

@@ -662,9 +662,10 @@ fn ratio_to_bps(success: u64, total: u64) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use sorafs_manifest::capacity::ReplicationOrderSlaV1;
+
     use super::*;
     use crate::capacity::ReplicationPlan;
-    use sorafs_manifest::capacity::ReplicationOrderSlaV1;
 
     #[test]
     fn meter_tracks_orders() {

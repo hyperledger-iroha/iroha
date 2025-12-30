@@ -432,11 +432,12 @@ pub fn metal_available() -> bool {
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
+use std::cell::OnceCell;
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2::rc::Retained;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2::runtime::ProtocolObject;
-#[cfg(all(target_os = "macos", feature = "metal"))]
-use std::cell::OnceCell;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn discover_metal_device() -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>> {
@@ -1217,6 +1218,7 @@ impl MetalState {
             let expect = [5u32, 5, 5, 5];
             let add_ok = {
                 use core::ptr::NonNull;
+
                 use objc2_metal::*;
 
                 let buf_a = unsafe {
@@ -1295,6 +1297,7 @@ impl MetalState {
                 sha256_compress_scalar_ref(&mut st_scalar, &block);
                 // Run through Metal pipeline
                 use core::ptr::NonNull;
+
                 use objc2_metal::*;
                 let buf_state = unsafe {
                     device.newBufferWithBytes_length_options(
@@ -1348,6 +1351,7 @@ impl MetalState {
             // AES round quick check against CPU reference
             let aes_ok = {
                 use core::ptr::NonNull;
+
                 use objc2_metal::*;
                 let state = [
                     0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
@@ -1577,6 +1581,7 @@ impl MetalState {
 
             let keccak_ok = {
                 use core::ptr::NonNull;
+
                 use objc2_metal::*;
                 let mut init = [0u64; 25];
                 for i in 0..25 {
@@ -1639,6 +1644,7 @@ impl MetalState {
 
             let sha_pairs_ok = {
                 use core::ptr::NonNull;
+
                 use objc2_metal::*;
 
                 fn cpu_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
@@ -1759,6 +1765,7 @@ impl MetalState {
             #[cfg(feature = "ed25519")]
             let ed25519_ok = {
                 use core::ptr::NonNull;
+
                 use curve25519_dalek::scalar::Scalar;
                 use ed25519_dalek::{Signer, SigningKey};
                 use sha2::{Digest, Sha512};
@@ -1989,6 +1996,7 @@ fn metal_vadd64(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
 
@@ -2070,6 +2078,7 @@ fn metal_vadd32(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
 
@@ -2141,6 +2150,7 @@ fn metal_vbit_cached(
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
 
@@ -2242,6 +2252,7 @@ fn metal_sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
         return false;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
 
@@ -2316,6 +2327,7 @@ pub fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
 
@@ -2387,6 +2399,7 @@ pub fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
     if digests.is_empty() {
@@ -2489,6 +2502,7 @@ pub(crate) fn metal_ed25519_verify_batch(
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
 
@@ -2575,6 +2589,7 @@ pub fn metal_aesenc_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
     autoreleasepool(|_| {
@@ -2643,6 +2658,7 @@ pub fn metal_aesdec_round(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
     autoreleasepool(|_| {
@@ -2711,6 +2727,7 @@ pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
         return false;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
     autoreleasepool(|_| {
@@ -2766,6 +2783,7 @@ pub fn metal_aesenc_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
     if states.is_empty() {
@@ -2844,6 +2862,7 @@ pub fn metal_aesdec_batch(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
     if states.is_empty() {
@@ -2924,6 +2943,7 @@ pub fn metal_aesenc_rounds_batch(
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
     if states.is_empty() {
@@ -3020,6 +3040,7 @@ pub fn metal_aesdec_rounds_batch(
         return None;
     }
     use core::ptr::NonNull;
+
     use objc2::rc::autoreleasepool;
     use objc2_metal::*;
     if states.is_empty() {
@@ -3133,8 +3154,10 @@ pub fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 fn sha256_compress_armv8(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
-    use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    };
     static FORCED_DISABLED: AtomicBool = AtomicBool::new(false);
     static SELFTEST_OK: OnceLock<bool> = OnceLock::new();
     if FORCED_DISABLED.load(Ordering::SeqCst) {
@@ -3266,8 +3289,10 @@ unsafe fn sha256_compress_armv8_impl(state: &mut [u32; 8], block: &[u8; 64]) {
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn sha256_compress_x86_shani(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
-    use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    };
     static FORCED_DISABLED: AtomicBool = AtomicBool::new(false);
     static SELFTEST_OK: OnceLock<bool> = OnceLock::new();
     if FORCED_DISABLED.load(Ordering::SeqCst) {
@@ -4443,8 +4468,9 @@ pub fn reset_metal_backend_for_tests() {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Instant;
+
+    use super::*;
 
     #[test]
     fn metal_acceleration_speed() {

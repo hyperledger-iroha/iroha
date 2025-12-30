@@ -6,12 +6,11 @@
 //! - All peers converge on the same canonical certificate (identical signer index set).
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::{block::SignedBlock, prelude::*, query::block::prelude::FindBlocks};
 use iroha_primitives::unique_vec::UniqueVec;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use tokio::runtime::Runtime;
-
-use integration_tests::sandbox;
 
 fn start_network(
     builder: NetworkBuilder,

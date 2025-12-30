@@ -79,8 +79,9 @@ mod scalar {
 
 #[cfg(feature = "simd")]
 mod simd {
-    use super::{Ordering, scalar};
     use core::simd::{LaneCount, Simd, SimdOrd, SimdPartialEq, SupportedLaneCount};
+
+    use super::{Ordering, scalar};
 
     const LANES: usize = 8;
 

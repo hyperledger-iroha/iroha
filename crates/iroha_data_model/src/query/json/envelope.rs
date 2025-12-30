@@ -5,15 +5,16 @@
 //! ensuring field ordering stays deterministic and validation errors surface
 //! with precise context.
 
-use std::str::FromStr;
 use std::{
     borrow::ToOwned,
     format,
     num::NonZeroU64,
+    str::FromStr,
     string::{String, ToString},
 };
 
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
+use thiserror::Error;
 
 use crate::{
     name::Name,
@@ -25,8 +26,6 @@ use crate::{
         parameters::{FetchSize, Pagination, QueryParams, Sorting},
     },
 };
-
-use thiserror::Error;
 
 fn build_query_with_filter<T, F>(
     predicate: CompoundPredicate<T>,
@@ -868,8 +867,9 @@ impl IterableQueryJson {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::num::NonZeroU64;
+
+    use super::*;
 
     #[test]
     fn singular_roundtrip() {

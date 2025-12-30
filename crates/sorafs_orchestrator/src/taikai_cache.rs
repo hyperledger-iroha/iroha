@@ -2328,7 +2328,8 @@ impl CacheAdmissionTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::str::FromStr;
+
     use iroha_data_model::{
         da::types::{BlobDigest, StorageTicketId},
         name::Name,
@@ -2338,7 +2339,8 @@ mod tests {
         },
     };
     use rand::{SeedableRng, rngs::StdRng};
-    use std::str::FromStr;
+
+    use super::*;
 
     fn digest(value: u8) -> BlobDigest {
         let mut bytes = [0u8; 32];

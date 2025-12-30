@@ -1,8 +1,13 @@
 use core::{fmt, str::FromStr};
+
 use pqcrypto_kyber::{kyber512, kyber768, kyber1024};
-use pqcrypto_traits::Error as PqError;
-use pqcrypto_traits::kem::{Ciphertext as KemCiphertext, PublicKey as KemPublicKey};
-use pqcrypto_traits::kem::{SecretKey as KemSecretKey, SharedSecret as KemSharedSecret};
+use pqcrypto_traits::{
+    Error as PqError,
+    kem::{
+        Ciphertext as KemCiphertext, PublicKey as KemPublicKey, SecretKey as KemSecretKey,
+        SharedSecret as KemSharedSecret,
+    },
+};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -93,7 +98,10 @@ impl MlKemSuite {
     /// assert_eq!(params.public_key, MlKemSuite::MlKem512.public_key_len());
     /// assert_eq!(params.secret_key, MlKemSuite::MlKem512.secret_key_len());
     /// assert_eq!(params.ciphertext, MlKemSuite::MlKem512.ciphertext_len());
-    /// assert_eq!(params.shared_secret, MlKemSuite::MlKem512.shared_secret_len());
+    /// assert_eq!(
+    ///     params.shared_secret,
+    ///     MlKemSuite::MlKem512.shared_secret_len()
+    /// );
     /// ```
     #[must_use]
     pub fn parameters(self) -> MlKemParameters {

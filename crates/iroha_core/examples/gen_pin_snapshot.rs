@@ -10,11 +10,11 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
-use iroha_data_model::isi::sorafs::{
-    ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-    RegisterPinManifest,
-};
 use iroha_data_model::{
+    isi::sorafs::{
+        ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
+        RegisterPinManifest,
+    },
     prelude::*,
     sorafs::{
         capacity::ProviderId,
@@ -27,12 +27,10 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use norito::{json, json::Value, to_bytes};
-use sorafs_manifest::pin_registry::{
-    AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
-};
 use sorafs_manifest::{
     AliasBindingV1, CouncilSignature, REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1,
     ReplicationOrderSlaV1, ReplicationOrderV1, chunker_registry,
+    pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
 };
 
 const FIXTURE_PATH: &str = "crates/iroha_core/tests/fixtures/sorafs_pin_registry/snapshot.json";

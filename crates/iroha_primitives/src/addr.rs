@@ -10,14 +10,12 @@ use std::{borrow::Cow, format, string::String, vec::Vec};
 
 use derive_more::{AsRef, Debug, Display, From, IntoIterator};
 use iroha_macro::FromVariant;
-
 /// Parses an IPv4 or IPv6 socket address literal at compile time.
 pub use iroha_primitives_derive::socket_addr;
 use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
-use norito::literal;
-use norito::{Decode, Encode};
+use norito::{Decode, Encode, literal};
 
 use crate::{conststr::ConstString, ffi};
 
@@ -772,8 +770,9 @@ impl SocketAddr {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use super::*;
     use norito::json::{self, FastJsonWrite};
+
+    use super::*;
 
     #[test]
     fn socket_addr_json_roundtrip() {

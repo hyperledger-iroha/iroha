@@ -822,13 +822,14 @@ pub async fn handle_get_cases(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::PublicKey;
     use iroha_data_model::{
         account::AccountAddress,
         sns::{self, SuffixStatus},
     };
     use iroha_primitives::json::Json;
+
+    use super::*;
 
     fn payment(owner: &AccountId, amount: u64) -> PaymentProofV1 {
         PaymentProofV1 {

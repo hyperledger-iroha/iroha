@@ -304,8 +304,9 @@ fn limiter_from_window(window: SorafsQuotaWindow) -> Option<Arc<ActionLimiter>> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::thread;
+
+    use super::*;
 
     #[test]
     fn quota_allows_within_window() {

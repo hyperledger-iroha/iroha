@@ -80,9 +80,10 @@ pub enum GenesisMessage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::{Hash, KeyPair};
     use norito::codec::{Decode as NoritoDecode, Encode as NoritoEncode};
+
+    use super::*;
 
     #[test]
     fn request_roundtrip() {

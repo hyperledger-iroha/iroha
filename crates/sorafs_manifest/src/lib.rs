@@ -39,12 +39,6 @@ pub mod repair;
 pub mod token;
 pub mod validation;
 
-pub use self::gateway_fixture::{
-    GatewayFixtureMetadata, SORAFS_GATEWAY_CAR_DIGEST_HEX, SORAFS_GATEWAY_FIXTURE_DIGEST_HEX,
-    SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX, SORAFS_GATEWAY_FIXTURE_VERSION,
-    SORAFS_GATEWAY_MANIFEST_DIGEST_HEX, SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX,
-    SORAFS_GATEWAY_PROFILE_VERSION, gateway_fixture_digest_hex, gateway_fixture_metadata,
-};
 pub use capacity::{
     AssignmentError, CAPACITY_DECLARATION_VERSION_V1, CAPACITY_DISPUTE_VERSION_V1,
     CAPACITY_TELEMETRY_VERSION_V1, CapacityDeclarationV1, CapacityDeclarationValidationError,
@@ -138,6 +132,13 @@ pub use token::{StreamTokenBodyV1, StreamTokenError, StreamTokenV1};
 pub use validation::{
     ManifestValidationError, PinPolicyConstraints, validate_chunker_handle, validate_manifest,
     validate_pin_policy,
+};
+
+pub use self::gateway_fixture::{
+    GatewayFixtureMetadata, SORAFS_GATEWAY_CAR_DIGEST_HEX, SORAFS_GATEWAY_FIXTURE_DIGEST_HEX,
+    SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX, SORAFS_GATEWAY_FIXTURE_VERSION,
+    SORAFS_GATEWAY_MANIFEST_DIGEST_HEX, SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX,
+    SORAFS_GATEWAY_PROFILE_VERSION, gateway_fixture_digest_hex, gateway_fixture_metadata,
 };
 
 /// Manifest version identifier.

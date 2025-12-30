@@ -1,15 +1,19 @@
-use crate::{JsonTarget, workspace_root};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs::{self, File},
+    io::Write,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use blake3::hash as blake3_hash;
 use eyre::{Context, Result, bail, ensure, eyre};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
 use norito::json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
-use std::fs::{self, File};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 use time::{Date, format_description::well_known::Iso8601};
+
+use crate::{JsonTarget, workspace_root};
 
 const KIT_FILES: &[(&str, &str)] = &[
     (
@@ -845,11 +849,12 @@ fn parse_count_map(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::JsonTarget;
     use iroha_crypto::PublicKey;
     use tempfile::TempDir;
     use time::Month;
+
+    use super::*;
+    use crate::JsonTarget;
 
     fn passing_metrics_value() -> Value {
         value_object([

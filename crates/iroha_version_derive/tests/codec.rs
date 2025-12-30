@@ -7,8 +7,10 @@ mod tests {
         error::{Error, Result},
     };
     use iroha_version_derive::{declare_versioned, version};
-    use norito::json::{JsonDeserialize, JsonSerialize};
-    use norito::{Decode as NoritoDecode, Encode as NoritoEncode};
+    use norito::{
+        Decode as NoritoDecode, Encode as NoritoEncode,
+        json::{JsonDeserialize, JsonSerialize},
+    };
 
     mod model_1 {
         use super::*;

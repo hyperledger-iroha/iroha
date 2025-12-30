@@ -13,25 +13,6 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use super::super::rbc_store::{SessionKey, SoftwareManifest};
-use super::background::dispatch_background_request;
-use super::view_change::{
-    ViewChangeProgress, ViewChangeProofOutcome, merge_view_change_proof,
-    note_view_change_proof_status,
-};
-use super::vrf::VrfLocalState;
-use super::*;
-use super::{Actor, BlockMessage};
-use crate::block::BlockValidationError;
-use crate::kura::Kura;
-use crate::query::store::LiveQueryStore;
-use crate::queue::{Queue, SingleLaneRouter};
-use crate::state::{State, World};
-use crate::sumeragi::consensus::{Phase, ValidatorIndex};
-use crate::sumeragi::view_change::{ProofBuilder, ProofChain};
-#[cfg(feature = "telemetry")]
-use crate::telemetry::{Metrics, Telemetry};
-use crate::tx::{AcceptTransactionFail, AcceptedTransaction};
 use eyre::eyre;
 use iroha_config::parameters::actual::{
     ConsensusMode, NodeRole, ProofPolicy, Queue as QueueConfig, SoranetHandshake, SoranetPrivacy,
@@ -39,18 +20,8 @@ use iroha_config::parameters::actual::{
     SumeragiNposTimeouts, SumeragiNposVrf,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
-use iroha_data_model::ChainId;
-use iroha_data_model::da::{
-    commitment::{DaCommitmentRecord, DaProofScheme, KzgCommitment, RetentionClass},
-    types::{BlobDigest, StorageTicketId},
-};
-use iroha_data_model::domain::DomainId;
-use iroha_data_model::isi::InstructionBox;
-use iroha_data_model::merge::MergeCommitteeSignature;
-use iroha_data_model::nexus::{DataSpaceId, LaneId, LaneRelayEnvelope};
-use iroha_data_model::prelude::{AccountId, Domain, Register, TransactionBuilder};
-use iroha_data_model::sorafs::pin_registry::ManifestDigest;
 use iroha_data_model::{
+    ChainId,
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         builder::BlockBuilder,
@@ -59,12 +30,48 @@ use iroha_data_model::{
     consensus::{
         CommitCertificate, ExecutionQcRecord, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
     },
+    da::{
+        commitment::{DaCommitmentRecord, DaProofScheme, KzgCommitment, RetentionClass},
+        types::{BlobDigest, StorageTicketId},
+    },
+    domain::DomainId,
+    isi::InstructionBox,
+    merge::MergeCommitteeSignature,
+    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::{Peer, PeerId},
+    prelude::{AccountId, Domain, Register, TransactionBuilder},
+    sorafs::pin_registry::ManifestDigest,
     transaction::SignedTransaction,
 };
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use nonzero_ext::nonzero;
+
+use super::{
+    super::rbc_store::{SessionKey, SoftwareManifest},
+    Actor, BlockMessage,
+    background::dispatch_background_request,
+    view_change::{
+        ViewChangeProgress, ViewChangeProofOutcome, merge_view_change_proof,
+        note_view_change_proof_status,
+    },
+    vrf::VrfLocalState,
+    *,
+};
+#[cfg(feature = "telemetry")]
+use crate::telemetry::{Metrics, Telemetry};
+use crate::{
+    block::BlockValidationError,
+    kura::Kura,
+    query::store::LiveQueryStore,
+    queue::{Queue, SingleLaneRouter},
+    state::{State, World},
+    sumeragi::{
+        consensus::{Phase, ValidatorIndex},
+        view_change::{ProofBuilder, ProofChain},
+    },
+    tx::{AcceptTransactionFail, AcceptedTransaction},
+};
 
 #[allow(clippy::too_many_arguments)]
 fn select_block_sync_roster(
@@ -1027,9 +1034,11 @@ async fn test_actor_harness_with_config(
     consensus_cfg: SumeragiConfig,
     rbc_store_cfg: Option<crate::sumeragi::RbcStoreConfig>,
 ) -> TestActorHarness {
-    use iroha_config::base::WithOrigin;
-    use iroha_config::parameters::actual::{
-        Common as CommonConfig, LaneProfile, Network as NetworkConfig, RelayMode,
+    use iroha_config::{
+        base::WithOrigin,
+        parameters::actual::{
+            Common as CommonConfig, LaneProfile, Network as NetworkConfig, RelayMode,
+        },
     };
     use iroha_data_model::Registrable as _;
     use iroha_futures::supervisor::ShutdownSignal;
@@ -1340,9 +1349,10 @@ async fn merge_committee_accepts_remote_signature() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn heartbeat_inserted_for_empty_batch() {
+    use std::borrow::Cow;
+
     use iroha_data_model::isi::Log;
     use iroha_logger::Level;
-    use std::borrow::Cow;
 
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -6458,6 +6468,7 @@ fn kura_alignment_requires_state_tip_match() {
     );
 }
 use std::num::NonZeroUsize;
+
 use tokio::sync::{broadcast, watch};
 
 fn sample_qc_ref(height: u64, view: u64) -> QcHeaderRef {
@@ -6636,9 +6647,11 @@ fn pending_block_stale_checks_committed_parent() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn stale_pending_block_requeues_transactions() {
-    use iroha_config::base::WithOrigin;
-    use iroha_config::parameters::actual::{
-        Common as CommonConfig, LaneProfile, Network as NetworkConfig, RelayMode,
+    use iroha_config::{
+        base::WithOrigin,
+        parameters::actual::{
+            Common as CommonConfig, LaneProfile, Network as NetworkConfig, RelayMode,
+        },
     };
     use iroha_data_model::Registrable as _;
     use iroha_futures::supervisor::ShutdownSignal;
@@ -19208,9 +19221,11 @@ fn resolve_prev_block_for_proposal_uses_pending_parent_when_available() {
 async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when_parent_missing() {
     use std::borrow::Cow;
 
-    use iroha_config::base::WithOrigin;
-    use iroha_config::parameters::actual::{
-        Common as CommonConfig, LaneProfile, Network as NetworkConfig, RelayMode,
+    use iroha_config::{
+        base::WithOrigin,
+        parameters::actual::{
+            Common as CommonConfig, LaneProfile, Network as NetworkConfig, RelayMode,
+        },
     };
     use iroha_data_model::Registrable as _;
     use iroha_futures::supervisor::ShutdownSignal;
@@ -19475,9 +19490,10 @@ fn compute_chunk_broadcast_order_respects_shuffle_and_drop() {
 
 #[test]
 fn kura_store_failure_defers_retry_without_advancing_state() {
-    use crate::queue::Queue;
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_primitives::time::TimeSource;
+
+    use crate::queue::Queue;
 
     let _guard = super::status::kura_store_test_guard();
     super::status::reset_kura_store_counters_for_tests();
@@ -19534,9 +19550,10 @@ fn kura_store_failure_defers_retry_without_advancing_state() {
 
 #[test]
 fn kura_store_failure_abort_cleans_block_state() {
-    use crate::queue::Queue;
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_primitives::time::TimeSource;
+
+    use crate::queue::Queue;
 
     let _guard = super::status::kura_store_test_guard();
     super::status::reset_kura_store_counters_for_tests();
@@ -19583,10 +19600,11 @@ fn kura_store_failure_abort_cleans_block_state() {
 
 #[test]
 fn qc_commit_failure_with_quorum_requeues_and_realigns_qcs() {
-    use crate::queue::Queue;
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_data_model::domain::{Domain, DomainId};
     use iroha_primitives::time::TimeSource;
+
+    use crate::queue::Queue;
 
     let queue = Queue::test(QueueConfig::default(), &TimeSource::new_system());
     let kura = Kura::blank_kura_for_testing();
@@ -19669,10 +19687,12 @@ fn qc_commit_failure_with_quorum_requeues_and_realigns_qcs() {
 
 #[test]
 fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails() {
-    use crate::queue::Queue;
+    use std::{borrow::Cow, num::NonZeroUsize, time::Duration};
+
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_primitives::time::TimeSource;
-    use std::{borrow::Cow, num::NonZeroUsize, time::Duration};
+
+    use crate::queue::Queue;
 
     let queue_cfg = QueueConfig {
         capacity: NonZeroUsize::new(1).expect("non-zero capacity"),
@@ -19736,9 +19756,10 @@ fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails() {
 #[cfg(feature = "telemetry")]
 #[test]
 fn kura_store_failure_retry_updates_telemetry_gauges() {
-    use crate::queue::Queue;
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_primitives::time::TimeSource;
+
+    use crate::queue::Queue;
 
     crate::test_alias::ensure();
     let _guard = super::status::kura_store_test_guard();
@@ -23471,8 +23492,10 @@ fn propose_attempt_monitor_enforces_cooldown() {
 
 #[test]
 fn kickstart_pacemaker_after_commit_triggers_only_when_allowed() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = Arc::clone(&calls);

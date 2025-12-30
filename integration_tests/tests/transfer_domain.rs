@@ -1,6 +1,7 @@
 //! Integration tests for domain permissions and transfers.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::{
     crypto::KeyPair,
     data_model::{prelude::*, transaction::error::TransactionRejectionReason},
@@ -16,8 +17,6 @@ use iroha_executor_data_model::permission::{
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
 use tokio::runtime::Runtime;
-
-use integration_tests::sandbox;
 
 fn start_network(
     builder: NetworkBuilder,

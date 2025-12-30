@@ -3,8 +3,7 @@
 //! They are used together with [`QueryBox`](crate::query::QueryBox) to
 //! configure execution of trait-object queries.
 
-use std::num::NonZeroU64;
-use std::{borrow::ToOwned, format, string::String, vec::Vec};
+use std::{borrow::ToOwned, format, num::NonZeroU64, string::String, vec::Vec};
 
 use derive_more::Constructor;
 use getset::Getters;
@@ -227,9 +226,11 @@ pub mod prelude {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use super::*;
-    use norito::json;
     use std::str::FromStr;
+
+    use norito::json;
+
+    use super::*;
 
     #[test]
     fn sorting_defaults_order() {

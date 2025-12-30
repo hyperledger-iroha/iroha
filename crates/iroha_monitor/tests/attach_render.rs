@@ -1,9 +1,11 @@
 //! Regression tests: attached mode keeps rendering even with slow peers.
 
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
+use std::{
+    path::PathBuf,
+    process::{Command, Stdio},
+    thread,
+    time::Duration,
+};
 
 const STUB_STATUS_BODY: &str = "{\"alias\":\"雅\",\"peers\":2,\"blocks\":5,\"blocks_non_empty\":4,\"commit_time_ms\":110,\"txs_approved\":20,\"txs_rejected\":1,\"queue_size\":1,\"uptime\":10,\"view_changes\":0,\"governance\":{\"proposals\":{\"proposed\":0,\"approved\":0,\"rejected\":0,\"enacted\":0},\"protected_namespace\":{\"total_checks\":0,\"allowed\":0,\"rejected\":0},\"manifest_quorum\":{\"total_checks\":0,\"satisfied\":0,\"rejected\":0},\"recent_manifest_activations\":[]}}";
 
@@ -59,8 +61,7 @@ fn attach_mode_with_slow_peer_renders_multiple_frames() {
 }
 
 fn spawn_status_metrics_stub(delay: Duration) -> Option<std::net::SocketAddr> {
-    use axum::response::IntoResponse;
-    use axum::{Router, routing::get};
+    use axum::{Router, response::IntoResponse, routing::get};
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async move {

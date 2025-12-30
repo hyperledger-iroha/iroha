@@ -8,13 +8,12 @@ use std::{
 use eyre::Result;
 use iroha_logger::prelude::*;
 
+use super::Actor;
 use crate::sumeragi::{
     consensus::{RbcChunk, RbcDeliver, RbcReady},
     rbc_store::SessionKey,
     status,
 };
-
-use super::Actor;
 
 #[derive(Debug)]
 pub(super) struct PendingRbcMessages {

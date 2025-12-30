@@ -2,6 +2,7 @@
 
 use blake3::Hasher;
 use derive_more::Display;
+use iroha_crypto::PublicKey;
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -12,7 +13,6 @@ use crate::{
     metadata::Metadata,
     name,
 };
-use iroha_crypto::PublicKey;
 
 /// Unique identifier assigned to a top-level suffix (e.g., `.sora`).
 pub type SuffixId = u16;

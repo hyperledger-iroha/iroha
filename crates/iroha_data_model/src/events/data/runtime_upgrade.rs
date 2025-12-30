@@ -7,8 +7,9 @@ use super::*;
 
 #[model]
 mod model {
-    use super::*;
     use getset::Getters;
+
+    use super::*;
 
     /// Runtime upgrade lifecycle events (proposal/activation/cancellation).
     #[derive(

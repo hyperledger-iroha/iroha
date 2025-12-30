@@ -2,16 +2,25 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::missing_safety_doc)]
 
+#[cfg(test)]
+use core::ffi::c_void;
+use std::{
+    collections::HashSet,
+    num::{NonZeroU32, NonZeroU64},
+    path::PathBuf,
+    ptr, slice,
+    str::FromStr as _,
+    sync::OnceLock,
+    time::Duration,
+};
+
 use ::norito::json::{Map as JsonMap, Value as JsonValue};
-use base64::Engine as _;
-use base64::engine::general_purpose as b64gp;
+use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
 };
 use blake3::hash as blake3_hash;
-#[cfg(test)]
-use core::ffi::c_void;
 use curve25519_dalek::{
     constants::RISTRETTO_BASEPOINT_POINT,
     ristretto::{CompressedRistretto, RistrettoPoint},
@@ -23,7 +32,6 @@ use iroha_crypto::{
     kex::KeyExchangeScheme,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
-use iroha_data_model::name::Name;
 use iroha_data_model::{
     ChainId,
     account::{
@@ -45,6 +53,7 @@ use iroha_data_model::{
         transfer::Transfer,
         zk,
     },
+    name::Name,
     offline::{
         OFFLINE_FASTPQ_COUNTER_PROOF_DOMAIN, OFFLINE_FASTPQ_HKDF_DOMAIN,
         OFFLINE_FASTPQ_PROOF_VERSION_V1, OFFLINE_FASTPQ_REPLAY_CHAIN_DOMAIN,
@@ -52,7 +61,7 @@ use iroha_data_model::{
         OFFLINE_FASTPQ_SUM_PROOF_DOMAIN, OfflineFastpqCounterProof, OfflineFastpqReplayProof,
         OfflineFastpqSumProof, OfflineProofBlindingSeed, OfflineProofRequestCounter,
         OfflineProofRequestReplay, OfflineProofRequestSum, OfflineReceiptChallengePreimage,
-        OfflineSpendReceipt, PoseidonDigest, compute_receipts_root,
+        OfflineSpendReceipt, PoseidonDigest, chain_bound_receipt_hash, compute_receipts_root,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     smart_contract::manifest::ContractManifest,
@@ -62,7 +71,7 @@ use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
 use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_torii_shared::{connect as proto, connect_sdk};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
-use libc::{c_char, c_int, c_uchar, c_ulong, free, malloc};
+use libc::{c_char, c_int, c_uchar, c_ulong, c_ulonglong, free, malloc};
 use norito::{decode_from_bytes, to_bytes};
 use rand::{RngCore, rng};
 use sha2::{Digest, Sha256, Sha512};
@@ -73,15 +82,6 @@ use sorafs_car::{
         ProviderMetadataInput, RangeCapabilityInput, StreamBudgetInput, TelemetryEntryInput,
         TransportHintInput,
     },
-};
-use std::{
-    collections::HashSet,
-    num::{NonZeroU32, NonZeroU64},
-    path::PathBuf,
-    ptr, slice,
-    str::FromStr as _,
-    sync::OnceLock,
-    time::Duration,
 };
 
 const ERR_NULL_PTR: c_int = -1;
@@ -146,8 +146,16 @@ const ACCOUNT_ADDRESS_FORMAT_IH58: u8 = 0;
 const ACCOUNT_ADDRESS_FORMAT_COMPRESSED: u8 = 1;
 const ACCOUNT_ADDRESS_FORMAT_CANONICAL_HEX: u8 = 2;
 
-const OFFLINE_PROOF_BYTES: usize = 96;
+const OFFLINE_BALANCE_PROOF_VERSION: u8 = 1;
+const OFFLINE_DELTA_PROOF_BYTES: usize = 96;
+const OFFLINE_RANGE_PROOF_BITS: usize = 64;
+const OFFLINE_RANGE_PROOF_PER_BIT_BYTES: usize = 192;
+const OFFLINE_RANGE_PROOF_BYTES: usize =
+    OFFLINE_RANGE_PROOF_BITS * OFFLINE_RANGE_PROOF_PER_BIT_BYTES;
+const OFFLINE_BALANCE_PROOF_BYTES: usize =
+    1 + OFFLINE_DELTA_PROOF_BYTES + OFFLINE_RANGE_PROOF_BYTES;
 const OFFLINE_PROOF_TRANSCRIPT_LABEL: &[u8] = b"iroha.offline.balance.v1";
+const OFFLINE_RANGE_PROOF_TRANSCRIPT_LABEL: &[u8] = b"iroha.offline.balance.range.v1";
 const OFFLINE_GENERATOR_LABEL: &[u8] = b"iroha.offline.balance.generator.H.v1";
 
 static PEDERSEN_H: OnceLock<RistrettoPoint> = OnceLock::new();
@@ -593,6 +601,11 @@ fn numeric_to_le_bytes(value: &Numeric) -> BridgeResult<[u8; 16]> {
     Ok(signed.to_le_bytes())
 }
 
+fn numeric_to_u64(value: &Numeric) -> BridgeResult<u64> {
+    let mantissa = value.try_mantissa_u128().ok_or(BridgeError::Quantity)?;
+    u64::try_from(mantissa).map_err(|_| BridgeError::Quantity)
+}
+
 fn transcript_context(chain_id: &ChainId) -> [u8; 32] {
     Hash::new(chain_id.as_str().as_bytes()).into()
 }
@@ -620,43 +633,129 @@ fn transcript_challenge(
     Scalar::from_bytes_mod_order_wide(&output)
 }
 
+fn range_proof_challenge(
+    context: &[u8; 32],
+    bit_index: u8,
+    commitment: &RistrettoPoint,
+    a0: &RistrettoPoint,
+    a1: &RistrettoPoint,
+) -> Scalar {
+    let mut hasher = Blake2bVar::new(64).expect("valid Blake2b length");
+    hasher.update(OFFLINE_RANGE_PROOF_TRANSCRIPT_LABEL);
+    hasher.update(context);
+    hasher.update(&[bit_index]);
+    hasher.update(commitment.compress().as_bytes());
+    hasher.update(a0.compress().as_bytes());
+    hasher.update(a1.compress().as_bytes());
+    let mut output = [0u8; 64];
+    hasher
+        .finalize_variable(&mut output)
+        .expect("output size matches");
+    Scalar::from_bytes_mod_order_wide(&output)
+}
+
+fn random_scalar(rng: &mut impl rand_core::RngCore) -> Scalar {
+    let mut bytes = [0u8; 64];
+    rng.fill_bytes(&mut bytes);
+    Scalar::from_bytes_mod_order_wide(&bytes)
+}
+
+fn generate_range_proof(
+    chain_id: &ChainId,
+    value: u64,
+    resulting_blinding: &Scalar,
+) -> BridgeResult<Vec<u8>> {
+    let context = transcript_context(chain_id);
+    let mut rng = rng();
+    let mut blindings = Vec::with_capacity(OFFLINE_RANGE_PROOF_BITS);
+    let mut sum = Scalar::ZERO;
+    for bit_index in 0..(OFFLINE_RANGE_PROOF_BITS - 1) {
+        let blinding = random_scalar(&mut rng);
+        sum += Scalar::from(1u64 << bit_index) * blinding;
+        blindings.push(blinding);
+    }
+    let last_weight = Scalar::from(1u64 << (OFFLINE_RANGE_PROOF_BITS - 1));
+    let last_blinding = (resulting_blinding - sum) * last_weight.invert();
+    blindings.push(last_blinding);
+
+    let mut proof = Vec::with_capacity(OFFLINE_RANGE_PROOF_BYTES);
+    for bit_index in 0..OFFLINE_RANGE_PROOF_BITS {
+        let bit = ((value >> bit_index) & 1) == 1;
+        let bit_scalar = Scalar::from(u64::from(bit));
+        let commitment =
+            RISTRETTO_BASEPOINT_POINT * bit_scalar + pedersen_generator_h() * blindings[bit_index];
+        let (a0, a1, e0, s0, s1) = if bit {
+            let alpha = random_scalar(&mut rng);
+            let e0 = random_scalar(&mut rng);
+            let s0 = random_scalar(&mut rng);
+            let a0 = pedersen_generator_h() * s0 - commitment * e0;
+            let a1 = pedersen_generator_h() * alpha;
+            let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
+            let e1 = challenge - e0;
+            let s1 = alpha + e1 * blindings[bit_index];
+            (a0, a1, e0, s0, s1)
+        } else {
+            let alpha = random_scalar(&mut rng);
+            let e1 = random_scalar(&mut rng);
+            let s1 = random_scalar(&mut rng);
+            let a0 = pedersen_generator_h() * alpha;
+            let commitment_minus_g = commitment - RISTRETTO_BASEPOINT_POINT;
+            let a1 = pedersen_generator_h() * s1 - commitment_minus_g * e1;
+            let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
+            let e0 = challenge - e1;
+            let s0 = alpha + e0 * blindings[bit_index];
+            (a0, a1, e0, s0, s1)
+        };
+        proof.extend_from_slice(commitment.compress().as_bytes());
+        proof.extend_from_slice(a0.compress().as_bytes());
+        proof.extend_from_slice(a1.compress().as_bytes());
+        proof.extend_from_slice(e0.to_bytes().as_ref());
+        proof.extend_from_slice(s0.to_bytes().as_ref());
+        proof.extend_from_slice(s1.to_bytes().as_ref());
+    }
+    Ok(proof)
+}
+
 fn generate_offline_balance_proof(
     chain_id: ChainId,
     claimed_delta: &Numeric,
+    resulting_value: &Numeric,
     initial_commitment: &[u8],
     resulting_commitment: &[u8],
     initial_blinding: &[u8],
     resulting_blinding: &[u8],
-) -> BridgeResult<[u8; OFFLINE_PROOF_BYTES]> {
+) -> BridgeResult<Vec<u8>> {
     let c_init = decode_commitment_point(initial_commitment)?;
     let c_res = decode_commitment_point(resulting_commitment)?;
     let delta_scalar = numeric_to_scalar(claimed_delta)?;
     let delta_bytes = numeric_to_le_bytes(claimed_delta)?;
+    let resulting_value_u64 = numeric_to_u64(resulting_value)?;
     let blind_init = decode_scalar_bytes(initial_blinding)?;
     let blind_res = decode_scalar_bytes(resulting_blinding)?;
     let blind_delta = blind_res - blind_init;
     let context = transcript_context(&chain_id);
     let u = c_res - c_init;
     let mut rng = rng();
-    let alpha = {
-        let mut bytes = [0u8; 64];
-        rng.fill_bytes(&mut bytes);
-        Scalar::from_bytes_mod_order_wide(&bytes)
-    };
-    let beta = {
-        let mut bytes = [0u8; 64];
-        rng.fill_bytes(&mut bytes);
-        Scalar::from_bytes_mod_order_wide(&bytes)
-    };
+    let alpha = random_scalar(&mut rng);
+    let beta = random_scalar(&mut rng);
     let r_point = RISTRETTO_BASEPOINT_POINT * alpha + pedersen_generator_h() * beta;
     let challenge = transcript_challenge(&c_init, &c_res, &delta_bytes, &context, &u, &r_point);
     let s_g = alpha + challenge * delta_scalar;
     let s_h = beta + challenge * blind_delta;
 
-    let mut proof = [0u8; OFFLINE_PROOF_BYTES];
-    proof[..32].copy_from_slice(r_point.compress().as_bytes());
-    proof[32..64].copy_from_slice(s_g.to_bytes().as_ref());
-    proof[64..96].copy_from_slice(s_h.to_bytes().as_ref());
+    let expected_commitment = RISTRETTO_BASEPOINT_POINT * Scalar::from(resulting_value_u64)
+        + pedersen_generator_h() * blind_res;
+    if expected_commitment != c_res {
+        return Err(BridgeError::OfflineCommitment);
+    }
+
+    let mut proof = Vec::with_capacity(OFFLINE_BALANCE_PROOF_BYTES);
+    proof.push(OFFLINE_BALANCE_PROOF_VERSION);
+    proof.extend_from_slice(r_point.compress().as_bytes());
+    proof.extend_from_slice(s_g.to_bytes().as_ref());
+    proof.extend_from_slice(s_h.to_bytes().as_ref());
+    let range_proof = generate_range_proof(&chain_id, resulting_value_u64, &blind_res)?;
+    proof.extend_from_slice(&range_proof);
     Ok(proof)
 }
 
@@ -680,12 +779,18 @@ fn update_offline_commitment(
 }
 
 fn compute_offline_receipt_challenge(
+    chain_id_raw: String,
     invoice_id: String,
     receiver_raw: String,
     asset_raw: String,
     amount_raw: String,
+    issued_at_ms: u64,
     nonce_raw: String,
 ) -> BridgeResult<(Vec<u8>, [u8; Hash::LENGTH], [u8; 32])> {
+    if chain_id_raw.trim().is_empty() {
+        return Err(BridgeError::ChainId);
+    }
+    let chain_id = ChainId::from_str(&chain_id_raw).map_err(|_| BridgeError::ChainId)?;
     let receiver = AccountId::from_str(&receiver_raw).map_err(|_| BridgeError::OfflineReceiver)?;
     let asset = AssetId::from_str(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
@@ -695,10 +800,11 @@ fn compute_offline_receipt_challenge(
         receiver,
         asset,
         amount,
+        issued_at_ms,
         nonce,
     };
     let bytes = to_bytes(&preimage).map_err(|_| BridgeError::OfflineSerialize)?;
-    let iroha_hash = Hash::new(&bytes);
+    let iroha_hash = chain_bound_receipt_hash(&chain_id, &bytes);
     let mut iroha_bytes = [0u8; Hash::LENGTH];
     iroha_bytes.copy_from_slice(iroha_hash.as_ref());
     let client_hash: [u8; 32] = Sha256::digest(iroha_hash.as_ref()).into();
@@ -1317,6 +1423,8 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_offline_receipt_challenge(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
     invoice_ptr: *const c_char,
     invoice_len: c_ulong,
     receiver_ptr: *const c_char,
@@ -1325,6 +1433,7 @@ pub unsafe extern "C" fn connect_norito_offline_receipt_challenge(
     asset_len: c_ulong,
     amount_ptr: *const c_char,
     amount_len: c_ulong,
+    issued_at_ms: c_ulonglong,
     nonce_ptr: *const c_char,
     nonce_len: c_ulong,
     out_preimage_ptr: *mut *mut c_uchar,
@@ -1343,14 +1452,22 @@ pub unsafe extern "C" fn connect_norito_offline_receipt_challenge(
             return Err(BridgeError::NullPtr);
         }
 
+        let chain_id = unsafe { read_string_bridge(chain_ptr, chain_len)? };
         let invoice = unsafe { read_string_bridge(invoice_ptr, invoice_len)? };
         let receiver = unsafe { read_string_bridge(receiver_ptr, receiver_len)? };
         let asset = unsafe { read_string_bridge(asset_ptr, asset_len)? };
         let amount = unsafe { read_string_bridge(amount_ptr, amount_len)? };
         let nonce = unsafe { read_string_bridge(nonce_ptr, nonce_len)? };
 
-        let (preimage, iroha_hash, client_hash) =
-            compute_offline_receipt_challenge(invoice, receiver, asset, amount, nonce)?;
+        let (preimage, iroha_hash, client_hash) = compute_offline_receipt_challenge(
+            chain_id,
+            invoice,
+            receiver,
+            asset,
+            amount,
+            issued_at_ms as u64,
+            nonce,
+        )?;
 
         unsafe { write_bytes_bridge(out_preimage_ptr, out_preimage_len, &preimage) }?;
         write_hash(out_hash_ptr, out_hash_len, &iroha_hash)?;
@@ -1503,6 +1620,8 @@ pub unsafe extern "C" fn connect_norito_offline_balance_proof(
     resulting_commitment_len: c_ulong,
     claimed_delta_ptr: *const c_char,
     claimed_delta_len: c_ulong,
+    resulting_value_ptr: *const c_char,
+    resulting_value_len: c_ulong,
     initial_blinding_ptr: *const c_uchar,
     initial_blinding_len: c_ulong,
     resulting_blinding_ptr: *const c_uchar,
@@ -1526,6 +1645,10 @@ pub unsafe extern "C" fn connect_norito_offline_balance_proof(
             unsafe { read_string_bridge(claimed_delta_ptr, claimed_delta_len)? };
         let claimed_delta =
             Numeric::from_str(&claimed_delta_str).map_err(|_| BridgeError::Quantity)?;
+        let resulting_value_str =
+            unsafe { read_string_bridge(resulting_value_ptr, resulting_value_len)? };
+        let resulting_value =
+            Numeric::from_str(&resulting_value_str).map_err(|_| BridgeError::Quantity)?;
 
         let initial_commitment = unsafe {
             slice::from_raw_parts(initial_commitment_ptr, initial_commitment_len as usize)
@@ -1542,6 +1665,7 @@ pub unsafe extern "C" fn connect_norito_offline_balance_proof(
         let proof = generate_offline_balance_proof(
             ChainId::from(chain),
             &claimed_delta,
+            &resulting_value,
             initial_commitment,
             resulting_commitment,
             initial_blinding,
@@ -6833,15 +6957,17 @@ mod test_support {
 
 #[cfg(test)]
 mod accel_tests {
-    use super::*;
-    use iroha_crypto::KeyPair;
-    use iroha_data_model::{account::AccountId, domain::DomainId};
     use std::{
         collections::BTreeMap,
         ffi::CString,
         num::{NonZeroU16, NonZeroU32, NonZeroU64},
         ptr, slice,
     };
+
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{account::AccountId, domain::DomainId};
+
+    use super::*;
 
     pub(super) fn sample_account(domain: &str, seed: u8) -> (CString, Vec<u8>) {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
@@ -7765,8 +7891,9 @@ mod accel_tests {
 
 #[cfg(test)]
 mod secp256k1_tests {
-    use super::*;
     use hex::decode;
+
+    use super::*;
 
     const PRIVATE_KEY: &str = "e4f21b38e005d4f895a29e84948d7cc83eac79041aeb644ee4fab8d9da42f713";
     const PUBLIC_KEY: &str = "0242c1e1f775237a26da4fd51b8d75ee2709711f6e90303e511169a324ef0789c0";
@@ -7821,7 +7948,8 @@ mod secp256k1_tests {
 
 #[cfg(test)]
 mod offline_challenge_tests {
-    use super::*;
+    use std::{ffi::CString, ptr, slice, str::FromStr};
+
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
@@ -7830,7 +7958,8 @@ mod offline_challenge_tests {
         offline::{OfflineReceiptChallengePreimage, OfflineSpendReceipt},
     };
     use norito::{decode_from_bytes, json};
-    use std::{ffi::CString, ptr, slice, str::FromStr};
+
+    use super::*;
 
     fn account_with_cstring(domain: &str, seed: u8) -> (AccountId, CString) {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
@@ -7844,6 +7973,7 @@ mod offline_challenge_tests {
     #[test]
     fn offline_challenge_roundtrip() {
         let _guard = super::test_support::chain_discriminant_guard();
+        let chain_id = CString::new("test-chain").expect("chain id");
         let invoice = CString::new("inv-ffi").expect("invoice");
         let (controller_account, controller_cstr) = account_with_cstring("bank", 21);
         let (_, receiver_cstr) = account_with_cstring("bank", 99);
@@ -7860,6 +7990,8 @@ mod offline_challenge_tests {
         let mut client_hash = [0u8; 32];
         let code = unsafe {
             connect_norito_offline_receipt_challenge(
+                chain_id.as_ptr(),
+                chain_id.as_bytes().len() as c_ulong,
                 invoice.as_ptr(),
                 invoice.as_bytes().len() as c_ulong,
                 receiver_cstr.as_ptr(),
@@ -7895,7 +8027,8 @@ mod offline_challenge_tests {
         assert_eq!(decoded.asset, asset_id);
         assert_eq!(decoded.amount, Numeric::from_str("500").unwrap());
 
-        let expected_hash = Hash::new(&preimage);
+        let chain_id_value = ChainId::from("test-chain");
+        let expected_hash = chain_bound_receipt_hash(&chain_id_value, &preimage);
         assert_eq!(iroha_hash, *expected_hash.as_ref());
         let expected_client: [u8; 32] = Sha256::digest(expected_hash.as_ref()).into();
         assert_eq!(client_hash, expected_client);
@@ -7929,7 +8062,8 @@ mod offline_challenge_tests {
 
 #[cfg(test)]
 mod offline_fastpq_proof_tests {
-    use super::*;
+    use std::{ptr, slice, str::FromStr};
+
     use curve25519_dalek::traits::Identity;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
@@ -7944,7 +8078,8 @@ mod offline_fastpq_proof_tests {
     };
     use iroha_primitives::numeric::Numeric;
     use norito::json;
-    use std::{ptr, slice, str::FromStr};
+
+    use super::*;
 
     fn sample_account_id(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
@@ -8794,8 +8929,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jboolean {
-    use jni::sys::{JNI_FALSE, JNI_TRUE};
     use std::panic::catch_unwind;
+
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
 
     let available = catch_unwind(ivm::cuda_available).unwrap_or(false);
     if available { JNI_TRUE } else { JNI_FALSE }
@@ -8813,8 +8949,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jboolean {
-    use jni::sys::{JNI_FALSE, JNI_TRUE};
     use std::panic::catch_unwind;
+
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
 
     let disabled = catch_unwind(ivm::cuda_disabled).unwrap_or(false);
     if disabled { JNI_TRUE } else { JNI_FALSE }
@@ -9007,15 +9144,18 @@ fn convert_field_elem<L: Into<String>>(
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineReceiptChallenge_nativeCompute(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
+    chain_id: jni::objects::JString<'_>,
     invoice: jni::objects::JString<'_>,
     receiver: jni::objects::JString<'_>,
     asset: jni::objects::JString<'_>,
     amount: jni::objects::JString<'_>,
+    issued_at_ms: jni::sys::jlong,
     nonce: jni::objects::JString<'_>,
     iroha_hash_out: jni::objects::JByteArray<'_>,
     client_hash_out: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let chain_str = jstring_to_string(&mut env, chain_id)?;
         let invoice_str = jstring_to_string(&mut env, invoice)?;
         let receiver_str = jstring_to_string(&mut env, receiver)?;
         let asset_str = jstring_to_string(&mut env, asset)?;
@@ -9041,10 +9181,12 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
         }
 
         let (preimage, iroha_hash, client_hash) = compute_offline_receipt_challenge(
+            chain_str,
             invoice_str,
             receiver_str,
             asset_str,
             amount_str,
+            issued_at_ms as u64,
             nonce_str,
         )
         .map_err(|err| format!("offline challenge error {}", err.code()))?;
@@ -9402,11 +9544,30 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
 }
 
 #[cfg(test)]
-mod offline_balance_proof_tests {
+mod offline_receipt_challenge_tests {
     use super::*;
-    use curve25519_dalek::scalar::Scalar;
-    use curve25519_dalek::traits::VartimeMultiscalarMul;
+
+    #[test]
+    fn receipt_challenge_rejects_empty_chain_id() {
+        let nonce = Hash::new(b"receipt-nonce").to_string();
+        let result = compute_offline_receipt_challenge(
+            "".to_string(),
+            "inv-1".to_string(),
+            "alice@wonderland".to_string(),
+            "xor#alice@wonderland".to_string(),
+            "1".to_string(),
+            nonce,
+        );
+        assert!(matches!(result, Err(BridgeError::ChainId)));
+    }
+}
+
+#[cfg(test)]
+mod offline_balance_proof_tests {
+    use curve25519_dalek::{scalar::Scalar, traits::VartimeMultiscalarMul};
     use iroha_primitives::numeric::Numeric;
+
+    use super::*;
 
     fn scalar_bytes(scalar: Scalar) -> [u8; 32] {
         scalar.to_bytes()
@@ -9422,17 +9583,25 @@ mod offline_balance_proof_tests {
         claimed_delta: &Numeric,
         c_init: &RistrettoPoint,
         c_res: &RistrettoPoint,
-        proof: &[u8; OFFLINE_PROOF_BYTES],
+        proof: &[u8],
     ) -> bool {
-        let r_point = match decode_commitment_point(&proof[0..32]) {
+        if proof.len() != OFFLINE_BALANCE_PROOF_BYTES {
+            return false;
+        }
+        if proof[0] != OFFLINE_BALANCE_PROOF_VERSION {
+            return false;
+        }
+        let delta_proof = &proof[1..1 + OFFLINE_DELTA_PROOF_BYTES];
+        let range_proof = &proof[1 + OFFLINE_DELTA_PROOF_BYTES..];
+        let r_point = match decode_commitment_point(&delta_proof[0..32]) {
             Ok(point) => point,
             Err(_) => return false,
         };
-        let s_g = match decode_scalar_bytes(&proof[32..64]) {
+        let s_g = match decode_scalar_bytes(&delta_proof[32..64]) {
             Ok(scalar) => scalar,
             Err(_) => return false,
         };
-        let s_h = match decode_scalar_bytes(&proof[64..96]) {
+        let s_h = match decode_scalar_bytes(&delta_proof[64..96]) {
             Ok(scalar) => scalar,
             Err(_) => return false,
         };
@@ -9448,7 +9617,65 @@ mod offline_balance_proof_tests {
             [RISTRETTO_BASEPOINT_POINT, *pedersen_generator_h()],
         );
         let rhs = r_point + u * challenge;
-        lhs == rhs
+        lhs == rhs && verify_range_proof(chain_id, c_res, range_proof)
+    }
+
+    fn verify_range_proof(chain_id: &ChainId, c_res: &RistrettoPoint, range_proof: &[u8]) -> bool {
+        if range_proof.len() != OFFLINE_RANGE_PROOF_BYTES {
+            return false;
+        }
+        let context = transcript_context(chain_id);
+        let mut commitments = Vec::with_capacity(OFFLINE_RANGE_PROOF_BITS);
+        for bit_index in 0..OFFLINE_RANGE_PROOF_BITS {
+            let offset = bit_index * OFFLINE_RANGE_PROOF_PER_BIT_BYTES;
+            let commitment = match decode_commitment_point(&range_proof[offset..offset + 32]) {
+                Ok(point) => point,
+                Err(_) => return false,
+            };
+            let a0 = match decode_commitment_point(&range_proof[offset + 32..offset + 64]) {
+                Ok(point) => point,
+                Err(_) => return false,
+            };
+            let a1 = match decode_commitment_point(&range_proof[offset + 64..offset + 96]) {
+                Ok(point) => point,
+                Err(_) => return false,
+            };
+            let e0 = match decode_scalar_bytes(&range_proof[offset + 96..offset + 128]) {
+                Ok(scalar) => scalar,
+                Err(_) => return false,
+            };
+            let s0 = match decode_scalar_bytes(&range_proof[offset + 128..offset + 160]) {
+                Ok(scalar) => scalar,
+                Err(_) => return false,
+            };
+            let s1 = match decode_scalar_bytes(&range_proof[offset + 160..offset + 192]) {
+                Ok(scalar) => scalar,
+                Err(_) => return false,
+            };
+            let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
+            let e1 = challenge - e0;
+            let lhs0 = RistrettoPoint::vartime_multiscalar_mul(
+                [s0, -e0],
+                [*pedersen_generator_h(), commitment],
+            );
+            if lhs0 != a0 {
+                return false;
+            }
+            let commitment_minus_g = commitment - RISTRETTO_BASEPOINT_POINT;
+            let lhs1 = RistrettoPoint::vartime_multiscalar_mul(
+                [s1, -e1],
+                [*pedersen_generator_h(), commitment_minus_g],
+            );
+            if lhs1 != a1 {
+                return false;
+            }
+            commitments.push(commitment);
+        }
+        let scalars: Vec<Scalar> = (0..OFFLINE_RANGE_PROOF_BITS)
+            .map(|index| Scalar::from(1u64 << index))
+            .collect();
+        let sum = RistrettoPoint::vartime_multiscalar_mul(scalars, commitments.iter());
+        sum == *c_res
     }
 
     #[test]
@@ -9477,6 +9704,7 @@ mod offline_balance_proof_tests {
         let proof = generate_offline_balance_proof(
             chain_id.clone(),
             &delta,
+            &updated_amount,
             &init_bytes,
             &updated_bytes,
             &blind_init_bytes,
@@ -9563,12 +9791,14 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
     initial_commitment: jni::objects::JByteArray<'_>,
     resulting_commitment: jni::objects::JByteArray<'_>,
     claimed_delta: jni::objects::JString<'_>,
+    resulting_value: jni::objects::JString<'_>,
     initial_blinding: jni::objects::JByteArray<'_>,
     resulting_blinding: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
         let chain_str = jstring_to_string(&mut env, chain_id)?;
         let delta_str = jstring_to_string(&mut env, claimed_delta)?;
+        let resulting_value_str = jstring_to_string(&mut env, resulting_value)?;
         let initial_commitment_vec = env
             .convert_byte_array(initial_commitment)
             .map_err(|err| err.to_string())?;
@@ -9589,9 +9819,12 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
         }
         let claimed_delta =
             Numeric::from_str(&delta_str).map_err(|_| "invalid delta value".to_owned())?;
+        let resulting_value = Numeric::from_str(&resulting_value_str)
+            .map_err(|_| "invalid resulting value".to_owned())?;
         let proof = generate_offline_balance_proof(
             ChainId::from(chain_str),
             &claimed_delta,
+            &resulting_value,
             &initial_commitment_vec,
             &resulting_commitment_vec,
             &initial_blinding_vec,
@@ -10487,9 +10720,11 @@ pub unsafe extern "C" fn connect_norito_blake3_hash(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_crypto::{Algorithm, KeyPair};
     use std::{ffi::CString, mem::MaybeUninit};
+
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    use super::*;
 
     struct ResetConfig(AccelerationConfig);
 
@@ -10929,14 +11164,20 @@ mod tests {
 
 #[cfg(test)]
 mod signed_transaction_fixture_tests {
-    use super::decode_signed_transaction;
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-    use iroha_data_model::account::address;
-    use iroha_data_model::transaction::{SignedTransaction, signed::TransactionSignature};
-    use norito::codec::{Decode, Encode};
-    use norito::core::read_len_dyn_slice;
-    use norito::json::Value;
     use std::{fs, path::PathBuf};
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use iroha_data_model::{
+        account::address,
+        transaction::{SignedTransaction, signed::TransactionSignature},
+    };
+    use norito::{
+        codec::{Decode, Encode},
+        core::read_len_dyn_slice,
+        json::Value,
+    };
+
+    use super::decode_signed_transaction;
 
     // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (IH58 prefix) used by fixtures.
     const FIXTURE_CHAIN_DISCRIMINANT: u16 = 0x02F1;
@@ -11145,7 +11386,6 @@ mod signed_transaction_fixture_tests {
 
 #[cfg(test)]
 mod da_proof_summary_tests {
-    use super::*;
     use iroha_data_model::{
         da::{
             manifest::{ChunkCommitment, ChunkRole},
@@ -11159,6 +11399,8 @@ mod da_proof_summary_tests {
         sorafs::pin_registry::StorageClass,
     };
     use sorafs_car::ChunkStore;
+
+    use super::*;
 
     #[test]
     fn da_proof_summary_via_ffi() {
@@ -11282,11 +11524,13 @@ mod da_proof_summary_tests {
 
 #[cfg(test)]
 mod sorafs_tests {
-    use super::*;
+    use std::{ffi::CString, fs, ptr, slice};
+
     use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_specs_to_string};
     use sorafs_chunker::ChunkProfile;
-    use std::{ffi::CString, fs, ptr, slice};
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn sorafs_local_fetch_via_ffi() {

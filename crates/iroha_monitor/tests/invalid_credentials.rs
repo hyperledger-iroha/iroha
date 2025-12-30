@@ -1,9 +1,11 @@
 //! CLI regression tests for error surfaces.
 
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
+use std::{
+    path::PathBuf,
+    process::{Command, Stdio},
+    thread,
+    time::Duration,
+};
 
 fn monitor_bin() -> Option<PathBuf> {
     std::env::var_os("CARGO_BIN_EXE_iroha_monitor").map(PathBuf::from)

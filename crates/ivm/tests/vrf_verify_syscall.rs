@@ -1,10 +1,9 @@
 use ivm::{IVM, Memory, PointerType};
 
 mod common;
-use common::assemble_syscalls;
-
 // Helpers: BLS Hash-to-curve mirroring host logic
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
+use common::assemble_syscalls;
 use group::{Curve, Group};
 use ivm::vrf::VrfVerifyRequest;
 

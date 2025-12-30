@@ -1,20 +1,26 @@
-use crate::workspace_root;
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf};
-use norito::core::to_bytes;
-use norito::json::{self, Map as NoritoMap, Number as NoritoNumber, Value as NoritoValue};
-use norito::streaming::{
-    RansGroupTableV1, RansTablesBodyV1, RansTablesSignatureV1, RansTablesV1, SignatureAlgorithm,
-    SignedRansTablesV1,
+use norito::{
+    core::to_bytes,
+    json::{self, Map as NoritoMap, Number as NoritoNumber, Value as NoritoValue},
+    streaming::{
+        RansGroupTableV1, RansTablesBodyV1, RansTablesSignatureV1, RansTablesV1,
+        SignatureAlgorithm, SignedRansTablesV1,
+    },
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::error::Error;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
+
+use crate::workspace_root;
 
 const DEFAULT_OUTPUT_SUBDIR: &str = "artifacts/nsc";
 const DEFAULT_OUTPUT_BASENAME: &str = "rans_tables";
@@ -844,11 +850,11 @@ fn default_output_base() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::fs;
-    use std::io::Write;
+    use std::{fs, io::Write};
 
     use tempfile::{NamedTempFile, TempDir};
+
+    use super::*;
 
     fn sample_payload(seed: u64) -> RansTablesV1 {
         let body = generate_body(seed, MAX_BUNDLE_WIDTH).expect("generate deterministic body");

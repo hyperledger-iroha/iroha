@@ -1,11 +1,13 @@
 //! Adaptive tests for optional columns.
 
 #![allow(unused_imports)]
-use norito::columnar as ncb;
-use norito::columnar::{
-    ADAPTIVE_TAG_AOS, ADAPTIVE_TAG_NCB, decode_rows_u64_optstr_bool_adaptive,
-    decode_rows_u64_optu32_bool_adaptive, encode_rows_u64_optstr_bool_adaptive,
-    encode_rows_u64_optu32_bool_adaptive,
+use norito::{
+    columnar as ncb,
+    columnar::{
+        ADAPTIVE_TAG_AOS, ADAPTIVE_TAG_NCB, decode_rows_u64_optstr_bool_adaptive,
+        decode_rows_u64_optu32_bool_adaptive, encode_rows_u64_optstr_bool_adaptive,
+        encode_rows_u64_optu32_bool_adaptive,
+    },
 };
 
 #[test]

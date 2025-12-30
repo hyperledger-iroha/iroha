@@ -211,6 +211,7 @@ fn sample_receipt(counter: u64, seed: &str) -> OfflineSpendReceipt {
         to: account.clone(),
         asset,
         amount: Numeric::new(250, 0),
+        issued_at_ms: 1,
         invoice_id: format!("invoice-{seed}"),
         platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
             key_id: seed.to_string(),

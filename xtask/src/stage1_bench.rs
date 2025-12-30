@@ -1,13 +1,18 @@
-use std::error::Error;
-use std::fmt::Write as _;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::{
+    error::Error,
+    fmt::Write as _,
+    fs,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 
 #[cfg(all(feature = "parallel-stage1", feature = "bench-internal"))]
 use norito::json::build_struct_index_parallel_bench;
-use norito::json::{build_struct_index, build_struct_index_scalar_bench};
-use norito::{derive::JsonSerialize, json as serde_json};
+use norito::{
+    derive::JsonSerialize,
+    json as serde_json,
+    json::{build_struct_index, build_struct_index_scalar_bench},
+};
 use serde::Serialize;
 use time::OffsetDateTime;
 

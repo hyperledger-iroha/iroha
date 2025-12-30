@@ -21,21 +21,21 @@ pub mod types;
 
 /// Convenience re-export of frequently used DA types.
 pub mod prelude {
-    pub use super::commitment::{
-        DaCommitmentBundle, DaCommitmentKey, DaCommitmentLocation, DaCommitmentProof,
-        DaCommitmentRecord, DaCommitmentWithLocation, DaProofPolicy, DaProofPolicyBundle,
-        DaProofScheme, KzgCommitment, MerkleDirection, MerklePathItem, RetentionClass,
-    };
-    pub use super::confidential_compute::{
-        ConfidentialComputeMechanism, ConfidentialComputePolicy,
-    };
-    pub use super::ingest::{DaIngestReceipt, DaIngestRequest, DaStripeLayout};
-    pub use super::manifest::{ChunkCommitment, ChunkRole, DaManifestV1};
-    pub use super::pin_intent::{DaPinIntent, DaPinIntentBundle, DaPinIntentWithLocation};
-    pub use super::types::{
-        BlobClass, BlobCodec, BlobDigest, ChunkDigest, Compression, DaRentError,
-        DaRentLedgerProjection, DaRentPolicyV1, DaRentQuote, ErasureProfile, ExtraMetadata,
-        FecScheme, GovernanceTag, MetadataCipherEnvelope, MetadataEncryption, MetadataEntry,
-        MetadataVisibility, RetentionPolicy, StorageTicketId,
+    pub use super::{
+        commitment::{
+            DaCommitmentBundle, DaCommitmentKey, DaCommitmentLocation, DaCommitmentProof,
+            DaCommitmentRecord, DaCommitmentWithLocation, DaProofPolicy, DaProofPolicyBundle,
+            DaProofScheme, KzgCommitment, MerkleDirection, MerklePathItem, RetentionClass,
+        },
+        confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
+        ingest::{DaIngestReceipt, DaIngestRequest, DaStripeLayout},
+        manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
+        pin_intent::{DaPinIntent, DaPinIntentBundle, DaPinIntentWithLocation},
+        types::{
+            BlobClass, BlobCodec, BlobDigest, ChunkDigest, Compression, DaRentError,
+            DaRentLedgerProjection, DaRentPolicyV1, DaRentQuote, ErasureProfile, ExtraMetadata,
+            FecScheme, GovernanceTag, MetadataCipherEnvelope, MetadataEncryption, MetadataEntry,
+            MetadataVisibility, RetentionPolicy, StorageTicketId,
+        },
     };
 }

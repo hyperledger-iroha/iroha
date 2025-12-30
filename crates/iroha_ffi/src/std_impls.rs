@@ -1,7 +1,6 @@
 #![allow(single_use_lifetimes)] // NOTE: Triggered by &str implementation
 
-use std::{boxed::Box, string::String, vec::Vec};
-use std::{mem::ManuallyDrop, ptr::NonNull};
+use std::{boxed::Box, mem::ManuallyDrop, ptr::NonNull, string::String, vec::Vec};
 
 use crate::{
     ReprC, WrapperTypeOf, ffi_type,

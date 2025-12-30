@@ -372,7 +372,7 @@ impl FromFfiReturn for core::convert::Infallible {
 /// # Example
 ///
 /// ```
-/// use iroha_ffi::{ffi_type, ReprC};
+/// use iroha_ffi::{ReprC, ffi_type};
 ///
 /// // Always use a type alias for inner types of transparent items so that if you make
 /// // a change the unsafe code in [`iroha_ffi::ffi_type!`] will not compile, thus preventing UB

@@ -163,13 +163,15 @@ pub fn sample_from_store(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::sumeragi::{main_loop::RbcSession, rbc_store::ChunkStore};
+    use std::time::Duration;
+
     use iroha_crypto::Hash;
     use iroha_data_model::prelude::BlockHeader;
     use sha2::{Digest, Sha256};
-    use std::time::Duration;
     use tempfile::tempdir;
+
+    use super::*;
+    use crate::sumeragi::{main_loop::RbcSession, rbc_store::ChunkStore};
 
     #[test]
     fn sampling_generates_proof_from_store() {

@@ -1,5 +1,6 @@
-use sorafs_car::{CarBuildPlan, sorafs_chunker::ChunkProfile};
 use sorafs_car::{
+    CarBuildPlan,
+    sorafs_chunker::ChunkProfile,
     streaming_verifier::{StreamingCarVerifier, StreamingVerifierConfig},
     verifier::CarVerifyError,
 };

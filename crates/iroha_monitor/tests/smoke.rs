@@ -1,9 +1,11 @@
 //! Smoke tests for the refactored `iroha_monitor` CLI.
 
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
+use std::{
+    path::PathBuf,
+    process::{Command, Stdio},
+    thread,
+    time::Duration,
+};
 
 fn monitor_bin() -> Option<PathBuf> {
     std::env::var_os("CARGO_BIN_EXE_iroha_monitor").map(PathBuf::from)
@@ -121,8 +123,7 @@ fn attach_mode_with_stubs_runs_cleanly() {
 }
 
 fn spawn_status_metrics_stub() -> Option<std::net::SocketAddr> {
-    use axum::response::IntoResponse;
-    use axum::{Router, routing::get};
+    use axum::{Router, response::IntoResponse, routing::get};
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async move {

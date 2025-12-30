@@ -1,6 +1,8 @@
 //! Ensure instruction framing used by the registry preserves Norito headers.
-use iroha_data_model::isi::{Instruction, InstructionRegistry};
-use iroha_data_model::prelude::{Encode, Level, Log};
+use iroha_data_model::{
+    isi::{Instruction, InstructionRegistry},
+    prelude::{Encode, Level, Log},
+};
 use norito::decode_from_bytes;
 
 #[test]

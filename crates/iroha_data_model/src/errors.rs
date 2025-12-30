@@ -9,7 +9,6 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::nexus::DataSpaceId;
-
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 
@@ -267,8 +266,9 @@ pub enum SettlementRouterOutage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::core::NoritoDeserialize;
+
+    use super::*;
 
     #[test]
     fn reason_codes_are_stable() {

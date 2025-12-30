@@ -1,7 +1,6 @@
 //! Kotodama control-flow codegen coverage for `break`/`continue`.
 
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-use ivm::{CoreHost, IVM};
+use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 
 #[test]
 fn break_exits_while_loop() {

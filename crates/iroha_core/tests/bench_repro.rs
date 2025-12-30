@@ -1,5 +1,9 @@
 //! Reproduces the ISI gas calibration benchmark setup for debugging.
 
+use std::str::FromStr;
+#[cfg(feature = "telemetry")]
+use std::sync::{Arc, OnceLock};
+
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
@@ -15,9 +19,6 @@ use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::str::FromStr;
-#[cfg(feature = "telemetry")]
-use std::sync::{Arc, OnceLock};
 
 fn bench_block_header() -> BlockHeader {
     BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0)

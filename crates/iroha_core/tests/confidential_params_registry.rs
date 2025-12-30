@@ -1,10 +1,10 @@
 #![doc = "Confidential parameter registry flow tests covering publish and lifecycle operations."]
 #![cfg(feature = "zk-tests")]
 
-use iroha_core::smartcontracts::Execute;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
+    smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{

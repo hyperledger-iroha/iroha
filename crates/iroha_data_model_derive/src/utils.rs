@@ -131,8 +131,9 @@ pub(crate) use attr_struct;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use syn::parse_quote;
+
+    use super::*;
 
     #[test]
     fn find_single_attr_opt_works() {

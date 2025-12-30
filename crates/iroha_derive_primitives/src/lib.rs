@@ -138,8 +138,9 @@ macro_rules! attr_struct {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use manyhow::{Error as ManyhowError, error_message};
+
+    use super::*;
 
     #[test]
     fn emitter_finish_ok_when_no_errors() {

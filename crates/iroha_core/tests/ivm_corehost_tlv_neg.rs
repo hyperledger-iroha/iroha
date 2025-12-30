@@ -1,10 +1,10 @@
 //! Host-level negative tests for typed TLV decoding via `CoreHost`.
+use std::str::FromStr;
+
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
-use ivm::IVMHost;
-use ivm::{IVM, Memory, ProgramMetadata, syscalls};
-use std::str::FromStr;
+use ivm::{IVM, IVMHost, Memory, ProgramMetadata, syscalls};
 
 fn build_tlv(type_id: u16, version: u8, payload: &[u8], corrupt_hash: bool) -> Vec<u8> {
     use iroha_crypto::Hash;

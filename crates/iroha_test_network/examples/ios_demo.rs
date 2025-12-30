@@ -13,8 +13,7 @@ use color_eyre::{
     Result,
     eyre::{Context, eyre},
 };
-use iroha::client::Client;
-use iroha::data_model::prelude::*;
+use iroha::{client::Client, data_model::prelude::*};
 use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
 use norito::json::{JsonDeserialize, JsonSerialize};

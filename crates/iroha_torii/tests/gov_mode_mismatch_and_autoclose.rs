@@ -6,6 +6,8 @@
 
 #[path = "../../iroha_core/tests/zk_testkit.rs"]
 mod zk_testkit;
+use std::env;
+
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_core::{
     kura::Kura,
@@ -31,7 +33,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
-use std::env;
 
 const CONTRACT_NAMESPACE: &str = "apps";
 const CONTRACT_ID: &str = "demo.contract";

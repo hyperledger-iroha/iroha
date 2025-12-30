@@ -1717,6 +1717,19 @@ fn render_proof_bench_markdown(report: &ProofBenchReport) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use iroha_crypto::{Hash as CryptoHash, Signature};
+    use iroha_data_model::{
+        da::{
+            commitment::{DaCommitmentRecord, DaProofScheme},
+            ingest::{DaIngestReceipt, DaStripeLayout},
+            types::{BlobClass, BlobDigest, RetentionPolicy, StorageTicketId},
+        },
+        nexus::LaneId,
+        sorafs::pin_registry::{ManifestDigest, StorageClass},
+    };
+
     use super::{
         CommitmentArtifact, ManifestAudit, ManifestAuditStatus, PolicySnapshot, ProofBenchOptions,
         ReceiptArtifact, ReplicationOrderSnapshot, blob_class_label, build_remediation_plan,
@@ -1724,18 +1737,6 @@ mod tests {
         storage_class_label,
     };
     use crate::JsonTarget;
-    use iroha_crypto::{Hash as CryptoHash, Signature};
-    use iroha_data_model::da::commitment::DaProofScheme;
-    use iroha_data_model::da::types::BlobClass;
-    use iroha_data_model::sorafs::pin_registry::StorageClass;
-    use iroha_data_model::{
-        da::commitment::DaCommitmentRecord,
-        da::ingest::{DaIngestReceipt, DaStripeLayout},
-        da::types::{BlobDigest, RetentionPolicy, StorageTicketId},
-        nexus::LaneId,
-        sorafs::pin_registry::ManifestDigest,
-    };
-    use std::path::PathBuf;
 
     fn sample_receipt(
         ticket: [u8; 32],

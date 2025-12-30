@@ -503,10 +503,12 @@ impl LaneRelayError {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
+    use iroha_crypto::{Hash, HashOf};
+
     use super::*;
     use crate::block::{BlockHeader, consensus::LaneBlockCommitment};
-    use iroha_crypto::{Hash, HashOf};
-    use std::num::NonZeroU64;
 
     fn sample_commitment(height: u64, lane_id: u32, dataspace_id: u64) -> LaneBlockCommitment {
         LaneBlockCommitment {

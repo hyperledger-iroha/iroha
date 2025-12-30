@@ -134,8 +134,9 @@ pub mod ivm {
 
 /// Genesis bootstrap defaults.
 pub mod genesis {
-    use super::*;
     use iroha_config_base::util::Bytes;
+
+    use super::*;
 
     /// Maximum size (bytes) of a genesis payload served or accepted during bootstrap.
     pub const BOOTSTRAP_MAX_BYTES: Bytes<u64> = Bytes(16 * 1024 * 1024);
@@ -183,7 +184,8 @@ pub mod transaction {
 
 /// Compute lane defaults.
 pub mod compute {
-    use super::*;
+    use std::str::FromStr;
+
     use iroha_config_base::util::Bytes;
     use iroha_data_model::{
         compute::{
@@ -194,7 +196,8 @@ pub mod compute {
         },
         name::Name,
     };
-    use std::str::FromStr;
+
+    use super::*;
 
     /// Whether the compute lane is enabled by default.
     pub const ENABLED: bool = false;
@@ -440,9 +443,10 @@ pub mod content {
 
 /// Oracle pipeline defaults.
 pub mod oracle {
-    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude::Name;
+
+    use super::*;
 
     fn deterministic_account(seed: &[u8], domain: &str) -> AccountId {
         let domain_id = DomainId::from_str(domain).expect("default oracle domain");
@@ -621,8 +625,9 @@ pub mod oracle {
 pub mod kura {
     use std::{num::NonZeroUsize, time::Duration};
 
-    use crate::kura::FsyncMode;
     use nonzero_ext::nonzero;
+
+    use crate::kura::FsyncMode;
 
     /// Directory for Kura storage relative to the node working directory.
     pub const STORE_DIR: &str = "./storage";
@@ -891,9 +896,9 @@ pub mod streaming {
 pub mod sorafs {
     /// Defaults governing the embedded SoraFS storage worker.
     pub mod storage {
-        use iroha_config_base::util::Bytes;
-
         use std::path::PathBuf;
+
+        use iroha_config_base::util::Bytes;
 
         /// Feature toggle for the embedded SoraFS storage worker.
         pub const ENABLED: bool = false;
@@ -1565,9 +1570,11 @@ pub mod nexus {
 
     /// Public-lane staking defaults.
     pub mod staking {
-        use super::super::NonZeroU32;
-        use nonzero_ext::nonzero;
         use std::time::Duration;
+
+        use nonzero_ext::nonzero;
+
+        use super::super::NonZeroU32;
 
         /// Minimum bonded stake required to register a validator (asset base units).
         pub const MIN_VALIDATOR_STAKE: u64 = 1;
@@ -2656,6 +2663,8 @@ pub mod settlement {
         pub const PRUNE_BATCH_SIZE: usize = 128;
         /// Default aggregate-proof enforcement mode for offline bundles.
         pub const PROOF_MODE: &str = "optional";
+        /// Default maximum age for offline receipts (ms). Zero disables age checks.
+        pub const MAX_RECEIPT_AGE_MS: u64 = 86_400_000;
     }
     /// Router defaults (shadow price, guard rails).
     pub mod router {

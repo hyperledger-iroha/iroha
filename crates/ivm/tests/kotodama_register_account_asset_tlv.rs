@@ -1,6 +1,9 @@
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-use ivm::{IVM, MockWorldStateView, PermissionToken, mock_wsv::WsvHost};
 use std::collections::HashMap;
+
+use ivm::{
+    IVM, MockWorldStateView, PermissionToken, kotodama::compiler::Compiler as KotodamaCompiler,
+    mock_wsv::WsvHost,
+};
 
 #[test]
 fn kotodama_register_account_and_unregister_asset() {

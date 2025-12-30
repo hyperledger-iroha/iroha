@@ -118,8 +118,9 @@ pub(crate) fn parse_hash_hex(field: &str, value: &str) -> Result<Hash> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[test]
     fn split_key_spec_parses_algorithm() {

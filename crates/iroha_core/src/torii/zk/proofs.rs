@@ -1,8 +1,9 @@
 //! Proof registry query helpers shared with Torii.
 
-use crate::state::{State, WorldReadOnly};
 use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus};
 use mv::storage::StorageReadOnly;
+
+use crate::state::{State, WorldReadOnly};
 
 /// Filters applied when querying proof records.
 #[derive(Debug, Clone)]
@@ -158,19 +159,21 @@ fn collect_filtered(world: &impl WorldReadOnly, filters: &ProofFilters<'_>) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use iroha_data_model::{
+        bridge::{
+            BridgeProof, BridgeProofPayload, BridgeProofRange, BridgeProofRecord,
+            BridgeTransparentProof,
+        },
+        proof::{ProofId, ProofRecord, ProofStatus},
+    };
+    use nonzero_ext::nonzero;
 
+    use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_data_model::bridge::{
-        BridgeProof, BridgeProofPayload, BridgeProofRange, BridgeProofRecord,
-        BridgeTransparentProof,
-    };
-    use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus};
-    use nonzero_ext::nonzero;
 
     fn blank_state() -> State {
         let kura = Kura::blank_kura_for_testing();

@@ -395,8 +395,9 @@ impl<T: ReprC> From<OwnedLinearSlice<T>> for LinearSlice<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::vec;
+
+    use super::*;
 
     #[test]
     fn linear_slice_mut_allows_updates() {

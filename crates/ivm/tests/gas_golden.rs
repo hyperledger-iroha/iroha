@@ -1,8 +1,7 @@
 mod common;
 
-use ivm::{IVM, VMError, cost_of, instruction};
-
 use instruction::wide;
+use ivm::{IVM, VMError, cost_of, instruction};
 
 fn push32(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());

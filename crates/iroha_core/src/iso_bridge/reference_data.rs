@@ -7,7 +7,6 @@
 //! staleness or ingestion failures.
 
 use core::convert::TryFrom;
-
 use std::{
     collections::BTreeMap,
     fs::{self, File},
@@ -1140,11 +1139,13 @@ fn compute_sha256_hex(path: &Path) -> eyre::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{fs, io::Write as _};
+
     use iroha_config::parameters::actual::IsoReferenceData;
     use iroha_telemetry::metrics;
-    use std::{fs, io::Write as _};
     use tempfile::{NamedTempFile, TempDir};
+
+    use super::*;
 
     fn write_snapshot(contents: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");

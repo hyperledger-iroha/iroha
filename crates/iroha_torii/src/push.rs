@@ -1,11 +1,10 @@
+#[cfg(test)]
+use std::sync::Mutex;
 use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
 use iroha_config::parameters::actual;
 use nonzero_ext::nonzero;
-
-#[cfg(test)]
-use std::sync::Mutex;
 /// Logical push notification target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Platform {

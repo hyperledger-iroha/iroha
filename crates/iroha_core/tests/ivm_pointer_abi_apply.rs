@@ -1,10 +1,10 @@
 //! Verify IVM pointer ABI applies queued instructions correctly.
 #![allow(clippy::too_many_lines)]
 
-use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
+    smartcontracts::ivm::host::CoreHost,
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{account::NewAccount, prelude::*};

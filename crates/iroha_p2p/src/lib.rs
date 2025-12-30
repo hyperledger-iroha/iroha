@@ -14,8 +14,7 @@ use iroha_crypto::{
     kex::X25519Sha256,
 };
 pub use iroha_data_model::confidential::ConfidentialFeatureDigest;
-pub use network::message::UpdateTrustedPeers;
-pub use network::message::*;
+pub use network::message::{UpdateTrustedPeers, *};
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 

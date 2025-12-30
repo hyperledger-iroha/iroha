@@ -1,9 +1,11 @@
 //! Soak tests for Norito columnar cache guards and telemetry.
 
-use norito::Error;
-use norito::columnar::{
-    MAX_CACHE_ROWS, adaptive_metrics_reset, adaptive_metrics_snapshot, encode_opt_str_column,
-    view_opt_str_column,
+use norito::{
+    Error,
+    columnar::{
+        MAX_CACHE_ROWS, adaptive_metrics_reset, adaptive_metrics_snapshot, encode_opt_str_column,
+        view_opt_str_column,
+    },
 };
 
 #[test]

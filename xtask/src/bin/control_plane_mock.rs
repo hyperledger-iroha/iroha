@@ -384,9 +384,10 @@ async fn main() -> eyre::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use axum::http::Request;
     use tower::ServiceExt as _;
+
+    use super::*;
 
     fn fixture_state() -> Arc<MockState> {
         build_state(&default_openapi_path(), &default_rbac_path()).unwrap()

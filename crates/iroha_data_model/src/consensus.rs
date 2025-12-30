@@ -1,16 +1,18 @@
 //! Consensus-related data model DTOs for on-chain persistence.
+use std::str::FromStr;
+
+use iroha_crypto::PublicKey;
+use iroha_schema::{Ident, IntoSchema};
+#[cfg(feature = "json")]
+use mv::json::JsonKeyCodec;
+use norito::codec::{Decode, Encode};
+
 pub use crate::block::consensus::{
     SumeragiBlockSyncRosterStatus, SumeragiConsensusCapsStatus, SumeragiPeerKeyPolicyStatus,
     SumeragiQcEntry, SumeragiQcSnapshot, SumeragiStatusWire, SumeragiViewChangeCauseStatus,
     SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
 };
 use crate::prelude::*;
-use iroha_crypto::PublicKey;
-use iroha_schema::{Ident, IntoSchema};
-#[cfg(feature = "json")]
-use mv::json::JsonKeyCodec;
-use norito::codec::{Decode, Encode};
-use std::str::FromStr;
 
 /// `ExecutionQC` record persisted in WSV for audit and recovery.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]

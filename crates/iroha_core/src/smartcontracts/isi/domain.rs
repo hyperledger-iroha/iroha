@@ -542,12 +542,14 @@ pub mod isi {
 pub mod query {
     use iroha_data_model::{
         domain::Domain,
-        query::{dsl::CompoundPredicate, error::QueryExecutionFail},
+        query::{
+            dsl::{CompoundPredicate, EvaluatePredicate},
+            error::QueryExecutionFail,
+        },
     };
 
     use super::*;
     use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
-    use iroha_data_model::query::dsl::EvaluatePredicate;
 
     impl ValidQuery for FindDomains {
         #[metrics(+"find_domains")]
@@ -567,21 +569,15 @@ pub mod query {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::prelude::World;
-    use crate::{
-        kura::Kura,
-        nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
-        query::store::LiveQueryStore,
-        state::State,
-    };
+    use std::sync::Arc;
+
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::events::data::space_directory::{
-        SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
-    };
     use iroha_data_model::{
         account::{NewAccount, rekey::AccountLabel},
         block::BlockHeader,
+        events::data::space_directory::{
+            SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
+        },
         metadata::Metadata,
         name::Name,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
@@ -589,7 +585,15 @@ mod tests {
     };
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-    use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        kura::Kura,
+        nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
+        prelude::World,
+        query::store::LiveQueryStore,
+        state::State,
+    };
 
     fn test_state() -> State {
         let kura = Kura::blank_kura_for_testing();

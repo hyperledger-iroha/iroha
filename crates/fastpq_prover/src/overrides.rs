@@ -9,7 +9,6 @@ use std::sync::{
     OnceLock,
     atomic::{AtomicBool, Ordering},
 };
-
 #[cfg(test)]
 use std::{cell::RefCell, collections::HashMap};
 

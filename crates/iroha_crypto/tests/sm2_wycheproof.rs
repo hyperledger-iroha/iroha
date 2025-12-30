@@ -1,12 +1,13 @@
 #![doc = "Wycheproof-derived SM2 signature regression suite."]
 #![cfg(feature = "sm")]
 
+use std::sync::LazyLock;
+
 use hex::FromHex;
 use iroha_crypto::sm::{Sm2PublicKey, Sm2Signature};
 use norito::json::Value;
 use num_bigint::BigUint;
 use sm3::{Digest, Sm3};
-use std::sync::LazyLock;
 
 #[derive(Clone, Debug)]
 struct Point {

@@ -1,8 +1,9 @@
 //! Regression fixtures for the FASTPQ stage 2 backend artifacts.
 
+use std::fs;
+
 use fastpq_prover::{OperationKind, Prover, StateTransition, TransitionBatch};
 use norito::core::to_bytes;
-use std::fs;
 
 fn synthetic_batch(rows: usize) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced");

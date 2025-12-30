@@ -1,8 +1,10 @@
+use std::fmt;
+
+use fastpq_isi::poseidon::STATE_WIDTH;
+
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 use crate::metal;
 use crate::{backend::GpuBackend, fastpq_cuda, trace::PoseidonColumnBatch};
-use fastpq_isi::poseidon::STATE_WIDTH;
-use std::fmt;
 
 /// GPU execution failure.
 #[derive(Debug, Clone)]

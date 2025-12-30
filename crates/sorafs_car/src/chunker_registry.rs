@@ -1,8 +1,10 @@
 //! Registry of SoraFS chunker profiles and their negotiation metadata.
 
-use crate::chunker_registry_data::{RAW_REGISTRY, RawChunkerDescriptor};
-use sorafs_chunker::ChunkProfile;
 use std::{collections::HashSet, sync::OnceLock};
+
+use sorafs_chunker::ChunkProfile;
+
+use crate::chunker_registry_data::{RAW_REGISTRY, RawChunkerDescriptor};
 
 /// Multihash code used for CAR payload digests in the default profile.
 pub const DEFAULT_MULTIHASH_CODE: u64 = 0x1f;

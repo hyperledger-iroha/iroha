@@ -1,15 +1,15 @@
 //! Integration tests for proof queries.
+use std::{thread::sleep, time::Duration};
+
 use eyre::Result;
-use iroha::data_model::prelude::*;
-use iroha::data_model::query::proof::prelude::{FindProofRecords, FindProofRecordsByStatus};
+use integration_tests::sandbox;
 use iroha::data_model::{
+    prelude::*,
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
+    query::proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
     zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_test_network::NetworkBuilder;
-
-use integration_tests::sandbox;
-use std::{thread::sleep, time::Duration};
 
 fn halo2_attachment() -> ProofAttachment {
     // Minimal Halo2 OpenVerifyEnvelope to satisfy verification invariants.

@@ -1,5 +1,7 @@
 #![cfg(feature = "cli")]
 
+use std::{env, error::Error, fs, path::PathBuf, process::Command};
+
 use assert_cmd::cargo::cargo_bin_cmd;
 use blake3::hash as blake3_hash;
 use iroha_data_model::taikai::{
@@ -7,7 +9,6 @@ use iroha_data_model::taikai::{
     TaikaiTrackKind,
 };
 use norito::{decode_from_bytes, json};
-use std::{env, error::Error, fs, path::PathBuf, process::Command};
 use tempfile::tempdir;
 
 #[test]

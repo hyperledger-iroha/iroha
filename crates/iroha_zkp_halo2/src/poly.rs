@@ -1,11 +1,13 @@
 //! Polynomial representation and commit/open operations via IPA.
 
-use crate::IpaScalar;
-use crate::backend::IpaBackend;
-use crate::errors::Error;
-use crate::ipa::{IpaProof, IpaProver, IpaVerifier, commit_vec};
-use crate::params::Params;
-use crate::transcript::Transcript;
+use crate::{
+    IpaScalar,
+    backend::IpaBackend,
+    errors::Error,
+    ipa::{IpaProof, IpaProver, IpaVerifier, commit_vec},
+    params::Params,
+    transcript::Transcript,
+};
 
 /// Dense polynomial over backend scalar field represented by its coefficients in
 /// ascending order, i.e., `coeffs[i]` is the coefficient of `x^i`.

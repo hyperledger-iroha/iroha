@@ -1,7 +1,8 @@
 //! Doc-sync tests for the Sumeragi governance and evidence documentation.
 
-use iroha_config::parameters::defaults::sumeragi::npos;
 use std::path::Path;
+
+use iroha_config::parameters::defaults::sumeragi::npos;
 
 #[test]
 fn sumeragi_doc_mentions_reconfig_defaults_and_errors() {

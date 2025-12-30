@@ -11,13 +11,13 @@ fn zk_ballot_verifies_with_registered_vk_tiny_add() {
     }
 
     use core::num::NonZeroU64;
-    use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-    use halo2_proofs::plonk::{
-        Circuit, ConstraintSystem, Error as PlonkError, Selector, keygen_pk, keygen_vk,
+
+    use halo2_proofs::{
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector, keygen_pk, keygen_vk},
+        poly::{Rotation, commitment::Params},
+        transcript::Blake2bWrite,
     };
-    use halo2_proofs::poly::Rotation;
-    use halo2_proofs::poly::commitment::Params;
-    use halo2_proofs::transcript::Blake2bWrite;
     use iroha_core::{
         block::ValidBlock, executor::Executor, kura::Kura, query::store::LiveQueryStore,
         smartcontracts::Execute, state::State,

@@ -4,12 +4,13 @@
 use core::arch::x86_64::{_mm_clmulepi64_si128, _mm_cvtsi128_si64, _mm_set_epi64x, _mm_srli_si128};
 #[allow(unused_imports)]
 use core::ffi::{c_char, c_int, c_void};
-use crc64fast::Digest;
 #[allow(unused_imports)]
 use std::ffi::{CStr, CString};
 use std::sync::OnceLock;
 #[allow(unused_imports)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crc64fast::Digest;
 
 /// CRC64-ECMA polynomial.
 const POLY: u64 = 0x42F0_E1EB_A9EA_3693;
@@ -459,13 +460,16 @@ const MU: u64 = 0x9c3e_466c_1729_63d5;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 mod simd {
+    use core::{
+        fmt::Debug,
+        mem,
+        ops::{BitXor, BitXorAssign},
+    };
+
     use super::{
         K_127, K_191, K_255, K_319, K_383, K_447, K_511, K_575, K_639, K_703, K_767, K_831, K_895,
         K_959, K_1023, K_1087, MU, POLY, crc64_slicing_by_8,
     };
-    use core::fmt::Debug;
-    use core::mem;
-    use core::ops::{BitXor, BitXorAssign};
 
     pub(super) trait SimdOps: Copy + Debug + BitXor<Output = Self> + BitXorAssign {
         unsafe fn new(high: u64, low: u64) -> Self;
@@ -476,8 +480,9 @@ mod simd {
 
     #[cfg(target_arch = "x86_64")]
     mod arch {
-        use super::*;
         use core::arch::x86_64::*;
+
+        use super::*;
 
         #[repr(transparent)]
         #[derive(Copy, Clone, Debug)]
@@ -554,8 +559,9 @@ mod simd {
 
     #[cfg(target_arch = "aarch64")]
     mod arch {
-        use super::*;
         use core::arch::aarch64::*;
+
+        use super::*;
 
         #[repr(transparent)]
         #[derive(Copy, Clone, Debug)]
@@ -878,11 +884,12 @@ pub unsafe fn crc64_pmull(data: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     use std::sync::atomic::Ordering;
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     use std::{fs, path::PathBuf, process::Command};
+
+    use super::*;
 
     #[cfg(feature = "simd-accel")]
     fn fallback_ptr() -> usize {

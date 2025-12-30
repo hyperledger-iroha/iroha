@@ -3,9 +3,9 @@
 
 #[cfg(feature = "goldilocks_backend")]
 use iroha_zkp_halo2::backend::goldilocks;
-use iroha_zkp_halo2::backend::{bn254, pallas};
 use iroha_zkp_halo2::{
     OpenVerifyEnvelope, Transcript,
+    backend::{bn254, pallas},
     norito_helpers::{self as nh, DecodedEnvelope},
 };
 

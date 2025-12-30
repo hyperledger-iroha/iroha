@@ -226,9 +226,10 @@ impl SpaceDirectoryManifestSet {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::nexus::ManifestVersion;
     use iroha_test_samples::gen_account_in;
+
+    use super::*;
 
     fn sample_manifest(dataspace: u32) -> AssetPermissionManifest {
         AssetPermissionManifest {

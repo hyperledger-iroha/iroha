@@ -9,39 +9,41 @@
 //! registers, optional hardware transactional memory and basic hardware feature
 //! detection. Vector operations currently operate on a fixed 128‑bit width and
 //! a fully scalable vector extension remains future work.
-use crate::SyscallPolicy;
-use crate::decoder;
-use crate::error::VMError;
-use crate::gas;
-use crate::host::AccessLog;
-use crate::host::{DefaultHost, IVMHost};
-use crate::instruction;
-use crate::memory::Memory;
-use crate::metadata::ProgramMetadata;
-use crate::parallel::{
-    self, Block, BlockResult, ExecutionContext, Scheduler, State, Transaction, TxResult,
-};
-use crate::pointer_abi::PointerPolicyGuard;
-use crate::registers::Registers;
-use crate::simple_instruction::Instruction as SimpleInstruction;
-use crate::vector;
-use crate::vector::SimdChoice;
-use crate::zk::{self, Constraint, DeltaTraceLog, MemEvent, MemLog, RegisterState};
-use likely_stable::{likely, unlikely};
-use std::cell::RefCell;
-use std::sync::Mutex;
+#[cfg(feature = "beep")]
+use std::time::Duration;
 use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
     panic::AssertUnwindSafe,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
+use likely_stable::{likely, unlikely};
 #[cfg(feature = "beep")]
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source, source::SineWave};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
-#[cfg(feature = "beep")]
-use std::time::Duration;
+
+use crate::{
+    SyscallPolicy, decoder,
+    error::VMError,
+    gas,
+    host::{AccessLog, DefaultHost, IVMHost},
+    instruction,
+    memory::Memory,
+    metadata::ProgramMetadata,
+    parallel::{
+        self, Block, BlockResult, ExecutionContext, Scheduler, State, Transaction, TxResult,
+    },
+    pointer_abi::PointerPolicyGuard,
+    registers::Registers,
+    simple_instruction::Instruction as SimpleInstruction,
+    vector,
+    vector::SimdChoice,
+    zk::{self, Constraint, DeltaTraceLog, MemEvent, MemLog, RegisterState},
+};
 
 static SUPPRESS_BANNER: AtomicBool = AtomicBool::new(false);
 static WORKER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
@@ -5502,9 +5504,10 @@ impl IVM {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+
     use super::*;
     use crate::{instruction, ivm_cache, metadata::LITERAL_SECTION_MAGIC};
-    use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
     #[test]
     fn builder_respects_deterministic_policy() {

@@ -6,12 +6,13 @@
 
 use std::string::String;
 
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+
 use crate::{
     account::AccountId,
     governance::types::{ParliamentBodies, ProposalId, VoteChoice},
 };
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 
 /// Root/sudo execution outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]

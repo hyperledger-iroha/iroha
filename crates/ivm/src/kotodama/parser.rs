@@ -2,8 +2,10 @@
 //!
 //! This module implements a simple recursive descent parser producing an AST.
 
-use super::ast::*;
-use super::lexer::{Token, TokenKind, lex};
+use super::{
+    ast::*,
+    lexer::{Token, TokenKind, lex},
+};
 
 #[derive(Debug, PartialEq)]
 pub struct ParseError {

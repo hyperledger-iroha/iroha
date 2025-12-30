@@ -6,8 +6,10 @@ use iroha_data_model::{
         AccountEvent, RepoAccountEvent, RepoAccountInitiated, RepoAccountMarginCalled,
         RepoAccountRole, RepoAccountSettled,
     },
-    isi::error::InstructionExecutionError,
-    isi::repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
+    isi::{
+        error::InstructionExecutionError,
+        repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
+    },
     prelude::*,
     repo::{RepoAgreement, RepoGovernance},
 };
@@ -667,9 +669,6 @@ pub mod query {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::prelude::World;
-    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
     use hex::encode_upper;
     use iroha_crypto::Hash;
     use iroha_data_model::{
@@ -689,6 +688,9 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use norito::json::{Map, Number, Value};
+
+    use super::*;
+    use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
 
     fn setup_state() -> (State, RepoAgreementId, AssetDefinitionId, AssetDefinitionId) {
         let domain_id: DomainId = "wonderland".parse().unwrap();

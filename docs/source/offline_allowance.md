@@ -164,8 +164,10 @@ Counters are tracked inside `OfflineCounterState` (per-`key_id` for iOS, per-`se
 `stage_receipt_counters`, and enforces strictly monotonic increments (no gaps and no rewinds).
 
 The challenge each platform signs is derived from the receipt payload by encoding the
-`OfflineReceiptChallengePreimage` struct with Norito and hashing the resulting bytes. This struct is
-public inside `iroha_data_model::offline` and mirrors the fields every receipt includes:
+`OfflineReceiptChallengePreimage` struct with Norito and hashing
+`Hash(chain_id) || preimage_bytes`. This binds every receipt to the chain ID and prevents
+cross-context replays. The preimage struct lives in `iroha_data_model::offline` and mirrors the
+fields every receipt includes:
 
 ```text
 struct OfflineReceiptChallengePreimage {
@@ -191,9 +193,10 @@ bound freshness via `android.provisioned.max_manifest_age_ms`; after that TTL ex
 receipts until a new manifest is registered.
 
 Rust data-model callers can now compute these digests directly via
-`OfflineReceiptChallengePreimage::hash()` or `OfflineSpendReceipt::challenge_hash()`, avoiding the
-manual `to_bytes()`/`Hash::new(...)` plumbing that SDKs previously reimplemented. Use these helpers
-when producing host-side attestations or when verifying receipts in tests to stay aligned with the
+`OfflineReceiptChallengePreimage::hash_with_chain_id()` or
+`OfflineSpendReceipt::challenge_hash_with_chain_id()`, avoiding the manual
+`to_bytes()`/`Hash::new(...)` plumbing that SDKs previously reimplemented. Use these helpers when
+producing host-side attestations or when verifying receipts in tests to stay aligned with the
 canonical Norito encoding described above.
 
 ## 4. Receipts, Balance Proofs, and Bundles
@@ -202,7 +205,7 @@ canonical Norito encoding described above.
   platform proof, sender certificate, the sender’s spend-key signature, and
   optional receipt-scoped `platform_snapshot` metadata when wallets attach a Play
   Integrity or HMS Safety Detect token for that specific spend.
-- `OfflineBalanceProof` carries `{ initial_commitment, resulting_commitment, claimed_delta, zk_proof? }`.
+- `OfflineBalanceProof` carries `{ initial_commitment, resulting_commitment, claimed_delta, zk_proof }`.
 - `OfflineToOnlineTransfer` is the bundle submitted to the ledger: `{ bundle_id, receiver,
   deposit_account, receipts[], balance_proof, aggregate_proof?, attachments?, platform_snapshot? }`.
   The optional `aggregate_proof` field carries the Poseidon root plus the three FASTPQ proofs
@@ -215,16 +218,27 @@ canonical Norito encoding described above.
 
 ### 4.1 Balance-proof proofs (Pedersen representation)
 
-- `zk_proof` is optional: when wallets attach the proof, validators verify it before crediting the
-  bundle; when omitted the bundle is still accepted (legacy compatibility) but no ZK verification is
-  performed. Empty payloads are rejected to avoid ambiguous signaling.【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:24】
+- `zk_proof` is required for settlement: validators reject bundles that omit the proof or supply an
+  empty payload, and the proof is checked before any allowance value is credited on-ledger.
+  【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:24】
 - Commitments are interpreted as **Pedersen commitments over Ristretto255**, using the global
   basepoint `G` and an independent generator `H = hash_to_group("iroha.offline-balance.generator.H.v1")`.
   A proof shows knowledge of the blinding delta between `C_init` and `C_res` consistent with the
   public `claimed_delta`. Fiat–Shamir is applied with BLAKE2b over the ordered tuple
   `(C_init, C_res, delta_le, context, U, R)` under the label
   `"iroha.offline.balance.v1"`.【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:52】
-- Proof bytes are a fixed 96-byte struct (no envelope, no VK lookup):
+- Proof bytes are versioned and contain both the delta proof and a 64-bit range proof that asserts
+  the resulting commitment encodes `v_new in [0, 2^64 - 1]`:
+
+  | Offset | Size | Field | Notes |
+  |--------|------|-------|-------|
+  | 0 | 1 | `version` | Currently `0x01` |
+  | 1 | 96 | `delta_proof` | Chaum–Pedersen proof for `C_res - C_init` |
+  | 97 | 12288 | `range_proof` | 64 per-bit proofs (192 bytes each) |
+
+  Total size: **12,385 bytes**.
+
+- The delta proof payload uses a fixed 96-byte struct (no envelope, no VK lookup):
 
   | Offset | Size | Field | Notes |
   |--------|------|-------|-------|
@@ -235,14 +249,27 @@ canonical Norito encoding described above.
   The challenge `c` is derived from `C_init`, `C_res`, the signed `delta_i128_le`, the 32-byte
   network binding (`Hash(chain_id)`), the difference `U = C_res - C_init`, and `R`. The verifier
   checks `s_G·G + s_H·H == R + c·U`.【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:70】
+- The range proof is a per-bit OR proof: each bit commitment is proven to be either `0·G` or `1·G`,
+  and the sum of the bit commitments is shown to match `C_res - C_init - Δ·G`.
 - No verifying key is required: the transcript label and generator derivation are hard-coded, so
   nodes do not fetch or rotate any VK material. Proofs are rejected when commitments are not 32-byte
-  Ristretto encodings or when `claimed_delta` uses a fractional scale.
-  generated by the real circuit before settling value on-ledger.【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:318】
+  Ristretto encodings or when `claimed_delta` uses a fractional scale.【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:318】
 - SDK helpers: the Swift SDK exposes `OfflineBalanceProofBuilder` (update commitment + generate
   proof), and the Android SDK exposes `OfflineBalanceProof`. Wallets pass the chain id, claimed
-  delta, and the current/randomized blinding seeds to obtain both the next commitment
-  (`resulting_commitment`) and the 96-byte proof blob that Torii accepts.
+  delta, resulting value, and the current/randomized blinding seeds to obtain both the next
+  commitment (`resulting_commitment`) and the versioned proof blob that Torii accepts.
+
+#### Operational guardrails
+
+- Offline receipts are probabilistic until settled: the on-ledger commitment can move between
+  receipt issuance and settlement, so merchants should reconcile quickly and surface pending
+  status until Torii confirms.
+- Shorten receipt windows by setting `refresh_at_ms` and attestation token TTLs (`max_token_age_ms`);
+  bundles submitted after the refresh deadline are rejected.
+- Hardware counters are enforced for attested paths; prefer rollback-resistant StrongBox/TEE keys
+  for offline allowances and do not export offline spend keys across devices.
+- Proof generation occurs in software, so compromised devices can leak balance/blinding material;
+  treat rooted devices as privacy-compromised and rotate allowances accordingly.
 
 ### 4.2 Poseidon receipt tree & aggregate proofs *(OA13/OA14)*
 
@@ -407,6 +434,11 @@ Ledger invariants enforced during `SubmitOfflineToOnlineTransfer`:
    bytes are used to verify Play Integrity / HMS Safety Detect tokens instead of the certificate’s
    cached attestation report. Receipt-local snapshots take precedence so POS importers can attach
    distinct proofs per spend.
+
+Offline receipts remain probabilistic until settlement: device rollbacks, cloned keys, or a
+sender racing an online refresh can still invalidate an otherwise well-formed receipt. Merchants
+should settle quickly, consume counter summaries, and surface UX warnings for offline acceptance
+flows; hardware counters mitigate but do not eliminate state-fork risk.
 
 ## 5. Ledger Instructions
 
@@ -670,7 +702,7 @@ which controller accounts may request new certificates.
 
 When a request fails due to an offline validation rejection, Torii surfaces a stable error code in
 the `x-iroha-reject-code` response header (for example `certificate_expired`, `counter_conflict`,
-`allowance_exceeded`, `invoice_duplicate`).
+`max_tx_value_exceeded`, `allowance_exceeded`, `invoice_duplicate`).
 
 `/v1/offline/transfers/proof` accepts a Norito/JSON body
 `{ bundle_id_hex, kind, counter_checkpoint?, replay_log_head_hex?, replay_log_tail_hex? }`. The
@@ -1118,10 +1150,10 @@ recording the attempt in their journals.【IrohaSwift/Sources/IrohaSwift/Offline
   the KeyDescription (parsing `attestationApplicationId`, StrongBox/rollback flags, alias metadata),
   and optionally enforces marker-key signatures so marker series + counters remain bound to the
   certificate metadata.【crates/iroha_core/src/smartcontracts/isi/offline.rs:1068】
-- **Canonical challenge + metadata binding.** `derive_receipt_challenge` hashes the receipt’s
-  `{invoice, receiver, asset, amount, tx_id}` tuple and both verifiers compare their inputs against
-  the metadata recorded in `OfflineWalletCertificate`, ensuring servers recompute the exact challenge
-  described in the spec.【crates/iroha_core/src/smartcontracts/isi/offline.rs:562】
+- **Canonical challenge + metadata binding.** `derive_receipt_challenge` hashes
+  `Hash(chain_id) || {invoice, receiver, asset, amount, tx_id}` and both verifiers compare their
+  inputs against the metadata recorded in `OfflineWalletCertificate`, ensuring servers recompute the
+  exact chain-bound challenge described in the spec.【crates/iroha_core/src/smartcontracts/isi/offline.rs:562】
 - **Telemetry.** `iroha_core` records settlement/archival metrics via `iroha_telemetry::metrics`
   (`record_offline_transfer_settlement`, `inc_offline_transfer_archived`) and now annotates every
   rejection path with `record_offline_transfer_rejection`, which feeds the

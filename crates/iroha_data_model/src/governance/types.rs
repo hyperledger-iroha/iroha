@@ -9,20 +9,22 @@
 
 use std::{collections::BTreeMap, fmt, str::FromStr, string::String, vec::Vec};
 
+use iroha_crypto::{
+    PublicKey, SignatureOf,
+    blake2::{
+        Blake2bVar,
+        digest::{Update, VariableOutput},
+    },
+};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
+
 use crate::{
     account::AccountId, asset::AssetId, isi::governance::CouncilDerivationKind,
     smart_contract::manifest::ManifestProvenance,
 };
-use iroha_crypto::blake2::{
-    Blake2bVar,
-    digest::{Update, VariableOutput},
-};
-use iroha_crypto::{PublicKey, SignatureOf};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
-#[cfg(feature = "json")]
-use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 
 /// Errors emitted when parsing hex-encoded hashes used by governance payloads.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -950,10 +952,11 @@ impl ProposalKind {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{AccountId, DomainId};
     use hex_literal::hex;
     use iroha_crypto::KeyPair;
+
+    use super::*;
+    use crate::{AccountId, DomainId};
 
     #[test]
     fn contract_hash_roundtrips_hex() {

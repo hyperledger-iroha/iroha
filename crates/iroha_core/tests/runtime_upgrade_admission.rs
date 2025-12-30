@@ -1,19 +1,24 @@
 //! Admission gating for runtime upgrades: pre-activation reject, post-activation accept.
 #![allow(clippy::items_after_statements)]
 
-use iroha_core::prelude::World;
+use std::borrow::Cow;
+
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
-use iroha_core::state::{State, WorldReadOnly};
-use iroha_core::tx::AcceptedTransaction;
+use iroha_core::{
+    prelude::World,
+    state::{State, WorldReadOnly},
+    tx::AcceptedTransaction,
+};
 use iroha_crypto::{Hash, KeyPair};
-use iroha_data_model::isi::error::InstructionExecutionError;
-use iroha_data_model::prelude::*;
-use iroha_data_model::runtime::{RuntimeUpgradeRecord, RuntimeUpgradeStatus};
+use iroha_data_model::{
+    isi::error::InstructionExecutionError,
+    prelude::*,
+    runtime::{RuntimeUpgradeRecord, RuntimeUpgradeStatus},
+};
 use iroha_primitives::json::Json;
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::borrow::Cow;
 
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 
@@ -43,9 +48,7 @@ fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
 
 #[test]
 fn runtime_upgrade_abi_gating_pre_post_activation() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_core::tx::TransactionRejectionReason;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, tx::TransactionRejectionReason};
     use iroha_data_model::validation_fail::{IvmAdmissionError, ValidationFail};
     // moved Cow import to module scope to avoid clippy items-after-statements
 
@@ -151,8 +154,7 @@ fn runtime_upgrade_abi_gating_pre_post_activation() {
 
 #[test]
 fn propose_runtime_upgrade_rejects_overlapping_windows() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -210,8 +212,7 @@ fn propose_runtime_upgrade_rejects_overlapping_windows() {
 
 #[test]
 fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -259,8 +260,7 @@ fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
 
 #[test]
 fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -307,8 +307,7 @@ fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
 
 #[test]
 fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -367,8 +366,7 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
 
 #[test]
 fn activate_runtime_upgrade_is_idempotent_at_start_height() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -437,9 +435,9 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
 
 #[test]
 fn activation_allows_new_abi_in_same_block() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_core::smartcontracts::ivm::cache::IvmCache;
+    use iroha_core::{
+        kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
+    };
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -512,10 +510,10 @@ fn activation_allows_new_abi_in_same_block() {
 
 #[test]
 fn active_manifest_hash_mismatch_rejects_contracts() {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_core::smartcontracts::ivm::cache::IvmCache;
-    use iroha_core::tx::TransactionRejectionReason;
+    use iroha_core::{
+        kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
+        tx::TransactionRejectionReason,
+    };
     use iroha_data_model::validation_fail::{IvmAdmissionError, ValidationFail};
 
     let kura = Kura::blank_kura_for_testing();

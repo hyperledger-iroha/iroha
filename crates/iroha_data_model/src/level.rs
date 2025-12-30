@@ -102,8 +102,9 @@ impl JsonDeserialize for Level {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use super::*;
     use norito::json::{self, FastJsonWrite};
+
+    use super::*;
 
     #[test]
     fn parse_level_from_str() {

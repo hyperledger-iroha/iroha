@@ -2,12 +2,17 @@
 
 #[cfg(feature = "cuda")]
 mod imp {
+    use std::{
+        ffi::CString,
+        sync::{
+            Mutex, OnceLock,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+
+    use cust::{memory::DeviceCopy, prelude::*};
+
     use crate::bn254_vec::FieldElem;
-    use cust::memory::DeviceCopy;
-    use cust::prelude::*;
-    use std::ffi::CString;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Mutex, OnceLock};
 
     static PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/add.ptx"));
     static VEC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/vector.ptx"));
@@ -1645,8 +1650,9 @@ mod imp {
 
     #[cfg(all(test, feature = "cuda"))]
     mod tests {
-        use super::*;
         use std::sync::atomic::Ordering;
+
+        use super::*;
 
         #[test]
         fn poseidon_kernel_reports_round_errors_without_disabling_backend() {

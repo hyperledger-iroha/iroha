@@ -1,5 +1,4 @@
-use ivm::kotodama::wide;
-use ivm::{IVM, encoding};
+use ivm::{IVM, encoding, kotodama::wide};
 mod common;
 
 fn program_shift_ops() -> Vec<u8> {

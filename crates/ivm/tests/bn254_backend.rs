@@ -2,8 +2,10 @@
 
 #![cfg(feature = "ivm_zk_tests")]
 use halo2curves::{bn256::Fr, ff::Field};
-use ivm::bn254_vec::{FieldElem, MODULUS, add, add_scalar, mul, mul_scalar, sub, sub_scalar};
-use ivm::field_dispatch::{self, FieldArithmetic};
+use ivm::{
+    bn254_vec::{FieldElem, MODULUS, add, add_scalar, mul, mul_scalar, sub, sub_scalar},
+    field_dispatch::{self, FieldArithmetic},
+};
 use rand_core::OsRng;
 
 fn lt_modulus(a: &FieldElem) -> bool {

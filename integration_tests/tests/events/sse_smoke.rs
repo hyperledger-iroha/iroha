@@ -1,18 +1,19 @@
 //! SSE smoke test: verify that `/v1/events/sse` streams trigger and data events.
 
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::mpsc::{self, Receiver};
-use std::time::{Duration, Instant};
+use std::{
+    io::{BufRead, BufReader, Write},
+    net::{TcpStream, ToSocketAddrs},
+    sync::mpsc::{self, Receiver},
+    time::{Duration, Instant},
+};
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use norito::json::{self, Value as JsonValue};
-
-use integration_tests::sandbox;
 
 const SSE_TIMEOUT: Duration = Duration::from_secs(45);
 

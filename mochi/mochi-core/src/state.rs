@@ -5,7 +5,6 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
-use crate::torii::{ToriiClient, ToriiError};
 #[cfg(not(feature = "fast_dsl"))]
 use iroha_data_model::query::{
     account::prelude::FindAccounts,
@@ -28,6 +27,8 @@ use iroha_data_model::{
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json;
+
+use crate::torii::{ToriiClient, ToriiError};
 
 /// Set of iterable queries currently supported by the state explorer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -776,7 +777,6 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use httpmock::{Method::POST, MockServer};
     use iroha_data_model::{
         Registrable,
@@ -792,6 +792,8 @@ mod tests {
     use iroha_primitives::numeric::{Numeric, NumericSpec};
     use iroha_test_samples::ALICE_ID;
     use norito::{json, to_bytes};
+
+    use super::*;
 
     fn try_start_mock_server() -> Option<MockServer> {
         std::panic::catch_unwind(MockServer::start)

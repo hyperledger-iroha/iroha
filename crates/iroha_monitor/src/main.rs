@@ -17,24 +17,29 @@ mod fetch;
 mod synth;
 mod theme;
 
-use crate::fetch::{PeerFetcher, PeerSnapshot, PeerUpdate, STATUS_BODY_LIMIT, spawn_stub_cluster};
-use crate::theme::{ThemeIntro, ThemeOptions};
+use std::{
+    collections::VecDeque,
+    io::{self, Write},
+    time::Duration,
+};
+
 use axum::http::Uri;
 use clap::{Parser, ValueEnum};
 use eyre::{Result, eyre};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Sparkline, Table};
-use std::collections::VecDeque;
-use std::io::{self, Write};
-use std::time::Duration;
-use tokio::signal;
-use tokio::sync::mpsc;
-use tokio::time;
-use tokio::time::MissedTickBehavior;
+use ratatui::{
+    Terminal,
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Sparkline, Table},
+};
+use tokio::{signal, sync::mpsc, time, time::MissedTickBehavior};
+
+use crate::{
+    fetch::{PeerFetcher, PeerSnapshot, PeerUpdate, STATUS_BODY_LIMIT, spawn_stub_cluster},
+    theme::{ThemeIntro, ThemeOptions},
+};
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
 enum ArtThemeArg {
@@ -603,8 +608,9 @@ enum InputEvent {
 
 fn spawn_input_listener(tx: mpsc::Sender<InputEvent>) {
     std::thread::spawn(move || {
-        use crossterm::event::{self, Event, KeyCode, KeyModifiers};
         use std::time::Duration;
+
+        use crossterm::event::{self, Event, KeyCode, KeyModifiers};
         loop {
             if event::poll(Duration::from_millis(100)).unwrap_or(false) {
                 match event::read() {
@@ -979,10 +985,12 @@ fn render_events(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ap
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use ratatui::backend::TestBackend;
+
     use super::*;
     use crate::fetch::{MetricsSnapshot, PeerSnapshot, PeerUpdate, StatusPayload};
-    use ratatui::backend::TestBackend;
-    use std::time::Duration;
 
     #[test]
     fn normalize_endpoint_adds_http_scheme() {

@@ -5,12 +5,14 @@
 //! groups runs per scenario, and renders a Markdown report containing aggregated
 //! latency and throughput measurements alongside per-run details.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::convert::TryFrom;
-use std::fmt::Write as _;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::TryFrom,
+    fmt::Write as _,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use norito::json::{self, Map, Value};
 
@@ -899,8 +901,9 @@ fn shorten_hash(hash: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs::{self, File};
+
+    use super::*;
 
     fn assert_close(actual: f64, expected: f64) {
         let diff = (actual - expected).abs();

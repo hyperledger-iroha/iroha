@@ -70,8 +70,10 @@ async fn zk_verify_batch_endpoint_accepts_norito_vec_and_returns_statuses() {
 async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
     use h2::norito_helpers as nh;
     use iroha_zkp_halo2 as h2;
-    use iroha_zkp_halo2::backend::goldilocks::GoldilocksBackend;
-    use iroha_zkp_halo2::{GoldilocksParams, GoldilocksPolynomial, GoldilocksScalar, Transcript};
+    use iroha_zkp_halo2::{
+        GoldilocksParams, GoldilocksPolynomial, GoldilocksScalar, Transcript,
+        backend::goldilocks::GoldilocksBackend,
+    };
 
     let app = Router::new().route(
         "/v1/zk/verify-batch",

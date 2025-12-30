@@ -1,8 +1,10 @@
 //! Regression tests for `ArchiveView` validation behaviour.
 
 use iroha_schema::IntoSchema;
-use norito::core::{DecodeFromSlice, Error, from_bytes_view, to_bytes};
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    core::{DecodeFromSlice, Error, from_bytes_view, to_bytes},
+};
 
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize)]
 struct DummyPayload(Vec<u8>);

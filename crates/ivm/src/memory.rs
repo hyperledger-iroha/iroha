@@ -10,18 +10,24 @@
 //! * **Input** – read-only buffer beginning at `0x0020_0000`.
 //! * **Output** – read/write buffer beginning at `0x0020_8000`.
 //! * **Stack** – 4&nbsp;MB region starting at `0x0030_0000`.
-use crate::byte_merkle_tree::ByteMerkleTree;
-use crate::error::{Perm, VMError};
-use crate::merkle_utils::compute_memory_leaf_digest;
+use std::{
+    collections::HashSet,
+    convert::TryInto,
+    sync::{
+        LazyLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree};
 use iroha_telemetry::metrics::record_stack_budget_hit;
 use likely_stable::{likely, unlikely};
 use parking_lot::Mutex;
-use std::collections::HashSet;
-use std::convert::TryInto;
-use std::sync::{
-    LazyLock,
-    atomic::{AtomicU64, Ordering},
+
+use crate::{
+    byte_merkle_tree::ByteMerkleTree,
+    error::{Perm, VMError},
+    merkle_utils::compute_memory_leaf_digest,
 };
 
 /// Memory read range recorded for conflict detection in parallel execution.
@@ -823,9 +829,10 @@ impl Memory {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Hash, HashOf, MerkleProof};
+
     use super::*;
     use crate::merkle_utils::compute_memory_leaf_digest;
-    use iroha_crypto::{Hash, HashOf, MerkleProof};
 
     #[test]
     fn reset_from_template_restores_runtime_regions() {

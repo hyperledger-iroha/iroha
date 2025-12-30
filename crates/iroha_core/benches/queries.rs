@@ -5,25 +5,23 @@
     clippy::field_reassign_with_default,
     clippy::items_after_statements
 )]
-use criterion::Criterion;
 use std::sync::LazyLock;
 
-use iroha_core::pipeline::query_lane::{
-    CursorMode as LaneCursorMode, run_on_snapshot, run_on_snapshot_with_mode,
-};
+use criterion::Criterion;
 use iroha_core::{
+    pipeline::query_lane::{
+        CursorMode as LaneCursorMode, run_on_snapshot, run_on_snapshot_with_mode,
+    },
     prelude::*,
     query::store::LiveQueryStore,
-    smartcontracts::isi::query::QueryLimits,
-    smartcontracts::{Execute, ValidQuery},
+    smartcontracts::{Execute, ValidQuery, isi::query::QueryLimits},
     state::{State, World},
 };
 use iroha_data_model::{
     prelude::*,
     query::{
         account::prelude::FindAccounts,
-        asset::prelude::FindAssets,
-        asset::prelude::FindAssetsDefinitions,
+        asset::prelude::{FindAssets, FindAssetsDefinitions},
         domain::prelude::FindDomains,
         dsl::CompoundPredicate,
         trigger::prelude::{FindActiveTriggerIds, FindTriggers},
@@ -599,8 +597,10 @@ fn bench_find_asset_defs_iter(c: &mut Criterion) {
 
 fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
     use iroha_core::block::BlockBuilder;
-    use iroha_data_model::events::time::{ExecutionTime, TimeEventFilter};
-    use iroha_data_model::trigger::prelude::*;
+    use iroha_data_model::{
+        events::time::{ExecutionTime, TimeEventFilter},
+        trigger::prelude::*,
+    };
 
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let _guard = RUNTIME.enter();

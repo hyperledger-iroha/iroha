@@ -52,6 +52,8 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, error, info, warn};
+#[cfg(test)]
+use iroha_test_samples::ALICE_ID;
 use iroha_torii_shared::da::sampling::{
     build_sampling_plan, compute_sample_window, sampling_plan_to_value,
 };
@@ -80,8 +82,6 @@ use crate::{
     sorafs::api::ResponseError,
     utils::{self, ResponseFormat},
 };
-#[cfg(test)]
-use iroha_test_samples::ALICE_ID;
 
 const CURSOR_FILE_NAME: &str = "replay_cursors.norito.json";
 const RECEIPT_FILE_PREFIX: &str = "da-receipt";
@@ -2945,10 +2945,14 @@ fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDaReceipt>> {
 
 #[allow(clippy::redundant_pub_crate)]
 mod taikai_ingest {
-    use super::*;
+    use std::{
+        io::{self, Write},
+        str::FromStr,
+    };
+
     use sorafs_car::{CarBuildPlan, CarWriter};
-    use std::io::{self, Write};
-    use std::str::FromStr;
+
+    use super::*;
 
     pub(super) const STREAM_LABEL_FALLBACK: &str = "<unknown>";
 
@@ -3909,8 +3913,10 @@ mod taikai_ingest {
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_data_model::Encode;
-    use tokio::fs as async_fs;
-    use tokio::time::{MissedTickBehavior, interval};
+    use tokio::{
+        fs as async_fs,
+        time::{MissedTickBehavior, interval},
+    };
 
     struct HttpAnchorSender {
         client: Client,
@@ -5173,10 +5179,18 @@ struct DaIngestResponse {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::*;
-    use crate::da::taikai_ingest::{AnchorSender, collect_pending_uploads, process_batch};
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use core::convert::TryInto;
+    use std::{
+        fs,
+        io::Write,
+        num::NonZeroU32,
+        path::{Path, PathBuf},
+        str::FromStr,
+        sync::{Arc, LazyLock},
+        time::Duration,
+    };
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use flate2::{Compression as FlateCompression, write::GzEncoder};
     use iroha_config::parameters::actual::{DaTaikaiAnchor, LaneConfig, TelemetryProfile};
     use iroha_core::{da::LaneEpoch, telemetry::Telemetry};
@@ -5202,9 +5216,12 @@ mod tests {
         },
     };
     use iroha_telemetry::metrics::Metrics;
-    use norito::codec::Decode;
-    use norito::json::{self, Value};
-    use norito::{from_bytes, to_bytes};
+    use norito::{
+        codec::Decode,
+        from_bytes,
+        json::{self, Value},
+        to_bytes,
+    };
     use reqwest::Url;
     use sorafs_car::{CarBuildPlan, PersistedChunkRecord};
     use sorafs_manifest::{
@@ -5214,17 +5231,11 @@ mod tests {
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
     };
-    use std::num::NonZeroU32;
-    use std::{
-        fs,
-        io::Write,
-        path::{Path, PathBuf},
-        str::FromStr,
-        sync::{Arc, LazyLock},
-        time::Duration,
-    };
     use tempfile::tempdir;
     use tokio::{fs as async_fs, sync::Mutex as AsyncMutex};
+
+    use super::*;
+    use crate::da::taikai_ingest::{AnchorSender, collect_pending_uploads, process_batch};
 
     #[test]
     fn replay_cursor_temp_path_keeps_suffixes() {

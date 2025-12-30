@@ -1,12 +1,13 @@
 use darling::{FromAttributes, FromDeriveInput, FromField};
-use manyhow::Emitter;
-use manyhow::emit;
+use manyhow::{Emitter, emit};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::parse_quote;
 
-use crate::emitter_ext::EmitterExt;
-use crate::utils::{darling_result, find_single_attr_opt};
+use crate::{
+    emitter_ext::EmitterExt,
+    utils::{darling_result, find_single_attr_opt},
+};
 
 mod kw {
     syn::custom_keyword!(transparent);

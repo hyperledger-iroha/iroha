@@ -8,9 +8,10 @@
 )]
 #![allow(clippy::redundant_closure_for_method_calls)]
 
+use std::sync::Once;
+
 use axum::{Router, response::IntoResponse, routing::get};
 use http_body_util::BodyExt as _;
-use std::sync::Once;
 use tower::ServiceExt as _;
 
 fn ensure_quota_config() {

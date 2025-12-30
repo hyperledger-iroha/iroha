@@ -2,11 +2,14 @@
 //! scheduling outcomes or final state. This toggles the knob and compares events
 //! and balances for a mixed set of transactions.
 
-use iroha_core::block::{BlockBuilder, ValidBlock};
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use std::borrow::Cow;
+
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    state::{StateReadOnly, WorldReadOnly},
+};
 use iroha_data_model::prelude::*;
 use mv::storage::StorageReadOnly; // trait for .get()
-use std::borrow::Cow;
 
 mod snapshots;
 

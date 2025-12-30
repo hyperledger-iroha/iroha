@@ -1,16 +1,17 @@
-use clap::Parser;
-use eyre::{Result, WrapErr};
-use norito::json::{self, Value};
-use soradns_resolver::transparency::{
-    BundleEventKind, BundleRecord, BundleState, ResolverEventKind, ResolverRecord,
-    TransparencyRecord, TransparencyTailer,
-};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Write as _,
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
+};
+
+use clap::Parser;
+use eyre::{Result, WrapErr};
+use norito::json::{self, Value};
+use soradns_resolver::transparency::{
+    BundleEventKind, BundleRecord, BundleState, ResolverEventKind, ResolverRecord,
+    TransparencyRecord, TransparencyTailer,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -508,9 +509,10 @@ impl ResolverSummary {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::json::{self, Value};
     use soradns_resolver::transparency::{BundleSnapshot, TransparencyTailer};
+
+    use super::*;
 
     fn sample_snapshot(zone_version: u64, cid: &str) -> BundleSnapshot {
         BundleSnapshot {

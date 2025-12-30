@@ -259,10 +259,11 @@ fn extract_string(object: &Map, key: &str) -> Result<String, SignerVaultError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::{NetworkProfile, ProfilePreset};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use tempfile::tempdir;
+
+    use super::*;
+    use crate::config::{NetworkProfile, ProfilePreset};
 
     fn dummy_paths(root: &Path) -> NetworkPaths {
         NetworkPaths::from_root(

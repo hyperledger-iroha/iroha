@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -21,7 +22,6 @@ use iroha_primitives::{json::Json, soradns::derive_gateway_hosts};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use reqwest::{Client as HttpClient, Url};
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::sleep;
 
 const SNS_SUFFIX_ID: u16 = 0x0001;

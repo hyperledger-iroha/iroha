@@ -1,6 +1,8 @@
 //! Tests audit metadata for Shield and `ZkTransfer` include roots and commitments.
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
+use std::str::FromStr;
+
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -10,7 +12,6 @@ use iroha_core::{
 use iroha_data_model::{account::NewAccount, name::Name, prelude::*};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::str::FromStr;
 
 #[test]
 fn shield_and_transfer_emit_audit_roots_and_commitments() {

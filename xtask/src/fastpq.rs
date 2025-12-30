@@ -1,21 +1,24 @@
-use crate::workspace_root;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use blake3::hash as blake3_hash;
-use eyre::eyre;
-use eyre::{Context, Result, bail, ensure};
+use eyre::{Context, Result, bail, ensure, eyre};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
-use norito::json as serde_json;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
+    json as serde_json,
     json::{self, Value},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339, macros::format_description};
+
+use crate::workspace_root;
 
 #[derive(Debug, Clone)]
 pub struct BenchInput {
@@ -1282,9 +1285,11 @@ fn default_wrapper_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::Path;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     fn sample_bundle(rows: u64) -> Value {
         norito::json!({

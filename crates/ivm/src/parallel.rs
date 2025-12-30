@@ -7,13 +7,19 @@
 //! attempt hardware transactions; other targets (or CPUs without RTM) fall back
 //! to the deterministic mutex path.
 
-use crate::vector::{SimdChoice, set_thread_forced_simd};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
+    sync::{
+        Arc,
+        atomic::{AtomicU8, AtomicUsize, Ordering},
+    },
+};
+
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use rayon::ThreadPool;
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
+use crate::vector::{SimdChoice, set_thread_forced_simd};
 
 #[cfg(all(
     feature = "htm",
@@ -22,9 +28,9 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 ))]
 mod htm_util {
     use core::arch::x86_64::{_XBEGIN_STARTED, _xbegin, _xend};
+    use std::{collections::HashSet, sync::LazyLock};
+
     use parking_lot::Mutex;
-    use std::collections::HashSet;
-    use std::sync::LazyLock;
 
     static STM_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
     static ACTIVE_TAGS: LazyLock<Mutex<HashSet<usize>>> =
@@ -90,9 +96,9 @@ mod htm_util {
     not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
 )))]
 mod htm_util {
+    use std::{collections::HashSet, sync::LazyLock};
+
     use parking_lot::Mutex;
-    use std::collections::HashSet;
-    use std::sync::LazyLock;
 
     static STM_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
     static ACTIVE_TAGS: LazyLock<Mutex<HashSet<usize>>> =

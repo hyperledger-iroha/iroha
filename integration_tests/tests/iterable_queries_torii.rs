@@ -1,23 +1,23 @@
 //! Additional Torii iterable query checks exercising server-side batching and
 //! multiple item types (blocks, transactions).
 
-use integration_tests::sandbox;
+use std::{thread::sleep, time::Duration};
 
 use eyre::{Result, WrapErr};
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 // use iroha_data_model::query::builder::QueryBuilderExt as _; // trait extension not needed in this test
 use iroha_data_model::query::dsl::SelectorTuple;
 use iroha_test_network::NetworkBuilder;
 use nonzero_ext::nonzero;
 use sandbox::start_network_blocking_or_skip as start_network_or_skip;
-use std::{thread::sleep, time::Duration};
 
 #[test]
 fn blocks_iterable_start_and_continue() -> Result<()> {
-    use iroha::data_model::query::dsl::CompoundPredicate;
     use iroha::data_model::query::{
         QueryBox, QueryOutputBatchBox, QueryWithFilter, QueryWithParams,
         builder::QueryExecutor as _,
+        dsl::CompoundPredicate,
         parameters::{FetchSize, QueryParams, Sorting},
     };
 
@@ -72,11 +72,12 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
 
 #[test]
 fn transactions_iterable_non_empty() -> Result<()> {
-    use iroha::data_model::query::transaction::prelude::FindTransactions;
     use std::{
         thread,
         time::{Duration, Instant},
     };
+
+    use iroha::data_model::query::transaction::prelude::FindTransactions;
 
     let Some((network, _rt)) = start_network_or_skip(
         NetworkBuilder::new(),

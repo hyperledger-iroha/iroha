@@ -6,6 +6,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use eyre::{Result, WrapErr, ensure};
+use integration_tests::sandbox;
 use iroha::client::Client;
 use iroha_data_model::{
     isi::SetParameter,
@@ -20,8 +21,6 @@ use rand::{Rng as _, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use reqwest::Client as HttpClient;
 use tokio::time::sleep;
-
-use integration_tests::sandbox;
 
 const EPOCH_LENGTH_BLOCKS: u64 = 6;
 const VRF_COMMIT_WINDOW_BLOCKS: u64 = 2;

@@ -4,6 +4,12 @@
 
 #![allow(unexpected_cfgs)]
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process,
+};
+
 use clap::Parser;
 use eyre::{Context, Result};
 use norito::{
@@ -12,11 +18,6 @@ use norito::{
 };
 use sorafs_car::{TrustlessVerifier, TrustlessVerifierConfig};
 use sorafs_manifest::{ManifestV1, pin_registry::PinRecordV1};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    process,
-};
 
 #[derive(Debug, Parser)]
 #[command(

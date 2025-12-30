@@ -10,12 +10,11 @@
 ))]
 mod zk_testkit;
 
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World},
+    state::{State, StateReadOnly, World, WorldReadOnly},
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
@@ -31,10 +30,13 @@ fn zk_ballot_rejected_on_plain_referendum() {
         return;
     }
     use core::num::NonZeroU64;
-    use iroha_data_model::events::data::{DataEvent, governance::GovernanceEvent};
-    use iroha_data_model::isi::governance::{CastZkBallot, ProposeDeployContract, VotingMode};
-    use iroha_data_model::permission::Permission;
-    use iroha_data_model::prelude::Grant;
+
+    use iroha_data_model::{
+        events::data::{DataEvent, governance::GovernanceEvent},
+        isi::governance::{CastZkBallot, ProposeDeployContract, VotingMode},
+        permission::Permission,
+        prelude::Grant,
+    };
     use iroha_executor_data_model::permission::governance::{
         CanProposeContractDeployment, CanSubmitGovernanceBallot,
     };

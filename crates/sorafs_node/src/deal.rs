@@ -4,6 +4,11 @@
 //! evaluates probabilistic micropayment tickets, and produces settlement
 //! records for governance pipelines.
 
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, RwLock},
+};
+
 use blake3::Hasher;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
@@ -20,10 +25,6 @@ use norito::Error as NoritoError;
 use sorafs_manifest::deal::{
     DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
     DealSettlementStatusV1, DealSettlementV1, XorAmount,
-};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, RwLock},
 };
 use thiserror::Error;
 
@@ -805,10 +806,10 @@ fn egress_charge(bytes: u128, terms: &DealTerms) -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_data_model::metadata::Metadata;
-    use iroha_data_model::sorafs::deal::MicropaymentTicket;
+    use iroha_data_model::{metadata::Metadata, sorafs::deal::MicropaymentTicket};
     use sorafs_manifest::deal::DealSettlementStatusV1;
+
+    use super::*;
 
     fn sample_terms() -> DealTerms {
         DealTerms {

@@ -413,12 +413,13 @@ fn dashboards_label(dashboards: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::soranet::certificate::{RelayCapabilityFlagsV1, RelayCertificateV2};
     use rand_core_06::OsRng;
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
     use tempfile::TempDir;
+
+    use super::*;
 
     fn sample_certificate() -> RelayCertificateV2 {
         RelayCertificateV2 {

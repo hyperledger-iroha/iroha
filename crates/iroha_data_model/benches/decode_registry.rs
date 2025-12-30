@@ -3,12 +3,11 @@
 //! This Criterion benchmark compares decoding performance between a simple
 //! vector-backed registry and the production `InstructionRegistry`.
 use criterion::Criterion;
-use iroha_data_model::Level;
-use iroha_data_model::isi::Log;
-use iroha_data_model::isi::{
-    Instruction, InstructionBox, InstructionConstructor, InstructionRegistry,
+use iroha_data_model::{
+    Level,
+    isi::{Instruction, InstructionBox, InstructionConstructor, InstructionRegistry, Log},
+    prelude::Decode,
 };
-use iroha_data_model::prelude::Decode;
 use norito::core;
 
 /// Minimal vector-backed registry used for benchmarking decode performance.

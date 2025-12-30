@@ -1,6 +1,28 @@
 # Status
 
 ## Latest Updates
+- Translated the SoraFS chunker conformance guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS chunker registry charter across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS chunker registry across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Offline balance proofs now require a versioned zk-proof with range verification; SDKs/tests/docs updated to the 12,385-byte v1 layout.
+- Added exportable software key persistence (KeyExportStore + passphrase provider) and a BouncyCastle-enforced policy for roaming accounts; docs/tests updated.
+- Translated the SoraFS chunker registry rollout checklist across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Localnet generation now allowlists loopback CIDRs in Torii pre-auth to prevent demo CLI bans; Kagami tests/docs updated.
+- `deploy_localnet.sh` defaults debug runs to 1s block/commit timings, adds curl timeouts, and sets a warn-level `RUST_LOG` when unset.
+- Offline balance proof RNG now uses the rand_core 0.6 OsRng to avoid rand_core trait mismatches during builds/tests.
+- Translated the SoraFS staging manifest playbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS node-client protocol across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS observability plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Bound offline receipt challenge hashes to `chain_id` across core, SDKs, and FFI helpers; updated Swift/Android tests and docs to match.
+- Enforced `policy.max_tx_value` during offline settlement, added the `max_tx_value_exceeded` rejection reason, and documented the balance proof range-proof requirements.
+- Android key manager now validates Ed25519 SPKI output and falls back from non-Ed25519 providers; docs and tests updated.
+- Translated the SoraFS operations playbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Taikai anchor observability runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS gateway and DNS kickoff runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Added `torii.peer_telemetry_urls` and wired Kagami localnet configs so peer telemetry targets Torii endpoints instead of P2P ports, eliminating HandshakeBadPreface noise in localnets.
+- Translated the SoraFS capacity reconciliation runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS dispute and revocation runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS node operations runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Moved `run_test_dump.py` into `scripts/` to keep the repo root tidy.
 - Translated the SoraFS orchestrator configuration guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS multi-source rollout runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).

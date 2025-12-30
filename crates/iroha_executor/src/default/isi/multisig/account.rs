@@ -1,16 +1,18 @@
 //! Validation and execution logic of instructions for multisig accounts
 
-use super::*;
-use crate::data_model::{
-    domain::DomainId, isi::error::InstructionExecutionError, metadata::Metadata,
-};
+use std::collections::BTreeSet;
+
 use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_smart_contract::data_model::{
     prelude::{FindAccounts, Grant, Register},
     query::prelude::{FindDomains, FindRoles, FindRolesByAccountId},
     role::{Role, RoleId},
 };
-use std::collections::BTreeSet;
+
+use super::*;
+use crate::data_model::{
+    domain::DomainId, isi::error::InstructionExecutionError, metadata::Metadata,
+};
 
 impl VisitExecute for MultisigRegister {
     fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
@@ -351,11 +353,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::num::{NonZeroU16, NonZeroU64};
+    use std::collections::BTreeMap;
+
+    use iroha_crypto::{Algorithm, KeyPair};
+
     use super::*;
     use crate::data_model::{domain::DomainId, prelude::AccountId};
-    use core::num::{NonZeroU16, NonZeroU64};
-    use iroha_crypto::{Algorithm, KeyPair};
-    use std::collections::BTreeMap;
 
     fn account(seed: u8, domain: &DomainId) -> AccountId {
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);

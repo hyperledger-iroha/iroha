@@ -5,17 +5,14 @@
 //! change. It is primarily used for byte buffers or other data that is loaded
 //! once and then treated as read‑only for the remainder of the program's
 //! lifetime.
-use core::ops::Deref;
-use core::ptr;
-use std::{boxed::Box, format, string::String, vec::Vec};
+use core::{ops::Deref, ptr};
+use std::{boxed::Box, format, io::Write, string::String, vec::Vec};
 
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 use ncore::WriteBytesExt;
-use norito::core as ncore;
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize};
-use std::io::Write;
+use norito::{NoritoDeserialize, NoritoSerialize, core as ncore};
 
 use crate::ffi;
 
@@ -1270,9 +1267,12 @@ impl<T: Clone> ToConstVec for [T] {
 
 #[cfg(test)]
 mod tests {
+    use norito::{
+        NoritoDeserialize, NoritoSerialize,
+        codec::{self, Decode, Encode},
+    };
+
     use super::{ConstVec, decode_const_vec_manual, ncore};
-    use norito::codec::{self, Decode, Encode};
-    use norito::{NoritoDeserialize, NoritoSerialize};
 
     #[repr(transparent)]
     #[derive(Clone, Debug, PartialEq, Eq)]

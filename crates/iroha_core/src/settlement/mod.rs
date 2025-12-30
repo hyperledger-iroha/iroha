@@ -15,8 +15,8 @@ use iroha_data_model::{
     asset::AssetDefinitionId, block::consensus::LaneSettlementReceipt,
     transaction::SignedTransaction,
 };
-use rust_decimal::Decimal;
-use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::{Decimal, prelude::FromPrimitive};
+pub use settlement_router::VolatilityBucket;
 use settlement_router::{
     MicroXor, ShadowPriceCalculator,
     config::SettlementConfig,
@@ -25,8 +25,6 @@ use settlement_router::{
     receipt::SettlementReceipt,
 };
 use time::Duration as TimeDuration;
-
-pub use settlement_router::VolatilityBucket;
 
 /// Error returned when quoting settlement amounts fails.
 #[derive(Clone, Copy, Debug, thiserror::Error)]
@@ -233,9 +231,10 @@ impl SettlementAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::Hash;
     use settlement_router::MicroXor;
+
+    use super::*;
 
     fn micro(value: i64) -> MicroXor {
         MicroXor::new(Decimal::from(value))

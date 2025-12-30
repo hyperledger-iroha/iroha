@@ -5,8 +5,9 @@ use ivm::{self, IVM, IVMHost, Memory};
 
 #[test]
 fn decode_typed_submitballot_fallback_yields_permission_denied_without_verify() {
-    use iroha_data_model::isi::BuiltInInstruction as _;
     use std::collections::HashMap;
+
+    use iroha_data_model::isi::BuiltInInstruction as _;
 
     // Seed WSV with a simple election
     let mut wsv = ivm::MockWorldStateView::new();
@@ -65,8 +66,9 @@ fn decode_typed_submitballot_fallback_yields_permission_denied_without_verify() 
 
 #[test]
 fn decode_typed_finalize_fallback_yields_permission_denied_without_verify() {
-    use iroha_data_model::isi::BuiltInInstruction as _;
     use std::collections::HashMap;
+
+    use iroha_data_model::isi::BuiltInInstruction as _;
 
     // Seed WSV with an election
     let mut wsv = ivm::MockWorldStateView::new();

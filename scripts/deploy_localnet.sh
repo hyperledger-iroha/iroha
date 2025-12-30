@@ -23,6 +23,8 @@ Options:
   --peers <N>                Number of peers (default: 4)
   --seed <SEED>              Deterministic key seed (default: Iroha)
   --build-line <LINE>        Build line for generated configs: iroha2 or iroha3 (default: iroha3)
+  --block-time-ms <MS>       Override block time (ms) in generated configs
+  --commit-time-ms <MS>      Override commit time (ms) in generated configs
   --base-api-port <PORT>     Base Torii API port (default: 29080)
   --base-p2p-port <PORT>     Base P2P port (default: 33337)
   --bind-host <HOST>         Bind host (default: 127.0.0.1)
@@ -56,6 +58,9 @@ SKIP_ASSET_REGISTER=false
 TELEMETRY_PROFILE=""
 TIMEOUT_SECS=30
 FORCE=false
+BLOCK_TIME_MS=""
+COMMIT_TIME_MS=""
+CURL_TIMEOUT_SECS=2
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,6 +82,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --build-line)
       BUILD_LINE="$2"
+      shift 2
+      ;;
+    --block-time-ms)
+      BLOCK_TIME_MS="$2"
+      shift 2
+      ;;
+    --commit-time-ms)
+      COMMIT_TIME_MS="$2"
       shift 2
       ;;
     --base-api-port)
@@ -148,6 +161,12 @@ case "$BUILD_LINE_LOWER" in
     exit 2
     ;;
 esac
+
+if [[ -z "$BLOCK_TIME_MS" && -z "$COMMIT_TIME_MS" && "$PROFILE" == "debug" ]]; then
+  BLOCK_TIME_MS=1000
+  COMMIT_TIME_MS=1000
+  echo "Debug build: defaulting block/commit time to 1000ms for localnet stability."
+fi
 
 for cmd in cargo curl; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -221,6 +240,12 @@ KAGAMI_ARGS=(
 if [[ "$SAMPLE_ASSET" == true ]]; then
   KAGAMI_ARGS+=(--sample-asset)
 fi
+if [[ -n "$BLOCK_TIME_MS" ]]; then
+  KAGAMI_ARGS+=(--block-time-ms "$BLOCK_TIME_MS")
+fi
+if [[ -n "$COMMIT_TIME_MS" ]]; then
+  KAGAMI_ARGS+=(--commit-time-ms "$COMMIT_TIME_MS")
+fi
 IROHA_BUILD_LINE="$BUILD_LINE" "$KAGAMI_BIN" "${KAGAMI_ARGS[@]}"
 
 if [[ -n "$TELEMETRY_PROFILE" ]]; then
@@ -253,12 +278,16 @@ fi
 echo "Starting Iroha peers..."
 cd "$OUT_DIR"
 chmod +x start.sh stop.sh
+if [[ -z "${RUST_LOG:-}" && "$PROFILE" == "debug" ]]; then
+  export RUST_LOG="warn"
+fi
 IROHAD_BIN="$IROHAD_BIN" ./start.sh
 
 echo "Waiting for network to be ready..."
 READY=false
 for ((i = 1; i <= TIMEOUT_SECS; i++)); do
-  if curl -sf "http://$PUBLIC_HOST:$BASE_API_PORT/status" >/dev/null 2>&1; then
+  if curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
+    "http://$PUBLIC_HOST:$BASE_API_PORT/status" >/dev/null 2>&1; then
     READY=true
     break
   fi
@@ -272,7 +301,8 @@ if [[ "$READY" != true ]]; then
 fi
 
 echo "Network is ready:"
-curl -sf "http://$PUBLIC_HOST:$BASE_API_PORT/status" || true
+curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
+  "http://$PUBLIC_HOST:$BASE_API_PORT/status" || true
 
 CFG="$OUT_DIR/client.toml"
 if [[ "$SKIP_ASSET_REGISTER" != true ]]; then

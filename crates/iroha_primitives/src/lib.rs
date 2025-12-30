@@ -33,11 +33,13 @@ pub mod json_macros {
 /// Placeholder when the `json` feature is disabled.
 pub mod json_macros {}
 
-pub use crate::big_numeric::{BigNumeric, BigNumericError};
-pub use crate::bigint::{BigInt, BigIntError, MAX_BITS as BIGINT_MAX_BITS};
-pub use crate::numeric::{
-    Numeric, NumericError, NumericSpec, NumericSpecError, NumericSpecParseError,
-    TryFromNumericError, numeric,
+pub use crate::{
+    big_numeric::{BigNumeric, BigNumericError},
+    bigint::{BigInt, BigIntError, MAX_BITS as BIGINT_MAX_BITS},
+    numeric::{
+        Numeric, NumericError, NumericSpec, NumericSpecError, NumericSpecParseError,
+        TryFromNumericError, numeric,
+    },
 };
 
 mod ffi {

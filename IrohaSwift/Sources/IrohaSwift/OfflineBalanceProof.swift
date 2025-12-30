@@ -9,7 +9,7 @@ public enum OfflineBalanceProofError: Swift.Error {
 
 public enum OfflineBalanceProofBuilder {
     public static let commitmentLength = 32
-    public static let proofLength = 96
+    public static let proofLength = 12385
 
     /// Convenience tuple containing the updated commitment + Chaum–Pedersen proof.
     public struct Artifacts {
@@ -33,6 +33,7 @@ public enum OfflineBalanceProofBuilder {
     public static func advanceCommitment(
         chainId: String,
         claimedDelta: String,
+        resultingValue: String,
         initialCommitmentHex: String,
         initialBlindingHex: String,
         resultingBlindingHex: String
@@ -49,6 +50,7 @@ public enum OfflineBalanceProofBuilder {
         let proof = try generateProof(
             chainId: chainId,
             claimedDelta: claimedDelta,
+            resultingValue: resultingValue,
             initialCommitment: initialCommitment,
             resultingCommitment: resultingCommitment,
             initialBlinding: initialBlinding,
@@ -91,6 +93,7 @@ public enum OfflineBalanceProofBuilder {
     public static func generateProof(
         chainId: String,
         claimedDelta: String,
+        resultingValue: String,
         initialCommitment: Data,
         resultingCommitment: Data,
         initialBlinding: Data,
@@ -108,6 +111,7 @@ public enum OfflineBalanceProofBuilder {
             guard let proof = try NoritoNativeBridge.shared.offlineBalanceProof(
                 chainId: chainId,
                 claimedDelta: claimedDelta,
+                resultingValue: resultingValue,
                 initialCommitment: initialCommitment,
                 resultingCommitment: resultingCommitment,
                 initialBlinding: initialBlinding,

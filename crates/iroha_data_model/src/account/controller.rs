@@ -4,7 +4,6 @@
 use core::fmt;
 use std::vec::Vec;
 
-use super::curve::CurveId;
 use blake2::{
     Blake2bMac,
     digest::{Mac, consts::U32},
@@ -13,6 +12,8 @@ use iroha_crypto::{Algorithm, PublicKey};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
+
+use super::curve::CurveId;
 
 /// Controller responsible for authorising account actions.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
@@ -434,8 +435,9 @@ fn cbor_write_len(buffer: &mut Vec<u8>, major: u8, len: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::KeyPair;
+
+    use super::*;
 
     #[test]
     fn multisig_members_require_positive_weight() {

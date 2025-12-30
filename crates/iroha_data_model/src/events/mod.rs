@@ -2,13 +2,14 @@
 
 use std::{format, ops::Deref, string::String, sync::Arc, vec::Vec};
 
-pub use crate::{Decode, Encode};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use pipeline::{BlockEvent, TransactionEvent};
+
+pub use crate::{Decode, Encode};
 macro_rules! impl_json_via_norito_bytes {
     ($($ty:path),+ $(,)?) => {
         $(
@@ -105,14 +106,16 @@ pub mod trigger_completed;
 
 #[cfg(test)]
 mod tests {
+    use std::{str::FromStr, sync::Arc};
+
+    use iroha_primitives::json::Json;
+
     use super::*;
     use crate::{
         domain::DomainId,
         events::data::prelude::{DataEvent, DomainEvent, MetadataChanged},
         name::Name,
     };
-    use iroha_primitives::json::Json;
-    use std::{str::FromStr, sync::Arc};
 
     #[test]
     fn shared_data_event_from_arc_preserves_arc_pointer() {

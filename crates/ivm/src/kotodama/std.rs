@@ -7,8 +7,13 @@
 //! vendor bridge wrappers) that lower to SCALLs with Norito TLVs. These helpers
 //! remain useful for tests and for building TLVs from host code.
 
-use crate::schema_registry::{DefaultRegistry, SchemaRegistry};
-use crate::{IVM, Memory, PointerType, host::IVMHost, instruction::wide, syscalls};
+use crate::{
+    IVM, Memory, PointerType,
+    host::IVMHost,
+    instruction::wide,
+    schema_registry::{DefaultRegistry, SchemaRegistry},
+    syscalls,
+};
 
 /// Build a TLV with type `NoritoBytes` for the given payload and place it in
 /// the VM INPUT region. Returns the pointer to the TLV.

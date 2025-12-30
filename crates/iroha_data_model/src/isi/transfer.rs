@@ -1,8 +1,10 @@
-use super::*;
+use std::fmt::Display;
+
 use iroha_primitives::numeric::Numeric;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
-use std::fmt::Display;
+
+use super::*;
 
 isi! {
     /// Generic instruction for a transfer of an object from the identifiable source to the identifiable destination.

@@ -3,9 +3,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use blake3::hash as blake3_hash;
-use ed25519_dalek::Verifier;
 use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Signer, SigningKey,
+    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Signer, SigningKey, Verifier,
     VerifyingKey,
 };
 use sorafs_manifest::{

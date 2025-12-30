@@ -3,10 +3,11 @@
 //! These tests are optional: if the fixture directory does not exist
 //! (not generated yet), they log a message and return early without failing.
 
+use std::{fs, path::PathBuf};
+
 use ivm::ivm_cache::IvmCache;
 use norito::json::Value;
 use sha2::{Digest, Sha256};
-use std::{fs, path::PathBuf};
 
 fn fixtures_root() -> PathBuf {
     ivm::predecoder_fixtures::default_predecoder_mixed_root()

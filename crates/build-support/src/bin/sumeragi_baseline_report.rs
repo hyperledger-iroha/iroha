@@ -5,11 +5,13 @@
 //! groups runs per scenario, and renders a Markdown report containing aggregated
 //! throughput and latency measurements alongside per-run details.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::{self, Write as _};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::{self, Write as _},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use norito::json::{self, Map, Value, native::Number};
 

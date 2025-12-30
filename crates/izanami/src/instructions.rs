@@ -9,10 +9,10 @@ use std::{
 
 use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{Hash, KeyPair};
-use iroha_data_model::sorafs::pin_registry::ReplicationOrderId;
-use iroha_data_model::{account::NewAccount, events::EventFilterBox};
 use iroha_data_model::{
+    account::NewAccount,
     events::{
+        EventFilterBox,
         pipeline::{PipelineEventFilterBox, TransactionEventFilter},
         prelude::{AccountEventFilter, AccountEventSet, DataEventFilter, TimeEventFilter},
         time::{ExecutionTime, Schedule},
@@ -39,6 +39,7 @@ use iroha_data_model::{
         PublicLaneRewardShare, UniversalAccountId,
     },
     prelude::*,
+    sorafs::pin_registry::ReplicationOrderId,
     trigger::{
         Trigger,
         action::{Action, Repeats},
@@ -47,8 +48,10 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     account::CanModifyAccountMetadata, nexus::CanPublishSpaceDirectoryManifest,
 };
-use norito::codec::Encode as NoritoEncode;
-use norito::json::{Map as JsonMap, Value as JsonValue};
+use norito::{
+    codec::Encode as NoritoEncode,
+    json::{Map as JsonMap, Value as JsonValue},
+};
 use rand::{Rng, RngCore, rngs::StdRng, seq::IndexedRandom};
 use sorafs_manifest::pin_registry::ReplicationOrderV1;
 use tokio::sync::Mutex;
@@ -2163,10 +2166,11 @@ impl ChaosState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::NexusProfile;
     use rand::SeedableRng;
     use tokio::runtime::Builder;
+
+    use super::*;
+    use crate::config::NexusProfile;
 
     #[test]
     fn json_pair_builds_object() {

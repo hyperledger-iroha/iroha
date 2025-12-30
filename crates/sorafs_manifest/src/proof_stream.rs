@@ -129,8 +129,9 @@ pub enum ProofStreamRequestError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::json::{Value, to_value};
+
+    use super::*;
 
     fn base_request() -> ProofStreamRequestV1 {
         ProofStreamRequestV1 {

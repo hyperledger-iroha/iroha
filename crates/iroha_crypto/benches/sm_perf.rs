@@ -2,15 +2,18 @@
 
 #![cfg(feature = "sm")]
 
+use std::{hint::black_box, time::Duration};
+
 use chacha20poly1305::{
-    ChaCha20Poly1305, KeyInit, Nonce, Tag, aead::AeadInOut, aead::inout::InOutBuf,
+    ChaCha20Poly1305, KeyInit, Nonce, Tag,
+    aead::{AeadInOut, inout::InOutBuf},
 };
 use criterion::{BenchmarkId, Criterion, Throughput};
-use iroha_crypto::sm::{Sm2PrivateKey, Sm3Digest, Sm4Key, SmIntrinsicPolicy};
-use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_crypto::{
+    Algorithm, KeyPair, Signature,
+    sm::{Sm2PrivateKey, Sm3Digest, Sm4Key, SmIntrinsicPolicy},
+};
 use sha2::{Digest, Sha256};
-use std::hint::black_box;
-use std::time::Duration;
 
 /// Compares deterministic SM2 signing/verification performance with Ed25519.
 fn bench_sm2_vs_ed25519(c: &mut Criterion) {

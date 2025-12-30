@@ -1,7 +1,9 @@
 //! Regression test: `InstructionRegistry` decodes bare bytes robustly.
-use iroha_data_model::Level;
-use iroha_data_model::isi::{Instruction, InstructionBox, InstructionRegistry};
-use iroha_data_model::prelude::Log;
+use iroha_data_model::{
+    Level,
+    isi::{Instruction, InstructionBox, InstructionRegistry},
+    prelude::Log,
+};
 use norito::codec::Encode;
 
 #[test]
