@@ -94,6 +94,7 @@ impl Drop for SerializedNetwork {
 
 const SERIAL_GUARD_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
 
 fn serial_lock() -> &'static Arc<Mutex<()>> {
     static SERIAL_LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
@@ -150,6 +151,7 @@ pub fn start_network_blocking_or_skip(
     context: &str,
 ) -> Result<Option<(SerializedNetwork, Runtime)>> {
     let guard = serial_guard();
+    let builder = builder.with_min_peers(MIN_NETWORK_PEERS);
     let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
         builder.build_blocking()
     })) {
@@ -183,6 +185,7 @@ pub fn build_network_blocking_or_skip(
     context: &str,
 ) -> Result<Option<(SerializedNetwork, Runtime)>> {
     let guard = serial_guard();
+    let builder = builder.with_min_peers(MIN_NETWORK_PEERS);
     let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
         builder.build_blocking()
     })) {
@@ -213,6 +216,7 @@ pub async fn start_network_async_or_skip(
     context: &str,
 ) -> Result<Option<SerializedNetwork>> {
     let guard = serial_guard_async().await;
+    let builder = builder.with_min_peers(MIN_NETWORK_PEERS);
     let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.build())) {
         Ok(network) => network,
         Err(panic) => {
@@ -245,6 +249,7 @@ pub fn build_network_or_skip(
     context: &str,
 ) -> Result<Option<SerializedNetwork>> {
     let guard = serial_guard();
+    let builder = builder.with_min_peers(MIN_NETWORK_PEERS);
     let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.build())) {
         Ok(network) => network,
         Err(panic) => {

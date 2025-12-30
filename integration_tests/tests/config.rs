@@ -205,7 +205,7 @@ fn soranet_pow_puzzle_config_roundtrips() -> eyre::Result<()> {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn soranet_pow_puzzle_update_propagates_across_peers() -> eyre::Result<()> {
-    let builder = NetworkBuilder::new().with_peers(2);
+    let builder = NetworkBuilder::new().with_min_peers(4);
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         builder,
         stringify!(soranet_pow_puzzle_update_propagates_across_peers),

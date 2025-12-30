@@ -18,8 +18,8 @@ use integration_tests::sandbox;
 fn observer_node_catches_up() -> Result<()> {
     init_instruction_registry();
 
-    // Prepare a small validator network.
-    let builder = NetworkBuilder::new().with_peers(1);
+    // Prepare a validator network that satisfies DA quorum requirements.
+    let builder = NetworkBuilder::new().with_min_peers(4);
     let (network, rt) = builder.build_blocking();
 
     // Build observer peer (sync-only) ahead of validator bootstrap so validators trust it.

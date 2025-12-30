@@ -11,12 +11,11 @@ use std::{
     time::Duration,
 };
 
-use iroha_config::parameters::defaults;
 use iroha_config::parameters::defaults::zk::fastpq;
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
     queue::{Queue, TransactionGuard},
-    state::{State, StateBlock, StateReadOnly, WorldReadOnly},
+    state::{State, StateBlock, StateReadOnly},
 };
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
@@ -25,7 +24,6 @@ use iroha_data_model::{
     sorafs::pricing::PricingScheduleRecord,
 };
 use nonzero_ext::nonzero;
-use norito::json;
 /// Parameters for invoking a contract within Torii integration tests.
 pub struct ContractCallOptions<'a> {
     /// Optional entry point function to call on the contract; defaults to main when `None`.
@@ -45,7 +43,7 @@ pub struct ContractCallOptions<'a> {
 pub fn apply_queued_in_one_block(
     state: &Arc<State>,
     queue: &Arc<Queue>,
-    _chain_id: &ChainId,
+    chain_id: &ChainId,
     expected_height: u64,
 ) -> usize {
     let max_txs_in_block = core::num::NonZeroUsize::new(1024).expect("nonzero");
@@ -75,6 +73,8 @@ pub fn apply_queued_in_one_block(
     );
 
     let mut state_block = state.block(new_block.header());
+    // Ensure stateless validation uses the expected chain id for these tests.
+    state_block.chain_id = chain_id.clone();
     let valid_block = new_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
@@ -145,12 +145,11 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     out
 }
 
-/// Compute the hex-encoded body hash for a `.to` program.
+/// Compute the hex-encoded contract code hash for a `.to` program.
+///
+/// This matches Torii's deployment hashing (header + body).
 pub fn body_code_hash_hex(code_bytes: &[u8]) -> String {
-    let off = ivm::ProgramMetadata::parse(code_bytes)
-        .expect("ivm header")
-        .code_offset;
-    let h = iroha_crypto::Hash::new(&code_bytes[off..]);
+    let h = iroha_crypto::Hash::new(code_bytes);
     hex::encode(<[u8; 32]>::from(h))
 }
 
@@ -1112,5 +1111,69 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 bundle_accel: A::BundleAcceleration::None,
             },
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{borrow::Cow, sync::Arc};
+
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::Queue,
+        state::{State, StateReadOnly, World},
+        tx::AcceptedTransaction,
+    };
+    use iroha_data_model::{
+        account::AccountId, metadata::Metadata, transaction::TransactionBuilder, ChainId,
+    };
+    use iroha_primitives::json::Json;
+
+    use super::{apply_queued_in_one_block, body_code_hash_hex, minimal_ivm_program};
+
+    #[test]
+    fn body_code_hash_hex_matches_full_bytes_hash() {
+        let code = minimal_ivm_program(1);
+        let expected = hex::encode(<[u8; 32]>::from(iroha_crypto::Hash::new(&code)));
+        assert_eq!(body_code_hash_hex(&code), expected);
+    }
+
+    #[test]
+    fn apply_queued_in_one_block_overrides_chain_id() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+        let chain_id: ChainId = "chain".parse().expect("chain id");
+
+        assert_ne!(state.chain_id(), &chain_id);
+
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            events,
+        ));
+
+        let keypair = iroha_crypto::KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain id"),
+            keypair.public_key().clone(),
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "sumeragi_heartbeat".parse().expect("metadata key"),
+            Json::new(true),
+        );
+
+        let tx = TransactionBuilder::new(chain_id.clone(), authority)
+            .with_metadata(metadata)
+            .sign(keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        queue
+            .push(accepted, state.view())
+            .expect("queue push");
+
+        let applied = apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        assert_eq!(applied, 1);
     }
 }
