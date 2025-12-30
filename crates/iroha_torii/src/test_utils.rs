@@ -1128,7 +1128,7 @@ mod tests {
         tx::AcceptedTransaction,
     };
     use iroha_data_model::{
-        account::AccountId, metadata::Metadata, transaction::TransactionBuilder, ChainId,
+        ChainId, account::AccountId, metadata::Metadata, transaction::TransactionBuilder,
     };
     use iroha_primitives::json::Json;
 
@@ -1171,9 +1171,7 @@ mod tests {
             .with_metadata(metadata)
             .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        queue
-            .push(accepted, state.view())
-            .expect("queue push");
+        queue.push(accepted, state.view()).expect("queue push");
 
         let applied = apply_queued_in_one_block(&state, &queue, &chain_id, 1);
         assert_eq!(applied, 1);
