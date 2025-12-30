@@ -202,6 +202,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 34. **EVENTS-PIPELINE-HANG — Unblock mod.rs integration event tests** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Reproduce `cargo test -p integration_tests --test mod` hangs and confirm DA-enabled single-peer networks stall on post-genesis commits.
    - [x] Enforce a 4-peer minimum in the integration-test harness and update direct peer-start paths to avoid single-peer stalls.
+   - [x] Allow pending-block quorum reschedules to drop/requeue after a retry even with partial precommit votes; add unit test coverage.
    - [x] Re-run the full `cargo test -p integration_tests --test mod` suite to confirm stability.
 
 ## Archived

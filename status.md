@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Allow quorum reschedule to drop/requeue pending blocks after a retry even with partial precommit votes; add unit coverage.
 - Enforced scale-0 validation for offline receipt challenge amounts in the bridge + Swift/Android SDKs, with new tests and docs updates.
 - Translated the SoraFS release process across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS deployment notes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).

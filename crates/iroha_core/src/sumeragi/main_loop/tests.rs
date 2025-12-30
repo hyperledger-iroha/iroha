@@ -2611,6 +2611,54 @@ async fn quorum_reschedule_skips_requeue_when_precommit_votes_present() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn quorum_reschedule_requeues_after_retry_with_precommit_votes() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    let block = block_with_txs(1, 0, None, vec![tx]);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let height = block.header().height().get();
+    let view = u64::from(block.header().view_change_index());
+    let parent_hash = block.header().prev_block_hash();
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.mark_availability_qc(view);
+    let now = Instant::now();
+    let earlier = now.checked_sub(Duration::from_secs(2)).unwrap_or(now);
+    pending.last_quorum_reschedule = Some(earlier);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let epoch = actor.current_epoch();
+    assert!(
+        actor.emit_precommit_vote(block_hash, height, view, epoch, &topology, parent_hash),
+        "precommit vote should be recorded"
+    );
+
+    actor.reschedule_pending_quorum_block(
+        pending,
+        Duration::from_secs(5),
+        /*min_votes_for_commit*/ 3,
+        /*vote_count*/ 0,
+        /*quorum_timeout*/ Duration::from_secs(1),
+        /*reschedule_backoff*/ Duration::from_secs(1),
+        now,
+    );
+
+    assert_eq!(
+        actor.queue.tx_len(),
+        1,
+        "requeue should occur after retry even with precommit votes"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "pending block should be dropped after retry even with precommit votes"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn quorum_reschedule_drops_pending_after_retry_with_availability_qc() {
     let mut harness = test_actor_harness(4).await;
     let block = sample_block(1, 0, None);
