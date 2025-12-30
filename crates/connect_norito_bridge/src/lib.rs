@@ -83,6 +83,7 @@ use sorafs_car::{
         TransportHintInput,
     },
 };
+use zeroize::Zeroize;
 
 const ERR_NULL_PTR: c_int = -1;
 const ERR_UTF8: c_int = -2;
@@ -583,12 +584,14 @@ fn decode_scalar_bytes(bytes: &[u8]) -> BridgeResult<Scalar> {
     if bytes.len() != 32 {
         return Err(BridgeError::OfflineBlinding);
     }
-    let array: [u8; 32] = bytes.try_into().map_err(|_| BridgeError::OfflineBlinding)?;
+    let mut array: [u8; 32] = bytes.try_into().map_err(|_| BridgeError::OfflineBlinding)?;
     let scalar = Scalar::from_canonical_bytes(array);
+    array.zeroize();
     Option::from(scalar).ok_or(BridgeError::OfflineBlinding)
 }
 
 fn numeric_to_scalar(value: &Numeric) -> BridgeResult<Scalar> {
+    ensure_integer_scale(value)?;
     let mantissa = value.try_mantissa_u128().ok_or(BridgeError::Quantity)?;
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(&mantissa.to_le_bytes());
@@ -596,14 +599,23 @@ fn numeric_to_scalar(value: &Numeric) -> BridgeResult<Scalar> {
 }
 
 fn numeric_to_le_bytes(value: &Numeric) -> BridgeResult<[u8; 16]> {
+    ensure_integer_scale(value)?;
     let mantissa = value.try_mantissa_u128().ok_or(BridgeError::Quantity)?;
     let signed = i128::try_from(mantissa).map_err(|_| BridgeError::Quantity)?;
     Ok(signed.to_le_bytes())
 }
 
 fn numeric_to_u64(value: &Numeric) -> BridgeResult<u64> {
+    ensure_integer_scale(value)?;
     let mantissa = value.try_mantissa_u128().ok_or(BridgeError::Quantity)?;
     u64::try_from(mantissa).map_err(|_| BridgeError::Quantity)
+}
+
+fn ensure_integer_scale(value: &Numeric) -> BridgeResult<()> {
+    if value.scale() != 0 {
+        return Err(BridgeError::Quantity);
+    }
+    Ok(())
 }
 
 fn transcript_context(chain_id: &ChainId) -> [u8; 32] {
@@ -630,7 +642,9 @@ fn transcript_challenge(
     hasher
         .finalize_variable(&mut output)
         .expect("output size matches");
-    Scalar::from_bytes_mod_order_wide(&output)
+    let scalar = Scalar::from_bytes_mod_order_wide(&output);
+    output.zeroize();
+    scalar
 }
 
 fn range_proof_challenge(
@@ -651,13 +665,17 @@ fn range_proof_challenge(
     hasher
         .finalize_variable(&mut output)
         .expect("output size matches");
-    Scalar::from_bytes_mod_order_wide(&output)
+    let scalar = Scalar::from_bytes_mod_order_wide(&output);
+    output.zeroize();
+    scalar
 }
 
-fn random_scalar(rng: &mut impl rand_core::RngCore) -> Scalar {
+fn random_scalar(rng: &mut impl RngCore) -> Scalar {
     let mut bytes = [0u8; 64];
     rng.fill_bytes(&mut bytes);
-    Scalar::from_bytes_mod_order_wide(&bytes)
+    let scalar = Scalar::from_bytes_mod_order_wide(&bytes);
+    bytes.zeroize();
+    scalar
 }
 
 fn generate_range_proof(
@@ -684,26 +702,30 @@ fn generate_range_proof(
         let bit_scalar = Scalar::from(u64::from(bit));
         let commitment =
             RISTRETTO_BASEPOINT_POINT * bit_scalar + pedersen_generator_h() * blindings[bit_index];
-        let (a0, a1, e0, s0, s1) = if bit {
-            let alpha = random_scalar(&mut rng);
-            let e0 = random_scalar(&mut rng);
-            let s0 = random_scalar(&mut rng);
+        let (a0, a1, mut e0, mut s0, mut s1) = if bit {
+            let mut alpha = random_scalar(&mut rng);
+            let mut e0 = random_scalar(&mut rng);
+            let mut s0 = random_scalar(&mut rng);
             let a0 = pedersen_generator_h() * s0 - commitment * e0;
             let a1 = pedersen_generator_h() * alpha;
             let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
-            let e1 = challenge - e0;
-            let s1 = alpha + e1 * blindings[bit_index];
+            let mut e1 = challenge - e0;
+            let mut s1 = alpha + e1 * blindings[bit_index];
+            alpha.zeroize();
+            e1.zeroize();
             (a0, a1, e0, s0, s1)
         } else {
-            let alpha = random_scalar(&mut rng);
-            let e1 = random_scalar(&mut rng);
-            let s1 = random_scalar(&mut rng);
+            let mut alpha = random_scalar(&mut rng);
+            let mut e1 = random_scalar(&mut rng);
+            let mut s1 = random_scalar(&mut rng);
             let a0 = pedersen_generator_h() * alpha;
             let commitment_minus_g = commitment - RISTRETTO_BASEPOINT_POINT;
             let a1 = pedersen_generator_h() * s1 - commitment_minus_g * e1;
             let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
-            let e0 = challenge - e1;
-            let s0 = alpha + e0 * blindings[bit_index];
+            let mut e0 = challenge - e1;
+            let mut s0 = alpha + e0 * blindings[bit_index];
+            alpha.zeroize();
+            e1.zeroize();
             (a0, a1, e0, s0, s1)
         };
         proof.extend_from_slice(commitment.compress().as_bytes());
@@ -712,7 +734,14 @@ fn generate_range_proof(
         proof.extend_from_slice(e0.to_bytes().as_ref());
         proof.extend_from_slice(s0.to_bytes().as_ref());
         proof.extend_from_slice(s1.to_bytes().as_ref());
+        e0.zeroize();
+        s0.zeroize();
+        s1.zeroize();
     }
+    for blinding in &mut blindings {
+        blinding.zeroize();
+    }
+    sum.zeroize();
     Ok(proof)
 }
 
@@ -727,25 +756,34 @@ fn generate_offline_balance_proof(
 ) -> BridgeResult<Vec<u8>> {
     let c_init = decode_commitment_point(initial_commitment)?;
     let c_res = decode_commitment_point(resulting_commitment)?;
-    let delta_scalar = numeric_to_scalar(claimed_delta)?;
-    let delta_bytes = numeric_to_le_bytes(claimed_delta)?;
+    let mut delta_scalar = numeric_to_scalar(claimed_delta)?;
+    let mut delta_bytes = numeric_to_le_bytes(claimed_delta)?;
     let resulting_value_u64 = numeric_to_u64(resulting_value)?;
-    let blind_init = decode_scalar_bytes(initial_blinding)?;
-    let blind_res = decode_scalar_bytes(resulting_blinding)?;
-    let blind_delta = blind_res - blind_init;
+    let mut blind_init = decode_scalar_bytes(initial_blinding)?;
+    let mut blind_res = decode_scalar_bytes(resulting_blinding)?;
+    let mut blind_delta = blind_res - blind_init;
     let context = transcript_context(&chain_id);
     let u = c_res - c_init;
     let mut rng = rng();
-    let alpha = random_scalar(&mut rng);
-    let beta = random_scalar(&mut rng);
+    let mut alpha = random_scalar(&mut rng);
+    let mut beta = random_scalar(&mut rng);
     let r_point = RISTRETTO_BASEPOINT_POINT * alpha + pedersen_generator_h() * beta;
     let challenge = transcript_challenge(&c_init, &c_res, &delta_bytes, &context, &u, &r_point);
-    let s_g = alpha + challenge * delta_scalar;
-    let s_h = beta + challenge * blind_delta;
+    let mut s_g = alpha + challenge * delta_scalar;
+    let mut s_h = beta + challenge * blind_delta;
 
     let expected_commitment = RISTRETTO_BASEPOINT_POINT * Scalar::from(resulting_value_u64)
         + pedersen_generator_h() * blind_res;
     if expected_commitment != c_res {
+        alpha.zeroize();
+        beta.zeroize();
+        s_g.zeroize();
+        s_h.zeroize();
+        blind_init.zeroize();
+        blind_res.zeroize();
+        blind_delta.zeroize();
+        delta_scalar.zeroize();
+        delta_bytes.zeroize();
         return Err(BridgeError::OfflineCommitment);
     }
 
@@ -756,6 +794,15 @@ fn generate_offline_balance_proof(
     proof.extend_from_slice(s_h.to_bytes().as_ref());
     let range_proof = generate_range_proof(&chain_id, resulting_value_u64, &blind_res)?;
     proof.extend_from_slice(&range_proof);
+    alpha.zeroize();
+    beta.zeroize();
+    s_g.zeroize();
+    s_h.zeroize();
+    blind_init.zeroize();
+    blind_res.zeroize();
+    blind_delta.zeroize();
+    delta_scalar.zeroize();
+    delta_bytes.zeroize();
     Ok(proof)
 }
 
@@ -766,15 +813,19 @@ fn update_offline_commitment(
     resulting_blinding: &[u8],
 ) -> BridgeResult<[u8; 32]> {
     let c_init = decode_commitment_point(initial_commitment)?;
-    let delta_scalar = numeric_to_scalar(claimed_delta)?;
-    let blind_init = decode_scalar_bytes(initial_blinding)?;
-    let blind_res = decode_scalar_bytes(resulting_blinding)?;
-    let blind_delta = blind_res - blind_init;
+    let mut delta_scalar = numeric_to_scalar(claimed_delta)?;
+    let mut blind_init = decode_scalar_bytes(initial_blinding)?;
+    let mut blind_res = decode_scalar_bytes(resulting_blinding)?;
+    let mut blind_delta = blind_res - blind_init;
     let updated =
         c_init + RISTRETTO_BASEPOINT_POINT * delta_scalar + pedersen_generator_h() * blind_delta;
     let compressed = updated.compress();
     let mut bytes = [0u8; 32];
     bytes.copy_from_slice(compressed.as_bytes());
+    delta_scalar.zeroize();
+    blind_init.zeroize();
+    blind_res.zeroize();
+    blind_delta.zeroize();
     Ok(bytes)
 }
 
@@ -833,7 +884,9 @@ fn blinding_scalar_from_seed(seed: &OfflineProofBlindingSeed) -> Scalar {
     hasher
         .finalize_variable(&mut output)
         .expect("output size matches");
-    Scalar::from_bytes_mod_order_wide(&output)
+    let scalar = Scalar::from_bytes_mod_order_wide(&output);
+    output.zeroize();
+    scalar
 }
 
 fn sum_proof_nonce(
@@ -854,7 +907,9 @@ fn sum_proof_nonce(
     hasher
         .finalize_variable(&mut output)
         .expect("output size matches");
-    Scalar::from_bytes_mod_order_wide(&output)
+    let scalar = Scalar::from_bytes_mod_order_wide(&output);
+    output.zeroize();
+    scalar
 }
 
 fn sum_proof_challenge(
@@ -879,7 +934,9 @@ fn sum_proof_challenge(
     hasher
         .finalize_variable(&mut output)
         .expect("output size matches");
-    Scalar::from_bytes_mod_order_wide(&output)
+    let scalar = Scalar::from_bytes_mod_order_wide(&output);
+    output.zeroize();
+    scalar
 }
 
 fn replay_chain(head: Hash, tx_ids: &[Hash]) -> Hash {
@@ -953,7 +1010,7 @@ fn generate_offline_fastpq_sum_proof(
     let c_res = decode_commitment_point(&request.resulting_commitment)?;
     let delta_scalar = numeric_to_scalar(&total)?;
     let delta_le = numeric_to_le_bytes(&total)?;
-    let blind_sum = request
+    let mut blind_sum = request
         .blinding_seeds
         .iter()
         .map(blinding_scalar_from_seed)
@@ -962,6 +1019,7 @@ fn generate_offline_fastpq_sum_proof(
         RISTRETTO_BASEPOINT_POINT * delta_scalar + pedersen_generator_h() * blind_sum;
     let commitment_delta = c_init - c_res;
     if commitment_delta != expected_delta {
+        blind_sum.zeroize();
         return Err(BridgeError::OfflineCommitment);
     }
     let nonce = sum_proof_nonce(
@@ -982,6 +1040,7 @@ fn generate_offline_fastpq_sum_proof(
         &r_point,
     );
     let s_scalar = nonce + challenge * blind_sum;
+    blind_sum.zeroize();
     Ok(OfflineFastpqSumProof {
         version: OFFLINE_FASTPQ_PROOF_VERSION_V1,
         receipts_root: request.header.receipts_root,
@@ -7981,6 +8040,7 @@ mod offline_challenge_tests {
         let asset_id = AssetId::new(asset_definition, controller_account.clone());
         let asset_cstr = CString::new(asset_id.to_string()).expect("asset identifier string");
         let amount = CString::new("500").expect("amount");
+        let issued_at_ms: u64 = 1_700_000_000_000;
         let nonce_hash = Hash::new(b"ffi-nonce");
         let nonce_cstr = CString::new(format!("{}", nonce_hash)).expect("nonce identifier");
 
@@ -8000,6 +8060,7 @@ mod offline_challenge_tests {
                 asset_cstr.as_bytes().len() as c_ulong,
                 amount.as_ptr(),
                 amount.as_bytes().len() as c_ulong,
+                issued_at_ms as c_ulonglong,
                 nonce_cstr.as_ptr(),
                 nonce_cstr.as_bytes().len() as c_ulong,
                 &mut out_ptr,
@@ -8026,6 +8087,7 @@ mod offline_challenge_tests {
         assert_eq!(decoded.receiver, receiver_account);
         assert_eq!(decoded.asset, asset_id);
         assert_eq!(decoded.amount, Numeric::from_str("500").unwrap());
+        assert_eq!(decoded.issued_at_ms, issued_at_ms);
 
         let chain_id_value = ChainId::from("test-chain");
         let expected_hash = chain_bound_receipt_hash(&chain_id_value, &preimage);
@@ -9556,6 +9618,7 @@ mod offline_receipt_challenge_tests {
             "alice@wonderland".to_string(),
             "xor#alice@wonderland".to_string(),
             "1".to_string(),
+            0,
             nonce,
         );
         assert!(matches!(result, Err(BridgeError::ChainId)));
@@ -9716,6 +9779,50 @@ mod offline_balance_proof_tests {
             verify_proof(&chain_id, &delta, &c_init, &c_res_expected, &proof),
             "proof must verify"
         );
+    }
+
+    #[test]
+    fn commitment_update_rejects_fractional_delta() {
+        let initial_amount = Numeric::new(50, 0);
+        let delta = Numeric::new(5, 1);
+        let blind_init = Scalar::from(5u64);
+        let blind_res = Scalar::from(11u64);
+        let c_init = pedersen_commit(&initial_amount, blind_init);
+        let init_bytes = c_init.compress().as_bytes().to_vec();
+        let blind_init_bytes = scalar_bytes(blind_init).to_vec();
+        let blind_res_bytes = scalar_bytes(blind_res).to_vec();
+
+        let result =
+            update_offline_commitment(&init_bytes, &delta, &blind_init_bytes, &blind_res_bytes);
+        assert!(matches!(result, Err(BridgeError::Quantity)));
+    }
+
+    #[test]
+    fn proof_rejects_fractional_value() {
+        let chain_id = ChainId::from("iroha-sdk-tests");
+        let initial_amount = Numeric::new(50, 0);
+        let delta = Numeric::new(7, 0);
+        let resulting_value = Numeric::new(575, 1);
+        let blind_init = Scalar::from(5u64);
+        let blind_res = Scalar::from(11u64);
+
+        let c_init = pedersen_commit(&initial_amount, blind_init);
+        let c_res_expected = pedersen_commit(&Numeric::new(57, 0), blind_res);
+        let init_bytes = c_init.compress().as_bytes().to_vec();
+        let updated_bytes = c_res_expected.compress().as_bytes().to_vec();
+        let blind_init_bytes = scalar_bytes(blind_init).to_vec();
+        let blind_res_bytes = scalar_bytes(blind_res).to_vec();
+
+        let proof = generate_offline_balance_proof(
+            chain_id,
+            &delta,
+            &resulting_value,
+            &init_bytes,
+            &updated_bytes,
+            &blind_init_bytes,
+            &blind_res_bytes,
+        );
+        assert!(matches!(proof, Err(BridgeError::Quantity)));
     }
 }
 

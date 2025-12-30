@@ -101,6 +101,7 @@ fn build_harness() -> Harness {
 
 fn build_fixtures() -> Fixtures {
     let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
+    let chain_id = ChainId::from("test-chain");
     let operator_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
     let operator = AccountId::of(domain.clone(), operator_keys.public_key().clone());
     let controller_keys = KeyPair::from_seed(vec![0x21; 32], Algorithm::Ed25519);

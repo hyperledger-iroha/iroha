@@ -12,6 +12,8 @@ import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
 import org.hyperledger.iroha.android.crypto.export.KeyExportException;
+import org.hyperledger.iroha.android.crypto.export.KeyExportStore;
+import org.hyperledger.iroha.android.crypto.export.KeyPassphraseProvider;
 import org.hyperledger.iroha.android.crypto.keystore.KeyAttestation;
 import org.hyperledger.iroha.android.crypto.keystore.KeyGenParameters;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProvider;
@@ -73,6 +75,22 @@ public final class IrohaKeyManager {
   }
 
   /**
+   * Creates a manager backed by an exportable software provider that persists deterministic key
+   * exports using {@code exportStore}.
+   */
+  public static IrohaKeyManager withExportableSoftwareKeys(
+      final KeyExportStore exportStore, final KeyPassphraseProvider passphraseProvider) {
+    Objects.requireNonNull(exportStore, "exportStore");
+    Objects.requireNonNull(passphraseProvider, "passphraseProvider");
+    return new IrohaKeyManager(
+        List.of(
+            new SoftwareKeyProvider(
+                SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED,
+                exportStore,
+                passphraseProvider)));
+  }
+
+  /**
    * Creates a manager that attempts to use hardware-backed keystore providers (when available) and
    * falls back to the software provider for emulators/desktop JVMs.
    */
@@ -128,7 +146,8 @@ public final class IrohaKeyManager {
       try {
         final Optional<KeyPair> existing = provider.load(alias);
         if (existing.isPresent()) {
-          ensureEd25519KeyPair(existing.get(), provider.metadata());
+          ensureEd25519KeyPair(
+              alias, preference, existing.get(), provider.metadata(), "load");
           return existing.get();
         }
       } catch (final KeyManagementException e) {
@@ -140,7 +159,8 @@ public final class IrohaKeyManager {
       try {
         final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
             provider.generateWithOutcome(alias, preference);
-        ensureEd25519KeyPair(outcome.keyPair(), provider.metadata());
+        ensureEd25519KeyPair(
+            alias, preference, outcome.keyPair(), provider.metadata(), "generate");
         enforcePreference(preference, provider.metadata(), outcome);
         recordKeyGenerationTelemetry(alias, preference, provider.metadata(), outcome);
         return outcome.keyPair();
@@ -189,29 +209,105 @@ public final class IrohaKeyManager {
     keystoreTelemetry.recordKeyGeneration(alias, preference, metadata, outcome.route(), fallback);
   }
 
-  private static void ensureEd25519KeyPair(
-      final KeyPair keyPair, final KeyProviderMetadata metadata) throws KeyManagementException {
-    if (!isValidEd25519KeyPair(keyPair)) {
+  private void ensureEd25519KeyPair(
+      final String alias,
+      final KeySecurityPreference preference,
+      final KeyPair keyPair,
+      final KeyProviderMetadata metadata,
+      final String phase)
+      throws KeyManagementException {
+    final Ed25519SpkiValidation validation = validateEd25519KeyPair(keyPair);
+    if (!validation.valid) {
+      recordKeyValidationFailure(alias, preference, metadata, phase, validation);
       final String provider = metadata == null ? "unknown" : metadata.name();
       throw new KeyManagementException(
-          "Provider " + provider + " returned non-Ed25519 key material");
+          "Provider " + provider + " returned non-Ed25519 key material (" + validation.detail() + ")");
     }
   }
 
-  private static boolean isValidEd25519KeyPair(final KeyPair keyPair) {
+  private void recordKeyValidationFailure(
+      final String alias,
+      final KeySecurityPreference preference,
+      final KeyProviderMetadata metadata,
+      final String phase,
+      final Ed25519SpkiValidation validation) {
+    keystoreTelemetry.recordKeyValidationFailure(
+        alias,
+        preference,
+        metadata,
+        phase,
+        validation.reason,
+        validation.length,
+        ED25519_SPKI_SIZE,
+        validation.prefixHex);
+  }
+
+  private static Ed25519SpkiValidation validateEd25519KeyPair(final KeyPair keyPair) {
     if (keyPair == null || keyPair.getPublic() == null) {
-      return false;
+      return Ed25519SpkiValidation.invalid(0, "", "public_key_missing");
     }
-    final byte[] encoded = keyPair.getPublic().getEncoded();
-    if (encoded == null || encoded.length != ED25519_SPKI_SIZE) {
-      return false;
+    return validateEd25519Spki(keyPair.getPublic().getEncoded());
+  }
+
+  private static Ed25519SpkiValidation validateEd25519Spki(final byte[] encoded) {
+    if (encoded == null || encoded.length == 0) {
+      return Ed25519SpkiValidation.invalid(0, "", "spki_missing");
+    }
+    final int length = encoded.length;
+    final int prefixLen = Math.min(ED25519_SPKI_PREFIX.length, length);
+    final String prefixHex = toHex(encoded, prefixLen);
+    if (length != ED25519_SPKI_SIZE) {
+      return Ed25519SpkiValidation.invalid(length, prefixHex, "length_mismatch");
     }
     for (int i = 0; i < ED25519_SPKI_PREFIX.length; i++) {
       if (encoded[i] != ED25519_SPKI_PREFIX[i]) {
-        return false;
+        return Ed25519SpkiValidation.invalid(length, prefixHex, "prefix_mismatch");
       }
     }
-    return true;
+    return Ed25519SpkiValidation.valid(length, prefixHex);
+  }
+
+  private static String toHex(final byte[] bytes, final int length) {
+    if (bytes == null || length <= 0) {
+      return "";
+    }
+    final int limit = Math.min(bytes.length, length);
+    final StringBuilder builder = new StringBuilder(limit * 2);
+    for (int i = 0; i < limit; i++) {
+      builder.append(String.format("%02x", bytes[i]));
+    }
+    return builder.toString();
+  }
+
+  private static final class Ed25519SpkiValidation {
+    private final boolean valid;
+    private final int length;
+    private final String prefixHex;
+    private final String reason;
+
+    private Ed25519SpkiValidation(
+        final boolean valid, final int length, final String prefixHex, final String reason) {
+      this.valid = valid;
+      this.length = length;
+      this.prefixHex = prefixHex == null ? "" : prefixHex;
+      this.reason = reason == null ? "unknown" : reason;
+    }
+
+    private static Ed25519SpkiValidation valid(final int length, final String prefixHex) {
+      return new Ed25519SpkiValidation(true, length, prefixHex, "ok");
+    }
+
+    private static Ed25519SpkiValidation invalid(
+        final int length, final String prefixHex, final String reason) {
+      return new Ed25519SpkiValidation(false, length, prefixHex, reason);
+    }
+
+    private String detail() {
+      return "reason=" + reason
+          + ", spki_len=" + length
+          + ", expected_len=" + ED25519_SPKI_SIZE
+          + ", prefix=" + (prefixHex.isEmpty() ? "unknown" : prefixHex);
+    }
   }
 
   /**
@@ -225,7 +321,7 @@ public final class IrohaKeyManager {
     for (final KeyProvider provider : providers) {
       try {
         final KeyPair keyPair = provider.generateEphemeral();
-        ensureEd25519KeyPair(keyPair, provider.metadata());
+        ensureEd25519KeyPair(null, null, keyPair, provider.metadata(), "ephemeral");
         return keyPair;
       } catch (final KeyManagementException e) {
         lastError = e;

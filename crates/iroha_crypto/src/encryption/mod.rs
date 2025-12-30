@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn encrypt_with_nonce_roundtrip() {
         let encryptor = encryptor();
-        let nonce = ChaCha20Poly1305::generate_nonce().expect("nonce");
+        let nonce = random_nonce::<ChaCha20Poly1305>().expect("nonce");
         let aad = b"encrypt test";
         let message = b"Hello and Goodbye!";
         let ciphertext = encryptor

@@ -21,7 +21,7 @@ Spec layout:
 | `proofs[].manifest_issued_at_ms` | Timestamp (ms) when the kiosk recorded the manifest. |
 | `proofs[].counter` | Monotonic counter enforced per `{manifest_schema}::{device_id}` scope. |
 | `proofs[].device_manifest` / `.device_manifest_file` | Metadata describing the inspected device. Must include `android.provisioned.device_id`. |
-| `proofs[].challenge` / `.challenge_file` | Receipt challenge preimage fields (invoice, receiver, asset, amount, issued_at_ms, nonce). |
+| `proofs[].challenge` / `.challenge_file` | Receipt challenge preimage fields (invoice, receiver, asset, amount, issued_at_ms, nonce). If `issued_at_ms` is omitted, `manifest_issued_at_ms` is used. |
 | `proofs[].manifest_schema` / `.manifest_version` | Optional overrides for individual proofs. |
 | `proofs[].inspector_key` | Optional per-proof key override. |
 

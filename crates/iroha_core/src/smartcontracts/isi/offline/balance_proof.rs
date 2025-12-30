@@ -99,7 +99,7 @@ pub fn build_balance_proof(
 ) -> Result<Vec<u8>, InstructionExecutionError> {
     let c_init = decode_commitment(initial_commitment)?;
     let c_res = decode_commitment(resulting_commitment)?;
-    let delta_scalar = numeric_to_scalar(claimed_delta)?;
+    let delta_scalar = numeric_to_scalar_delta(claimed_delta)?;
     let delta_bytes = numeric_delta_bytes(claimed_delta)?;
     let resulting_value_u64 = numeric_to_u64(resulting_value)?;
     let blind_init = decode_scalar(initial_blinding)?;
@@ -141,7 +141,7 @@ pub fn compute_commitment(
     value: &Numeric,
     blinding: &[u8],
 ) -> Result<Vec<u8>, InstructionExecutionError> {
-    let value_scalar = numeric_to_scalar(value)?;
+    let value_scalar = numeric_to_scalar_value(value)?;
     let blind = decode_scalar(blinding)?;
     let commitment = RISTRETTO_BASEPOINT_POINT * value_scalar + pedersen_generator_h() * blind;
     Ok(commitment.compress().as_bytes().to_vec())
@@ -167,6 +167,10 @@ enum BalanceProofError {
     ProofPointEncoding,
     #[error("scalar encoding is not canonical")]
     NonCanonicalScalar,
+    #[error("claimed delta must use scale 0")]
+    DeltaFractional,
+    #[error("value must use scale 0")]
+    ValueFractional,
     #[error("claimed delta exceeds supported range")]
     DeltaOutOfRange,
     #[error("resulting value exceeds supported range")]
@@ -228,6 +232,7 @@ fn parse_delta_proof(bytes: &[u8]) -> Result<(RistrettoPoint, Scalar, Scalar), B
 }
 
 fn numeric_delta_bytes(value: &Numeric) -> Result<[u8; 16], BalanceProofError> {
+    ensure_integer_scale(value, BalanceProofError::DeltaFractional)?;
     let mantissa = value
         .try_mantissa_u128()
         .ok_or(BalanceProofError::DeltaOutOfRange)?;
@@ -235,7 +240,8 @@ fn numeric_delta_bytes(value: &Numeric) -> Result<[u8; 16], BalanceProofError> {
     Ok(delta_i128.to_le_bytes())
 }
 
-fn numeric_to_scalar(value: &Numeric) -> Result<Scalar, BalanceProofError> {
+fn numeric_to_scalar_delta(value: &Numeric) -> Result<Scalar, BalanceProofError> {
+    ensure_integer_scale(value, BalanceProofError::DeltaFractional)?;
     let mantissa = value
         .try_mantissa_u128()
         .ok_or(BalanceProofError::DeltaOutOfRange)?;
@@ -244,11 +250,29 @@ fn numeric_to_scalar(value: &Numeric) -> Result<Scalar, BalanceProofError> {
     Ok(Scalar::from_bytes_mod_order(bytes))
 }
 
+fn numeric_to_scalar_value(value: &Numeric) -> Result<Scalar, BalanceProofError> {
+    ensure_integer_scale(value, BalanceProofError::ValueFractional)?;
+    let mantissa = value
+        .try_mantissa_u128()
+        .ok_or(BalanceProofError::ResultingValueOutOfRange)?;
+    let mut bytes = [0u8; 32];
+    bytes[..16].copy_from_slice(&mantissa.to_le_bytes());
+    Ok(Scalar::from_bytes_mod_order(bytes))
+}
+
 fn numeric_to_u64(value: &Numeric) -> Result<u64, BalanceProofError> {
+    ensure_integer_scale(value, BalanceProofError::ValueFractional)?;
     let mantissa = value
         .try_mantissa_u128()
         .ok_or(BalanceProofError::ResultingValueOutOfRange)?;
     u64::try_from(mantissa).map_err(|_| BalanceProofError::ResultingValueOutOfRange)
+}
+
+fn ensure_integer_scale(value: &Numeric, err: BalanceProofError) -> Result<(), BalanceProofError> {
+    if value.scale() != 0 {
+        return Err(err);
+    }
+    Ok(())
 }
 
 fn transcript_challenge(
@@ -636,6 +660,109 @@ mod tests {
             chain_id: &chain_id,
         };
         assert!(verify_balance_proof(&inputs).is_ok());
+    }
+
+    #[test]
+    fn build_balance_proof_rejects_fractional_delta() {
+        let chain_id: ChainId = "testnet".parse().unwrap();
+        let initial_value = 10u64;
+        let delta = Numeric::new(15, 1);
+        let resulting_value = Numeric::new(25, 0);
+        let initial_blind = Scalar::from(5u64);
+        let resulting_blind = Scalar::from(9u64);
+        let initial_commitment = pedersen_commit(initial_value, initial_blind)
+            .compress()
+            .as_bytes()
+            .to_vec();
+        let resulting_commitment = pedersen_commit(25, resulting_blind)
+            .compress()
+            .as_bytes()
+            .to_vec();
+        let initial_blinding = initial_blind.to_bytes();
+        let resulting_blinding = resulting_blind.to_bytes();
+
+        let err = build_balance_proof(
+            &chain_id,
+            &delta,
+            &resulting_value,
+            &initial_commitment,
+            &resulting_commitment,
+            &initial_blinding,
+            &resulting_blinding,
+        )
+        .expect_err("fractional delta should be rejected");
+        assert!(
+            err.to_string().contains("claimed delta must use scale 0"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn build_balance_proof_rejects_fractional_value() {
+        let chain_id: ChainId = "testnet".parse().unwrap();
+        let initial_value = 10u64;
+        let delta = Numeric::new(5, 0);
+        let resulting_value = Numeric::new(125, 1);
+        let initial_blind = Scalar::from(5u64);
+        let resulting_blind = Scalar::from(9u64);
+        let initial_commitment = pedersen_commit(initial_value, initial_blind)
+            .compress()
+            .as_bytes()
+            .to_vec();
+        let resulting_commitment = pedersen_commit(12, resulting_blind)
+            .compress()
+            .as_bytes()
+            .to_vec();
+        let initial_blinding = initial_blind.to_bytes();
+        let resulting_blinding = resulting_blind.to_bytes();
+
+        let err = build_balance_proof(
+            &chain_id,
+            &delta,
+            &resulting_value,
+            &initial_commitment,
+            &resulting_commitment,
+            &initial_blinding,
+            &resulting_blinding,
+        )
+        .expect_err("fractional value should be rejected");
+        assert!(
+            err.to_string().contains("value must use scale 0"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_fractional_delta() {
+        let value = 42;
+        let delta = 10;
+        let blind_start = Scalar::from(5u64);
+        let blind_delta = Scalar::from(3u64);
+        let c_init = pedersen_commit(value, blind_start);
+        let c_res = pedersen_commit(value + delta, blind_start + blind_delta);
+        let chain_id: ChainId = "testnet".parse().unwrap();
+        let context = derive_context(&chain_id);
+        let delta_proof = make_delta_proof(&c_init, &c_res, delta, blind_delta, context);
+        let range_proof = make_range_proof(value + delta, blind_start + blind_delta, context);
+        let balance_proof = OfflineBalanceProof {
+            initial_commitment: OfflineAllowanceCommitment {
+                asset: sample_asset(),
+                amount: Numeric::new(0, 0),
+                commitment: c_init.compress().as_bytes().to_vec(),
+            },
+            resulting_commitment: c_res.compress().as_bytes().to_vec(),
+            claimed_delta: Numeric::new(100, 1),
+            zk_proof: Some(assemble_balance_proof(delta_proof, range_proof)),
+        };
+        let inputs = VerificationInputs {
+            balance_proof: &balance_proof,
+            chain_id: &chain_id,
+        };
+        let err = verify_balance_proof(&inputs).expect_err("fractional delta should be rejected");
+        assert!(
+            err.to_string().contains("claimed delta must use scale 0"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

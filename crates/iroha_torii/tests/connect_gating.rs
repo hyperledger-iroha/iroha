@@ -199,6 +199,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             api_fee_amount: None,
             api_fee_receiver: None,
             api_allow_cidrs: Vec::new(),
+            peer_telemetry_urls: Vec::new(),
             strict_addresses: false,
             debug_match_filters: false,
             preauth_max_connections: None,
