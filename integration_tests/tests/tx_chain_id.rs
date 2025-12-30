@@ -1,11 +1,10 @@
 //! Validates that mismatched chain identifiers cause transaction rejection.
 
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_primitives::numeric::numeric;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
-
-use integration_tests::sandbox;
 
 #[test]
 fn send_tx_with_different_chain_id() {

@@ -5,14 +5,12 @@ use std::{collections::HashSet, sync::Arc};
 
 use axum::{Router, routing::post};
 use http_body_util::BodyExt as _;
-use iroha_core::state::WorldReadOnly;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, World},
+    state::{State, World, WorldReadOnly},
 };
-use iroha_data_model::NewAccount;
-use iroha_data_model::prelude::*;
+use iroha_data_model::{NewAccount, prelude::*};
 use iroha_torii::NoritoJson;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;

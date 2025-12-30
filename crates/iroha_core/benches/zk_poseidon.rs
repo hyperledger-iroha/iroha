@@ -15,19 +15,22 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 #[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2-ipa-poseidon"))]
 mod benches {
-    use super::*;
-    use halo2_gadgets::poseidon::primitives::P128Pow5T3;
     use halo2_gadgets::poseidon::{
-        Hash as PoseidonHash, Pow5Chip, Pow5Config, primitives::ConstantLength,
+        Hash as PoseidonHash, Pow5Chip, Pow5Config,
+        primitives::{ConstantLength, P128Pow5T3},
     };
-    use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-    use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-    use halo2_proofs::plonk::{
-        Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{
+            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        },
+        poly::commitment::Params,
+        transcript::{Blake2bWrite, Challenge255},
     };
-    use halo2_proofs::poly::commitment::Params;
-    use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
     use rand::rngs::OsRng;
+
+    use super::*;
 
     // Local native Pow5 compressor used for comparison
     fn compress2_native(a: Scalar, b: Scalar) -> Scalar {

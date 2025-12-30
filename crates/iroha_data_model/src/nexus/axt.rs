@@ -3,13 +3,15 @@
 //! These structures mirror the IVM syscall surface while providing Norito-compatible
 //! schemas for WSV/block persistence and gossip replication.
 
-use crate::nexus::{DataSpaceId, LaneId};
+use std::collections::{BTreeMap, BTreeSet};
+
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
 use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
 use norito::codec::{Decode, Encode, encode_adaptive};
-use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
+
+use crate::nexus::{DataSpaceId, LaneId};
 
 /// Canonical 32-byte binding derived from an AXT descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
@@ -761,8 +763,9 @@ pub fn validate_descriptor(descriptor: &AxtDescriptor) -> Result<(), AxtValidati
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::{decode_from_bytes, to_bytes};
+
+    use super::*;
 
     fn sample_descriptor(dsid: DataSpaceId) -> AxtDescriptor {
         AxtDescriptor {

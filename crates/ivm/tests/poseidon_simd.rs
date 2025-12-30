@@ -1,6 +1,8 @@
 #![cfg(feature = "ivm_zk_tests")]
-use halo2curves::bn256::Fr;
-use halo2curves::ff::{Field, PrimeField};
+use halo2curves::{
+    bn256::Fr,
+    ff::{Field, PrimeField},
+};
 use ivm::{poseidon2, poseidon2_simd, poseidon6, poseidon6_simd, simd_bits};
 use poseidon_primitives::poseidon::primitives::Spec;
 

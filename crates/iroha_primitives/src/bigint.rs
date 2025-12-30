@@ -6,13 +6,16 @@
 //! the hard limit is reached.
 
 use core::fmt;
+use std::io::Write;
+
 use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId};
-use norito::core::{self as ncore, DecodeFromSlice};
-use norito::json::{self, FastJsonWrite, JsonDeserialize};
-use norito::{Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize};
+use norito::{
+    Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
+    core::{self as ncore, DecodeFromSlice},
+    json::{self, FastJsonWrite, JsonDeserialize},
+};
 use num_bigint::BigInt as InnerBigInt;
 use num_traits::{One, Signed, Zero};
-use std::io::Write;
 
 /// Maximum number of bits representable by [`BigInt`].
 pub const MAX_BITS: usize = 512;

@@ -1,5 +1,4 @@
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use norito::json::Value;

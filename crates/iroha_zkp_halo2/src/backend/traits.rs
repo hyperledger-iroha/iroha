@@ -2,10 +2,7 @@
 
 use core::fmt;
 
-use crate::constants::DST;
-use crate::errors::Error;
-use crate::hash::sha3_512;
-use crate::norito_types::ZkCurveId;
+use crate::{constants::DST, errors::Error, hash::sha3_512, norito_types::ZkCurveId};
 
 /// Scalar behaviour required by the IPA algorithms.
 pub trait IpaScalar: Copy + Clone + PartialEq + Eq + fmt::Debug + Default {

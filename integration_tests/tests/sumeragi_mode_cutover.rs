@@ -3,6 +3,7 @@ use std::{convert::TryFrom, fs, path::PathBuf, time::Duration};
 
 use eyre::{Result, bail, ensure};
 use hex::{decode as hex_decode, encode as hex_encode};
+use integration_tests::sandbox;
 use iroha::client::Client;
 use iroha_core::sumeragi::consensus::{
     ConsensusGenesisParams, NPOS_TAG, NposGenesisParams, PERMISSIONED_TAG,
@@ -23,8 +24,6 @@ use iroha_genesis::{GenesisBlock, GenesisBuilder};
 use iroha_test_network::{NetworkBuilder, NetworkPeer, chain_id, init_instruction_registry};
 use tempfile::tempdir;
 use tokio::time::sleep;
-
-use integration_tests::sandbox;
 
 const ACTIVATION_HEIGHT: u64 = 4;
 const EPOCH_LENGTH_BLOCKS: u64 = 6;

@@ -1,17 +1,16 @@
 //! Visitor helper functions for queries.
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::Visit;
+// Alias the `query` module for ergonomic type references within this module.
+#[cfg(not(feature = "fast_dsl"))]
+use crate::query as query_mod;
 use crate::{
     prelude::*,
     query::{AnyQueryBox, QueryWithParams, SingularQueryBox},
 };
-// Alias the `query` module for ergonomic type references within this module.
-#[cfg(not(feature = "fast_dsl"))]
-use crate::query as query_mod;
-
-use super::Visit;
-
-#[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(test)]
 static SINGULAR_QUERY_FALLBACK_HIT: AtomicBool = AtomicBool::new(false);
@@ -170,12 +169,16 @@ query_visitors!(define_query_visitors);
 
 #[cfg(all(test, not(feature = "fast_dsl")))]
 mod tests {
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::{Mutex, OnceLock},
+    };
+
     use super::*;
-    use crate::asset::AssetId;
-    use crate::query as query_mod;
-    use crate::{QueryWithFilter, prelude::*, query::parameters::QueryParams};
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::sync::{Mutex, OnceLock};
+    use crate::{
+        QueryWithFilter, asset::AssetId, prelude::*, query as query_mod,
+        query::parameters::QueryParams,
+    };
 
     fn reset_singular_query_fallback_guard() {
         SINGULAR_QUERY_FALLBACK_HIT.store(false, Ordering::Relaxed);

@@ -19,14 +19,15 @@ use crate::transaction::executable::IvmBytecode;
 
 #[model]
 mod model {
-    use super::*;
-    use crate::{isi, nexus::AxtRejectContext, parameter::CustomParameters, query};
     use derive_more::Constructor;
     use getset::Getters;
     use iroha_crypto::Hash;
     use iroha_macro::FromVariant;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
+
+    use super::*;
+    use crate::{isi, nexus::AxtRejectContext, parameter::CustomParameters, query};
 
     /// executor that checks if an operation satisfies some conditions.
     #[derive(

@@ -1,7 +1,10 @@
-use criterion::{Criterion, criterion_group, criterion_main};
-use norito::streaming::codec::{BaselineEncoder, BaselineEncoderConfig, FrameDimensions, RawFrame};
-use norito::streaming::{BundleAcceleration, EntropyMode};
 use std::iter;
+
+use criterion::{Criterion, criterion_group, criterion_main};
+use norito::streaming::{
+    BundleAcceleration, EntropyMode,
+    codec::{BaselineEncoder, BaselineEncoderConfig, FrameDimensions, RawFrame},
+};
 
 fn bench_bundled_scalar(c: &mut Criterion) {
     let dimensions = FrameDimensions::new(32, 32);

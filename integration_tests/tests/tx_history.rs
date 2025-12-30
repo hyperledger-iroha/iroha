@@ -3,12 +3,11 @@
 use std::time::Duration;
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::{prelude::*, query::parameters::Pagination};
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
-use integration_tests::sandbox;
 
 #[test]
 fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()> {

@@ -15,6 +15,8 @@ use std::{
 
 use eyre::{Context, Result};
 use hex::ToHex as _;
+use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
+use iroha_data_model::prelude::Name;
 use itoa::Buffer as ItoaBuffer;
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -22,9 +24,6 @@ use norito::{
     json,
 };
 use sha2::{Digest as _, Sha256};
-
-use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
-use iroha_data_model::prelude::Name;
 
 use super::World;
 
@@ -1413,7 +1412,6 @@ pub struct TieredManifestEntry {
 mod tests {
     use std::num::NonZeroU32;
 
-    use super::*;
     use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
     use iroha_crypto::Hash;
     use iroha_data_model::{
@@ -1423,6 +1421,8 @@ mod tests {
     };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn streamed_hash_matches_canonical_json() {

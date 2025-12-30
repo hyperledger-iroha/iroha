@@ -3,8 +3,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::Path as AxPath;
-use axum::response::IntoResponse;
+use axum::{extract::Path as AxPath, response::IntoResponse};
 use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,

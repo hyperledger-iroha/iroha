@@ -1,7 +1,9 @@
 //! Wide opcode 128-bit memory operation tests.
 
-use ivm::kotodama::wide::{encode_addi, encode_load128, encode_store128};
-use ivm::{IVM, Memory, ProgramMetadata, VMError, encoding, instruction, ivm_mode};
+use ivm::{
+    IVM, Memory, ProgramMetadata, VMError, encoding, instruction, ivm_mode,
+    kotodama::wide::{encode_addi, encode_load128, encode_store128},
+};
 
 const HALT: u32 = encoding::wide::encode_halt();
 

@@ -1,7 +1,6 @@
 //! Kotodama encode_int/decode_int helpers end-to-end via CoreHost.
 
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-use ivm::{CoreHost, IVM};
+use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 
 #[test]
 fn kotodama_encode_decode_int_roundtrip() {

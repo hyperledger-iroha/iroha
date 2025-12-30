@@ -1,6 +1,13 @@
 //! Generates chunk metadata and a Norito manifest stub for a given payload.
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use std::{
+    env,
+    fs::{self, File, read},
+    io::{self, BufReader, BufWriter, Cursor, Read, Write},
+    path::{Path, PathBuf},
+    process,
+};
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::Hash;
 use iroha_crypto::{Algorithm, HybridPublicKey, HybridSuite, PublicKey, Signature};
 use norito::{
@@ -19,13 +26,6 @@ use sorafs_manifest::{
     AliasClaim, ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy,
     ProfileId, StorageClass, chunker_registry,
     hybrid_envelope::{HybridPayloadEnvelopeV1, encrypt_payload},
-};
-use std::{
-    env,
-    fs::{self, File, read},
-    io::{self, BufReader, BufWriter, Cursor, Read, Write},
-    path::{Path, PathBuf},
-    process,
 };
 
 fn main() {

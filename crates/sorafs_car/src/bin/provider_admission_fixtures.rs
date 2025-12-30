@@ -773,8 +773,9 @@ fn transport_protocol_label(protocol: TransportProtocol) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn generate_fixtures_produces_expected_artifacts() {

@@ -1,10 +1,12 @@
 //! Benchmarks for zero-knowledge operations and instructions in IVM.
 use criterion::Criterion;
-use ivm::halo2::{
-    BurnCircuit, BurnPublic, BurnWitness, ECPoint, MintCircuit, MintPublic, MintWitness,
-    compute_nullifier, derive_public_key, verify_merkle_path,
+use ivm::{
+    halo2::{
+        BurnCircuit, BurnPublic, BurnWitness, ECPoint, MintCircuit, MintPublic, MintWitness,
+        compute_nullifier, derive_public_key, verify_merkle_path,
+    },
+    pedersen_commit_truncated, poseidon2, poseidon6,
 };
-use ivm::{pedersen_commit_truncated, poseidon2, poseidon6};
 
 fn poseidon_hash(inputs: &[u64]) -> u64 {
     if inputs.is_empty() {

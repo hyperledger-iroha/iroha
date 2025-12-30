@@ -1,8 +1,10 @@
 //! Static configuration for the settlement router.
 
 use derive_more::Display;
-use norito::json::{JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    json::{JsonDeserialize, JsonSerialize},
+};
 use time::Duration;
 
 /// Safety margin expressed in basis points (1/100th of a percent).

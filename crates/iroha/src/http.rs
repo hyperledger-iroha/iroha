@@ -95,10 +95,10 @@ pub mod ws {
     /// Here is an example of how to implement flow in a transport-agnostic manner:
     ///
     /// ```rust
-    /// use eyre::{eyre, Result};
+    /// use eyre::{Result, eyre};
     /// use iroha::http::{
-    ///     ws::conn_flow::{Events as FlowEvents, Init as FlowInit, InitData},
     ///     Method, RequestBuilder,
+    ///     ws::conn_flow::{Events as FlowEvents, Init as FlowInit, InitData},
     /// };
     ///
     /// struct Init;
@@ -147,8 +147,8 @@ pub mod ws {
     ///     client::events_api::flow as events_api_flow,
     ///     data_model::prelude::EventBox,
     ///     http::{
-    ///         ws::conn_flow::{Events, Init, InitData},
     ///         Method, RequestBuilder,
+    ///         ws::conn_flow::{Events, Init, InitData},
     ///     },
     /// };
     /// use url::Url;

@@ -478,10 +478,11 @@ impl AckRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::account::AccountId;
     use norito::json;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn exports_receipts_and_acks() -> Result<()> {

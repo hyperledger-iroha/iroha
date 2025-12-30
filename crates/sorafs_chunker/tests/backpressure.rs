@@ -1,5 +1,4 @@
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use norito::json::Value;
 use sorafs_chunker::{Chunker, fixtures::FixtureProfile};

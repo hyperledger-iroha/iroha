@@ -1,7 +1,6 @@
 //! Asset identifiers.
 
-use std::{fmt, str::FromStr};
-use std::{format, string::String};
+use std::{fmt, format, str::FromStr, string::String};
 
 use derive_more::Constructor;
 use getset::Getters;
@@ -10,7 +9,6 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
-
 use crate::{
     Name, account::prelude::*, common::split_nonempty, domain::prelude::*, error::ParseError,
 };
@@ -159,9 +157,10 @@ impl FromStr for AssetId {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::KeyPair;
+
     use super::*;
     use crate::account::AccountId;
-    use iroha_crypto::KeyPair;
 
     #[test]
     fn debug_formats_without_recursion() {

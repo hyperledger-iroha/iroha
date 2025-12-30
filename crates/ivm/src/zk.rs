@@ -20,14 +20,17 @@
 /// traces, so the limit is now 2^17 cycles by default.
 pub const MAX_CYCLES: u64 = 1 << 17; // 131_072 cycles
 
+use std::{
+    cell::RefCell,
+    sync::{
+        LazyLock, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
-use std::cell::RefCell;
-use std::sync::{
-    LazyLock, OnceLock,
-    atomic::{AtomicUsize, Ordering},
-};
 
 thread_local! {
     /// Global pointer used by [`Registers`] to log Merkle proofs.

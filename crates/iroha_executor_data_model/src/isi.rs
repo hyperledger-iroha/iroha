@@ -1,6 +1,13 @@
 //! Types for custom instructions
 
-use std::{collections::BTreeMap, format, string::String, string::ToString, vec::Vec};
+#[allow(unused_imports)]
+use std::eprintln;
+use std::{
+    collections::BTreeMap,
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 
 use derive_more::{Constructor, From};
 use iroha_data_model::{
@@ -8,8 +15,6 @@ use iroha_data_model::{
     prelude::{Json, *},
 };
 use iroha_schema::IntoSchema;
-#[allow(unused_imports)]
-use std::eprintln;
 
 macro_rules! impl_custom_instruction {
     ($box:ty, $($instruction:ty)|+) => {
@@ -49,20 +54,21 @@ macro_rules! impl_custom_instruction {
 
 /// Types for multisig instructions
 pub mod multisig {
+    use core::{
+        num::{NonZeroU16, NonZeroU64},
+        str::FromStr,
+    };
+    #[allow(unused_imports)]
+    use std::eprintln;
+    use std::{borrow::ToOwned, collections::BTreeSet};
+
+    use iroha_crypto::{HashOf, KeyPair};
+    use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
+
+    use super::*;
     use crate::json_macros::{
         JsonDeserialize as DeriveJsonDeserialize, JsonSerialize as DeriveJsonSerialize,
     };
-    use core::num::{NonZeroU16, NonZeroU64};
-    use std::borrow::ToOwned;
-    use std::collections::BTreeSet;
-
-    use super::*;
-    #[allow(unused_imports)]
-    use std::eprintln;
-
-    use core::str::FromStr;
-    use iroha_crypto::{HashOf, KeyPair};
-    use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
 
     /// Multisig-related instructions
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, From)]
@@ -539,9 +545,11 @@ pub mod multisig {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
-        use iroha_crypto::{Algorithm, HashOf, KeyPair};
         use std::collections::BTreeMap;
+
+        use iroha_crypto::{Algorithm, HashOf, KeyPair};
+
+        use super::*;
 
         fn sample_instruction_box() -> InstructionBox {
             let domain: DomainId = "multisig".parse().expect("valid domain");

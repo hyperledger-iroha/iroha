@@ -6,12 +6,11 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{BlockHeader, SignedBlock};
 use iroha_logger::prelude::*;
 
+use super::kura::KuraRetryDecision;
 use crate::{
     sumeragi::{consensus::Evidence, da, status},
     tx::AcceptedTransaction,
 };
-
-use super::kura::KuraRetryDecision;
 
 /// Local validation lifecycle for a pending block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

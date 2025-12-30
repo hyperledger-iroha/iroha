@@ -1,6 +1,7 @@
 #![cfg(feature = "ivm_zk_tests")]
-use ivm::halo2::verify_merkle_path_with_dirs;
-use ivm::halo2::{MerkleCircuit, MerklePublic, MerkleWitness, verify_merkle_path};
+use ivm::halo2::{
+    MerkleCircuit, MerklePublic, MerkleWitness, verify_merkle_path, verify_merkle_path_with_dirs,
+};
 
 #[test]
 fn test_merkle_circuit_verify_ok() {

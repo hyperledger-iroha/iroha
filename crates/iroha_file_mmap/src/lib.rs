@@ -7,8 +7,9 @@
 
 #![allow(unsafe_code)]
 
-use memmap2::{Mmap, MmapOptions};
 use std::{fs::File, io};
+
+use memmap2::{Mmap, MmapOptions};
 
 /// Read-only memory mapped view over a file.
 #[derive(Debug)]
@@ -106,9 +107,11 @@ impl core::ops::Deref for ReadOnlyMmap {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::{ErrorKind, Write};
+
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[test]
     fn mapping_reports_length_and_non_empty_state() {

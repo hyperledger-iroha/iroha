@@ -4,18 +4,20 @@
 //! one intentionally bad signature per batch.
 
 use core::time::Duration;
-use iroha_core::block::ValidBlock;
-use iroha_core::prelude::*;
-use iroha_core::state::State;
-use iroha_core::tx::{AcceptTransactionFail, SignatureRejectionCode};
+use std::time::SystemTime;
+
+use iroha_core::{
+    block::ValidBlock,
+    prelude::*,
+    state::State,
+    tx::{AcceptTransactionFail, SignatureRejectionCode},
+};
 use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 use iroha_data_model::prelude::*;
 use nonzero_ext::nonzero;
-use std::time::SystemTime;
 
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyPair) {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

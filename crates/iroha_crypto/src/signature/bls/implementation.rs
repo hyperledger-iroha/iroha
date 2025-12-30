@@ -2,9 +2,9 @@ use core::marker::PhantomData;
 use std::{borrow::ToOwned as _, string::ToString as _, sync::Mutex, vec, vec::Vec};
 
 use sha2::Sha256;
-use w3f_bls::Signature as BlsSignature;
 use w3f_bls::{
     EngineBLS, PublicKey, SecretKey as W3fSecretKey, SecretKeyVT, SerializableToBytes as _,
+    Signature as BlsSignature,
 };
 use zeroize::Zeroize as _;
 
@@ -387,8 +387,7 @@ pub(super) fn verify_aggregate_multi_message_normal_blstrs(
     use group::Curve;
     use group::Group as _; // for is_identity()
     use group::prime::PrimeCurveAffine; // for generator()
-    use pairing::MillerLoopResult as _;
-    use pairing::MultiMillerLoop; // for Bls12::multi_miller_loop // bring trait for final_exponentiation()
+    use pairing::{MillerLoopResult as _, MultiMillerLoop}; // for Bls12::multi_miller_loop // bring trait for final_exponentiation()
 
     // Decompress helpers
     fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
@@ -463,8 +462,7 @@ pub(super) fn verify_aggregate_multi_message_small_blstrs(
     use group::Curve;
     use group::Group as _; // for is_identity()
     use group::prime::PrimeCurveAffine; // for generator()
-    use pairing::MillerLoopResult as _;
-    use pairing::MultiMillerLoop; // for Bls12::multi_miller_loop // bring trait for final_exponentiation()
+    use pairing::{MillerLoopResult as _, MultiMillerLoop}; // for Bls12::multi_miller_loop // bring trait for final_exponentiation()
 
     fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
         if bytes.len() != 48 {

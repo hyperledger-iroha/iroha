@@ -1,6 +1,14 @@
 //! Integration tests ensuring executor-enforced permission policies.
 
+use std::{
+    io::ErrorKind,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     crypto::KeyPair,
@@ -9,23 +17,16 @@ use iroha::{
         transaction::error::TransactionRejectionReason,
     },
 };
-use iroha_data_model::isi::register::RegisterBox;
-use iroha_data_model::isi::transfer::TransferBox;
+use iroha_data_model::isi::{register::RegisterBox, transfer::TransferBox};
 use iroha_executor_data_model::permission::{
     asset::CanTransferAsset, domain::CanModifyDomainMetadata, nft::CanModifyNftMetadata,
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, gen_account_in};
-use std::{
-    io::ErrorKind,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-    time::Duration,
+use tokio::{
+    runtime::Runtime,
+    time::{sleep, timeout},
 };
-use tokio::runtime::Runtime;
-use tokio::time::{sleep, timeout};
-
-use integration_tests::sandbox;
 
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()

@@ -7,6 +7,8 @@
 //! Updates mechanism is implemented via subscriptions to [`tokio::sync::watch`] channels. For now,
 //! only `logger.level` field is dynamic, which might be tracked with [`KisoHandle::subscribe_on_logger_updates()`].
 
+use std::{num::NonZeroU32, time::Duration};
+
 use eyre::Result;
 use hex;
 use iroha_config::{
@@ -21,7 +23,6 @@ use iroha_config::{
     },
 };
 use iroha_futures::supervisor::{Child, OnShutdown};
-use std::{num::NonZeroU32, time::Duration};
 use tokio::sync::{mpsc, oneshot, watch};
 
 const DEFAULT_CHANNEL_SIZE: usize = 32;
@@ -535,9 +536,12 @@ fn default_puzzle_params() -> SoranetPuzzle {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+        path::PathBuf,
+        time::Duration,
+    };
 
-    use iroha_config::parameters::actual::SoranetPrivacy;
     use iroha_config::{
         base::WithOrigin,
         client_api::{
@@ -549,23 +553,23 @@ mod tests {
                 Acceleration, BlockSync, Common, Concurrency, Confidential, Connect,
                 DataspaceGossip, FraudMonitoring, Genesis, Governance, Hijiri, IsoBridge, Ivm,
                 Kura, LiveQueryStore, Logger, Network, Nexus, NodeRole, Queue, RbcSampling, Root,
-                Settlement, SoranetHandshake as ActualSoranetHandshake, SoranetPow, Streaming,
-                StreamingSoranet, Sumeragi, TieredState, Torii, TransactionGossiper, TrustedPeers,
+                Settlement, SoranetHandshake as ActualSoranetHandshake, SoranetPow, SoranetPrivacy,
+                Streaming, StreamingSoranet, Sumeragi, TieredState, Torii, TransactionGossiper,
+                TrustedPeers,
             },
             defaults,
         },
     };
-    use iroha_crypto::soranet::handshake::{
-        DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
+    use iroha_crypto::{
+        KeyPair,
+        soranet::handshake::{
+            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
+        },
+        streaming::StreamingKeyMaterial,
     };
-    use iroha_crypto::{KeyPair, streaming::StreamingKeyMaterial};
     use iroha_data_model::{ChainId, peer::Peer, sorafs::pricing::PricingScheduleRecord};
     use iroha_logger::Level;
     use iroha_primitives::addr::socket_addr;
-    use std::{
-        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-        path::PathBuf,
-    };
 
     use super::*;
 
@@ -705,6 +709,7 @@ mod tests {
                 api_fee_amount: None,
                 api_fee_receiver: None,
                 api_allow_cidrs: Vec::new(),
+                peer_telemetry_urls: Vec::new(),
                 soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
                 strict_addresses: true,
                 debug_match_filters: false,

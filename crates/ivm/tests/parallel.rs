@@ -1,12 +1,20 @@
-use ivm::parallel::{
-    Block, DependencyGraph, ExecutionContext, Scheduler, State, StateAccessSet, Transaction,
-    TxResult, execute_block_predicted,
+use std::{
+    any::Any,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
-use ivm::{IVM, VMError, encoding, host::AccessLog, host::IVMHost, instruction, syscalls};
-use std::any::Any;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+
+use ivm::{
+    IVM, VMError, encoding,
+    host::{AccessLog, IVMHost},
+    instruction,
+    parallel::{
+        Block, DependencyGraph, ExecutionContext, Scheduler, State, StateAccessSet, Transaction,
+        TxResult, execute_block_predicted,
+    },
+    syscalls,
 };
 
 mod common;
@@ -194,8 +202,7 @@ fn test_dependency_graph_write_conflict() {
 
 #[test]
 fn test_ivm_execute_block_commits() {
-    use ivm::IVM;
-    use ivm::parallel::StateUpdate;
+    use ivm::{IVM, parallel::StateUpdate};
     let state = State::new();
     state.apply(&[StateUpdate {
         key: "a".to_string(),
@@ -282,8 +289,7 @@ fn test_scheduler_parallelism() {
 
 #[test]
 fn test_deterministic_results() {
-    use ivm::IVM;
-    use ivm::parallel::StateUpdate;
+    use ivm::{IVM, parallel::StateUpdate};
     // Prepare block
     let mut access1 = StateAccessSet::new();
     access1.write_keys.insert("x".to_string());
@@ -324,8 +330,7 @@ fn test_deterministic_results() {
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn test_deterministic_results_htm() {
-    use ivm::IVM;
-    use ivm::parallel::StateUpdate;
+    use ivm::{IVM, parallel::StateUpdate};
     let scheduler = Scheduler::new(2);
     if !scheduler.htm_available() {
         return; // skip if hardware lacks HTM
@@ -358,8 +363,7 @@ fn test_deterministic_results_htm() {
 #[cfg(not(target_arch = "x86_64"))]
 #[test]
 fn test_deterministic_results_fallback() {
-    use ivm::IVM;
-    use ivm::parallel::StateUpdate;
+    use ivm::{IVM, parallel::StateUpdate};
     let mut access = StateAccessSet::new();
     access.write_keys.insert("z".to_string());
     let tx = Transaction {

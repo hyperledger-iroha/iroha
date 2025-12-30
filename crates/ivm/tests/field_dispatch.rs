@@ -1,14 +1,18 @@
 #![cfg(feature = "ivm_zk_tests")]
 use halo2curves::bn256::Fr;
-use ivm::bn254_vec::FieldElem;
 #[cfg(target_arch = "aarch64")]
 use ivm::field_dispatch::NeonField;
 #[cfg(target_arch = "x86_64")]
 use ivm::field_dispatch::{Avx2Field, Avx512Field, Sse2Field};
-use ivm::field_dispatch::{
-    FieldArithmetic, ScalarField, clear_field_impl_for_tests, field_impl, set_field_impl_for_tests,
+use ivm::{
+    SimdChoice,
+    bn254_vec::FieldElem,
+    field_dispatch::{
+        FieldArithmetic, ScalarField, clear_field_impl_for_tests, field_impl,
+        set_field_impl_for_tests,
+    },
+    simd_choice,
 };
-use ivm::{SimdChoice, simd_choice};
 
 #[test]
 fn test_scalar_add_sub_mul() {

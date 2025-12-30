@@ -173,13 +173,15 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs;
+
     use norito::codec::Encode;
     use sorafs_manifest::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
     };
-    use std::fs;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn sample_settlement() -> (DealSettlementV1, Vec<u8>) {
         let deal_id = [0xAB; 32];

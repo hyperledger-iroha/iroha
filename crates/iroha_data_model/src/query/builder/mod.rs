@@ -8,8 +8,7 @@
 mod batch_downcast;
 mod iter;
 
-use std::marker::PhantomData;
-use std::vec::Vec;
+use std::{marker::PhantomData, vec::Vec};
 
 use derive_where::derive_where;
 pub use iter::QueryIterator;

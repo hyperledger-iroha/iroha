@@ -1,16 +1,19 @@
-use clap::{Parser, Subcommand};
-use iroha_crypto::soranet::directory::GuardDirectorySnapshotV2;
-use norito::json;
-use soranet_relay::directory::{
-    DirectoryBuildError, DirectoryBuildOptions, DirectoryMetadata, DirectoryRotateError,
-    RotationOutput, build_snapshot_from_config_with_options,
-    collect_guard_pinning_proofs_from_directory, inspect_snapshot, rotate_snapshot_with_os_rng,
-};
-use soranet_relay::guard::{GuardPinningProof, verify_guard_pinning_proof};
 use std::{
     fs,
     io::{Error as IoError, ErrorKind},
     path::{Path, PathBuf},
+};
+
+use clap::{Parser, Subcommand};
+use iroha_crypto::soranet::directory::GuardDirectorySnapshotV2;
+use norito::json;
+use soranet_relay::{
+    directory::{
+        DirectoryBuildError, DirectoryBuildOptions, DirectoryMetadata, DirectoryRotateError,
+        RotationOutput, build_snapshot_from_config_with_options,
+        collect_guard_pinning_proofs_from_directory, inspect_snapshot, rotate_snapshot_with_os_rng,
+    },
+    guard::{GuardPinningProof, verify_guard_pinning_proof},
 };
 
 #[derive(Parser, Debug)]

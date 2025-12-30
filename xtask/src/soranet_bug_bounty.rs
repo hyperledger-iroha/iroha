@@ -557,10 +557,10 @@ fn render_remediation_template(reporting: &Reporting) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use norito::json;
-    use norito::json::Value;
+    use norito::{json, json::Value};
     use tempfile::tempdir;
+
+    use super::*;
 
     fn sample_config() -> BugBountyConfig {
         BugBountyConfig {

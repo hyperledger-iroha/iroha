@@ -1,7 +1,6 @@
 use eyre::Result;
-use hickory_proto::op::{Message, MessageType, ResponseCode};
-
 pub use hickory_proto::op::Message as DnsMessage;
+use hickory_proto::op::{Message, MessageType, ResponseCode};
 
 /// Decode a DNS message from a byte slice.
 pub fn decode_message(bytes: &[u8]) -> Result<Message> {

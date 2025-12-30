@@ -1,16 +1,18 @@
-use crate::state::{BundleDiff, BundleSnapshot, ExpiryDiff, ResolverDiff, ResolverInvalidation};
-use eyre::Result;
-use norito::json;
-use norito_derive::{JsonDeserialize, JsonSerialize, NoritoSerialize};
 use std::{
     fs::OpenOptions,
     io::Write,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+
+use eyre::Result;
+use norito::json;
+use norito_derive::{JsonDeserialize, JsonSerialize, NoritoSerialize};
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
+
+use crate::state::{BundleDiff, BundleSnapshot, ExpiryDiff, ResolverDiff, ResolverInvalidation};
 
 /// Resolver event payload emitted via logs and streaming interfaces.
 #[derive(Clone, Debug, NoritoSerialize, JsonSerialize, JsonDeserialize)]
@@ -212,12 +214,14 @@ impl EventEmitter {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use tempfile::NamedTempFile;
+
     use super::*;
     use crate::state::{
         BundleDiff, BundleSnapshot, ExpiryDiff, ResolverDiff, ResolverInvalidation,
     };
-    use std::fs;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn logs_bundle_events_when_path_configured() {

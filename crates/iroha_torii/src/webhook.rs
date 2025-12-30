@@ -15,6 +15,12 @@
 //! - GET  `/v1/webhooks` – List webhooks.
 //! - DELETE `/v1/webhooks/{id}` – Delete a webhook by id.
 
+use core::{convert::TryFrom, str::FromStr};
+#[cfg(test)]
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
 use std::{
     collections::HashMap,
     fs,
@@ -25,17 +31,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(test)]
-use std::sync::{
-    Arc,
-    atomic::{AtomicU32, Ordering},
-};
-
-use crate::filter::filter_expr_to_value;
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
-use core::{convert::TryFrom, str::FromStr};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_config::parameters::defaults;
 use iroha_data_model::{
     events::data::prelude as df,
@@ -44,6 +41,8 @@ use iroha_data_model::{
 };
 use sha2::{Digest, Sha256};
 use tokio::fs as tokio_fs;
+
+use crate::filter::filter_expr_to_value;
 
 #[derive(
     Debug,
@@ -823,17 +822,17 @@ fn expr_contains_only_proof_filters(expr: &crate::filter::FilterExpr) -> bool {
 fn event_filter_boxes_from_expr(
     expr: &crate::filter::FilterExpr,
 ) -> Vec<iroha_data_model::events::EventFilterBox> {
-    use crate::filter::FilterExpr as F;
-    use iroha_data_model::events::execute_trigger::prelude::ExecuteTriggerEventFilter;
-    use iroha_data_model::events::time::{ExecutionTime, TimeEventFilter};
-    use iroha_data_model::events::trigger_completed::prelude::{
-        TriggerCompletedEventFilter, TriggerCompletedOutcomeType,
-    };
+    use std::num::NonZeroU64;
+
     use iroha_data_model::events::{
         EventFilterBox,
+        execute_trigger::prelude::ExecuteTriggerEventFilter,
         pipeline::{BlockEventFilter, BlockStatus, TransactionEventFilter, TransactionStatus},
+        time::{ExecutionTime, TimeEventFilter},
+        trigger_completed::prelude::{TriggerCompletedEventFilter, TriggerCompletedOutcomeType},
     };
-    use std::num::NonZeroU64;
+
+    use crate::filter::FilterExpr as F;
 
     #[derive(Clone)]
     enum PF {
@@ -1597,8 +1596,10 @@ async fn http_post_plain(
             Some((h, p)) => (h, p.parse::<u16>().unwrap_or(80)),
             None => (host_port, 80),
         };
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpStream;
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpStream,
+        };
         let timeouts = http_timeout_config();
         let mut stream =
             match tokio::time::timeout(timeouts.connect, TcpStream::connect((host, port))).await {
@@ -1653,9 +1654,10 @@ async fn http_post_https(
     headers: &[(&str, String)],
     body: &[u8],
 ) -> std::io::Result<u16> {
+    use std::str::FromStr as _;
+
     use hyper::{Request, body::Body, http::HeaderName};
     use hyper_rustls::HttpsConnectorBuilder;
-    use std::str::FromStr as _;
 
     let uri = hyper::Uri::from_str(url).map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
@@ -1724,11 +1726,11 @@ async fn http_post(url: &str, headers: &[(&str, String)], body: &[u8]) -> std::i
 
 #[cfg(feature = "app_api_wss")]
 async fn ws_send(url: &str, headers: &[(&str, String)], body: &[u8]) -> std::io::Result<u16> {
-    use futures::SinkExt as _;
     use std::str::FromStr;
+
+    use futures::SinkExt as _;
     use tokio_tungstenite::connect_async;
-    use tungstenite::http::HeaderName;
-    use tungstenite::{Message, client::IntoClientRequest};
+    use tungstenite::{Message, client::IntoClientRequest, http::HeaderName};
 
     let mut req = url.into_client_request().map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
@@ -1981,20 +1983,25 @@ async fn process_queue_once() -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use http_body_util::BodyExt as _;
-    use iroha_crypto::Hash;
-    use iroha_data_model::events::EventBox;
-    use iroha_data_model::events::EventFilter; // bring .matches()
-    use iroha_data_model::events::pipeline::{TransactionEvent, TransactionStatus};
     use std::{
         convert::TryFrom,
         fs,
         sync::{Arc, Mutex},
     };
-    use tokio::runtime::Runtime;
-    use tokio::time::{Duration, sleep};
 
+    use http_body_util::BodyExt as _;
+    use iroha_crypto::Hash;
+    use iroha_data_model::events::EventFilter; // bring .matches()
+    use iroha_data_model::events::{
+        EventBox,
+        pipeline::{TransactionEvent, TransactionStatus},
+    };
+    use tokio::{
+        runtime::Runtime,
+        time::{Duration, sleep},
+    };
+
+    use super::*;
     use crate::test_utils::TestDataDirGuard;
 
     struct TimeoutOverride(super::HttpTimeoutConfig);
@@ -2712,9 +2719,12 @@ mod tests {
 
     #[test]
     fn enqueue_respects_proof_envelope_hash_filter() {
+        use iroha_data_model::events::data::{
+            prelude::DataEvent,
+            proof::{ProofEvent, ProofVerified},
+        };
+
         use crate::filter::{FieldPath, FilterExpr};
-        use iroha_data_model::events::data::prelude::DataEvent;
-        use iroha_data_model::events::data::proof::{ProofEvent, ProofVerified};
 
         let _env = TestDataDirGuard::new();
         super::init_persistence();
@@ -2804,8 +2814,10 @@ mod tests {
             proof_hash: [0xAA; 32],
         };
         let id_str = format!("{}", id);
-        use iroha_data_model::events::data::prelude::DataEvent;
-        use iroha_data_model::events::data::proof::{ProofEvent, ProofVerified};
+        use iroha_data_model::events::data::{
+            prelude::DataEvent,
+            proof::{ProofEvent, ProofVerified},
+        };
         let ev: iroha_data_model::events::EventBox = iroha_data_model::events::EventBox::Data(
             iroha_data_model::events::SharedDataEvent::from(DataEvent::Proof(
                 ProofEvent::Verified(ProofVerified {

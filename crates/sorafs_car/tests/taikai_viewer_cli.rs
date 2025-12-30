@@ -1,11 +1,4 @@
 #![cfg(feature = "cli")]
-use iroha_data_model::{
-    name::Name,
-    taikai::{
-        CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1, TaikaiEventId, TaikaiStreamId,
-    },
-};
-use norito::json;
 use std::{
     env,
     error::Error,
@@ -15,6 +8,14 @@ use std::{
     str::FromStr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use iroha_data_model::{
+    name::Name,
+    taikai::{
+        CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1, TaikaiEventId, TaikaiStreamId,
+    },
+};
+use norito::json;
 use tempfile::tempdir;
 
 fn taikai_publisher_example_dir() -> PathBuf {

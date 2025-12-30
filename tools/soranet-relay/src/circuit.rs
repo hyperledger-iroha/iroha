@@ -10,11 +10,6 @@ use std::{
     time::Instant,
 };
 
-use crate::{
-    capability::{ConstantRateCapability, KemId, NegotiatedCapabilities, SignatureId},
-    config::PaddingConfig,
-    metrics::Metrics,
-};
 use bytes::Bytes;
 use quinn::Connection;
 use thiserror::Error;
@@ -23,6 +18,12 @@ use tokio::{
     time::{self, Duration, MissedTickBehavior},
 };
 use tracing::{debug, warn};
+
+use crate::{
+    capability::{ConstantRateCapability, KemId, NegotiatedCapabilities, SignatureId},
+    config::PaddingConfig,
+    metrics::Metrics,
+};
 
 /// Tracks active circuits for introspection/debugging.
 #[derive(Debug)]
@@ -335,14 +336,15 @@ impl PaddingBudget {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        net::{IpAddr, Ipv4Addr},
+        time::Duration,
+    };
+
     use super::*;
     use crate::{
         capability::{ConstantRateMode, KemAdvertisement, SignatureAdvertisement},
         constant_rate::CONSTANT_RATE_CELL_BYTES,
-    };
-    use std::{
-        net::{IpAddr, Ipv4Addr},
-        time::Duration,
     };
 
     fn sample_negotiated() -> NegotiatedCapabilities {

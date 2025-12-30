@@ -1,6 +1,11 @@
 //! Bridge finality proof construction/roundtrip.
 #![allow(clippy::expect_used)]
 
+use std::{
+    num::NonZeroU64,
+    sync::{LazyLock, Mutex, MutexGuard, PoisonError},
+};
+
 use iroha_core::{
     bridge::{
         BridgeFinalityError, BridgeFinalityVerificationError, FinalityProofVerificationConfig,
@@ -20,10 +25,6 @@ use iroha_data_model::{
     bridge::BridgeFinalityProof,
     consensus::{CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1},
     peer::PeerId,
-};
-use std::{
-    num::NonZeroU64,
-    sync::{LazyLock, Mutex, MutexGuard, PoisonError},
 };
 
 const DEFAULT_COMMIT_CERT_HISTORY_CAP: usize = 512;

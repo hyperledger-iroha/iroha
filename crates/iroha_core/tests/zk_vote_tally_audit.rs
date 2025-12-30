@@ -31,11 +31,11 @@ mod tests {
         prelude::InstructionBox,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
     };
-
-    use super::zk_testkit;
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
+
+    use super::zk_testkit;
 
     #[test]
     fn vote_tally_proof_verifies_with_inline_vk() {

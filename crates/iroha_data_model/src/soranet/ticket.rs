@@ -11,7 +11,6 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use super::Digest32;
-
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, metadata::Metadata};
@@ -269,11 +268,13 @@ fn finalize_hash(hasher: &blake3::Hasher) -> Digest32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{account::AccountId, domain::DomainId};
+    use std::str::FromStr;
+
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::codec::{Decode, Encode};
-    use std::str::FromStr;
+
+    use super::*;
+    use crate::{account::AccountId, domain::DomainId};
 
     fn sample_body() -> TicketBodyV1 {
         let domain = DomainId::from_str("wonderland").expect("static domain is valid");

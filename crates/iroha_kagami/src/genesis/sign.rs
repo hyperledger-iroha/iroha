@@ -5,15 +5,16 @@ use std::{
     path::PathBuf,
 };
 
-use super::{ensure_npos_parameters, generate::ConsensusModeArg};
 use clap::Parser;
 use color_eyre::eyre::{WrapErr, eyre};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::{
-    parameter::SumeragiParameter, parameter::system::SumeragiConsensusMode, prelude::*,
+    parameter::{SumeragiParameter, system::SumeragiConsensusMode},
+    prelude::*,
 };
 use iroha_genesis::RawGenesisTransaction;
 
+use super::{ensure_npos_parameters, generate::ConsensusModeArg};
 use crate::{Outcome, RunArgs, tui};
 
 /// Sign the genesis block
@@ -249,18 +250,20 @@ fn from_hex_nibble(c: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{
+        fs,
+        io::{BufWriter, Write},
+        path::PathBuf,
+    };
+
     use iroha_crypto::KeyPair as CryptoKeyPair;
     use iroha_data_model::{
         ChainId,
         parameter::{Parameter, system::SumeragiNposParameters},
     };
     use iroha_genesis::GenesisBuilder;
-    use std::{
-        fs,
-        io::{BufWriter, Write},
-        path::PathBuf,
-    };
+
+    use super::*;
 
     #[test]
     fn peer_pops_without_topology_is_rejected() {

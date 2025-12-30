@@ -1,12 +1,13 @@
 //! Dump reference compressed account addresses for documentation fixtures.
 
+use std::{convert::TryFrom, str::FromStr};
+
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
     account::{AccountAddress, AccountId},
     domain::DomainId,
     name::Name,
 };
-use std::{convert::TryFrom, str::FromStr};
 
 fn ed25519_pk_with(byte: u8) -> PublicKey {
     let seed = vec![byte; 32];

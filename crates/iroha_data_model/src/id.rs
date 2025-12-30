@@ -4,9 +4,8 @@ use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use crate::{account, asset, domain, nexus, nft, parameter, peer, permission, repo, role, trigger};
-
 pub use self::model::*;
+use crate::{account, asset, domain, nexus, nft, parameter, peer, permission, repo, role, trigger};
 
 #[model]
 mod model {

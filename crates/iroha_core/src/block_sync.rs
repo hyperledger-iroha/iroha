@@ -1,9 +1,8 @@
 //! This module contains structures and messages for synchronization of blocks between peers.
-use std::num::NonZeroUsize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
     time::Duration,
 };
@@ -500,8 +499,10 @@ mod sample_targets_tests {
 #[cfg(test)]
 mod signature_topology_tests {
     use iroha_crypto::KeyPair;
-    use iroha_data_model::block::{BlockHeader, builder::BlockBuilder};
-    use iroha_data_model::peer::PeerId;
+    use iroha_data_model::{
+        block::{BlockHeader, builder::BlockBuilder},
+        peer::PeerId,
+    };
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -533,17 +534,18 @@ mod signature_topology_tests {
 mod prf_seed_tests {
     use std::sync::Arc;
 
-    use iroha_data_model::consensus::VrfEpochRecord;
-    use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+    use iroha_data_model::{
+        consensus::VrfEpochRecord,
+        parameter::{Parameter, system::SumeragiNposParameters},
+    };
 
+    use super::*;
     use crate::{
         prelude::World,
         query::store::LiveQueryStore,
         state::State,
         sumeragi::{npos_seed_for_height, npos_seed_for_height_from_world},
     };
-
-    use super::*;
 
     #[test]
     fn npos_seed_for_height_falls_back_to_chain_hash() {
@@ -640,7 +642,6 @@ mod prf_seed_tests {
 mod roster_metadata_tests {
     use std::sync::Arc;
 
-    use crate::{prelude::World, query::store::LiveQueryStore, sumeragi::status};
     use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         block::{BlockHeader, BlockSignature},
@@ -650,6 +651,7 @@ mod roster_metadata_tests {
     use nonzero_ext::nonzero;
 
     use super::*;
+    use crate::{prelude::World, query::store::LiveQueryStore, sumeragi::status};
 
     fn sample_roster_artifacts() -> (CommitCertificate, ValidatorSetCheckpoint) {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -755,8 +757,10 @@ mod qc_build_tests {
     use std::collections::BTreeSet;
 
     use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::block::{BlockHeader, builder::BlockBuilder};
-    use iroha_data_model::peer::PeerId;
+    use iroha_data_model::{
+        block::{BlockHeader, builder::BlockBuilder},
+        peer::PeerId,
+    };
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -1738,12 +1742,12 @@ pub mod message {
         use std::{collections::BTreeSet, str::FromStr};
 
         use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature, SignatureOf};
-        use iroha_data_model::block::BlockSignature;
-        use iroha_data_model::consensus::{
-            ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
+        use iroha_data_model::{
+            block::BlockSignature,
+            consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
+            parameter::Parameters,
+            peer::PeerId,
         };
-        use iroha_data_model::parameter::Parameters;
-        use iroha_data_model::peer::PeerId;
         use iroha_schema::Ident;
 
         use super::*;
@@ -1752,8 +1756,7 @@ pub mod message {
             kura::Kura,
             query::store::LiveQueryStore,
             state::{State, World},
-            sumeragi::consensus::ValidatorIndex,
-            sumeragi::network_topology::Topology,
+            sumeragi::{consensus::ValidatorIndex, network_topology::Topology},
         };
 
         fn test_chain_config() -> (ChainId, String) {

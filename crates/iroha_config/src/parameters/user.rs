@@ -2,7 +2,6 @@
 //!
 //! Contains structures in a format that is convenient from the user perspective. It is less strict
 //! and not necessarily valid upon successful parsing of the user-provided content.
-//!
 #![allow(
     clippy::too_many_lines,
     clippy::or_fun_call,
@@ -33,16 +32,17 @@ use std::{
 };
 
 use error_stack::{Report, ResultExt};
-use iroha_config_base::ReadConfig;
 use iroha_config_base::{
-    ParameterOrigin, WithOrigin,
+    ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     env::FromEnvStr,
     read::{ConfigReader, FinalWrap, ReadConfig as ReadConfigTrait},
     util::{Bytes, DurationMs, Emitter, EmitterResultExt},
 };
-use iroha_data_model::sorafs::capacity::ProviderId;
-use iroha_data_model::soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1};
+use iroha_data_model::{
+    sorafs::capacity::ProviderId,
+    soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
+};
 use nonzero_ext::nonzero;
 use rust_decimal::Decimal;
 use thiserror::Error;
@@ -454,8 +454,9 @@ impl From<SmIntrinsicsPolicyConfig> for actual::SmIntrinsicsPolicy {
 
 #[cfg(test)]
 mod sm_intrinsics_policy_config_tests {
-    use super::SmIntrinsicsPolicyConfig;
     use std::str::FromStr;
+
+    use super::SmIntrinsicsPolicyConfig;
 
     #[test]
     fn parses_force_disable_and_enable() {
@@ -7295,6 +7296,11 @@ pub struct Offline {
     /// Aggregate-proof enforcement mode for offline bundles.
     #[config(default = "defaults::settlement::offline::PROOF_MODE.parse().unwrap()")]
     pub proof_mode: OfflineProofMode,
+    /// Maximum age for offline receipts in milliseconds (0 disables age checks).
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::settlement::offline::MAX_RECEIPT_AGE_MS))"
+    )]
+    pub max_receipt_age_ms: DurationMs,
     /// Optional list of DER-encoded Android trust anchor files used to supplement the built-in roots.
     #[config(default)]
     pub android_trust_anchor_files: Vec<PathBuf>,
@@ -7308,6 +7314,9 @@ impl Default for Offline {
             cold_retention_blocks: defaults::settlement::offline::COLD_RETENTION_BLOCKS,
             prune_batch_size: defaults::settlement::offline::PRUNE_BATCH_SIZE,
             proof_mode: defaults::settlement::offline::PROOF_MODE.parse().unwrap(),
+            max_receipt_age_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::settlement::offline::MAX_RECEIPT_AGE_MS,
+            )),
             android_trust_anchor_files: Vec::new(),
         }
     }
@@ -7533,6 +7542,7 @@ impl Offline {
             cold_retention_blocks,
             prune_batch_size,
             proof_mode,
+            max_receipt_age_ms,
             android_trust_anchor_files,
         } = self;
         if hot_retention_blocks == 0 {
@@ -7578,6 +7588,7 @@ impl Offline {
             cold_retention_blocks,
             prune_batch_size,
             proof_mode: proof_mode.into_actual(),
+            max_receipt_age: max_receipt_age_ms.get(),
             android_trust_anchors: anchors,
         }
     }
@@ -10673,6 +10684,9 @@ pub struct Torii {
     pub api_fee_receiver: Option<String>,
     /// CIDR allowlist for bypassing API rate limits (IPv4/IPv6), e.g. `127.0.0.0/8`.
     pub api_allow_cidrs: Option<Vec<String>>,
+    /// Optional Torii base URLs used to fetch peer telemetry metadata.
+    #[config(default)]
+    pub peer_telemetry_urls: Vec<Url>,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     #[config(nested)]
     pub soranet_privacy_ingest: crate::parameters::user::ToriiSoranetPrivacyIngest,
@@ -11066,6 +11080,7 @@ impl Torii {
             api_fee_amount: self.api_fee_amount,
             api_fee_receiver: self.api_fee_receiver,
             api_allow_cidrs: self.api_allow_cidrs.unwrap_or_default(),
+            peer_telemetry_urls: self.peer_telemetry_urls,
             soranet_privacy_ingest: self.soranet_privacy_ingest.parse(),
             strict_addresses: self.strict_addresses,
             debug_match_filters: self.debug_match_filters,
@@ -12979,8 +12994,9 @@ impl IsoCurrencyAsset {
 
 #[cfg(test)]
 mod offline_cfg_tests {
-    use super::*;
     use core::str::FromStr;
+
+    use super::*;
 
     fn bundled_tables_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -2,8 +2,7 @@ use core::iter::FromIterator;
 use std::collections::HashSet;
 
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::block::decode_framed_signed_block;
-use iroha_data_model::peer::PeerId;
+use iroha_data_model::{block::decode_framed_signed_block, peer::PeerId};
 use iroha_primitives::unique_vec::UniqueVec;
 use iroha_test_network::{genesis_factory, init_instruction_registry};
 

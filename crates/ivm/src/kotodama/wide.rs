@@ -10,8 +10,7 @@
 //! displacement; callers must pre-adjust the base register (e.g., chunked frame
 //! updates via [`encode_addi`]) before issuing the wide memory operation.
 
-use crate::encoding::wide;
-use crate::instruction;
+use crate::{encoding::wide, instruction};
 
 /// Errors produced when constructing wide-opcode encodings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,8 +194,7 @@ pub fn encode_branch_checked(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::decode;
-    use crate::memory::Memory;
+    use crate::{decoder::decode, memory::Memory};
 
     #[test]
     fn wide_add_roundtrip() {

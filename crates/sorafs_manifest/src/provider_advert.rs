@@ -7,12 +7,14 @@
 use core::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use norito::core::{DecodeFromSlice, decode_field_canonical};
-use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use norito::json::{FastJsonWrite, JsonSerialize as NoritoJsonSerialize};
+use norito::{
+    core::{DecodeFromSlice, decode_field_canonical},
+    derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},
+    json::{FastJsonWrite, JsonSerialize as NoritoJsonSerialize},
+};
+use thiserror::Error;
 
 use crate::chunker_registry;
-use thiserror::Error;
 
 /// Advertisement schema version.
 pub const PROVIDER_ADVERT_VERSION_V1: u8 = 1;
@@ -1135,8 +1137,9 @@ fn unix_time_now() -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::{decode_from_bytes, to_bytes};
+
+    use super::*;
 
     fn sample_advert(now: u64) -> ProviderAdvertV1 {
         let issued_at = now;

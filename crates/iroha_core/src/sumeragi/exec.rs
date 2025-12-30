@@ -5,8 +5,10 @@
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::BlockHeader;
 
-use super::consensus::{ExecVote, ExecWitness, ExecutionQC, QcAggregate};
-use super::smt::{KvPair, compute_post_state_root};
+use super::{
+    consensus::{ExecVote, ExecWitness, ExecutionQC, QcAggregate},
+    smt::{KvPair, compute_post_state_root},
+};
 
 /// Convert an `ExecWitness` into SMT `KvPair` slices and compute the `post_state_root`.
 pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
@@ -82,9 +84,10 @@ pub fn assemble_execution_qc(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::Hash;
     use iroha_data_model::block::BlockHeader as DMHeader;
+
+    use super::*;
 
     #[test]
     fn post_root_stable_for_order_variations() {

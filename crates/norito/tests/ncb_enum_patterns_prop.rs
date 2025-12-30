@@ -2,8 +2,7 @@
 //! Uses a tiny predicate DSL to assert presence of complex windows.
 
 use norito::columnar as ncb;
-use proptest::collection::vec as pvec;
-use proptest::prelude::*;
+use proptest::{collection::vec as pvec, prelude::*};
 
 // Local copy of the payload view used by the matcher
 #[derive(Debug, Clone, PartialEq, Eq)]

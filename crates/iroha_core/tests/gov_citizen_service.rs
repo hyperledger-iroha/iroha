@@ -6,8 +6,8 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
-use iroha_data_model::Registrable;
 use iroha_data_model::{
+    Registrable,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
     domain::Domain,

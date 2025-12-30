@@ -1,31 +1,38 @@
 //! Structures, traits and impls related to `Account`s.
 use core::fmt;
-use std::str::FromStr;
 use std::{
     format,
     io::Write,
+    str::FromStr,
     string::String,
     sync::{Arc, RwLock},
     vec::Vec,
 };
 
+pub use admission::{
+    ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
+    DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX,
+};
 use iroha_crypto::PublicKey;
 use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder, model};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-pub use self::model::*;
-pub use self::rekey::{AccountLabel, AccountRekeyRecord};
-pub use admission::{
-    ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
-    DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX,
+pub use self::{
+    model::*,
+    rekey::{AccountLabel, AccountRekeyRecord},
 };
 pub mod address;
 pub mod admission;
 pub mod controller;
 pub mod curve;
 pub mod rekey;
+pub use address::{
+    AccountAddress, AccountAddressError, AccountAddressErrorCode, AccountAddressFormat,
+};
+pub use controller::{AccountController, MultisigMember, MultisigPolicy, MultisigPolicyError};
+
 use crate::{
     HasMetadata, Identifiable, IntoKeyValue, Registered, Registrable,
     common::{Owned, Ref, split_nonempty},
@@ -35,10 +42,6 @@ use crate::{
     name::Name,
     nexus::UniversalAccountId,
 };
-pub use address::{
-    AccountAddress, AccountAddressError, AccountAddressErrorCode, AccountAddressFormat,
-};
-pub use controller::{AccountController, MultisigMember, MultisigPolicy, MultisigPolicyError};
 
 /// Function type used to resolve account aliases into canonical [`AccountId`] values.
 pub type AccountAliasResolver =
@@ -83,9 +86,10 @@ mod model {
     /// ```rust
     /// use iroha_data_model::account::AccountId;
     ///
-    /// let id: AccountId = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-    ///     .parse()
-    ///     .expect("canonical account address must parse");
+    /// let id: AccountId =
+    ///     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
+    ///         .parse()
+    ///         .expect("canonical account address must parse");
     /// ```
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -752,10 +756,12 @@ impl FromStr for AccountId {
 
 #[cfg(test)]
 mod account_id_parsing_tests {
+    use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
+
+    use iroha_crypto::{Algorithm, KeyPair};
+
     use super::*;
     use crate::domain::DomainId;
-    use iroha_crypto::{Algorithm, KeyPair};
-    use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
     fn guard_alias_resolver() -> MutexGuard<'static, ()> {
         static ALIAS_RESOLVER_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -1172,9 +1178,10 @@ pub mod prelude {
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod tests {
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+
     use super::*;
     use crate::{domain::DomainId, name::Name};
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
 
     #[test]
     fn parse_account_id() {
@@ -1359,9 +1366,10 @@ mod tests {
 
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
+    use iroha_crypto::{Hash, KeyPair};
+
     use super::*;
     use crate::{domain::DomainId, metadata::Metadata, name::Name, nexus::UniversalAccountId};
-    use iroha_crypto::{Hash, KeyPair};
 
     #[test]
     fn account_json_roundtrip() {

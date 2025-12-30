@@ -1,10 +1,11 @@
-use serde::Serialize;
-use soranet_relay::constant_rate::{self, CONSTANT_RATE_CELL_BYTES, ConstantRateProfileSpec};
 use std::{
     error::Error,
     fmt,
     path::{Path, PathBuf},
 };
+
+use serde::Serialize;
+use soranet_relay::constant_rate::{self, CONSTANT_RATE_CELL_BYTES, ConstantRateProfileSpec};
 use thiserror::Error;
 
 pub fn default_fixture_dir(workspace_root: &Path) -> PathBuf {

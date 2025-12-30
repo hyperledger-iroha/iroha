@@ -2,13 +2,12 @@
 //! and batching works end-to-end via the HTTP `/query` path.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 // use iroha_data_model::query::builder::QueryBuilderExt as _; // not used in this smoke test
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use reqwest::Client as HttpClient;
-
-use integration_tests::sandbox;
 
 #[test]
 fn find_genesis_assets_via_torii_iterable() -> Result<()> {

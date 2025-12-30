@@ -13,14 +13,14 @@ use norito::{
     to_bytes,
 };
 use sorafs_car::{CarWriter, ingest_single_file};
-use sorafs_manifest::gateway_fixture::{
-    SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX, SORAFS_GATEWAY_FIXTURE_VERSION,
-    SORAFS_GATEWAY_PROFILE_VERSION,
-};
-use sorafs_manifest::por::{PorChallengeV1, PorProofV1};
 use sorafs_manifest::{
     CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
     StorageClass, chunker_registry,
+    gateway_fixture::{
+        SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX, SORAFS_GATEWAY_FIXTURE_VERSION,
+        SORAFS_GATEWAY_PROFILE_VERSION,
+    },
+    por::{PorChallengeV1, PorProofV1},
 };
 use thiserror::Error;
 
@@ -457,8 +457,9 @@ fn ensure_digest_match(label: &str, expected: &str, actual: &str) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn verify_bundle_accepts_pristine_output() {

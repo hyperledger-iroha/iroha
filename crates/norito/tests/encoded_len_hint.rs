@@ -1,9 +1,9 @@
 #![allow(clippy::manual_div_ceil)]
 //! Tests for encoded_len_hint to ensure capacity reservations are reasonable.
-use iroha_schema::IntoSchema;
-use norito::core::Error;
-use norito::core::NoritoSerialize;
 use std::io::Write;
+
+use iroha_schema::IntoSchema;
+use norito::core::{Error, NoritoSerialize};
 
 #[test]
 fn primitives_hint_sizes() {

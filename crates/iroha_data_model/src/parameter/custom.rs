@@ -3,17 +3,17 @@ use std::collections::BTreeMap;
 
 use getset::Getters;
 use iroha_primitives::json::Json;
+#[cfg(feature = "json")]
+use norito::json::{self, JsonDeserialize, JsonSerialize};
 
 use crate::name::Name;
 
 #[cfg(feature = "json")]
-use norito::json::{self, JsonDeserialize, JsonSerialize};
-
-#[cfg(feature = "json")]
 pub mod json_helpers {
     //! JSON helper utilities for serializing and deserializing custom parameters.
-    use super::*;
     use norito::json::{self, JsonDeserialize, JsonSerialize, Parser, Value};
+
+    use super::*;
 
     /// Serialize a `CustomParameters` map into a JSON object written to `out`.
     pub fn serialize(parameters: &CustomParameters, out: &mut String) {
@@ -229,9 +229,10 @@ impl JsonDeserialize for CustomParameter {
 
 #[cfg(test)]
 mod tests {
+    use core::str::FromStr as _;
+
     use super::*;
     use crate::name::Name;
-    use core::str::FromStr as _;
 
     #[test]
     fn id_name_returns_inner() {

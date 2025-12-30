@@ -713,9 +713,10 @@ fn sanitize_label(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::json::Value;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn default_assets_are_written() {

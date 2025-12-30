@@ -5,10 +5,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::workspace_root;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
 use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
+
+use crate::workspace_root;
 
 const SCORECARD_VERSION: u32 = 1;
 const HANDOFF_VERSION: u32 = 1;
@@ -184,9 +185,11 @@ fn verify_single_catalog(path: &Path, require_checksum: bool) -> Result<(), Box<
 
 #[cfg(test)]
 mod portal_stub_tests {
-    use super::*;
     use std::fs;
+
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn portal_stub_writes_expected_content() {
@@ -2595,9 +2598,11 @@ mod catalog_verify_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{fs, path::Path};
+
     use tempfile::{NamedTempFile, tempdir};
+
+    use super::*;
 
     fn sample_source(
         renewal_rate: f64,

@@ -3,7 +3,6 @@
 
 use eyre::Result;
 use iroha_config::parameters::{actual::Torii as ToriiActual, defaults::torii as torii_defaults};
-use iroha_data_model::query::parameters::DEFAULT_FETCH_SIZE;
 use iroha_data_model::{
     offline::{
         OfflineAllowanceRecord, OfflineCounterSummary, OfflineTransferRecord,
@@ -15,14 +14,14 @@ use iroha_data_model::{
         SingularQueryBox, SingularQueryOutputBox,
         dsl::{EvaluateSelector, HasProjection, SelectorMarker},
         error::QueryExecutionFail as Error,
-        parameters::{QueryParams, SortOrder},
+        parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
     },
 };
 
-use crate::smartcontracts::ValidQuery;
 use crate::{
     prelude::ValidSingularQuery,
     query::{cursor::ErasedQueryIterator, pagination::Paginate as _, store::LiveQueryStoreHandle},
+    smartcontracts::ValidQuery,
     state::{StateReadOnly, WorldReadOnly},
 };
 
@@ -571,9 +570,9 @@ fn validate_query_request_limits(
 
 #[cfg(test)]
 mod fetch_size_limit_tests {
-    use super::*;
-    use iroha_config::parameters::actual::Root as ConfigRoot;
-    use iroha_config::parameters::defaults::torii as torii_defaults;
+    use std::io::Write;
+
+    use iroha_config::parameters::{actual::Root as ConfigRoot, defaults::torii as torii_defaults};
     use iroha_data_model::{
         permission::Permission,
         prelude::SelectorTuple,
@@ -584,8 +583,9 @@ mod fetch_size_limit_tests {
     };
     use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;
-    use std::io::Write;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     fn request_with_fetch_size(fetch_size: u64) -> QueryRequest {
         let fetch_size = std::num::NonZeroU64::new(fetch_size).expect("nonzero fetch size");
@@ -4749,6 +4749,8 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn iter_dispatch_accounts_with_asset_parity_and_continue() {
+        use std::collections::BTreeSet;
+
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::{
             QueryBox, QueryItemKind, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
@@ -4757,7 +4759,6 @@ mod tests {
             parameters::{FetchSize, QueryParams, Sorting},
         };
         use iroha_futures::supervisor::ShutdownSignal;
-        use std::collections::BTreeSet;
 
         fn build_state_with_holdings() -> (
             State,

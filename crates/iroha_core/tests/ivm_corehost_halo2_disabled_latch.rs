@@ -3,6 +3,8 @@
 
 #![cfg(feature = "zk-ipa-native")]
 
+use std::sync::Arc;
+
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
@@ -16,7 +18,6 @@ use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, IVMHost, PointerType, ProgramMetadata, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
 use norito::{decode_from_bytes, to_bytes};
-use std::sync::Arc;
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);

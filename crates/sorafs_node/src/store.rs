@@ -6,7 +6,6 @@
 
 #![allow(unexpected_cfgs)]
 
-use blake3::Hash;
 use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, File},
@@ -16,6 +15,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use blake3::Hash;
 use hex::ToHex;
 use iroha_data_model::da::{ingest::DaStripeLayout, manifest::ChunkRole};
 use norito::{
@@ -1409,12 +1409,14 @@ fn splitmix64(mut state: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs;
+
     use blake3;
     use sorafs_car::CarPlanError;
     use sorafs_manifest::{DagCodecId, ManifestBuilder, PinPolicy};
-    use std::fs;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn temp_config(temp_dir: &TempDir) -> StorageConfig {
         StorageConfig::builder()

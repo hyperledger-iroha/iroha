@@ -5,9 +5,10 @@
 //! `cargo test -p fastpq_prover --test perf_production --release -- --ignored`
 //! to obtain realistic timings.
 
+use std::{env, time::Instant};
+
 use fastpq_prover::{OperationKind, Prover, StateTransition, TransitionBatch, verify};
 use norito::core::to_bytes;
-use std::{env, time::Instant};
 
 const PARAMETER_SET: &str = "fastpq-lane-balanced";
 const DEFAULT_ROW_COUNT: usize = 20_000;

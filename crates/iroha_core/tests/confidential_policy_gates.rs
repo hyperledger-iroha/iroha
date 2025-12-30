@@ -1,5 +1,7 @@
 //! Tests covering confidential policy gating for transparent asset instructions.
 
+use std::num::NonZeroU64;
+
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
@@ -8,21 +10,21 @@ use iroha_core::{
     tx::ValidationFail,
 };
 use iroha_crypto::{Hash, KeyPair};
-use iroha_data_model::isi::error::InstructionExecutionError;
 use iroha_data_model::{
     account::NewAccount,
-    asset::{AssetDefinition, AssetId, definition::AssetConfidentialPolicy},
+    asset::{
+        AssetDefinition, AssetId,
+        definition::{AssetConfidentialPolicy, ConfidentialPolicyMode},
+    },
     isi::{
         InstructionBox, Mint, Register, Transfer,
+        error::InstructionExecutionError,
         zk::{RegisterZkAsset, ZkAssetMode},
     },
     prelude::*,
 };
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::num::NonZeroU64;
-
-use iroha_data_model::asset::definition::ConfidentialPolicyMode;
 
 fn init_state() -> (
     State,

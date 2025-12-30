@@ -1,11 +1,13 @@
 //! Adaptive tests for combo shapes: (u64, &str, u32, bool) and (u64, &[u8], u32, bool).
 
-use norito::columnar as ncb;
-use norito::columnar::{
-    ADAPTIVE_TAG_AOS, ADAPTIVE_TAG_NCB, ComboPolicy, decode_rows_u64_bytes_u32_bool_adaptive,
-    decode_rows_u64_str_u32_bool_adaptive, encode_ncb_u64_str_u32_bool_with_policy,
-    encode_rows_u64_bytes_u32_bool_adaptive, encode_rows_u64_str_u32_bool_adaptive,
-    should_use_columnar, view_ncb_u64_str_u32_bool,
+use norito::{
+    columnar as ncb,
+    columnar::{
+        ADAPTIVE_TAG_AOS, ADAPTIVE_TAG_NCB, ComboPolicy, decode_rows_u64_bytes_u32_bool_adaptive,
+        decode_rows_u64_str_u32_bool_adaptive, encode_ncb_u64_str_u32_bool_with_policy,
+        encode_rows_u64_bytes_u32_bool_adaptive, encode_rows_u64_str_u32_bool_adaptive,
+        should_use_columnar, view_ncb_u64_str_u32_bool,
+    },
 };
 
 fn decode_ncb_str_u32_bool(body: &[u8]) -> Vec<(u64, String, u32, bool)> {

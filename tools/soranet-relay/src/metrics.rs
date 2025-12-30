@@ -1,8 +1,5 @@
 //! Minimal metrics tracking for the relay daemon.
 
-use crate::{config::RelayMode, scheduler::CellClass};
-use iroha_crypto::soranet::handshake::HandshakeSuite;
-use iroha_data_model::soranet::vpn::VpnSessionReceiptV1;
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
@@ -12,6 +9,11 @@ use std::{
     },
     time::Duration,
 };
+
+use iroha_crypto::soranet::handshake::HandshakeSuite;
+use iroha_data_model::soranet::vpn::VpnSessionReceiptV1;
+
+use crate::{config::RelayMode, scheduler::CellClass};
 
 fn store_f64(atom: &AtomicU64, value: f64) {
     atom.store(value.to_bits(), Ordering::Relaxed);

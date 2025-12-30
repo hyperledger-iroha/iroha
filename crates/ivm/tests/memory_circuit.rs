@@ -1,6 +1,8 @@
 #![cfg(feature = "ivm_zk_tests")]
-use ivm::Memory;
-use ivm::halo2::{LoadCircuit, StoreCircuit, VectorLoadCircuit, VectorStoreCircuit};
+use ivm::{
+    Memory,
+    halo2::{LoadCircuit, StoreCircuit, VectorLoadCircuit, VectorStoreCircuit},
+};
 
 #[test]
 fn test_load_circuit_ok() {

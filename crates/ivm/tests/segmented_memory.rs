@@ -1,5 +1,4 @@
-use ivm::VMError;
-use ivm::segmented_memory::Memory;
+use ivm::{VMError, segmented_memory::Memory};
 
 #[test]
 fn load_store_segments() {

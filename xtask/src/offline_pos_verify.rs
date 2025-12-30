@@ -573,9 +573,10 @@ impl RevocationApiSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{account::AccountId, domain::DomainId, offline::OfflinePosBackendRoot};
+
+    use super::*;
 
     fn operator_pair() -> KeyPair {
         KeyPair::from_seed(b"pos-operator".to_vec(), Algorithm::Ed25519)

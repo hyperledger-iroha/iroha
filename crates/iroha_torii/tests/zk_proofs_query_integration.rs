@@ -1,7 +1,6 @@
 //! Integration test for /v1/proofs/query (signed core query wrapper).
 #![cfg(feature = "app_api")]
 
-use norito::json;
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
@@ -17,6 +16,7 @@ use iroha_data_model::{
 };
 use iroha_torii::QueryOptions;
 use mv::storage::StorageReadOnly;
+use norito::json;
 use tower::ServiceExt as _;
 
 #[tokio::test]

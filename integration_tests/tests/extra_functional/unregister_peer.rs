@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use eyre::{Report, Result, WrapErr, eyre};
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     data_model::{isi::register::RegisterPeerWithPop, parameter::BlockParameter, prelude::*},
@@ -14,8 +15,6 @@ use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
-
-use integration_tests::sandbox;
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]

@@ -1,13 +1,12 @@
 //! Integration tests covering multi-peer genesis submissions.
 
+use integration_tests::sandbox;
 use iroha::data_model::{
     domain::{Domain, DomainId},
     isi::Register,
 };
 use iroha_test_network::NetworkBuilder;
 use tokio::task::spawn_blocking;
-
-use integration_tests::sandbox;
 
 #[tokio::test]
 async fn all_peers_submit_genesis() -> eyre::Result<()> {

@@ -1,9 +1,10 @@
+use std::collections::HashMap;
+
 use ivm::{
     IVM,
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost},
 };
-use std::collections::HashMap;
 
 fn compile(src: &str) -> Vec<u8> {
     let c = KotodamaCompiler::new();

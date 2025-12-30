@@ -17,8 +17,10 @@ use iroha_data_model::{
         OfflineWalletCertificate, OfflineWalletPolicy, PoseidonDigest,
     },
 };
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json::{self as serde_json, Value as JsonValue};
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json::{self as serde_json, Value as JsonValue},
+};
 
 use crate::offline_tooling::{
     build_metadata, parse_account_id, parse_asset_id, parse_hash_hex, parse_numeric, write_json,
@@ -188,6 +190,7 @@ fn build_receipts(specs: &[ReceiptSpec], base_dir: &Path) -> Result<Vec<OfflineS
             to,
             asset,
             amount,
+            issued_at_ms: spec.issued_at_ms,
             invoice_id: spec.invoice_id.clone(),
             platform_proof,
             platform_snapshot,
@@ -367,6 +370,7 @@ struct ReceiptSpec {
     to: String,
     asset: String,
     amount: String,
+    issued_at_ms: u64,
     invoice_id: String,
     platform_proof: PlatformProofSpec,
     #[norito(default)]

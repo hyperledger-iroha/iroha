@@ -1,18 +1,22 @@
 //! Verify that all peers in a seven-peer network maintain consistent asset balances with DA enabled.
 
-use std::{path::PathBuf, time::{Duration, Instant}};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use eyre::{Result, WrapErr, eyre};
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     data_model::{
+        ValidationFail,
         parameter::{BlockParameter, SumeragiParameter},
         prelude::*,
         query::{
             asset::prelude::FindAssetById,
             error::{FindError, QueryExecutionFail},
         },
-        ValidationFail,
     },
     query::QueryError,
 };
@@ -21,8 +25,6 @@ use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 use norito::json::Value;
-
-use integration_tests::sandbox;
 
 #[test]
 fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
@@ -149,9 +151,9 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
                         ));
                     }
                 }
-                Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-                    FindError::Asset(_),
-                ))))
+                Err(QueryError::Validation(ValidationFail::QueryFailed(
+                    QueryExecutionFail::Find(FindError::Asset(_)),
+                )))
                 | Err(QueryError::Validation(ValidationFail::QueryFailed(
                     QueryExecutionFail::NotFound,
                 ))) => {
@@ -189,10 +191,7 @@ fn wait_for_rbc_delivery(
 ) -> Result<Value> {
     let client = client.clone();
     rt.block_on(wait_for_rbc_delivery_inner(
-        client,
-        store_dir,
-        min_height,
-        timeout,
+        client, store_dir, min_height, timeout,
     ))
 }
 

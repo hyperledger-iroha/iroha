@@ -1,7 +1,8 @@
 //! Error helpers for the relay runtime.
 
-use crate::config::ConfigError;
 use thiserror::Error;
+
+use crate::config::ConfigError;
 
 /// Common error wrapper used across the relay runtime.
 #[derive(Debug, Error)]

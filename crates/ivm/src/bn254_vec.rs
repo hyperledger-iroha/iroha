@@ -5,9 +5,9 @@
 //! based on the host CPU features (SSE2, AVX2, AVX-512 or NEON).
 //! The scalar routines serve as a portable fallback.
 
+use halo2curves::{bn256::Fr, ff::PrimeField};
+
 use crate::field_dispatch::field_impl;
-use halo2curves::bn256::Fr;
-use halo2curves::ff::PrimeField;
 
 /// BN254 field modulus in little-endian limb form.
 pub const MODULUS: [u64; 4] = [
@@ -678,11 +678,12 @@ impl FieldArithmetic for NeonField {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(target_arch = "aarch64")]
     use halo2curves::bn256::Fr;
     #[cfg(target_arch = "aarch64")]
     use rand_core::{RngCore, impls::fill_bytes_via_next};
+
+    use super::*;
 
     #[test]
     #[cfg(target_arch = "x86_64")]

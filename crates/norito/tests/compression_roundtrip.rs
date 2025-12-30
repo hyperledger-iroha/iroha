@@ -2,8 +2,7 @@
 
 //! Ensure zstd compression path roundtrips complex payloads and preserves flags.
 
-use norito::core::header_flags;
-use norito::{CompressionConfig, decode_from_bytes, to_compressed_bytes};
+use norito::{CompressionConfig, core::header_flags, decode_from_bytes, to_compressed_bytes};
 
 #[test]
 fn compressed_roundtrip_preserves_layout_flags() {

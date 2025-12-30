@@ -3,8 +3,7 @@
 //!   cargo run -p ivm --bin gen_abi_hash_doc -- --write
 //!   cargo run -p ivm --bin gen_abi_hash_doc -- --check
 
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED ABI HASHES -->";
 const END: &str = "<!-- END GENERATED ABI HASHES -->";

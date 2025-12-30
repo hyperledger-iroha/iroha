@@ -2,6 +2,8 @@
 #![cfg(feature = "zk-tests")]
 //! Ensure deprecated verifying-key retention cap per backend is enforced.
 
+use std::num::NonZeroU64;
+
 use iroha_core::smartcontracts::Execute; // for .execute on ISI/Grant
 use iroha_core::{
     executor::Executor,
@@ -13,7 +15,6 @@ use iroha_data_model::{confidential::ConfidentialStatus, prelude::*, zk::Backend
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::num::NonZeroU64;
 
 fn prepare_state_with_vk_permission() -> State {
     let world = iroha_core::state::World::new();
@@ -22,8 +23,7 @@ fn prepare_state_with_vk_permission() -> State {
     let state = State::new_for_testing(world, kura, query_handle);
 
     {
-        use iroha_data_model::permission::Permission;
-        use iroha_data_model::prelude::Grant;
+        use iroha_data_model::{permission::Permission, prelude::Grant};
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);

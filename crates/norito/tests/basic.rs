@@ -1,6 +1,9 @@
 #![allow(clippy::manual_div_ceil)]
-use norito::core::{Header, NoritoDeserialize, NoritoSerialize};
-use norito::{Compression, deserialize_from, serialize_into};
+use norito::{
+    Compression,
+    core::{Header, NoritoDeserialize, NoritoSerialize},
+    deserialize_from, serialize_into,
+};
 
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
 struct TestData {

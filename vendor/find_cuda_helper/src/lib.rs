@@ -279,7 +279,6 @@ pub fn find_libnvvm_bin_dir() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{
         env,
         ffi::OsString,
@@ -291,6 +290,8 @@ mod tests {
         },
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    use super::*;
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);

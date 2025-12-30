@@ -819,12 +819,14 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::sumeragi::main_loop::RbcSession;
+    use std::{fs, time::Duration};
+
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{block::BlockHeader, peer::PeerId};
-    use std::{fs, time::Duration};
     use tempfile::tempdir;
+
+    use super::*;
+    use crate::sumeragi::main_loop::RbcSession;
 
     fn session_key(id: u8) -> SessionKey {
         let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([id; 32]));

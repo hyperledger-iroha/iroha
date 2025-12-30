@@ -14,8 +14,7 @@ use iroha_data_model::{
     account::AccountId,
     isi::{InstructionBox, Log},
     prelude::*,
-    transaction::IvmBytecode,
-    transaction::TransactionBuilder,
+    transaction::{IvmBytecode, TransactionBuilder},
 };
 use iroha_test_samples::gen_account_in;
 

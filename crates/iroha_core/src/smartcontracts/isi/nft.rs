@@ -209,6 +209,11 @@ pub mod query {
 
     #[cfg(test)]
     mod tests {
+        use core::num::NonZeroU64;
+
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::ALICE_ID;
+
         use super::*;
         use crate::{
             block::ValidBlock,
@@ -216,9 +221,6 @@ pub mod query {
             query::store::LiveQueryStore,
             state::{State, World},
         };
-        use core::num::NonZeroU64;
-        use iroha_primitives::json::Json;
-        use iroha_test_samples::ALICE_ID;
 
         fn new_dummy_block() -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) =

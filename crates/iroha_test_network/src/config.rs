@@ -1,6 +1,7 @@
 //! Sample configuration builders
 
-use crate::init_instruction_registry;
+use std::{collections::BTreeMap, path::PathBuf};
+
 use color_eyre::{Report, eyre::eyre};
 use iroha_config::base::toml::WriteExt;
 use iroha_core::{
@@ -12,7 +13,6 @@ use iroha_core::{
     telemetry::StateTelemetry,
 };
 use iroha_crypto::{KeyPair, SignatureOf};
-use iroha_data_model::prelude::HashOf;
 use iroha_data_model::{
     ChainId,
     account::{Account, AccountId},
@@ -24,7 +24,7 @@ use iroha_data_model::{
     name::Name,
     parameter::{Parameter, custom::CustomParameter, system::confidential_metadata},
     peer::PeerId,
-    prelude::Transfer,
+    prelude::{HashOf, Transfer},
     transaction::signed::TransactionResultInner,
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
@@ -40,16 +40,14 @@ use iroha_executor_data_model::permission::{
     trigger::CanRegisterTrigger,
 };
 use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisPeerPop};
-use iroha_primitives::time::TimeSource;
-use iroha_primitives::unique_vec::UniqueVec;
-use iroha_primitives::{json::Json, numeric::NumericSpec};
+use iroha_primitives::{json::Json, numeric::NumericSpec, time::TimeSource, unique_vec::UniqueVec};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+#[cfg(test)]
+use norito::json::Value;
 use toml::Table;
 use tracing::warn;
 
-#[cfg(test)]
-use norito::json::Value;
-use std::{collections::BTreeMap, path::PathBuf};
+use crate::init_instruction_registry;
 
 pub fn chain_id() -> ChainId {
     ChainId::from("00000000-0000-0000-0000-000000000000")
@@ -583,11 +581,14 @@ fn rebuild_block_from_parts(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::isi::{offline::RegisterOfflineAllowance, register::RegisterPeerWithPop};
-    use iroha_data_model::parameter::system::SumeragiParameters;
+    use iroha_data_model::{
+        isi::{offline::RegisterOfflineAllowance, register::RegisterPeerWithPop},
+        parameter::system::SumeragiParameters,
+    };
     use norito::codec::Decode;
+
+    use super::*;
 
     #[test]
     fn base_config_enables_confidential_verification() {
@@ -728,11 +729,13 @@ mod tests {
 
     #[test]
     fn genesis_executes_offline_allowance_instruction() {
-        use iroha_core::smartcontracts::ValidQuery;
+        use std::{fs, path::PathBuf};
+
         use iroha_core::{
             block::ValidBlock,
             kura::Kura,
             query::store::LiveQueryStore,
+            smartcontracts::ValidQuery,
             state::{State, World},
             sumeragi::network_topology::Topology as CoreTopology,
             telemetry::StateTelemetry,
@@ -744,7 +747,6 @@ mod tests {
             offline::OfflineWalletCertificate,
             query::{dsl::CompoundPredicate, offline::prelude::FindOfflineAllowances},
         };
-        use std::{fs, path::PathBuf};
 
         init_instruction_registry();
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

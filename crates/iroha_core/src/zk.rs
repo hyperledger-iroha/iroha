@@ -13,18 +13,6 @@
 //! `smartcontracts::isi` and related modules.
 
 //
-#[cfg(feature = "zk-preverify")]
-use crate::kura::PipelineProofSnapshot;
-#[cfg(feature = "zk-preverify")]
-use iroha_crypto::streaming::TransportCapabilityResolutionSnapshot;
-use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
-#[cfg(feature = "zk-preverify")]
-use ivm::halo2::VMExecutionCircuit;
-#[cfg(feature = "zk-halo2")]
-use kaigi_zk::{KAIGI_ROSTER_BACKEND, KaigiRosterJoinCircuit};
-#[cfg(feature = "zk-preverify")]
-use norito::streaming::CapabilityFlags;
-use sha2::{Digest, Sha256};
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use std::collections::{BTreeMap, btree_map::Entry};
 #[cfg(any(
@@ -47,13 +35,29 @@ use std::sync::MutexGuard;
     feature = "zk-halo2-ipa"
 ))]
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
-use std::{collections::BTreeSet, io};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    collections::BTreeSet,
+    io,
+    time::{Duration, Instant},
+};
+
+#[cfg(feature = "zk-preverify")]
+use iroha_crypto::streaming::TransportCapabilityResolutionSnapshot;
+use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
+#[cfg(feature = "zk-preverify")]
+use ivm::halo2::VMExecutionCircuit;
+#[cfg(feature = "zk-halo2")]
+use kaigi_zk::{KAIGI_ROSTER_BACKEND, KaigiRosterJoinCircuit};
+#[cfg(feature = "zk-preverify")]
+use norito::streaming::CapabilityFlags;
+use sha2::{Digest, Sha256};
 #[cfg(feature = "zk-preverify")]
 use tokio::sync::mpsc;
 
-#[cfg(test)]
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "zk-preverify")]
+use crate::kura::PipelineProofSnapshot;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 type PastaParams =
@@ -175,11 +179,14 @@ fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
 #[cfg(any(test, feature = "iroha-core-tests"))]
 /// Test fixtures and helpers for constructing deterministic `OpenVerifyEnvelope` payloads.
 pub mod test_utils {
+    use iroha_crypto::Hash as CryptoHash;
+    use iroha_data_model::{
+        proof::{ProofBox, VerifyingKeyBox},
+        zk::{BackendTag, OpenVerifyEnvelope},
+    };
+
     #[allow(unused_imports)]
     use super::*;
-    use iroha_crypto::Hash as CryptoHash;
-    use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
-    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
 
     #[cfg(feature = "iroha_zkp_halo2")]
     const HALO2_N_IN: u8 = 1;
@@ -342,11 +349,12 @@ pub mod test_utils {
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn tiny_add_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-        use halo2_proofs::halo2curves::pasta::EqAffine as Curve;
-        use halo2_proofs::plonk::{create_proof, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::ipa::commitment::IPACommitmentScheme;
-        use halo2_proofs::poly::ipa::multiopen::ProverIPA;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _};
+        use halo2_proofs::{
+            halo2curves::pasta::EqAffine as Curve,
+            plonk::{create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
 
         static CACHE: OnceLock<(Vec<u8>, Vec<u8>, Vec<u8>)> = OnceLock::new();
 
@@ -395,11 +403,12 @@ pub mod test_utils {
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn tiny_add_public_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         use ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{create_proof, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::ipa::commitment::IPACommitmentScheme;
-        use halo2_proofs::poly::ipa::multiopen::ProverIPA;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
 
         static CACHE: OnceLock<(Vec<u8>, Vec<u8>, Vec<u8>)> = OnceLock::new();
 
@@ -455,11 +464,12 @@ pub mod test_utils {
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn tiny_add_2rows_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-        use halo2_proofs::halo2curves::pasta::EqAffine as Curve;
-        use halo2_proofs::plonk::{create_proof, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::ipa::commitment::IPACommitmentScheme;
-        use halo2_proofs::poly::ipa::multiopen::ProverIPA;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _};
+        use halo2_proofs::{
+            halo2curves::pasta::EqAffine as Curve,
+            plonk::{create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
 
         static CACHE: OnceLock<(Vec<u8>, Vec<u8>, Vec<u8>)> = OnceLock::new();
 
@@ -610,9 +620,10 @@ type CachedVk = Arc<halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves:
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn params_fingerprint(params: &PastaParams) -> [u8; 32] {
+    use std::io::{self, Write};
+
     use halo2_proofs::poly::commitment::Params as _;
     use sha2::{Digest, Sha256};
-    use std::io::{self, Write};
 
     struct HashWriter<'a, H: Digest>(&'a mut H);
 
@@ -852,8 +863,9 @@ fn verify_with_registry(
 ///  - Backends remain identified outside of the envelope via `ProofBox.backend`.
 ///  - Existing `H2*` containers stay supported; verifiers try `ZK1` first, then `H2*`.
 mod zk1 {
-    use super::*;
     use std::io::{Cursor, Read};
+
+    use super::*;
 
     const MAGIC: &[u8; 4] = b"ZK1\0";
 
@@ -1046,10 +1058,12 @@ pub mod zk1_test_helpers {
 /// checks. They are not consensus-critical and are compiled only when Halo2
 /// backends are enabled.
 pub mod depth {
-    use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-    use halo2_proofs::halo2curves::pasta::Fp as Scalar;
-    use halo2_proofs::plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector};
-    use halo2_proofs::poly::Rotation;
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        halo2curves::pasta::Fp as Scalar,
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+        poly::Rotation,
+    };
 
     #[cfg(feature = "zk-halo2-ipa-poseidon")]
     #[allow(unused_imports)]
@@ -1551,10 +1565,12 @@ pub mod depth {
 /// round parameters and are used to exercise backends that implement
 /// transparent hashing (e.g., IPA over Pasta) in our verifier dispatch.
 pub mod poseidon_depth {
-    use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner};
-    use halo2_proofs::halo2curves::pasta::Fp as Scalar;
-    use halo2_proofs::plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector};
-    use halo2_proofs::poly::Rotation;
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner},
+        halo2curves::pasta::Fp as Scalar,
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+        poly::Rotation,
+    };
 
     #[cfg(feature = "zk-halo2-ipa-poseidon")]
     #[allow(unused_imports)]
@@ -3041,16 +3057,18 @@ impl DedupCache {
 #[test]
 fn halo2_verify_with_instance_malformed_length_ipa() {
     // Generate a valid proof for add-public (IPA), but craft INST with wrong lengths
-    use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-    use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-    use halo2_proofs::plonk::{
-        Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
-    };
-    use halo2_proofs::poly::Rotation;
-    use halo2_proofs::poly::commitment::Params as _;
-    use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
-    use rand::rngs::OsRng;
     use std::io::Cursor;
+
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{
+            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        },
+        poly::{Rotation, commitment::Params as _},
+        transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+    };
+    use rand::rngs::OsRng;
 
     #[derive(Clone, Default)]
     struct TinyAddPublic;
@@ -3171,16 +3189,18 @@ fn halo2_verify_with_instance_malformed_length_ipa() {
 #[test]
 fn halo2_verify_with_instance_noncanonical_ipa() {
     // Generate a valid proof, but use non-canonical instance encoding (all 0xFF)
-    use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-    use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-    use halo2_proofs::plonk::{
-        Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
-    };
-    use halo2_proofs::poly::Rotation;
-    use halo2_proofs::poly::commitment::Params as _;
-    use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
-    use rand::rngs::OsRng;
     use std::io::Cursor;
+
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{
+            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        },
+        poly::{Rotation, commitment::Params as _},
+        transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+    };
+    use rand::rngs::OsRng;
 
     #[derive(Clone, Default)]
     struct TinyAddPublic;
@@ -3258,13 +3278,15 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
     ))]
     #[test]
     fn ipa_vote_bool_commit_zk1() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::Rotation,
+            transcript::{Blake2bWrite, Challenge255},
         };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
         use rand::rngs::OsRng;
 
         // Build circuit and params
@@ -3332,10 +3354,12 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
     ))]
     #[test]
     fn halo2_verify_rejects_vk_without_bytes() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 5u32;
@@ -3416,10 +3440,12 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
     ))]
     #[test]
     fn ipa_anon_transfer_commit_zk1() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 5u32;
@@ -3507,10 +3533,12 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
     ))]
     #[test]
     fn ipa_vote_bool_commit_merkle2_zk1() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -3863,8 +3891,9 @@ pub fn verify_backend_with_timing(
 
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 mod halo2_ipa_alias_tests {
-    use super::*;
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+
+    use super::*;
 
     #[test]
     fn halo2_ipa_circuit_id_maps_to_pasta_backend() {
@@ -3909,9 +3938,9 @@ mod halo2_ipa_alias_tests {
 fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
     #[cfg(feature = "goldilocks_backend")]
     use iroha_zkp_halo2::backend::goldilocks;
-    use iroha_zkp_halo2::backend::{bn254, pallas};
     use iroha_zkp_halo2::{
         OpenVerifyEnvelope, Transcript,
+        backend::{bn254, pallas},
         norito_helpers::{self as nh, DecodedEnvelope},
     };
     // Decode Norito envelope
@@ -3962,10 +3991,14 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
 /// delegating cryptographic verification to the concrete Halo2 backends.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod h2parse {
-    use super::{PastaParams, pasta_params_new};
+    use std::{
+        convert::{TryFrom, TryInto},
+        io::{Cursor, Read},
+    };
+
     use halo2_proofs::poly::commitment::Params as _;
-    use std::convert::{TryFrom, TryInto};
-    use std::io::{Cursor, Read};
+
+    use super::{PastaParams, pasta_params_new};
 
     fn envelope_cursor(bytes: &[u8]) -> Option<Cursor<&[u8]>> {
         if !super::zk1::is_envelope(bytes) {
@@ -4162,10 +4195,12 @@ fn extract_pasta_fp_instances_impl(
 // Tiny pasta circuits used for dispatch verification across KZG and IPA
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod pasta_tiny {
-    use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-    use halo2_proofs::halo2curves::pasta::Fp as Scalar;
-    use halo2_proofs::plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector};
-    use halo2_proofs::poly::Rotation;
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        halo2curves::pasta::Fp as Scalar,
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+        poly::Rotation,
+    };
 
     #[derive(Clone, Default)]
     pub struct Add;
@@ -5009,16 +5044,19 @@ mod pasta_tiny {
     // It is independent from external poseidon crates to keep determinism and avoid version drift.
     #[cfg(feature = "zk-halo2-ipa-poseidon")]
     pub mod poseidon {
-        use super::*;
         #[cfg(feature = "zk-halo2-ipa-poseidon")]
         use halo2_gadgets::poseidon::primitives::P128Pow5T3;
         #[cfg(feature = "zk-halo2-ipa-poseidon")]
         pub use halo2_gadgets::poseidon::{
             Hash as PoseidonHash, Pow5Chip, Pow5Config, primitives::ConstantLength,
         };
-        use halo2_proofs::circuit::{AssignedCell, Layouter, Region, Value};
-        use halo2_proofs::plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector};
-        use halo2_proofs::poly::Rotation;
+        use halo2_proofs::{
+            circuit::{AssignedCell, Layouter, Region, Value},
+            plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+            poly::Rotation,
+        };
+
+        use super::*;
 
         pub(super) fn compress2_native(
             a: halo2_proofs::halo2curves::pasta::Fp,
@@ -6843,10 +6881,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
     // Minimal circuits used for dispatch sanity-checks.
     #[allow(dead_code)]
     mod tiny {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::Fp as Scalar;
-        use halo2_proofs::plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector};
-        use halo2_proofs::poly::Rotation;
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::Fp as Scalar,
+            plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+            poly::Rotation,
+        };
 
         #[derive(Clone, Default)]
         pub struct Add;
@@ -7251,11 +7291,14 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
             }
         }
     }
-    use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-    use halo2_proofs::plonk::verify_proof;
-    use halo2_proofs::poly::ipa::strategy::SingleStrategy as SingleVerifier;
-    use halo2_proofs::transcript::Blake2bRead;
     use std::io::Cursor;
+
+    use halo2_proofs::{
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::verify_proof,
+        poly::ipa::strategy::SingleStrategy as SingleVerifier,
+        transcript::Blake2bRead,
+    };
 
     let Some(vk_box) = vk else { return false };
     // Sanity: backends must match
@@ -7485,12 +7528,15 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
 #[cfg(feature = "zk-halo2-ipa")]
 #[allow(clippy::too_many_lines)]
 fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
-    use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-    use halo2_proofs::plonk::verify_proof;
-    use halo2_proofs::poly::ipa::strategy::SingleStrategy as SingleVerifier;
-    use halo2_proofs::transcript::Blake2bRead;
-    use iroha_zkp_halo2::Halo2ProofEnvelope;
     use std::io::Cursor;
+
+    use halo2_proofs::{
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::verify_proof,
+        poly::ipa::strategy::SingleStrategy as SingleVerifier,
+        transcript::Blake2bRead,
+    };
+    use iroha_zkp_halo2::Halo2ProofEnvelope;
 
     let Some(vk_box) = vk else { return false };
     if vk_box.backend != proof.backend || proof.bytes.is_empty() || vk_box.bytes.is_empty() {
@@ -8129,10 +8175,12 @@ mod trace_proof_queue_tests {
 
 #[cfg(all(test, feature = "zk-preverify"))]
 mod trace_proving_queue_tests {
-    use super::*;
+    use std::{num::NonZeroU64, sync::Arc};
+
     use iroha_crypto::Hash;
     use ivm::encoding;
-    use std::{num::NonZeroU64, sync::Arc};
+
+    use super::*;
 
     fn assemble_zk(code: &[u8], max_cycles: u64) -> Vec<u8> {
         use ivm::ProgramMetadata;
@@ -8235,7 +8283,6 @@ mod trace_proving_queue_tests {
 #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
 #[allow(unused_imports)]
 mod tests {
-    use super::*;
     #[cfg(all(
         feature = "halo2-dev-tests",
         any(feature = "zk-halo2", feature = "zk-halo2-ipa")
@@ -8254,6 +8301,7 @@ mod tests {
     #[cfg(feature = "zk-halo2")]
     use rand::rngs::OsRng;
 
+    use super::*;
     #[cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
     use crate::zk::pasta_tiny::{
         VoteBoolCommitMerkle8, poseidon_compress2_native, vote_bool_commit_merkle8_sample_inputs,
@@ -8314,10 +8362,12 @@ mod tests {
     #[test]
     fn halo2_verify_tiny_commit_open_ipa() {
         use ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 5u32;
@@ -8368,10 +8418,12 @@ mod tests {
     #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "zk-halo2"))]
     #[test]
     fn halo2_verify_tiny_commit_open_poseidon() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -8420,10 +8472,12 @@ mod tests {
     #[test]
     fn halo2_verify_tiny_merkle2_poseidon() {
         use ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -8472,11 +8526,12 @@ mod tests {
     ))]
     #[test]
     fn vk_cache_reuses_entries() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector};
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+            poly::{Rotation, commitment::Params as _},
+        };
 
         #[derive(Clone, Default)]
         struct CacheCircuit;
@@ -8566,15 +8621,18 @@ mod tests {
     ))]
     #[test]
     fn zk1_envelope_pasta_ipa_verify_add_public() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
-        };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
-        use rand::rngs::OsRng;
         use std::io::Cursor;
+
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::Rotation,
+            transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+        };
+        use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyAddPublic;
@@ -8683,9 +8741,11 @@ mod tests {
     #[cfg(feature = "zk-halo2")]
     #[test]
     fn kaigi_roster_backend_accepts_valid_proof() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{keygen_pk, keygen_vk};
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{keygen_pk, keygen_vk},
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use kaigi_zk::{
             KAIGI_ROSTER_CIRCUIT_K, compute_commitment, compute_nullifier, empty_roster_root_hash,
             roster_root_limbs,
@@ -8749,9 +8809,11 @@ mod tests {
     #[cfg(feature = "zk-halo2")]
     #[test]
     fn kaigi_usage_backend_accepts_valid_proof() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{keygen_pk, keygen_vk};
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{keygen_pk, keygen_vk},
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use kaigi_zk::{
             KAIGI_USAGE_BACKEND, KAIGI_USAGE_CIRCUIT_K, KaigiUsageCommitmentCircuit,
             compute_usage_commitment,
@@ -8866,15 +8928,18 @@ mod tests {
     #[cfg(feature = "zk-halo2")]
     #[test]
     fn halo2_end_to_end_proof_verification() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
-        };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
-        use rand::rngs::OsRng;
         use std::io::Cursor;
+
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::Rotation,
+            transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+        };
+        use rand::rngs::OsRng;
 
         // A tiny circuit with no public inputs: enforce 2 + 2 = 4
         #[derive(Clone, Default)]
@@ -8984,15 +9049,18 @@ mod tests {
     #[cfg(feature = "zk-halo2")]
     #[test]
     fn halo2_verify_with_instance_add_kzg() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
-        };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
-        use rand::rngs::OsRng;
         use std::io::Cursor;
+
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::Rotation,
+            transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+        };
+        use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyAddPublic;
@@ -9106,14 +9174,15 @@ mod tests {
     #[cfg(feature = "zk-halo2")]
     #[test]
     fn halo2_verify_add_2rows_kzg() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bWrite, Challenge255},
         };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
         use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
@@ -9238,14 +9307,15 @@ mod tests {
     #[cfg(feature = "zk-halo2")]
     #[test]
     fn halo2_verify_id_public_kzg_with_and_without_inst() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bWrite, Challenge255},
         };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
         use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
@@ -9349,14 +9419,15 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_ipa_acceptance_variants() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bWrite, Challenge255},
         };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
         use rand::rngs::OsRng;
 
         // Tiny add (no INST)
@@ -9549,14 +9620,15 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_add_2rows_ipa() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bWrite, Challenge255},
         };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
         use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
@@ -9689,14 +9761,15 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_add3_ipa() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bWrite, Challenge255},
         };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
         use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
@@ -9817,10 +9890,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_poseidon_commit_open_chip_ipa() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         // Params
@@ -9903,10 +9978,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_poseidon_merkle2_chip_ipa() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -9970,10 +10047,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_commit_merkle8_ipa() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -10063,10 +10142,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle8_ipa() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 7u32;
@@ -10171,10 +10252,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -10265,10 +10348,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_permutation_harness() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         #[derive(Clone, Copy)]
@@ -10420,10 +10505,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_malformed_inst() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -10477,10 +10564,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_truncated_prof() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -10531,10 +10620,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -10625,10 +10716,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -10712,10 +10805,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 7u32;
@@ -10819,10 +10914,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 7u32;
@@ -10924,10 +11021,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_malformed_inst() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -10983,10 +11082,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_truncated_prof() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -11040,10 +11141,12 @@ mod tests {
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_noncanonical() {
         use ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 7u32;
@@ -11102,10 +11205,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_invalid_header() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 7u32;
@@ -11157,10 +11262,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 7u32;
@@ -11264,10 +11371,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_permutation_harness() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         #[derive(Clone, Copy)]
@@ -11439,10 +11548,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_randomized_min() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         #[derive(Clone, Copy)]
@@ -11572,10 +11683,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_permutation_harness() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         #[derive(Clone, Copy)]
@@ -11726,10 +11839,12 @@ mod tests {
     #[test]
     fn halo2_verify_vote_bool_commit_merkle8_h2_ordering_harness() {
         use ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -11834,10 +11949,12 @@ mod tests {
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle8_h2_ordering_harness() {
         use ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 7u32;
@@ -11913,10 +12030,12 @@ mod tests {
     #[test]
     fn halo2_verify_vote_bool_commit_merkle16_h2_ordering_harness() {
         use ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12020,10 +12139,12 @@ mod tests {
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle16_h2_ordering_harness() {
         use ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 7u32;
@@ -12139,10 +12260,12 @@ mod tests {
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_noncanonical() {
         use ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 7u32;
@@ -12200,10 +12323,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_invalid_header() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 7u32;
@@ -12256,10 +12381,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_commit_open_ipa_zk1_truncated_prof() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12311,10 +12438,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_merkle2_ipa_zk1_invalid_header_extreme() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12378,10 +12507,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_commit_open_ipa_zk1_positive() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12447,10 +12578,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_merkle2_ipa_zk1_positive() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12500,10 +12633,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_commit_open_ipa_zk1_multiple_prof_and_unknown_ok() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12580,10 +12715,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_merkle2_h2_unknown_magic_rejects_instances() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12630,10 +12767,12 @@ mod tests {
     #[test]
     fn halo2_verify_tiny_merkle2_h2_unknown_then_i10p_still_rejects() {
         use ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12684,10 +12823,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_stress_ok() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12773,10 +12914,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_add_h2_truncated_proof_rejects() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 5u32;
@@ -12822,10 +12965,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_wins() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12894,10 +13039,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_wrong_rejects() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -12964,10 +13111,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_add_ipa_h2_invalid_vk_magic_rejects() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 5u32;
@@ -13009,10 +13158,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_randomized_ok() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 6u32;
@@ -13101,10 +13252,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_mul_h2_invalid_vk_magic_rejects() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         let k = 5u32;
@@ -13146,10 +13299,12 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness() {
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{VerifyingKey, keygen_pk, keygen_vk};
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{VerifyingKey, keygen_pk, keygen_vk},
+            poly::commitment::Params as _,
+            transcript::{Blake2bWrite, Challenge255},
+        };
         use rand::rngs::OsRng;
 
         #[derive(Clone, Copy)]
@@ -13315,14 +13470,15 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_add2inst_public_ipa() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bWrite, Challenge255},
         };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
         use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
@@ -13447,14 +13603,15 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_anon_transfer_ipa() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bWrite, Challenge255},
         };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
         use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
@@ -13573,14 +13730,15 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_vote_bool_ipa() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bWrite, Challenge255},
         };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
         use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
@@ -13670,14 +13828,15 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_id_public_ipa_with_and_without_inst() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bWrite, Challenge255},
         };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
         use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
@@ -13781,15 +13940,18 @@ mod tests {
     ))]
     #[test]
     fn halo2_verify_with_instance_add_ipa() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
-        };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
-        use rand::rngs::OsRng;
         use std::io::Cursor;
+
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::Rotation,
+            transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+        };
+        use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyAddPublic;
@@ -13905,16 +14067,18 @@ mod tests {
     #[cfg(feature = "zk-halo2")]
     #[test]
     fn halo2_verify_with_instance_mul_kzg() {
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
-        };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
-        use rand::rngs::OsRng;
         use std::io::Cursor;
+
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+        };
+        use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyMulPublic;
@@ -14028,16 +14192,18 @@ mod tests {
     #[test]
     fn halo2_verify_with_instance_malformed_length_kzg() {
         // Generate a valid proof for add-public, but craft INST with wrong lengths
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
-        };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
-        use rand::rngs::OsRng;
         use std::io::Cursor;
+
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+        };
+        use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyAddPublic;
@@ -14150,16 +14316,18 @@ mod tests {
     #[test]
     fn halo2_verify_with_instance_noncanonical_kzg() {
         // Generate a valid proof, but use non-canonical instance encoding (all 0xFF)
-        use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{
-            Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
-        };
-        use halo2_proofs::poly::Rotation;
-        use halo2_proofs::poly::commitment::Params as _;
-        use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
-        use rand::rngs::OsRng;
         use std::io::Cursor;
+
+        use halo2_proofs::{
+            circuit::{Layouter, SimpleFloorPlanner, Value},
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{
+                Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
+            },
+            poly::{Rotation, commitment::Params as _},
+            transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+        };
+        use rand::rngs::OsRng;
 
         #[derive(Clone, Default)]
         struct TinyAddPublic;

@@ -94,9 +94,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::numeric::Numeric;
+
     use super::*;
     use crate::query::QueryOutputBatchBox;
-    use iroha_primitives::numeric::Numeric;
 
     // A dummy executor that returns a configurable number of empty batches
     // before finally returning a single-item batch and then terminating.

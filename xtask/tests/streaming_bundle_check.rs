@@ -1,8 +1,10 @@
 use std::{fs, path::PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
-use norito::json::{self as serde_json, Value};
-use norito::streaming::BUNDLED_RANS_BUILD_AVAILABLE;
+use norito::{
+    json::{self as serde_json, Value},
+    streaming::BUNDLED_RANS_BUILD_AVAILABLE,
+};
 use tempfile::TempDir;
 
 fn workspace_root() -> PathBuf {

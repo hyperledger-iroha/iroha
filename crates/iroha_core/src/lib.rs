@@ -126,14 +126,15 @@ pub fn validate_genesis_block(
 #[cfg(test)]
 /// Test-only helpers shared across core modules.
 pub mod test_alias {
+    use std::{
+        fmt::Write as _,
+        sync::{Arc, LazyLock},
+    };
+
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::{AccountId, set_account_alias_resolver},
         domain::DomainId,
-    };
-    use std::{
-        fmt::Write as _,
-        sync::{Arc, LazyLock},
     };
 
     static INSTALL: LazyLock<()> = LazyLock::new(|| {
@@ -170,6 +171,8 @@ use norito::{
 pub mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
+use iroha_data_model::{merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope};
+use iroha_torii_shared::connect as connect_proto;
 use tokio::sync::broadcast;
 
 use crate::{
@@ -177,8 +180,6 @@ use crate::{
     peers_gossiper::{PeerTrustGossip, PeersGossip},
     sumeragi::message::{BlockMessage, ControlFlow},
 };
-use iroha_data_model::{merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope};
-use iroha_torii_shared::connect as connect_proto;
 
 /// The interval at which sumeragi checks if there are tx in the `queue`.
 pub const TX_RETRIEVAL_INTERVAL: Duration = Duration::from_millis(100);
@@ -310,6 +311,7 @@ pub mod role {
     //! Module with extension for [`RoleId`] to be stored inside state.
 
     use core::{fmt, str::FromStr};
+
     use derive_more::Constructor;
     use iroha_primitives::impl_as_dyn_key;
     use mv::json::JsonKeyCodec;

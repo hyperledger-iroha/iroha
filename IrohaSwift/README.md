@@ -275,8 +275,10 @@ checks), and `OfflineWallet.buildSignedReceipt` to sign with the spend key while
 audit log or journal:
 
 ```swift
+let chainId = "testnet"
 let journal = try OfflineJournal(url: journalURL, key: OfflineJournalKey.derive(from: seed))
 let receipt = try wallet.buildSignedReceipt(
+    chainId: chainId,
     receiverAccountId: certificate.controller,
     amount: "10",
     invoiceId: "inv-001",
@@ -287,13 +289,25 @@ let receipt = try wallet.buildSignedReceipt(
 )
 
 let claimedDelta = try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt])
+let resultingValue = "90" // current balance minus claimedDelta
+let initialBlindingHex = "<current-blinding-hex>"
+let resultingBlindingHex = "<next-blinding-hex>"
+let artifacts = try OfflineBalanceProofBuilder.advanceCommitment(
+    chainId: chainId,
+    claimedDelta: claimedDelta,
+    resultingValue: resultingValue,
+    initialCommitmentHex: certificate.allowance.commitment.hexUppercased(),
+    initialBlindingHex: initialBlindingHex,
+    resultingBlindingHex: resultingBlindingHex
+)
 let balanceProof = OfflineBalanceProof(
     initialCommitment: certificate.allowance,
-    resultingCommitment: resultingCommitment,
+    resultingCommitment: artifacts.resultingCommitment,
     claimedDelta: claimedDelta,
-    zkProof: zkProof
+    zkProof: artifacts.proof
 )
 let transfer = try OfflineReceiptBuilder.buildTransfer(
+    chainId: chainId,
     receiver: certificate.controller,
     depositAccount: certificate.controller,
     receipts: [receipt],
@@ -301,10 +315,14 @@ let transfer = try OfflineReceiptBuilder.buildTransfer(
 )
 ```
 
+Balance proofs are mandatory for settlement; the builder emits the versioned 12,385-byte v1 proof
+blob (delta + range proofs) that Torii validates.
+
 To include proof attachments (for example, regulator receipts), build attachments and pass them
 into the transfer:
 
 ```swift
+let chainId = "testnet"
 let attachment = try ProofAttachment(
     backend: "halo2/ipa",
     proof: proofBytes,
@@ -314,6 +332,7 @@ let attachment = try ProofAttachment(
 )
 let attachments = OfflineProofAttachmentList(attachments: [attachment])
 let transfer = try OfflineReceiptBuilder.buildTransfer(
+    chainId: chainId,
     receiver: certificate.controller,
     depositAccount: certificate.controller,
     receipts: [receipt],
@@ -329,10 +348,12 @@ validation:
 ```swift
 let logger = try OfflineAuditLogger(isEnabled: true)
 let recorder = OfflineReceiptRecorder(journal: journal, auditLogger: logger)
+let chainId = "testnet"
 let seed = Data("receipt-seed".utf8)
 let bundleSeed = Data("bundle-seed".utf8)
 let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
     txIdSeed: seed,
+    chainId: chainId,
     receiverAccountId: certificate.controller,
     amount: "10",
     invoiceId: "inv-002",
@@ -345,6 +366,7 @@ let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
 
 let transfer = try OfflineReceiptBuilder.buildTransfer(
     bundleIdSeed: bundleSeed,
+    chainId: chainId,
     receiver: certificate.controller,
     depositAccount: certificate.controller,
     receipts: [receipt],

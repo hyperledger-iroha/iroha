@@ -727,8 +727,9 @@ fn write_capture_json(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn load_baseline_parses_metadata_and_values() {

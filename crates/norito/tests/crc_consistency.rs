@@ -1,8 +1,8 @@
 //! Validate CRC64 agreement between encoder and streaming decoder paths.
 
-use norito::core as norito_core;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, crc64_fallback, decode_from_bytes, hardware_crc64, to_bytes,
+    NoritoDeserialize, NoritoSerialize, core as norito_core, crc64_fallback, decode_from_bytes,
+    hardware_crc64, to_bytes,
 };
 
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]

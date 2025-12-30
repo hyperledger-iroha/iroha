@@ -2,18 +2,18 @@
 
 #[cfg(feature = "goldilocks_backend")]
 mod goldilocks {
+    use std::{convert::TryFrom, sync::Arc};
+
     use iroha_config::parameters::defaults;
     use iroha_core::smartcontracts::ivm::host::CoreHost;
     use iroha_data_model::prelude::AccountId;
     use iroha_test_samples::ALICE_ID;
     use ivm::{IVMHost, syscalls as ivm_sys};
-    use std::{convert::TryFrom, sync::Arc};
 
     fn make_goldilocks_envelope() -> iroha_zkp_halo2::OpenVerifyEnvelope {
-        use iroha_zkp_halo2::backend::goldilocks::GoldilocksBackend;
         use iroha_zkp_halo2::{
             GoldilocksParams, GoldilocksPolynomial, GoldilocksScalar, Transcript,
-            norito_helpers as nh,
+            backend::goldilocks::GoldilocksBackend, norito_helpers as nh,
         };
 
         let params = GoldilocksParams::new(8).expect("params");

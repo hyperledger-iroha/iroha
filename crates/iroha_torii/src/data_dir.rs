@@ -1,8 +1,10 @@
 //! Shared helpers for resolving Torii data directory overrides.
 
-use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex, OnceLock, RwLock};
-use std::thread::ThreadId;
+use std::{
+    path::{Path, PathBuf},
+    sync::{Condvar, Mutex, OnceLock, RwLock},
+    thread::ThreadId,
+};
 
 use iroha_config::parameters::defaults;
 
@@ -141,8 +143,9 @@ pub fn base_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::Path;
+
+    use super::*;
 
     fn clear_override() {
         override_slot()

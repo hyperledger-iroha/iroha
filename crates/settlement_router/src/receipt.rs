@@ -1,10 +1,12 @@
 //! Deterministic settlement receipts serialised via Norito.
 
 use std::convert::TryFrom;
-use time::OffsetDateTime;
 
-use norito::json::{JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    json::{JsonDeserialize, JsonSerialize},
+};
+use time::OffsetDateTime;
 
 use crate::{MicroXor, ShadowPrice};
 
@@ -66,7 +68,9 @@ impl SettlementReceipt {
 
 #[cfg(test)]
 mod tests {
+    use norito::{decode_from_bytes, json};
     use rust_decimal::Decimal;
+    use time::Duration;
 
     use crate::{
         config::{EpsilonBps, SettlementConfig},
@@ -75,9 +79,6 @@ mod tests {
         receipt::SettlementReceipt,
         volatility::VolatilityBucket,
     };
-    use norito::decode_from_bytes;
-    use norito::json;
-    use time::Duration;
 
     #[test]
     fn receipt_rounds_timestamp() {

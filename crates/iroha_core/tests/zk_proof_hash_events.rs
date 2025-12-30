@@ -1,6 +1,8 @@
 //! Assert that `MetadataInserted` events for ZK ISIs carry the same JSON (including `proof_hash`).
 #![cfg(feature = "zk-tests")]
 
+use std::borrow::Cow;
+
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     zk::test_utils::halo2_fixture_envelope,
@@ -9,7 +11,6 @@ use iroha_data_model::{
     events::{EventBox, data::prelude::*},
     prelude::*,
 };
-use std::borrow::Cow;
 
 #[allow(clippy::too_many_lines)]
 #[test]

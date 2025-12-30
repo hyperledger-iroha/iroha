@@ -10,25 +10,34 @@
 //! - JSON parsing uses Norito's serde wrappers via the `NoritoJson` extractor.
 //! - Keep responses stable and explicit; map input errors to 400.
 
-use crate::json_macros::{JsonDeserialize, JsonSerialize};
-use crate::routing::{MaybeTelemetry, parse_account_literal};
-use crate::{JsonBody, NoritoJson, NoritoQuery};
-use base64::Engine as _;
 use core::str::FromStr;
-use iroha_core::governance::{
-    draw,
-    parliament::{self, CandidateRef, CandidateVariant},
+
+use base64::Engine as _;
+use iroha_core::{
+    governance::{
+        draw,
+        parliament::{self, CandidateRef, CandidateVariant},
+    },
+    smartcontracts::Execute as _,
+    state::{StateReadOnly, WorldReadOnly},
 };
-use iroha_core::smartcontracts::Execute as _;
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_crypto::blake2::{Blake2b512, digest::Digest};
-use iroha_data_model::governance::types::AtWindow;
-use iroha_data_model::isi::governance::CouncilDerivationKind;
-use iroha_data_model::smart_contract::manifest::ManifestProvenance;
+use iroha_data_model::{
+    governance::types::AtWindow, isi::governance::CouncilDerivationKind,
+    smart_contract::manifest::ManifestProvenance,
+};
 use mv::storage::StorageReadOnly;
-use norito::codec::Encode as _;
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use norito::json;
+use norito::{
+    codec::Encode as _,
+    derive::{NoritoDeserialize, NoritoSerialize},
+    json,
+};
+
+use crate::{
+    JsonBody, NoritoJson, NoritoQuery,
+    json_macros::{JsonDeserialize, JsonSerialize},
+    routing::{MaybeTelemetry, parse_account_literal},
+};
 
 const CONTEXT_GOV_PROPOSE_DEPLOY_AUTHORITY: &str = "/v1/gov/proposals/deploy-contract#authority";
 const CONTEXT_GOV_BALLOT_ZK_AUTHORITY: &str = "/v1/gov/ballots/zk#authority";
@@ -1347,9 +1356,10 @@ pub async fn handle_gov_protected_set(
     NoritoJson(body): NoritoJson<ProtectedNamespacesDto>,
 ) -> Result<JsonBody<ProtectedNamespacesApplyResponse>, crate::Error> {
     // Build SetParameter(Custom) and execute inside a synthetic block
-    use iroha_data_model::parameter::{CustomParameterId, Parameter, custom::CustomParameter};
     // note: using fully qualified paths below; no prelude/nonzero macros needed
     use std::str::FromStr as _;
+
+    use iroha_data_model::parameter::{CustomParameterId, Parameter, custom::CustomParameter};
 
     // Validate namespace strings are non-empty ASCII (basic check)
     let filtered: Vec<String> = body
@@ -1431,8 +1441,9 @@ pub struct ProtectedNamespacesGetResponse {
 pub async fn handle_gov_protected_get(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<ProtectedNamespacesGetResponse>, crate::Error> {
-    use iroha_data_model::{name::Name, parameter::CustomParameterId};
     use std::str::FromStr as _;
+
+    use iroha_data_model::{name::Name, parameter::CustomParameterId};
     let v = state.view();
     let params = v.world().parameters();
     let mut namespaces: Vec<String> = Vec::new();
@@ -2451,8 +2462,8 @@ pub async fn handle_gov_council_audit(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::routing::MaybeTelemetry;
+    use std::sync::Arc;
+
     use iroha_config::parameters::actual::LaneConfig;
     use iroha_core::{
         block::BlockBuilder,
@@ -2471,7 +2482,9 @@ mod tests {
         smart_contract::manifest::ContractManifest,
     };
     use iroha_primitives::numeric::Numeric;
-    use std::sync::Arc;
+
+    use super::*;
+    use crate::routing::MaybeTelemetry;
 
     const ACCOUNT_AUTHORITY: &str =
         "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";

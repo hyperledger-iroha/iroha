@@ -139,9 +139,7 @@ pub unsafe extern "C" fn norito_crc64_metal(
 
 #[cfg(test)]
 mod tests {
-    use super::crc64_cpu;
-    use super::json_stage1_build_tape;
-    use super::norito_crc64_metal;
+    use super::{crc64_cpu, json_stage1_build_tape, norito_crc64_metal};
 
     #[test]
     fn basic_offsets() {

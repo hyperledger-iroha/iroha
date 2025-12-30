@@ -8,16 +8,14 @@
 #![allow(clippy::module_name_repetitions)]
 
 mod jury;
-pub use jury::*;
-
 use std::{collections::BTreeSet, string::String, vec::Vec};
 
 use iroha_schema::IntoSchema;
+pub use jury::*;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{Decode, Encode};
-
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 
@@ -1285,8 +1283,9 @@ pub mod prelude {
 
 #[cfg(feature = "json")]
 mod json {
-    use super::{AgendaEvidenceKind, AgendaProposalAction};
     use norito::json::{self, JsonSerialize, Parser};
+
+    use super::{AgendaEvidenceKind, AgendaProposalAction};
 
     pub mod action {
         use super::*;
@@ -1341,8 +1340,9 @@ mod json {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::{decode_from_bytes, json, to_bytes};
+
+    use super::*;
 
     fn sample_review_summary() -> ReviewPanelSummaryV1 {
         ReviewPanelSummaryV1 {

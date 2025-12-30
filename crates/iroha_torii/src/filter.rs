@@ -449,9 +449,10 @@ pub fn filter_expr_to_value(expr: &FilterExpr) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use norito::json;
+
     use super::*;
     use crate::{json_array, json_object, json_value};
-    use norito::json;
 
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         json_object(pairs)

@@ -260,8 +260,9 @@ fn ensure_field_docs(fields: &mut syn::Fields, owner: &syn::Ident, variant: Opti
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use syn::{Attribute, Expr, ItemEnum, ItemStruct, ItemUnion, Lit, Visibility, parse_quote};
+
+    use super::*;
 
     fn doc_strings(attrs: &[Attribute]) -> Vec<String> {
         attrs

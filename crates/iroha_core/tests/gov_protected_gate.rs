@@ -25,6 +25,7 @@ fn compute_proposal_id(
     abi_hex: &str,
 ) -> [u8; 32] {
     use core::convert::TryInto;
+
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
     let namespace = namespace.trim();
     let contract_id = contract_id.trim();
@@ -65,16 +66,18 @@ fn protected_namespace_requires_enacted_proposal() {
         eprintln!("Skipping: protected namespace gate test gated. Set IROHA_RUN_IGNORED=1 to run.");
         return;
     }
-    use iroha_data_model::isi::governance::{EnactReferendum, ProposeDeployContract};
-    use iroha_data_model::permission::Permission;
-    use iroha_data_model::prelude::Grant;
-    use iroha_data_model::prelude::*;
-    use iroha_data_model::transaction::{Executable, TransactionBuilder};
+    use std::str::FromStr;
+
+    use iroha_data_model::{
+        isi::governance::{EnactReferendum, ProposeDeployContract},
+        permission::Permission,
+        prelude::{Grant, *},
+        transaction::{Executable, TransactionBuilder},
+    };
     use iroha_executor_data_model::permission::governance::{
         CanEnactGovernance, CanProposeContractDeployment,
     };
     use nonzero_ext::nonzero;
-    use std::str::FromStr;
 
     // Build minimal world with one authority
     let kura = Kura::blank_kura_for_testing();

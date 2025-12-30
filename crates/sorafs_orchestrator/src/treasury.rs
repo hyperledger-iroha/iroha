@@ -5,6 +5,11 @@
 //! records ledger state per relay/epoch, manages dispute lifecycles, and emits dashboard-friendly
 //! aggregates for relay operators and oversight tooling.
 
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+};
+
 use hex::encode as hex_encode;
 use iroha_core::soranet_incentives::RelayPayoutLedger;
 use iroha_data_model::{
@@ -25,10 +30,6 @@ use iroha_data_model::{
     },
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-};
 use thiserror::Error;
 
 use crate::incentives::RelayRewardEngine;
@@ -1471,9 +1472,10 @@ fn numeric_to_nanos(amount: &Numeric) -> Option<u128> {
 }
 
 mod relay_id_json {
-    use super::*;
     use hex::{decode, encode};
     use norito::json::{JsonDeserialize, JsonSerialize, Parser};
+
+    use super::*;
 
     pub fn serialize(relay_id: &RelayId, out: &mut String) {
         JsonSerialize::json_serialize(&encode(relay_id), out);
@@ -1496,8 +1498,8 @@ mod relay_id_json {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::incentives::RewardConfig;
+    use std::sync::Arc;
+
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -1507,7 +1509,9 @@ mod tests {
         name::Name,
         soranet::incentives::{RelayBondPolicyV1, RelayComplianceStatusV1},
     };
-    use std::sync::Arc;
+
+    use super::*;
+    use crate::incentives::RewardConfig;
 
     fn numeric(value: u32) -> Numeric {
         Numeric::from(value)

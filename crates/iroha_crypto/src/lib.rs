@@ -64,23 +64,34 @@ use std::{
     vec::Vec,
 };
 
+#[cfg(not(feature = "ffi_import"))]
+pub use blake2;
+
 #[cfg(feature = "bls")]
 pub use self::signature::bls::{
     BlsNormal, BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmall, BlsSmallPrivateKey,
     BlsSmallPublicKey,
 };
-#[cfg(not(feature = "ffi_import"))]
-pub use blake2;
 /// Convenience alias for the historical Blake2b-256 digest type which was
 /// previously exported directly from the `blake2` crate. The upstream crate
 /// removed this alias in 0.10, so we offer it here to keep the existing API
 /// surface for downstream users.
 pub type Blake2b256 = blake2::Blake2b<blake2::digest::consts::U32>;
+pub use confidential::{
+    ConfidentialKeyError, ConfidentialKeyset, derive_keyset, derive_keyset_from_slice,
+    generate_keyset,
+};
 use derive_more::Display;
 pub use error::Error;
 use error::ParseError;
 use getset::Getters;
 pub use hash::*;
+#[cfg(not(feature = "ffi_import"))]
+pub use hybrid::{
+    DerivedSecret as HybridDerivedSecret, HybridError, HybridKemCiphertext, HybridKeyPair,
+    HybridPublicKey, HybridSecretKey, HybridSuite, decapsulate as hybrid_decapsulate,
+    encapsulate as hybrid_encapsulate,
+};
 use iroha_macro::ffi_impl_opaque;
 use iroha_primitives::const_vec::{ConstVec, ToConstVec};
 use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
@@ -91,39 +102,27 @@ pub use privacy::{
     MerkleCommitment, MerkleWitness, PrivacyError, PrivacyWitness, PrivacyWitnessKind,
     SnarkCircuit, SnarkCircuitId, SnarkWitness, hash_proof, hash_public_inputs,
 };
+#[cfg(feature = "sm")]
+pub use sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
 #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
 use w3f_bls::SerializableToBytes;
 // Zeroize trait is only required under configurations that use it.
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-#[cfg(feature = "sm")]
-pub use sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
-
 #[cfg(not(feature = "ffi_import"))]
 pub use self::signature::secp256k1::EcdsaSecp256k1Sha256;
-
 pub use self::signature::*;
-pub use confidential::{
-    ConfidentialKeyError, ConfidentialKeyset, derive_keyset, derive_keyset_from_slice,
-    generate_keyset,
-};
-#[cfg(not(feature = "ffi_import"))]
-pub use hybrid::{
-    DerivedSecret as HybridDerivedSecret, HybridError, HybridKemCiphertext, HybridKeyPair,
-    HybridPublicKey, HybridSecretKey, HybridSuite, decapsulate as hybrid_decapsulate,
-    encapsulate as hybrid_encapsulate,
-};
 
 #[cfg(feature = "gost")]
 pub mod gost {
     //! Public wrapper exposing the GOST signature helpers.
     pub use super::signature::gost::*;
 }
-use crate::secrecy::Secret;
-
 pub use algorithm::{Algorithm, ED_25519, SECP_256_K1};
 #[cfg(feature = "bls")]
 pub use algorithm::{BLS_NORMAL, BLS_SMALL};
+
+use crate::secrecy::Secret;
 
 /// Domain separator for BLS Proof-of-Possession over a validator public key.
 /// Message = Hash("iroha:bls:pop:v1" || `pk_bytes`)
@@ -321,9 +320,10 @@ impl KeyPair {
 
         #[cfg(feature = "ml-dsa")]
         if algorithm == Algorithm::MlDsa {
-            use crate::secrecy::ExposeSecret;
             use pqcrypto_dilithium::dilithium3 as dilithium;
             use pqcrypto_traits::sign::PublicKey as _;
+
+            use crate::secrecy::ExposeSecret;
 
             let pk_bytes = public_key.to_bytes().1;
             let dilithium_pk = dilithium::PublicKey::from_bytes(pk_bytes)
@@ -1648,8 +1648,7 @@ impl ZeroizeOnDrop for MlDsaSecretKey {}
 #[allow(unsafe_code)]
 impl Drop for MlDsaSecretKeyInner {
     fn drop(&mut self) {
-        use core::mem;
-        use core::ptr;
+        use core::{mem, ptr};
 
         let byte_ptr = ptr::addr_of_mut!(self.secret).cast::<u8>();
         unsafe {
@@ -2366,8 +2365,9 @@ mod tests {
     #[test]
     #[cfg(feature = "ml-dsa")]
     fn ml_dsa_secret_key_clone_shares_inner_arc() {
-        use crate::mldsa_seed::dilithium3 as seeded;
         use pqcrypto_traits::sign::SecretKey as _;
+
+        use crate::mldsa_seed::dilithium3 as seeded;
 
         let (_, private) =
             seeded::keypair_from_seed(b"iroha:ml-dsa:strong-count").expect("seeded ML-DSA keypair");

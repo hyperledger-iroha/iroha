@@ -4,22 +4,26 @@
 //! selected analysis passes. Lint warnings and analysis findings are reported
 //! with stable codes so editors can surface issues inline.
 
-use std::env;
-use std::ffi::{OsStr, OsString};
-use std::fs;
-use std::io::{self, Write};
-use std::path::Path;
-
-use ivm::ProgramMetadata;
-use ivm::kotodama::analysis::{
-    AnalysisCategory, AnalysisFinding, AnalysisSeverity,
-    bytecode::{self, BytecodeAnalysisError},
-    fuzz as fuzz_analysis, source as source_analysis,
+use std::{
+    env,
+    ffi::{OsStr, OsString},
+    fs,
+    io::{self, Write},
+    path::Path,
 };
-use ivm::kotodama::{
-    i18n::{self, Message as I18nMessage},
-    lint::lint_program,
-    parser, semantic,
+
+use ivm::{
+    ProgramMetadata,
+    kotodama::{
+        analysis::{
+            AnalysisCategory, AnalysisFinding, AnalysisSeverity,
+            bytecode::{self, BytecodeAnalysisError},
+            fuzz as fuzz_analysis, source as source_analysis,
+        },
+        i18n::{self, Message as I18nMessage},
+        lint::lint_program,
+        parser, semantic,
+    },
 };
 use norito::json::{self, Value};
 
@@ -673,13 +677,18 @@ fn display_bytecode_error(err: BytecodeAnalysisError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use norito::json::Value;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     static TEST_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
     static LANG_LOCK: Mutex<()> = Mutex::new(());

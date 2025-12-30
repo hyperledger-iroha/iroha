@@ -354,7 +354,8 @@ fn write_summary_json(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::PathBuf;
+
     use blake3::Hasher as Blake3Hasher;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
@@ -373,11 +374,11 @@ mod tests {
         json::{self as norito_json, Map as JsonMap, Value as JsonValue},
         to_bytes,
     };
-    use sorafs_car::build_plan_from_da_manifest;
-    use sorafs_car::{CarBuildPlan, CarChunk, ChunkStore};
+    use sorafs_car::{CarBuildPlan, CarChunk, ChunkStore, build_plan_from_da_manifest};
     use sorafs_chunker::ChunkProfile;
-    use std::path::PathBuf;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn render_chunk_template_supports_width() {

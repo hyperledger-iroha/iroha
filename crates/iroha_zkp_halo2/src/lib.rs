@@ -36,9 +36,26 @@ mod poly;
 pub mod poseidon;
 mod transcript;
 
-pub use backend::bn254;
-pub use backend::pallas;
-pub use backend::{IpaBackend, IpaGroup, IpaScalar};
+// Backwards-compatible re-exports for the default (Pallas) backend.
+#[cfg(feature = "goldilocks_backend")]
+pub use backend::goldilocks::{
+    Group as GoldilocksGroup, IpaProof as GoldilocksIpaProof, IpaProver as GoldilocksIpaProver,
+    IpaVerifier as GoldilocksIpaVerifier, Params as GoldilocksParams,
+    Polynomial as GoldilocksPolynomial, Scalar as GoldilocksScalar,
+};
+pub use backend::{
+    IpaBackend, IpaGroup, IpaScalar, bn254,
+    bn254::{
+        GroupElem as Bn254Group, IpaProof as Bn254IpaProof, IpaProver as Bn254IpaProver,
+        IpaVerifier as Bn254IpaVerifier, Params as Bn254Params, Polynomial as Bn254Polynomial,
+        Scalar as Bn254Scalar,
+    },
+    pallas,
+    pallas::{
+        Group as GroupElem, IpaProof, IpaProver, IpaVerifier, Params, Polynomial,
+        Scalar as PrimeField64,
+    },
+};
 pub use envelope::{
     CURVE_PASTA, ENVELOPE_VERSION, EnvelopeError, FLAG_LOOKUPS, Halo2ProofEnvelope,
     Halo2ProofEnvelopeHeader, PCS_IPA, PUBLIC_INPUT_STRIDE, TRANSCRIPT_BLAKE2B,
@@ -46,23 +63,6 @@ pub use envelope::{
 pub use errors::Error;
 pub use norito_types::{IpaParams, IpaProofData, OpenVerifyEnvelope, PolyOpenPublic, ZkCurveId};
 pub use transcript::Transcript;
-
-// Backwards-compatible re-exports for the default (Pallas) backend.
-pub use backend::bn254::{
-    GroupElem as Bn254Group, IpaProof as Bn254IpaProof, IpaProver as Bn254IpaProver,
-    IpaVerifier as Bn254IpaVerifier, Params as Bn254Params, Polynomial as Bn254Polynomial,
-    Scalar as Bn254Scalar,
-};
-#[cfg(feature = "goldilocks_backend")]
-pub use backend::goldilocks::{
-    Group as GoldilocksGroup, IpaProof as GoldilocksIpaProof, IpaProver as GoldilocksIpaProver,
-    IpaVerifier as GoldilocksIpaVerifier, Params as GoldilocksParams,
-    Polynomial as GoldilocksPolynomial, Scalar as GoldilocksScalar,
-};
-pub use backend::pallas::{
-    Group as GroupElem, IpaProof, IpaProver, IpaVerifier, Params, Polynomial,
-    Scalar as PrimeField64,
-};
 
 /// Crate constants and domain separation tags.
 pub mod constants {
@@ -76,13 +76,13 @@ mod tests;
 
 pub mod norito_helpers {
     //! Conversions between internal types and Norito wire types.
-    use super::*;
-
     use std::sync::Arc;
 
-    use crate::backend::IpaBackend;
-    use crate::backend::pallas::PallasBackend;
-    use crate::errors::Error;
+    use super::*;
+    use crate::{
+        backend::{IpaBackend, pallas::PallasBackend},
+        errors::Error,
+    };
 
     /// Encode backend parameters into the Norito wire representation.
     pub fn params_to_wire<B: IpaBackend>(params: &crate::params::Params<B>) -> IpaParams {
@@ -307,11 +307,13 @@ pub mod norito_helpers {
 
 /// Batch verification helpers for OpenVerify envelopes.
 pub mod batch {
-    use super::*;
     use core::num::NonZeroUsize;
+
     use norito_helpers::DecodedEnvelope;
     #[cfg(feature = "parallel")]
     use rayon::prelude::*;
+
+    use super::*;
 
     /// Execution strategy controls how batch verification work is scheduled.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]

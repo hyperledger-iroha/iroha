@@ -2,8 +2,10 @@
 
 use std::io::{Cursor, Read};
 
-use norito::NoritoSerialize;
-use norito::core::{self, Compression, Header, VERSION_MAJOR};
+use norito::{
+    NoritoSerialize,
+    core::{self, Compression, Header, VERSION_MAJOR},
+};
 
 fn packed_seq_supported() -> bool {
     (norito::core::default_encode_flags() & norito::core::header_flags::PACKED_SEQ) != 0

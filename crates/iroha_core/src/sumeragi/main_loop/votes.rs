@@ -699,15 +699,17 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{collections::BTreeMap, net::SocketAddr, num::NonZeroU64, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
-    use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
-    use iroha_data_model::peer::{Peer, PeerId};
-    use iroha_data_model::transaction::SignedTransaction;
+    use iroha_data_model::{
+        block::{BlockHeader, BlockSignature, SignedBlock},
+        peer::{Peer, PeerId},
+        transaction::SignedTransaction,
+    };
     use iroha_primitives::unique_vec::UniqueVec;
 
+    use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,

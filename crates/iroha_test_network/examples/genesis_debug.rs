@@ -1,5 +1,6 @@
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
+use std::process::{Command, Stdio};
+
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use iroha_data_model::{block::SignedBlock, isi::InstructionBox, transaction::Executable};
 use iroha_primitives::const_vec::ConstVec;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -7,7 +8,6 @@ use norito::{
     codec::{decode_adaptive, encode_adaptive},
     json::{self, Value as JsonValue},
 };
-use std::process::{Command, Stdio};
 
 fn main() {
     init_instruction_registry();

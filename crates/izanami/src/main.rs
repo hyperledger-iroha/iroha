@@ -24,9 +24,10 @@ mod persistence;
 mod smart_contracts;
 mod tui;
 
-use crate::config::IzanamiArgs;
 use clap::{ArgMatches, CommandFactory, FromArgMatches, parser::ValueSource};
 use color_eyre::Result;
+
+use crate::config::IzanamiArgs;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -139,10 +140,12 @@ fn is_cli_source(matches: &ArgMatches, id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use clap::{CommandFactory, FromArgMatches};
+
     use super::*;
     use crate::config;
-    use clap::{CommandFactory, FromArgMatches};
-    use std::time::Duration;
 
     fn parse_cli_arguments(args: Vec<String>) -> (IzanamiArgs, ArgMatches) {
         let command = config::IzanamiArgs::command();

@@ -360,10 +360,10 @@ impl EpochBloom {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use sorafs_car::PorMerkleTree;
     use sorafs_node::store::{StoredManifestParts, StoredPorTree};
+
+    use super::*;
 
     fn manifest_with_cid(cid: &[u8], id_hex: &str) -> StoredManifest {
         StoredManifest::from_parts(StoredManifestParts {

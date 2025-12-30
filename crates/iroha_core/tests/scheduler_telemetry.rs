@@ -2,22 +2,6 @@
 //! Ensures layer metrics and utilization are populated after block application.
 #![allow(unused_imports)]
 
-use iroha_config::parameters::actual::{
-    LaneCompliance, LaneConfig, NexusAxt, NexusEndorsement, NexusFees, NexusStaking,
-};
-use iroha_core::block::{BlockBuilder, ValidBlock};
-use iroha_core::governance::manifest::{
-    GovernanceHooks, GovernanceRules, LaneManifestRegistry, LaneManifestStatus, RuntimeUpgradeHook,
-};
-use iroha_core::state::StateReadOnly;
-use iroha_core::telemetry::LaneTeuGaugeUpdate;
-use iroha_data_model::{
-    nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneId, LaneMetadata,
-        LaneStorageProfile, LaneVisibility,
-    },
-    prelude::*,
-};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -25,6 +9,26 @@ use std::{
     path::PathBuf,
     str::FromStr,
     sync::Arc,
+};
+
+use iroha_config::parameters::actual::{
+    LaneCompliance, LaneConfig, NexusAxt, NexusEndorsement, NexusFees, NexusStaking,
+};
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    governance::manifest::{
+        GovernanceHooks, GovernanceRules, LaneManifestRegistry, LaneManifestStatus,
+        RuntimeUpgradeHook,
+    },
+    state::StateReadOnly,
+    telemetry::LaneTeuGaugeUpdate,
+};
+use iroha_data_model::{
+    nexus::{
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneId, LaneMetadata,
+        LaneStorageProfile, LaneVisibility,
+    },
+    prelude::*,
 };
 
 #[test]

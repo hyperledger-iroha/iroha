@@ -32,18 +32,32 @@ public final class OfflineReceiptChallenge {
   }
 
   public static OfflineReceiptChallenge compute(
+      final String chainId,
       final String invoiceId,
       final String receiverAccountId,
       final String assetId,
       final String amount,
+      final long issuedAtMs,
       final String nonceHex) {
+    if (chainId == null || chainId.trim().isEmpty()) {
+      throw new IllegalArgumentException("chainId must not be empty");
+    }
     if (!NATIVE_AVAILABLE) {
       throw new IllegalStateException("connect_norito_bridge is not available in this runtime");
     }
     final byte[] irohaHash = new byte[32];
     final byte[] clientHash = new byte[32];
     final byte[] preimage =
-        nativeCompute(invoiceId, receiverAccountId, assetId, amount, nonceHex, irohaHash, clientHash);
+        nativeCompute(
+            chainId,
+            invoiceId,
+            receiverAccountId,
+            assetId,
+            amount,
+            issuedAtMs,
+            nonceHex,
+            irohaHash,
+            clientHash);
     if (preimage == null) {
       throw new IllegalStateException("connect_norito_offline_receipt_challenge failed");
     }
@@ -63,10 +77,12 @@ public final class OfflineReceiptChallenge {
   }
 
   private static native byte[] nativeCompute(
+      String chainId,
       String invoiceId,
       String receiverAccountId,
       String assetId,
       String amount,
+      long issuedAtMs,
       String nonceHex,
       byte[] irohaHashOut,
       byte[] clientHashOut);

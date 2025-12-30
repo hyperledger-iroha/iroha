@@ -4,11 +4,17 @@
     clippy::too_many_lines,
     clippy::needless_pass_by_value
 )]
+#[cfg(feature = "quic")]
+use std::sync::OnceLock;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
     io,
-    net::ToSocketAddrs,
+    net::{IpAddr, ToSocketAddrs},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
@@ -35,33 +41,25 @@ use iroha_primitives::addr::SocketAddr;
 use norito::codec::{Decode, Encode};
 use rand::Rng as _;
 use soranet_pq::MlDsaSuite;
-#[cfg(feature = "quic")]
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::{
-    net::IpAddr,
-    sync::{Arc, Mutex},
-};
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::{
+    io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
     sync::{mpsc, watch},
 };
 
 #[cfg(feature = "p2p_tls")]
 use crate::boilerplate;
-use crate::sampler::LogSampler;
 use crate::{
-    Broadcast, Error, NetworkMessage, OnlinePeers, Post, UpdatePeers, UpdateTopology,
-    UpdateTrustedPeers,
+    Broadcast, Error, NetworkMessage, OnlinePeers, Post, Priority, RelayRole, UpdatePeers,
+    UpdateTopology, UpdateTrustedPeers,
     boilerplate::*,
     peer::{
-        Connection, ConnectionId,
+        Connection, ConnectionId, SoranetHandshakeConfig,
         handles::{PeerHandle, PostError, connected_from, connecting},
         message::*,
     },
+    sampler::LogSampler,
 };
-use crate::{Priority, RelayRole, peer::SoranetHandshakeConfig};
 
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -268,11 +266,13 @@ fn relay_role_from_mode(mode: iroha_config::parameters::actual::RelayMode) -> Re
 
 #[cfg(test)]
 mod runtime_tests {
-    use super::*;
+    use std::{fs, num::NonZeroU32, time::Duration};
+
     use iroha_config::parameters::actual::SoranetPuzzle as ConfigPuzzle;
     use rand::{SeedableRng, rngs::StdRng};
-    use std::{fs, num::NonZeroU32, time::Duration};
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn runtime_from_handshake_preserves_puzzle_parameters() {
@@ -1869,12 +1869,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
 
 #[cfg(test)]
 mod handle_update_tests {
-    use super::*;
+    use std::collections::HashSet;
+
     use iroha_config::parameters::actual::SoranetHandshake as ActualSoranetHandshake;
     use iroha_crypto::{encryption::ChaCha20Poly1305, kex::X25519Sha256};
     use norito::codec::{Decode, Encode};
-    use std::collections::HashSet;
     use tokio::sync::{mpsc, watch};
+
+    use super::*;
 
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
@@ -1966,19 +1968,18 @@ mod handle_update_tests {
 
 #[cfg(test)]
 mod accept_stream_tests {
-    use super::*;
-    use crate::peer::{
-        SoranetHandshakeConfig,
-        test_support::{SpawnPath, snapshot},
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+        time::Duration,
     };
-    use crate::sampler::LogSampler;
-    use iroha_config::parameters::actual::SoranetPrivacy as ActualSoranetPrivacy;
+
     use iroha_config::parameters::actual::{
         LaneProfile, Network as NetCfg, RelayMode, SoranetHandshake as ActualSoranetHandshake,
-        SoranetPow,
+        SoranetPow, SoranetPrivacy as ActualSoranetPrivacy,
     };
-    use iroha_crypto::KeyPair;
     use iroha_crypto::{
+        KeyPair,
         encryption::ChaCha20Poly1305,
         kex::X25519Sha256,
         soranet::handshake::{
@@ -1994,11 +1995,19 @@ mod accept_stream_tests {
     #[cfg(feature = "quic")]
     #[allow(unused_imports)]
     use quinn::crypto::rustls::QuicClientConfig;
-    use std::collections::{HashMap, HashSet};
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tokio::net::TcpListener;
-    use tokio::sync::{mpsc, watch};
+    use tokio::{
+        net::TcpListener,
+        sync::{mpsc, watch},
+    };
+
+    use super::*;
+    use crate::{
+        peer::{
+            SoranetHandshakeConfig,
+            test_support::{SpawnPath, snapshot},
+        },
+        sampler::LogSampler,
+    };
 
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
@@ -2229,8 +2238,9 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn connect_peer_propagates_frame_cap() {
-        use iroha_primitives::addr::socket_addr;
         use std::collections::HashSet;
+
+        use iroha_primitives::addr::socket_addr;
 
         let baseline = snapshot().len();
 
@@ -2288,9 +2298,12 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn tls_listener_propagates_frame_cap() {
         use std::sync::Arc;
+
         use tokio::sync::mpsc;
-        use tokio_rustls::TlsConnector;
-        use tokio_rustls::rustls::{self, ClientConfig};
+        use tokio_rustls::{
+            TlsConnector,
+            rustls::{self, ClientConfig},
+        };
 
         let baseline = snapshot().len();
         let key_pair = KeyPair::random();
@@ -2671,6 +2684,7 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn quic_listener_propagates_frame_cap() {
         use std::sync::Arc;
+
         use tokio::sync::mpsc;
 
         let baseline = snapshot().len();
@@ -2984,8 +2998,9 @@ mod accept_stream_tests {
 
     #[test]
     fn overflow_counters_full_matrix() {
-        use super::message::Topic::*;
         use std::sync::atomic::Ordering::Relaxed;
+
+        use super::message::Topic::*;
 
         // Snapshot bases
         let base_total = super::post_overflow_count();
@@ -3074,9 +3089,11 @@ mod accept_stream_tests {
 
 #[cfg(test)]
 mod reputation_tests {
-    use super::*;
-    use iroha_crypto::KeyPair;
     use std::collections::HashSet;
+
+    use iroha_crypto::KeyPair;
+
+    use super::*;
 
     #[test]
     fn trust_and_scores_update() {
@@ -3233,11 +3250,13 @@ where
 
 #[cfg(all(test, feature = "quic"))]
 mod quic_tests {
-    use super::*;
+    use std::sync::Arc;
+
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305, kex::X25519Sha256};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, Encode};
-    use std::sync::Arc;
+
+    use super::*;
 
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
@@ -5061,13 +5080,15 @@ fn guard_deprecated_env_toggle_with_override(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305, kex::X25519Sha256};
     use iroha_primitives::addr::socket_addr;
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair;
-    use std::sync::{Mutex, OnceLock};
     use tokio::sync::mpsc::error::TryRecvError;
+
+    use super::*;
 
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyMsg;

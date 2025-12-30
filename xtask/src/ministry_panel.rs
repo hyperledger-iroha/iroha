@@ -8,13 +8,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(test)]
-use crate::ministry_agenda::{
-    ConflictDetail, HashFamilyImpact, ImpactTotals, SelectedMemberSummary, SortitionDigestSummary,
-};
-use crate::ministry_agenda::{
-    ConflictSource, ImpactReport, ProposalImpactSummary, SortitionSummary,
-};
 use eyre::{Context, Result, ensure, eyre};
 use hex::encode as hex_encode;
 use iroha_data_model::{
@@ -30,6 +23,14 @@ use iroha_data_model::{
 };
 use norito::json::{JsonDeserialize, Map as JsonMap, Value};
 use serde::de::DeserializeOwned;
+
+#[cfg(test)]
+use crate::ministry_agenda::{
+    ConflictDetail, HashFamilyImpact, ImpactTotals, SelectedMemberSummary, SortitionDigestSummary,
+};
+use crate::ministry_agenda::{
+    ConflictSource, ImpactReport, ProposalImpactSummary, SortitionSummary,
+};
 
 type ParseResult<T> = std::result::Result<T, String>;
 
@@ -253,7 +254,6 @@ fn to_u32(value: usize, label: &str) -> Result<u32> {
 
 #[cfg(test)]
 mod parse_tests {
-    use super::*;
     use iroha_data_model::{
         ministry::{
             AGENDA_PROPOSAL_VERSION_V1, AgendaEvidenceAttachment, AgendaEvidenceKind,
@@ -268,6 +268,8 @@ mod parse_tests {
     };
     use norito::json::{JsonSerialize, Value as NoritoValue};
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn packet_command_emits_referendum_packet() {
@@ -994,12 +996,13 @@ fn require_string(map: &JsonMap, key: &str) -> ParseResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::ministry::{
         AGENDA_PROPOSAL_VERSION_V1, AgendaEvidenceAttachment, AgendaEvidenceKind,
         AgendaProposalAction, AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget,
         AgendaProposalV1,
     };
+
+    use super::*;
 
     fn sample_proposal() -> AgendaProposalV1 {
         AgendaProposalV1 {

@@ -7,17 +7,16 @@
 //!
 //! All generators are derived using SHA3-256 under a fixed DST.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 
-use crate::backend::IpaBackend;
-use crate::backend::traits::IpaGroup;
-use crate::errors::Error;
-use crate::norito_types::{IpaParams, ZkCurveId, fingerprint_bytes};
+use crate::{
+    backend::{IpaBackend, traits::IpaGroup},
+    errors::Error,
+    norito_types::{IpaParams, ZkCurveId, fingerprint_bytes},
+};
 
 /// IPA public parameters instantiated for backend `B`.
 #[derive(Clone, Debug)]

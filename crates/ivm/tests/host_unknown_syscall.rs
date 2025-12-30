@@ -1,9 +1,12 @@
 use iroha_data_model::nexus::{DataSpaceId, LaneId};
-use ivm::axt::{
-    self, AssetHandle, GroupBinding, HandleBudget, HandleSubject, ProofBlob, RemoteSpendIntent,
-    SpendOp, TouchManifest,
+use ivm::{
+    IVM, IVMHost, PointerType, VMError,
+    axt::{
+        self, AssetHandle, GroupBinding, HandleBudget, HandleSubject, ProofBlob, RemoteSpendIntent,
+        SpendOp, TouchManifest,
+    },
+    host::DefaultHost,
 };
-use ivm::{IVM, IVMHost, PointerType, VMError, host::DefaultHost};
 
 #[test]
 fn default_host_unknown_syscall_returns_unknown() {

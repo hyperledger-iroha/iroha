@@ -9,11 +9,10 @@ use std::{
 use base64::Engine as _;
 use dashmap::{DashMap, mapref::entry::Entry};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use iroha_config::parameters::actual;
 use rand::random;
 use sorafs_manifest::{StreamTokenBodyV1, StreamTokenError, StreamTokenV1};
 use thiserror::Error;
-
-use iroha_config::parameters::actual;
 
 /// Fixed rolling window applied to per-client issuance quotas.
 const CLIENT_QUOTA_WINDOW: Duration = Duration::from_mins(1);
@@ -347,8 +346,9 @@ pub fn decode_token_base64(value: &str) -> Result<StreamTokenV1, StreamTokenHead
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+
+    use super::*;
 
     fn sample_body() -> StreamTokenBodyV1 {
         StreamTokenBodyV1 {

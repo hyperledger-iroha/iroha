@@ -15,8 +15,10 @@ use iroha::data_model::{
     },
 };
 use iroha_crypto::{Hash, PrivateKey, Signature};
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json::{self as serde_json, Value as JsonValue};
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json::{self as serde_json, Value as JsonValue},
+};
 
 use crate::offline_tooling::{
     build_metadata, parse_private_key, parse_public_key, write_json, write_norito_bytes,
@@ -674,8 +676,9 @@ fn path_name(path: &Path, root: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[test]
     fn read_key_errors_on_duplicates() {

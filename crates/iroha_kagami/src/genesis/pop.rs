@@ -1,7 +1,8 @@
+use std::io::Write as _;
+
 use clap::Args as ClapArgs;
 use color_eyre::eyre::WrapErr as _;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
-use std::io::Write as _;
 
 use crate::{Outcome, RunArgs, tui};
 
@@ -80,9 +81,12 @@ impl<T: std::io::Write> RunArgs<T> for Args {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{BufWriter, Write},
+        str::FromStr,
+    };
+
     use super::*;
-    use std::io::{BufWriter, Write};
-    use std::str::FromStr;
 
     #[test]
     fn pop_json_parses_and_verifies() {

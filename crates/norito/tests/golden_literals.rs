@@ -1,9 +1,7 @@
 //! Golden fixtures for Norito serialization of nested enums/options/tuples.
 
 use iroha_schema::IntoSchema;
-use norito::NoritoDeserialize;
-use norito::NoritoSerialize;
-use norito::{decode_from_bytes, to_bytes};
+use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 
 #[derive(Debug, PartialEq, Eq, IntoSchema, NoritoSerialize, NoritoDeserialize)]
 struct NestedSample {
@@ -20,9 +18,10 @@ struct SamplePayload {
 
 impl<'a> norito::core::DecodeFromSlice<'a> for SamplePayload {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        use std::alloc::{Layout, alloc, dealloc};
-        use std::ptr;
-        use std::slice;
+        use std::{
+            alloc::{Layout, alloc, dealloc},
+            ptr, slice,
+        };
 
         let align = std::mem::align_of::<norito::core::Archived<SamplePayload>>();
         let layout = Layout::from_size_align(bytes.len(), align)

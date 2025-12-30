@@ -1,9 +1,9 @@
+use std::{fmt, num::NonZeroU64, time::Duration};
+
 use iroha_crypto::{Hash, HashOf, MerkleTree, Signature, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
-use norito::codec::Encode;
-use norito::core as ncore;
-use std::{fmt, num::NonZeroU64, time::Duration};
+use norito::{codec::Encode, core as ncore};
 
 use crate::{
     confidential::{ConfidentialFeatureDigest, DEFAULT_CONFIDENTIAL_FEATURE_DIGEST},
@@ -16,11 +16,11 @@ use crate::{
 
 #[model]
 mod model {
-    use super::*;
-    use crate::confidential::ConfidentialFeatureDigest;
-    use crate::da::commitment::DaProofPolicyBundle;
     use getset::{CopyGetters, Getters, Setters};
     use norito::codec::{Decode, Encode};
+
+    use super::*;
+    use crate::{confidential::ConfidentialFeatureDigest, da::commitment::DaProofPolicyBundle};
 
     /// Essential metadata for a block in the chain.
     #[derive(
@@ -98,8 +98,9 @@ pub use self::model::{BlockHeader, BlockSignature};
 
 /// Internal wire helper with a stable Norito tuple layout used by codecs and tests.
 pub mod wire {
-    use super::*;
     use norito::core as ncore;
+
+    use super::*;
 
     /// Stable transport for `BlockHeader` mapping typed hashes to raw bytes.
     #[derive(Clone, Copy)]
@@ -556,11 +557,14 @@ impl<'de> ncore::NoritoDeserialize<'de> for BlockSignature {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::{Hash, KeyPair, Signature};
     use nonzero_ext::nonzero;
-    use norito::codec::{DecodeAll as _, decode_adaptive, encode_with_header_flags};
-    use norito::core::NoritoSerialize;
+    use norito::{
+        codec::{DecodeAll as _, decode_adaptive, encode_with_header_flags},
+        core::NoritoSerialize,
+    };
+
+    use super::*;
 
     struct SamplePayload {
         payload: Vec<u8>,

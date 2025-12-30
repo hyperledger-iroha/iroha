@@ -4,27 +4,32 @@
 //! handshake simulation (with ML-KEM material, dual signatures, and padded
 //! frames), plus helpers for salt/telemetry fixture generation.
 
-use arrayref::array_ref;
-use base64::{Engine as _, engine::general_purpose::STANDARD as Base64};
-use ed25519_dalek::{Signer, SigningKey};
-use hex::FromHex;
-use hkdf::Hkdf;
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json::{self, Map, Value};
-use rand_core::{CryptoRng, RngCore};
-use sha3::digest::{ExtendableOutput, Update, XofReader};
-use sha3::{Digest, Sha3_256, Shake256};
-use soranet_pq::{
-    MlKemMetadata, MlKemParameters, MlKemSharedSecret, MlKemSuite, decapsulate_mlkem,
-    encapsulate_mlkem, generate_mlkem_keypair, mlkem_metadata, validate_mlkem_ciphertext,
-    validate_mlkem_public_key,
-};
 use std::{
     convert::{TryFrom, TryInto},
     fmt, fs,
     ops::Deref,
     path::{Path, PathBuf},
     str::FromStr,
+};
+
+use arrayref::array_ref;
+use base64::{Engine as _, engine::general_purpose::STANDARD as Base64};
+use ed25519_dalek::{Signer, SigningKey};
+use hex::FromHex;
+use hkdf::Hkdf;
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json::{self, Map, Value},
+};
+use rand_core::{CryptoRng, RngCore};
+use sha3::{
+    Digest, Sha3_256, Shake256,
+    digest::{ExtendableOutput, Update, XofReader},
+};
+use soranet_pq::{
+    MlKemMetadata, MlKemParameters, MlKemSharedSecret, MlKemSuite, decapsulate_mlkem,
+    encapsulate_mlkem, generate_mlkem_keypair, mlkem_metadata, validate_mlkem_ciphertext,
+    validate_mlkem_public_key,
 };
 use tempfile::TempDir;
 use thiserror::Error;
@@ -5492,10 +5497,11 @@ impl<'a> MessageCursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::Algorithm;
     use rand::{SeedableRng, rngs::StdRng};
     use rand_chacha::ChaCha20Rng;
+
+    use super::*;
+    use crate::Algorithm;
 
     #[test]
     fn update_suite_list_sets_required_flag() {

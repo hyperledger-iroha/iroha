@@ -16,18 +16,18 @@ pub mod rad;
 pub mod state;
 pub mod transparency;
 
-pub use iroha_primitives::soradns::{
-    GatewayHostBindings, GatewayHostError, canonical_gateway_suffix,
-    canonical_gateway_wildcard_pattern, derive_gateway_hosts, pretty_gateway_suffix,
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    net::SocketAddr,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicI64, AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
-use crate::{
-    bundle::ProofBundleV1,
-    config::{DotTlsConfig, ResolverConfig},
-    events::EventEmitter,
-    rad::{ResolverAttestation, validate_rad},
-    state::{ResolverState, ResolverStateMetrics},
-};
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -39,21 +39,14 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use eyre::Result;
 use futures::StreamExt;
+pub use iroha_primitives::soradns::{
+    GatewayHostBindings, GatewayHostError, canonical_gateway_suffix,
+    canonical_gateway_wildcard_pattern, derive_gateway_hosts, pretty_gateway_suffix,
+};
 use norito::json::{self, Value};
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
-};
-use std::{
-    collections::HashMap,
-    convert::Infallible,
-    net::SocketAddr,
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicI64, AtomicU64, Ordering},
-    },
-    time::Duration,
 };
 use time::OffsetDateTime;
 use tokio::{
@@ -67,6 +60,14 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{error, info, warn};
+
+use crate::{
+    bundle::ProofBundleV1,
+    config::{DotTlsConfig, ResolverConfig},
+    events::EventEmitter,
+    rad::{ResolverAttestation, validate_rad},
+    state::{ResolverState, ResolverStateMetrics},
+};
 
 const DNS_CONTENT_TYPE: &str = "application/dns-message";
 
@@ -790,8 +791,8 @@ fn escape_label_value(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::StaticZone;
+    use std::{io::ErrorKind, sync::Arc};
+
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use hickory_proto::{
         op::{Message, Query, ResponseCode},
@@ -802,11 +803,13 @@ mod tests {
         Client as HttpClient, StatusCode as HttpStatus,
         header::{ACCEPT, CONTENT_TYPE},
     };
-    use std::{io::ErrorKind, sync::Arc};
     use tokio::{
         net::UdpSocket,
         time::{Duration, sleep},
     };
+
+    use super::*;
+    use crate::config::StaticZone;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn doq_roundtrip_resolves_static_record() -> Result<()> {

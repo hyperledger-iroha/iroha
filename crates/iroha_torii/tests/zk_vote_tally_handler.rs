@@ -3,6 +3,8 @@
     feature = "halo2-dev-tests",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
+use std::sync::Arc;
+
 use axum::{extract::State, response::IntoResponse};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -13,7 +15,6 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use iroha_torii::{NoritoJson, ZkVoteGetTallyRequestDto, handle_v1_zk_vote_tally};
 use nonzero_ext::nonzero;
-use std::sync::Arc;
 
 #[path = "../../iroha_core/tests/zk_testkit.rs"]
 mod zk_testkit;

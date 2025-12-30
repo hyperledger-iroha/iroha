@@ -7,12 +7,13 @@
 //! - Aggregator verifies all proofs, homomorphically sums commitments, and opens the
 //!   tally using the sum of blindings (simulated here for the benchmark). The final
 //!   winner is derived from the tally; individual votes remain hidden.
+use std::sync::LazyLock;
+
 use blstrs::{G1Affine, G1Projective, Scalar};
 use criterion::Criterion;
 use group::{Curve, Group};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
-use std::sync::LazyLock;
 
 // Fixed generators in affine form to speed up fixed-base scalar muls.
 static G_GENERATOR_AFFINE: LazyLock<G1Affine> =

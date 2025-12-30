@@ -5,15 +5,15 @@
 //! `tokio::spawn_blocking` and normalises the responses into lightweight
 //! snapshots used by the TUI.
 
-use std::collections::HashMap;
-use std::io::Read;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    io::Read,
+    time::{Duration, Instant},
+};
 
 use eyre::{Result, eyre};
-use norito::derive::JsonDeserialize;
-use norito::json;
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use norito::{derive::JsonDeserialize, json};
+use tokio::{sync::mpsc, task::JoinHandle};
 
 pub const STATUS_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 pub const METRICS_HTTP_TIMEOUT: Duration = Duration::from_secs(2);

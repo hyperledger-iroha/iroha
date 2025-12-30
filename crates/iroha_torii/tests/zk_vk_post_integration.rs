@@ -2,7 +2,6 @@
 #![cfg(feature = "app_api")]
 #![allow(clippy::too_many_lines)]
 
-use norito::json;
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
@@ -15,6 +14,7 @@ use iroha_core::{
 use iroha_data_model::{account::AccountId, prelude::ChainId};
 use iroha_torii::NoritoJson;
 use nonzero_ext::nonzero;
+use norito::json;
 use tower::ServiceExt as _;
 
 #[tokio::test]

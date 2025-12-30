@@ -563,10 +563,7 @@ pub fn receipt_fingerprint(receipt: &DaIngestReceipt) -> ReplayFingerprint {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::{collections::BTreeSet, num::NonZeroU32};
-    use tempfile::tempdir;
 
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
@@ -579,6 +576,9 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
     };
     use norito::to_bytes;
+    use tempfile::tempdir;
+
+    use super::*;
 
     fn sample_receipt(lane: u32, epoch: u64, sequence: u64) -> DaIngestReceipt {
         let lane_id = LaneId::new(lane);

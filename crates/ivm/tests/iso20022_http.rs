@@ -1,8 +1,10 @@
 //! Integration tests for ISO 20022 HTTP dispatch.
 
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
-use std::net::TcpListener;
-use std::thread;
+use std::{
+    io::{BufRead, BufReader, ErrorKind, Read, Write},
+    net::TcpListener,
+    thread,
+};
 
 use ivm::iso20022::{msg_create, msg_send, msg_set};
 

@@ -1,9 +1,9 @@
 //! PDP/PoTR simulation harness shared across integration tests and tooling.
-use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha8Rng;
 use std::time::Duration;
 
 use norito::json::{Map, Value};
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 
 /// Deterministic seed used for standard reports.
 pub const DEFAULT_SEED: u64 = 0x5eed;

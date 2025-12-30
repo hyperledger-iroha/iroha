@@ -2,6 +2,8 @@
 #![cfg(feature = "zk-ipa-native")]
 #![allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
 
+use std::{collections::BTreeMap, sync::Arc};
+
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
@@ -10,8 +12,8 @@ use iroha_core::{
     state::State,
 };
 use iroha_crypto::Hash;
-use iroha_data_model::isi::verifying_keys;
 use iroha_data_model::{
+    isi::verifying_keys,
     prelude::*,
     proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
@@ -24,7 +26,6 @@ use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, sync::Arc};
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);

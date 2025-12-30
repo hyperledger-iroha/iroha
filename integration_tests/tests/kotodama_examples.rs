@@ -8,10 +8,11 @@
 //! Run manually with:
 //!   cargo test -p `integration_tests` --test `kotodama_examples` -- --ignored --nocapture
 
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn on_path(bin: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;

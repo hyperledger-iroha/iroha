@@ -1,29 +1,26 @@
 //! Regenerate Swift parity fixtures from payload JSON using the current encoder.
 
-use std::collections::BTreeMap;
-use std::fs;
-use std::num::NonZeroU32;
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::time::Duration;
-
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use iroha_crypto::{Algorithm, HashOf, KeyPair};
-use iroha_data_model::account::AccountId;
-use iroha_data_model::account::address;
-use iroha_data_model::asset::{AssetDefinitionId, AssetId};
-use iroha_data_model::isi::{Burn, InstructionBox, Mint, Transfer};
-use iroha_data_model::metadata::Metadata;
-use iroha_data_model::name::Name;
-use iroha_data_model::transaction::signed::TransactionPayload;
-use iroha_data_model::transaction::{
-    Executable, IvmBytecode, SignedTransaction, TransactionBuilder,
+use std::{
+    collections::BTreeMap, fs, num::NonZeroU32, path::PathBuf, str::FromStr, time::Duration,
 };
-use iroha_primitives::json::Json;
-use iroha_primitives::numeric::Numeric;
-use norito::codec::Encode;
-use norito::json::{self, Map, Number, Value};
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use iroha_crypto::{Algorithm, HashOf, KeyPair};
+use iroha_data_model::{
+    account::{AccountId, address},
+    asset::{AssetDefinitionId, AssetId},
+    isi::{Burn, InstructionBox, Mint, Transfer},
+    metadata::Metadata,
+    name::Name,
+    transaction::{
+        Executable, IvmBytecode, SignedTransaction, TransactionBuilder, signed::TransactionPayload,
+    },
+};
+use iroha_primitives::{json::Json, numeric::Numeric};
+use norito::{
+    codec::Encode,
+    json::{self, Map, Number, Value},
+};
 
 const DEFAULT_FIXTURES_PATH: &str = "IrohaSwift/Fixtures/swift_parity_payloads.json";
 const DEFAULT_OUT_DIR: &str = "IrohaSwift/Fixtures";
@@ -395,8 +392,9 @@ fn run() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::domain::DomainId;
+
+    use super::*;
 
     #[test]
     fn parse_asset_literal_splits_definition_and_owner() {

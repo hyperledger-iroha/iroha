@@ -1,6 +1,3 @@
-use crate::JsonTarget;
-use eyre::{Context, Result, eyre};
-use norito::json::{Map, Value};
 use std::{
     collections::BTreeMap,
     fs::{self, File},
@@ -9,7 +6,12 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use eyre::{Context, Result, eyre};
+use norito::json::{Map, Value};
 use time::OffsetDateTime;
+
+use crate::JsonTarget;
 
 const DEFAULT_PREFIX: &str = "203.0.113.0/24";
 const DEFAULT_TRUSTLESS_SERVICE: &str = "soranet-trustless-verifier.service";

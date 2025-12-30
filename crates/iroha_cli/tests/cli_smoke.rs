@@ -6,15 +6,25 @@
 //! binary cannot launch in automated environments.
 #![allow(clippy::too_many_lines)]
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    str::FromStr,
+};
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::hash;
-use iroha::account_address::{
-    encode_account_id_to_canonical_hex, encode_account_id_to_compressed, encode_account_id_to_ih58,
-};
-use iroha::data_model::isi::{
-    InstructionBox, TransferBox,
-    repo::RepoInstructionBox,
-    settlement::{SettlementAtomicity, SettlementInstructionBox},
+use iroha::{
+    account_address::{
+        encode_account_id_to_canonical_hex, encode_account_id_to_compressed,
+        encode_account_id_to_ih58,
+    },
+    data_model::isi::{
+        InstructionBox, TransferBox,
+        repo::RepoInstructionBox,
+        settlement::{SettlementAtomicity, SettlementInstructionBox},
+    },
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, KeyPair, Sm2PrivateKey};
 use iroha_data_model::{
@@ -26,16 +36,15 @@ use iroha_data_model::{
     soranet::incentives::{RelayBondLedgerEntryV1, RelayEpochMetricsV1, RelayRewardInstructionV1},
 };
 use iroha_primitives::numeric::Numeric;
-use norito::derive::NoritoSerialize;
-use norito::json::{Map, Value};
-use norito::{codec::Encode as NoritoEncode, decode_from_bytes, json, to_bytes};
-use sorafs_orchestrator::treasury::{LedgerTransferRecord, TransferKind};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-    str::FromStr,
+use norito::{
+    codec::Encode as NoritoEncode,
+    decode_from_bytes,
+    derive::NoritoSerialize,
+    json,
+    json::{Map, Value},
+    to_bytes,
 };
+use sorafs_orchestrator::treasury::{LedgerTransferRecord, TransferKind};
 fn cli_binary() -> &'static str {
     env!("CARGO_BIN_EXE_iroha")
 }
@@ -1343,6 +1352,7 @@ fn gov_governance_queries_against_mock() {
 #[allow(clippy::too_many_lines)]
 fn gov_council_vrf_commands_against_mock() {
     use std::fs;
+
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
@@ -1623,11 +1633,12 @@ fn gov_activate_instance_emits_skeleton() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_plain_against_mock() {
+    use std::str::FromStr;
+
     use iroha::data_model::{
         isi::{InstructionBox, governance::CastPlainBallot},
         prelude::AccountId,
     };
-    use std::str::FromStr;
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
@@ -1743,11 +1754,12 @@ fn gov_vote_plain_against_mock() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_plain_subcommand_emits_summary_and_json() {
+    use std::str::FromStr;
+
     use iroha::data_model::{
         isi::{InstructionBox, governance::CastPlainBallot},
         prelude::AccountId,
     };
-    use std::str::FromStr;
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
@@ -2258,11 +2270,12 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_zk_against_mock() {
+    use std::str::FromStr;
+
     use iroha::data_model::{
         isi::{InstructionBox, governance::CastZkBallot},
         prelude::AccountId,
     };
-    use std::str::FromStr;
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
@@ -2396,11 +2409,12 @@ fn gov_vote_zk_against_mock() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_zk_subcommand_emits_summary_and_json() {
+    use std::str::FromStr;
+
     use iroha::data_model::{
         isi::{InstructionBox, governance::CastZkBallot},
         prelude::AccountId,
     };
-    use std::str::FromStr;
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
@@ -3131,15 +3145,18 @@ fn da_submit_no_submit_emits_request_artifacts() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn iroha_da_submit_records_pdp_commitment_receipt() {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use core::convert::TryFrom;
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::Signature;
     use iroha_data_model::{
         da::prelude::{BlobDigest, DaIngestReceipt, DaRentQuote, DaStripeLayout, StorageTicketId},
         nexus::LaneId,
     };
-    use norito::core::NoritoDeserialize;
-    use norito::json::{Map as JsonMap, Value};
+    use norito::{
+        core::NoritoDeserialize,
+        json::{Map as JsonMap, Value},
+    };
     use sorafs_manifest::{
         BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, ProfileId,
         pdp::{HashAlgorithmV1, PDP_COMMITMENT_VERSION_V1, PdpCommitmentV1},
@@ -5017,7 +5034,6 @@ fn space_directory_manifest_audit_bundle_cli() {
 }
 
 mod torii_mock_support {
-    use norito::json;
     use std::{
         env, fmt, fs,
         io::{self, BufRead, BufReader, Read, Write},
@@ -5027,6 +5043,8 @@ mod torii_mock_support {
         thread,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    use norito::json;
     use url::Url;
 
     #[derive(Debug)]

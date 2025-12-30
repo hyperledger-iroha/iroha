@@ -78,8 +78,9 @@ pub fn enable_tracing() -> Result<(), LoggerSetupError> {
 
 #[cfg(test)]
 mod tests {
-    use super::enable_tracing;
     use log::Log;
+
+    use super::enable_tracing;
 
     #[test]
     fn logger_filters_by_module_prefix() {

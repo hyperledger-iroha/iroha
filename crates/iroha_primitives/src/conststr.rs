@@ -19,15 +19,16 @@ use core::{
 use std::{
     borrow::ToOwned as _,
     boxed::Box,
+    io::Write,
     string::{String, ToString as _},
 };
 
 use derive_more::{Debug, Display};
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
-use norito::core as ncore;
-use norito::json::{self, JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize};
-use std::io::Write;
+use norito::{
+    NoritoDeserialize, NoritoSerialize, core as ncore,
+    json::{self, JsonDeserialize, JsonSerialize},
+};
 
 const MAX_INLINED_STRING_LEN: usize = 2 * size_of::<usize>() - 1;
 

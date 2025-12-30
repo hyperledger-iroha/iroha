@@ -2,6 +2,8 @@
 //! preserve syscall order within a single transaction overlay.
 #![allow(clippy::cast_possible_truncation, clippy::items_after_statements)]
 
+use std::{str::FromStr, sync::Arc};
+
 use iroha_core::{
     kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
 };
@@ -9,7 +11,6 @@ use iroha_crypto::Hash;
 use iroha_data_model::{block::BlockHeader, prelude::*};
 use ivm::{IVM, Memory, PointerType, encoding, syscalls};
 use nonzero_ext::nonzero;
-use std::{str::FromStr, sync::Arc};
 
 fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);

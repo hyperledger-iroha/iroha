@@ -30,7 +30,6 @@ use iroha_config::{
         user,
     },
 };
-use iroha_core::query::store::LiveQueryStore;
 use iroha_core::{
     EventsSender,
     iso_bridge::reference_data::{
@@ -39,11 +38,14 @@ use iroha_core::{
     },
     kiso::KisoHandle,
     kura::Kura,
+    query::store::LiveQueryStore,
     queue::Queue,
     state::{State, World},
 };
-use iroha_crypto::soranet::certificate::CertificateValidationPhase;
-use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, PublicKey, Signature};
+use iroha_crypto::{
+    Algorithm, Hash, KeyPair, PrivateKey, PublicKey, Signature,
+    soranet::certificate::CertificateValidationPhase,
+};
 use iroha_data_model::{
     account::address::compliance_vectors::compliance_vectors_json,
     asset::AssetDefinitionId,
@@ -10649,8 +10651,9 @@ fn current_git_commit() -> Option<String> {
 
 #[cfg(test)]
 mod acceleration_state_tests {
-    use super::*;
     use serde_json::Value;
+
+    use super::*;
 
     #[test]
     fn parse_supports_acceleration_state_command() {
@@ -10731,8 +10734,9 @@ mod acceleration_state_tests {
 
 #[cfg(test)]
 mod openapi_tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn manifest_signature_round_trip() {
@@ -10816,8 +10820,9 @@ mod openapi_tests {
 
 #[cfg(test)]
 mod space_directory_tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     const SAMPLE_MANIFEST: &str = r#"{
   "version": 1,
@@ -12462,8 +12467,9 @@ fn print_usage() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::json::Value;
+
+    use super::*;
     #[test]
     fn stub_spec_contains_minimal_metadata() {
         let spec = build_stub_spec();

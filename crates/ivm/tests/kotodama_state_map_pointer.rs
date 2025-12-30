@@ -1,9 +1,10 @@
 //! Verify durable map path hashing and pointer Norito encoding helpers align with CoreHost.
 
+use std::fmt::Write;
+
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::prelude::*;
 use ivm::{CoreHost, PointerType};
-use std::fmt::Write;
 
 fn encode_pointer_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + 1 + 4 + payload.len() + IrohaHash::LENGTH);

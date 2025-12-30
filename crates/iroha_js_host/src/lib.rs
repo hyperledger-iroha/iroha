@@ -17,23 +17,25 @@ macro_rules! norito_json {
 
 use std::{
     collections::HashSet,
-    fs,
-    num::NonZeroU64,
+    convert::{TryFrom, TryInto},
+    fmt, fs,
+    num::{NonZeroU32, NonZeroU64},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     ptr,
+    str::FromStr,
+    time::Duration,
 };
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake3::hash as blake3_hash;
 use iroha::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
 };
-use iroha_crypto::sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature};
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
 #[cfg(test)]
 use iroha_data_model::da::types::DaRentQuote;
@@ -134,24 +136,17 @@ use sorafs_manifest::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
 };
-use sorafs_orchestrator::proxy::{
-    ProxyCarBridgeConfig, ProxyKaigiBridgeConfig, ProxyMode, ProxyNoritoBridgeConfig,
-};
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, GatewayOrchestratorError, OrchestratorConfig, OrchestratorError,
     RolloutPhase, TransportPolicy, WriteModeHint, fetch_via_gateway,
-    proxy::LocalQuicProxyConfig,
+    proxy::{
+        LocalQuicProxyConfig, ProxyCarBridgeConfig, ProxyKaigiBridgeConfig, ProxyMode,
+        ProxyNoritoBridgeConfig,
+    },
     taikai_cache::{
         EvictionStats, QosConfig, QosStats, ReliabilityTuning, TaikaiCacheConfig,
         TaikaiCacheStatsSnapshot, TaikaiPullQueueStats, TierStats,
     },
-};
-use std::{
-    convert::{TryFrom, TryInto},
-    fmt,
-    num::NonZeroU32,
-    str::FromStr,
-    time::Duration,
 };
 use tokio::runtime::Runtime;
 
@@ -6833,10 +6828,10 @@ pub fn build_precommit_trigger_action(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
+
     use base64::engine::general_purpose::STANDARD as BASE64;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::smart_contract::manifest::{AccessSetHints, ContractManifest};
     use iroha_data_model::{
         HasMetadata,
         account::AccountId,
@@ -6871,6 +6866,7 @@ mod tests {
         nexus::LaneId,
         nft::NftId,
         peer::{Peer, PeerId},
+        smart_contract::manifest::{AccessSetHints, ContractManifest},
         transaction::Executable,
         trigger::TriggerId,
     };
@@ -6888,15 +6884,14 @@ mod tests {
         ChunkingProfileV1, CouncilSignature, GovernanceProofs, ManifestBuilder, PinPolicy,
         StorageClass, StreamTokenBodyV1, StreamTokenV1,
     };
-    use sorafs_orchestrator::taikai_cache::PromotionStats;
     use sorafs_orchestrator::{
         AnonymityPolicy, GatewayCarVerification, OrchestratorConfig, PolicyOverride, PolicyReport,
         PolicyStatus, RolloutPhase, TransportPolicy, prelude::BrowserExtensionManifest,
-        proxy::ProxyMode,
+        proxy::ProxyMode, taikai_cache::PromotionStats,
     };
-    use std::sync::Arc;
-    use std::{fs, io::Cursor, path::PathBuf, str::FromStr};
     use tempfile::tempdir;
+
+    use super::*;
 
     fn disable_packed_struct_once() {
         static ONCE: std::sync::Once = std::sync::Once::new();

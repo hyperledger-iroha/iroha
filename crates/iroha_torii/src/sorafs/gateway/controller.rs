@@ -15,13 +15,15 @@ use tokio::{
     time as tokio_time,
 };
 
-use super::acme::{
-    AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeClientError, AcmeConfig,
-    CertificateBundle, CertificateOrder,
-};
 #[cfg(feature = "telemetry")]
 use super::telemetry::record_renewal_metrics;
-use super::telemetry::{TlsRenewalResult, TlsStateSnapshot};
+use super::{
+    acme::{
+        AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeClientError, AcmeConfig,
+        CertificateBundle, CertificateOrder,
+    },
+    telemetry::{TlsRenewalResult, TlsStateSnapshot},
+};
 use crate::routing::MaybeTelemetry;
 
 /// Default automation poll interval (seconds).

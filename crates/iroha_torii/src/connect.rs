@@ -7,7 +7,6 @@
 //! when both are attached to the same Torii instance. P2P relay integration is
 //! tracked separately and will piggy-back on the core network message envelope.
 
-use std::time::{Duration, Instant};
 use std::{
     collections::{HashMap, VecDeque},
     net::IpAddr,
@@ -16,16 +15,12 @@ use std::{
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
-use iroha_logger::prelude::*;
-// no direct HTTP responses here
-use crate::json_macros::JsonSerialize;
-use futures::{SinkExt, StreamExt};
-use tokio::sync::{Mutex, RwLock, mpsc};
-
 use base64::Engine;
+use futures::{SinkExt, StreamExt};
 use iroha_core as corelib;
 use iroha_crypto::{Algorithm, MerkleTree, Signature};
 use iroha_data_model::{
@@ -33,7 +28,12 @@ use iroha_data_model::{
     prelude::HashOf,
     transaction::TransactionEntrypoint,
 };
+use iroha_logger::prelude::*;
 use iroha_torii_shared::connect as proto;
+use tokio::sync::{Mutex, RwLock, mpsc};
+
+// no direct HTTP responses here
+use crate::json_macros::JsonSerialize;
 
 /// Length in bytes of a Connect session identifier.
 pub const SID_LEN: usize = 32;
@@ -1065,11 +1065,12 @@ pub(crate) fn decode_sid(s: &str) -> Result<Sid, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{collections::BTreeMap, num::NonZeroU64};
 
     use iroha_crypto::Hash;
     use tokio::time::{Duration, timeout};
+
+    use super::*;
 
     #[tokio::test]
     async fn register_tokens_rejects_duplicate_sid() {

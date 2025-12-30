@@ -1,13 +1,12 @@
 //! Tests that state changes made by failing triggers are reverted.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::{ValidationFail, prelude::*, query::error::FindError, trigger::TriggerId};
 use iroha_data_model::isi::error::InstructionExecutionError;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use tokio::task::spawn_blocking;
-
-use integration_tests::sandbox;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_trigger_revert() -> Result<()> {

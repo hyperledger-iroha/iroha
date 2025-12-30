@@ -1421,6 +1421,7 @@ mod bundle_inspect_tests {
             AggregateProofEnvelope, OfflineSpendReceipt, OfflineToOnlineTransfer,
             OfflineWalletCertificate,
         };
+        use iroha_core::smartcontracts::isi::offline::{build_balance_proof, compute_commitment};
         use iroha_primitives::numeric::Numeric;
 
         let controller: AccountId =
@@ -1437,10 +1438,14 @@ mod bundle_inspect_tests {
             .unwrap();
 
         let allowance_amount = Numeric::from_str("500").unwrap();
+        let initial_blinding = scalar_bytes(1);
+        let resulting_blinding = scalar_bytes(2);
+        let initial_commitment = compute_commitment(&allowance_amount, &initial_blinding)
+            .expect("initial commitment");
         let allowance_commitment = OfflineAllowanceCommitment {
             asset: asset.clone(),
             amount: allowance_amount.clone(),
-            commitment: vec![0u8; 32],
+            commitment: initial_commitment.clone(),
         };
         let policy = OfflineWalletPolicy {
             max_balance: allowance_amount.clone(),
@@ -1480,6 +1485,7 @@ mod bundle_inspect_tests {
             to: receiver.clone(),
             asset: asset.clone(),
             amount: receipt_amount.clone(),
+            issued_at_ms: 1_600_000_100_000,
             invoice_id: "inv-1".into(),
             platform_proof,
             platform_snapshot: None,
@@ -1497,11 +1503,27 @@ mod bundle_inspect_tests {
             proof_replay: None,
             metadata: Metadata::default(),
         });
+        let resulting_value = allowance_amount
+            .clone()
+            .checked_add(receipt_amount.clone())
+            .expect("resulting value");
+        let resulting_commitment =
+            compute_commitment(&resulting_value, &resulting_blinding).expect("resulting commitment");
+        let zk_proof = build_balance_proof(
+            &ChainId::from("cli-sample"),
+            &receipt_amount,
+            &resulting_value,
+            &initial_commitment,
+            &resulting_commitment,
+            &initial_blinding,
+            &resulting_blinding,
+        )
+        .expect("balance proof");
         let balance_proof = OfflineBalanceProof {
             initial_commitment: allowance_commitment,
-            resulting_commitment: vec![0u8; 32],
+            resulting_commitment,
             claimed_delta: receipt_amount,
-            zk_proof: None,
+            zk_proof: Some(zk_proof),
         };
 
         OfflineToOnlineTransfer {
@@ -1514,6 +1536,12 @@ mod bundle_inspect_tests {
             attachments: None,
             platform_snapshot: None,
         }
+    }
+
+    fn scalar_bytes(value: u8) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[0] = value;
+        bytes
     }
 }
 
@@ -1632,6 +1660,7 @@ pub struct OfflineRejectionStatsItem {
 mod tests {
     use super::*;
     use iroha::data_model::{
+        ChainId,
         asset::AssetDefinitionId,
         domain::DomainId,
         offline::{
@@ -1759,6 +1788,7 @@ mod tests {
             to: receiver.clone(),
             asset: certificate.allowance.asset.clone(),
             amount: Numeric::new(50, 0),
+            issued_at_ms: 1_700_000_600_000,
             invoice_id: "INV-001".into(),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
                 key_id: "apple-key".into(),

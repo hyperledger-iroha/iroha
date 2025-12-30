@@ -11,9 +11,12 @@
 //! providing timed events, MIDI export helpers, and small helpers that keep the ASCII prologue in
 //! sync with the audio rendition.
 
+use std::{
+    cmp::Ordering,
+    f32::consts::{LN_2, PI},
+};
+
 use eyre::Result;
-use std::cmp::Ordering;
-use std::f32::consts::{LN_2, PI};
 
 pub const HYOSHI_BEATS: f32 = 16.0;
 pub const OBACHI_OFFSET_BEATS: f32 = HYOSHI_BEATS * 0.5;

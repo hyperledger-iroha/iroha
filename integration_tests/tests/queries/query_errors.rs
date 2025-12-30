@@ -1,5 +1,6 @@
 //! Query error surface regression tests.
 
+use integration_tests::sandbox;
 use iroha::data_model::{
     prelude::{FindAccounts, QueryBuilderExt},
     query::builder::SingleQueryError,
@@ -7,8 +8,6 @@ use iroha::data_model::{
 use iroha_data_model::Identifiable;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::gen_account_in;
-
-use integration_tests::sandbox;
 
 #[test]
 fn non_existent_account_is_specific_error() {

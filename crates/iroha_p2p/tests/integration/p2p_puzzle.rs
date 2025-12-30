@@ -6,12 +6,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::next_port;
-use iroha_config::parameters::actual::{
-    LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
-    SoranetPow, SoranetPrivacy, SoranetPuzzle, SoranetVpn,
+use iroha_config::parameters::{
+    actual::{
+        LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
+        SoranetPow, SoranetPrivacy, SoranetPuzzle, SoranetVpn,
+    },
+    defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL},
 };
-use iroha_config::parameters::defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL};
 use iroha_config_base::WithOrigin;
 use iroha_crypto::{
     KeyPair,
@@ -28,6 +29,8 @@ use iroha_p2p::{
 };
 use iroha_primitives::addr::socket_addr;
 use norito::codec::{Decode, Encode};
+
+use super::next_port;
 
 #[derive(Clone, Debug, Decode, Encode)]
 struct EmptyMsg;

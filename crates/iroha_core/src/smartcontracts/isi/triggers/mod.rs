@@ -21,10 +21,10 @@ pub mod specialized;
 /// - adjusting trigger metadata to reflect registration height and block time
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
-    use iroha_data_model::name::Name;
     use iroha_data_model::{
         events::EventFilter,
         isi::error::{InvalidParameterError, RepetitionError},
+        name::Name,
         trigger::prelude::*,
     };
 
@@ -593,7 +593,9 @@ pub mod query {
     //! Queries associated to triggers.
     use iroha_data_model::{
         query::{
-            dsl::CompoundPredicate, error::QueryExecutionFail as Error, trigger::FindTriggers,
+            dsl::{CompoundPredicate, EvaluatePredicate},
+            error::QueryExecutionFail as Error,
+            trigger::FindTriggers,
         },
         trigger::{Trigger, TriggerId},
     };
@@ -604,7 +606,6 @@ pub mod query {
         smartcontracts::{ValidQuery, triggers::set::SetReadOnly},
         state::StateReadOnly,
     };
-    use iroha_data_model::query::dsl::EvaluatePredicate;
 
     impl ValidQuery for FindActiveTriggerIds {
         #[metrics(+"find_active_triggers")]
@@ -656,17 +657,9 @@ pub mod query {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        block::ValidBlock,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::Error,
-        smartcontracts::{Execute, ValidQuery},
-        state::{State, World},
-        sumeragi::network_topology::Topology,
-    };
     use core::num::NonZeroU64;
+    use std::{str::FromStr, time::Duration};
+
     use iroha_data_model::{
         block::BlockHeader,
         events::time::Schedule,
@@ -676,7 +669,16 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use std::{str::FromStr, time::Duration};
+
+    use super::*;
+    use crate::{
+        block::ValidBlock,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::{Error, Execute, ValidQuery},
+        state::{State, World},
+        sumeragi::network_topology::Topology,
+    };
 
     fn new_dummy_block() -> crate::block::CommittedBlock {
         let (leader_public_key, leader_private_key) = iroha_crypto::KeyPair::random().into_parts();

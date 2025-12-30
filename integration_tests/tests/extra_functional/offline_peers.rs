@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use eyre::{OptionExt, Result, eyre};
+use integration_tests::sandbox;
 use iroha::{
     crypto::{Algorithm, KeyPair, bls_normal_pop_prove},
     data_model::{isi::register::RegisterPeerWithPop, peer::PeerId, prelude::*},
@@ -10,8 +11,6 @@ use iroha::{
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use tokio::{task::spawn_blocking, time::sleep};
-
-use integration_tests::sandbox;
 
 #[tokio::test]
 async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {

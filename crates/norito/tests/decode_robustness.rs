@@ -1,7 +1,6 @@
 use std::io::Cursor;
 
-use norito::core::Error;
-use norito::{deserialize_from, to_bytes};
+use norito::{core::Error, deserialize_from, to_bytes};
 
 #[test]
 fn truncated_payload_is_rejected() {

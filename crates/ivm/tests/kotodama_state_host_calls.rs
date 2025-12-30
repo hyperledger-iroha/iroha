@@ -1,7 +1,6 @@
 //! Kotodama calls to durable state helpers via host::state_{get,set,del}.
 
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-use ivm::{CoreHost, IVM};
+use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 
 #[test]
 fn kotodama_host_state_calls_run() {

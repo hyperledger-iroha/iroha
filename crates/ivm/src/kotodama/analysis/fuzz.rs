@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use super::{AnalysisCategory, AnalysisFinding};
-use crate::kotodama::analysis::SimpleRng;
-use crate::kotodama::ast::{Function as AstFunction, Item, Program, TypeExpr};
-use crate::kotodama::semantic::{
-    self, ExprKind, Type, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement,
+use crate::kotodama::{
+    analysis::SimpleRng,
+    ast::{Function as AstFunction, Item, Program, TypeExpr},
+    semantic::{
+        self, ExprKind, Type, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement,
+    },
 };
 
 /// Outcome of the Kotodama source fuzz pass.

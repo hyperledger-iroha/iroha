@@ -299,8 +299,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::RefCell;
+
+    use super::*;
 
     #[derive(Default)]
     struct MockClient {

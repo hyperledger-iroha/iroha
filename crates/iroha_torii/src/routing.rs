@@ -8,97 +8,107 @@
     clippy::struct_excessive_bools
 )]
 
-use crate::api_version::{self, ApiVersion};
-use axum::extract::{State, ws::WebSocket};
-use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use axum::{Json, body::Body};
 use core::str::FromStr;
+use std::sync::{Arc, LazyLock, RwLock};
+
+use axum::{
+    Json,
+    body::Body,
+    extract::{State, ws::WebSocket},
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
+};
 #[cfg(feature = "app_api")]
 use dashmap::DashMap;
 #[cfg(feature = "telemetry")]
 use eyre::eyre;
 use hex::ToHex;
-use iroha_config::parameters::defaults;
 use iroha_config::{
     client_api::ConfigUpdateDTO,
-    parameters::actual::{ConsensusMode, TelemetryProfile},
-};
-use std::sync::{Arc, LazyLock, RwLock};
-// Temporary in-memory code registry is not used by on-chain manifest endpoints.
-use iroha_core::kura::Kura;
-use iroha_core::nexus::{
-    portfolio,
-    space_directory::{
-        SpaceDirectoryManifestLifecycle, SpaceDirectoryManifestRecord, UaidDataspaceBindings,
+    parameters::{
+        actual::{ConsensusMode, TelemetryProfile},
+        defaults,
     },
 };
-use iroha_core::query::store::LiveQueryStoreHandle;
-use iroha_core::queue::RoutingDecision;
-use iroha_core::telemetry::{Telemetry, capability::TelemetryGate};
-use iroha_core::tx::{
-    AcceptTransactionFail, SIGNATURE_LIMIT_REASON_PREFIX, SignatureRejectionCode,
-    SignatureVerificationFail,
+// Temporary in-memory code registry is not used by on-chain manifest endpoints.
+use iroha_core::kura::Kura;
+// Network Time Service endpoints are backed by `iroha_core::time`.
+use iroha_core::smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config;
+use iroha_core::{
+    nexus::{
+        portfolio,
+        space_directory::{
+            SpaceDirectoryManifestLifecycle, SpaceDirectoryManifestRecord, UaidDataspaceBindings,
+        },
+    },
+    query::store::LiveQueryStoreHandle,
+    queue::RoutingDecision,
+    state::{State as CoreState, StateReadOnly, WorldReadOnly},
+    sumeragi::{
+        self, SumeragiHandle,
+        consensus::Evidence as ConsensusEvidence,
+        message::{BlockMessage, ControlFlow},
+        rbc_status, status,
+    },
+    telemetry::{Telemetry, capability::TelemetryGate},
+    time,
+    torii::zk::proofs::{
+        ProofFilters as CoreProofFilters, ProofListItem, ProofListParams as CoreProofListParams,
+    },
+    tx::{
+        AcceptTransactionFail, SIGNATURE_LIMIT_REASON_PREFIX, SignatureRejectionCode,
+        SignatureVerificationFail,
+    },
 };
-use iroha_data_model::consensus::{ConsensusKeyRecord, ExecutionQcRecord, ValidatorSetCheckpoint};
-use iroha_data_model::nexus::{
-    DataSpaceCatalog, DataSpaceId, LaneId, LaneLifecyclePlan, LaneMetadata, LaneRelayEnvelope,
-    PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
-    PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
-};
-use iroha_data_model::offline::{
-    AGGREGATE_PROOF_VERSION_V1, AggregateProofEnvelope, AndroidIntegrityPolicy,
-    AppleAppAttestProof, OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceCommitment,
-    OfflineAllowanceRecord, OfflineBalanceProof, OfflineCounterState, OfflineCounterSummary,
-    OfflinePlatformProof, OfflinePlatformTokenSnapshot, OfflineProofRequestCounter,
-    OfflineProofRequestError, OfflineProofRequestKind, OfflineProofRequestReplay,
-    OfflineProofRequestSum, OfflineSpendReceipt, OfflineToOnlineTransfer,
-    OfflineTransferLifecycleEntry, OfflineTransferRecord, OfflineTransferRejectionPlatform,
-    OfflineTransferRejectionReason, OfflineTransferStatus, OfflineVerdictRevocation,
-    OfflineVerdictRevocationReason, OfflineVerdictSnapshot, OfflineWalletCertificate,
-    OfflineWalletPolicy, compute_receipts_root,
-};
-use iroha_data_model::peer::PeerId;
-use iroha_data_model::proof::VerifyingKeyId;
-use iroha_data_model::smart_contract::manifest;
-use iroha_data_model::transactions::offline_transfer::{
-    OfflineTransferSummary, transfer_attestation_nonce_hex, transfer_certificate_expires_at_ms,
-    transfer_certificate_id_hex, transfer_platform_policy_label, transfer_policy_expires_at_ms,
-    transfer_refresh_at_ms, transfer_verdict_hex,
-};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     self,
     account::AccountAddressErrorCode,
+    block::{BlockHeader, consensus::EvidenceRecord},
+    consensus::{ConsensusKeyRecord, ExecutionQcRecord, ValidatorSetCheckpoint},
+    nexus::{
+        DataSpaceCatalog, DataSpaceId, LaneId, LaneLifecyclePlan, LaneMetadata, LaneRelayEnvelope,
+        PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
+        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+        UniversalAccountId,
+    },
+    offline::{
+        AGGREGATE_PROOF_VERSION_V1, AggregateProofEnvelope, AndroidIntegrityPolicy,
+        AppleAppAttestProof, OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceCommitment,
+        OfflineAllowanceRecord, OfflineBalanceProof, OfflineCounterState, OfflineCounterSummary,
+        OfflinePlatformProof, OfflinePlatformTokenSnapshot, OfflineProofRequestCounter,
+        OfflineProofRequestError, OfflineProofRequestKind, OfflineProofRequestReplay,
+        OfflineProofRequestSum, OfflineSpendReceipt, OfflineToOnlineTransfer,
+        OfflineTransferLifecycleEntry, OfflineTransferRecord, OfflineTransferRejectionPlatform,
+        OfflineTransferRejectionReason, OfflineTransferStatus, OfflineVerdictRevocation,
+        OfflineVerdictRevocationReason, OfflineVerdictSnapshot, OfflineWalletCertificate,
+        OfflineWalletPolicy, compute_receipts_root,
+    },
+    peer::PeerId,
     prelude::*,
+    proof::VerifyingKeyId,
     query::{QueryRequestWithAuthority, QueryResponse, SignedQuery},
+    repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+    smart_contract::manifest,
     transaction::{
         executable::Executable,
         signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
     },
+    transactions::offline_transfer::{
+        OfflineTransferSummary, transfer_attestation_nonce_hex, transfer_certificate_expires_at_ms,
+        transfer_certificate_id_hex, transfer_platform_policy_label, transfer_policy_expires_at_ms,
+        transfer_refresh_at_ms, transfer_verdict_hex,
+    },
 };
-// Network Time Service endpoints are backed by `iroha_core::time`.
-use iroha_core::smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config;
-use iroha_core::state::{State as CoreState, StateReadOnly, WorldReadOnly};
-use iroha_core::sumeragi::{
-    self, SumeragiHandle,
-    consensus::Evidence as ConsensusEvidence,
-    message::{BlockMessage, ControlFlow},
-    rbc_status, status,
-};
-use iroha_core::time;
-use iroha_core::torii::zk::proofs::{
-    ProofFilters as CoreProofFilters, ProofListItem, ProofListParams as CoreProofListParams,
-};
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
-use iroha_data_model::block::{BlockHeader, consensus::EvidenceRecord};
-use iroha_data_model::repo::{
-    RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance,
-};
+
+use crate::api_version::{self, ApiVersion};
 #[cfg(feature = "app_api")]
 mod local_selector_tracker {
-    use super::*;
-    use dashmap::mapref::entry::Entry;
     use std::sync::{Arc, LazyLock};
+
+    use dashmap::mapref::entry::Entry;
+
+    use super::*;
 
     static TRACKER: LazyLock<LocalSelectorTracker> = LazyLock::new(LocalSelectorTracker::default);
 
@@ -236,6 +246,18 @@ mod local_selector_tracker {
     pub fn seed_for_tests(_digest: [u8; 12], _label: &str) {}
 }
 
+use core::fmt;
+use std::{
+    cmp::{Ordering, Reverse},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque},
+    num::NonZeroUsize,
+    panic::AssertUnwindSafe,
+    sync::OnceLock,
+    time::Duration,
+};
+
+use base64::Engine;
+use blake3::hash as blake3_hash;
 use iroha_data_model::sorafs::{
     capacity::{
         CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
@@ -255,26 +277,17 @@ use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError};
 use iroha_torii_shared::Version;
 pub use local_selector_tracker::{LocalSelectorCollision, LocalSelectorTracker};
 use mv::storage::StorageReadOnly;
+use norito::{
+    codec::{Decode, Encode},
+    json::{self, Map, Value},
+    to_bytes,
+};
 #[cfg(feature = "telemetry")]
 use prometheus::core::Collector;
 use tokio::task;
-// use tokio::task; // not currently used
 
+// use tokio::task; // not currently used
 use super::*;
-use base64::Engine;
-use blake3::hash as blake3_hash;
-use core::fmt;
-use norito::json::{self, Map, Value};
-use norito::{
-    codec::{Decode, Encode},
-    to_bytes,
-};
-use std::cmp::{Ordering, Reverse};
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
-use std::num::NonZeroUsize;
-use std::panic::AssertUnwindSafe;
-use std::sync::OnceLock;
-use std::time::Duration;
 
 pub mod debug_match_flag {
     use std::sync::OnceLock;
@@ -293,25 +306,9 @@ pub mod debug_match_flag {
     }
 }
 
-#[cfg(feature = "app_api")]
-use crate::address_format::AddressFormatPreference;
-use crate::sorafs::{PorCoordinatorError, PorStatusExportV1, PorStatusFilter};
-use crate::{
-    explorer::{
-        ExplorerInstructionDto, ExplorerInstructionKind, ExplorerInstructionsPage, metadata_to_json,
-    },
-    filter::FieldPath,
-    json_array, json_entry, json_object, json_value,
-    sorafs::{QuotaExceeded, SorafsAction, SorafsQuotaEnforcer},
-    utils::NoritoJsonBody,
-};
 use iroha_data_model as dm;
-use iroha_data_model::account;
-use iroha_data_model::domain::DomainId;
-use iroha_data_model::soradns::{DirectoryRotationPolicyV1, RadRevokeReason};
-use iroha_data_model::sorafs::deal::{ClientId, DealProposal, DealTerms, GIB_HOURS_PER_MONTH};
-use iroha_data_model::sorafs::pin_registry::StorageClass;
 use iroha_data_model::{
+    account,
     block::consensus::{
         SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiConsensusCapsStatus,
         SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
@@ -323,6 +320,7 @@ use iroha_data_model::{
         SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
         SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
     },
+    domain::DomainId,
     events::{
         EventBox, SharedDataEvent,
         pipeline::{BlockStatus, PipelineEventBox},
@@ -330,6 +328,11 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     query::error::QueryExecutionFail,
+    soradns::{DirectoryRotationPolicyV1, RadRevokeReason},
+    sorafs::{
+        deal::{ClientId, DealProposal, DealTerms, GIB_HOURS_PER_MONTH},
+        pin_registry::StorageClass,
+    },
 };
 use sorafs_manifest::{
     ManifestV1, ManifestValidationError, PinPolicy as ManifestPinPolicy,
@@ -348,6 +351,21 @@ use sorafs_manifest::{
     validate_chunker_handle, validate_pin_policy,
 };
 use sorafs_node::{DealEngineError, DealSettlementOutcome, UsageOutcome};
+
+#[cfg(feature = "app_api")]
+use crate::address_format::AddressFormatPreference;
+use crate::{
+    explorer::{
+        ExplorerInstructionDto, ExplorerInstructionKind, ExplorerInstructionsPage, metadata_to_json,
+    },
+    filter::FieldPath,
+    json_array, json_entry, json_object, json_value,
+    sorafs::{
+        PorCoordinatorError, PorStatusExportV1, PorStatusFilter, QuotaExceeded, SorafsAction,
+        SorafsQuotaEnforcer,
+    },
+    utils::NoritoJsonBody,
+};
 
 #[allow(dead_code)]
 fn _json_helper_sanity() {
@@ -1779,6 +1797,8 @@ impl MaybeTelemetry {
     pub fn for_tests() -> Self {
         #[cfg(feature = "telemetry")]
         {
+            use std::sync::Arc;
+
             use iroha_core::{
                 kura::Kura,
                 query::store::LiveQueryStore,
@@ -1787,7 +1807,6 @@ impl MaybeTelemetry {
                 telemetry as core_telemetry,
             };
             use iroha_primitives::time::TimeSource;
-            use std::sync::Arc;
             use tokio::sync::watch;
 
             let metrics = iroha_telemetry::metrics::global_or_default();
@@ -1820,12 +1839,12 @@ impl MaybeTelemetry {
     }
 }
 #[cfg(feature = "app_api")]
-use crate::filter::{FilterExpr, QueryEnvelope, Selector};
-use crate::{JsonBody, NoritoJson, NoritoQuery};
+use core::convert::Infallible;
+#[cfg(feature = "app_api")]
+use std::num::NonZeroU64;
+
 #[cfg(feature = "app_api")]
 use axum::response::sse::{Event as SseEvent, Sse};
-#[cfg(feature = "app_api")]
-use core::convert::Infallible;
 #[cfg(feature = "app_api")]
 use futures::stream;
 #[cfg(feature = "app_api")]
@@ -1834,8 +1853,10 @@ use iroha_data_model::events::{
     data::prelude::{DataEventFilter, OfflineTransferEventFilter},
     pipeline::{BlockEventFilter, TransactionEventFilter, TransactionStatus},
 };
+
 #[cfg(feature = "app_api")]
-use std::num::NonZeroU64;
+use crate::filter::{FilterExpr, QueryEnvelope, Selector};
+use crate::{JsonBody, NoritoJson, NoritoQuery};
 
 #[inline]
 fn norito_internal_error(err: json::Error) -> Error {
@@ -2891,8 +2912,7 @@ pub async fn handle_connect_session(
     chain_id: std::sync::Arc<iroha_data_model::ChainId>,
     NoritoJson(req): NoritoJson<ConnectSessionRequest>,
 ) -> Result<JsonBody<ConnectSessionResponse>, crate::Error> {
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use rand::{rand_core::TryRngCore as _, rngs::OsRng};
     // Require client-provided `sid` (base64url or hex)
     let sid_bytes: [u8; 32] = if let Some(s) = &req.sid {
@@ -3010,8 +3030,9 @@ pub struct ConnectWsQuery {
 
 #[cfg(all(test, feature = "connect"))]
 mod connect_session_tests {
-    use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+
+    use super::*;
 
     #[tokio::test]
     async fn connect_session_requires_client_sid() {
@@ -4478,7 +4499,6 @@ fn decode_and_validate_evidence(
 
 #[cfg(test)]
 mod evidence_submit_tests {
-    use super::*;
     use iroha_core::sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Vote};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
@@ -4488,6 +4508,8 @@ mod evidence_submit_tests {
         prelude::ChainId,
     };
     use norito::codec::Encode as _;
+
+    use super::*;
 
     fn test_state_with_peer(peer: PeerId) -> iroha_core::state::State {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
@@ -4669,7 +4691,6 @@ fn reject_direct_multisig_signing(
 
 #[cfg(test)]
 mod multisig_guard_tests {
-    use super::*;
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -4677,6 +4698,8 @@ mod multisig_guard_tests {
     };
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude::Json as ModelJson;
+
+    use super::*;
 
     #[test]
     fn direct_multisig_signing_rejected_during_admission() {
@@ -4934,12 +4957,13 @@ pub async fn handle_transaction_with_metrics(
 
 #[cfg(all(test, feature = "telemetry"))]
 mod lane_admission_latency_tests {
-    use super::*;
     use iroha_config::parameters::actual::TelemetryProfile;
     use iroha_core::telemetry::{StateTelemetry, Telemetry};
     use iroha_data_model::nexus::LaneId;
     use iroha_telemetry::metrics::global_or_default;
     use tokio::time::timeout;
+
+    use super::*;
 
     #[tokio::test]
     async fn telemetry_timeout_prevents_hanging_observation() {
@@ -4973,10 +4997,10 @@ pub async fn handle_queries_with_opts(
     crate::NoritoQuery(opts): crate::NoritoQuery<QueryOptions>,
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
-    use iroha_core::pipeline::query_lane::{
-        CursorMode as LaneCursorMode, run_on_snapshot_with_mode,
+    use iroha_core::{
+        pipeline::query_lane::{CursorMode as LaneCursorMode, run_on_snapshot_with_mode},
+        smartcontracts::isi::query::QueryLimits,
     };
-    use iroha_core::smartcontracts::isi::query::QueryLimits;
     #[cfg(feature = "telemetry")]
     let start = std::time::Instant::now();
 
@@ -5236,8 +5260,9 @@ pub async fn handle_time_status() -> impl IntoResponse {
 
 #[cfg(test)]
 mod nts_tests {
-    use super::*;
     use http_body_util::BodyExt as _;
+
+    use super::*;
 
     #[tokio::test]
     async fn nts_now_returns_expected_keys() {
@@ -5519,8 +5544,10 @@ pub async fn handle_post_contract_instance(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<DeployAndActivateInstanceDto>,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::isi::smart_contract_code::ActivateContractInstance;
-    use iroha_data_model::{isi::smart_contract_code, prelude as dm};
+    use iroha_data_model::{
+        isi::{smart_contract_code, smart_contract_code::ActivateContractInstance},
+        prelude as dm,
+    };
 
     let DeployAndActivateInstanceDto {
         authority,
@@ -6225,8 +6252,9 @@ fn mk_record_from_inputs(
 
 #[cfg(feature = "app_api")]
 fn vk_record_to_json(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> norito::json::Value {
-    use crate::json_value;
     use iroha_data_model::proof::VkStatus;
+
+    use crate::json_value;
 
     let mut m = norito::json::Map::new();
     m.insert(
@@ -6294,8 +6322,9 @@ fn vk_record_to_json(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> norit
 
 #[cfg(all(test, feature = "app_api"))]
 mod vk_record_input_tests {
-    use super::*;
     use iroha_data_model::confidential::ConfidentialStatus;
+
+    use super::*;
 
     fn sample_hex32(fill: u8) -> String {
         hex::encode([fill; 32])
@@ -9200,8 +9229,9 @@ fn quota_limit_error(err: QuotaExceeded) -> Error {
 
 #[cfg(feature = "app_api")]
 mod serialization {
-    use super::*;
     use sorafs_manifest::capacity::CapacityMetadataEntry;
+
+    use super::*;
 
     pub fn replication_plan_to_value(
         status: &str,
@@ -9393,8 +9423,9 @@ mod serialization {
 
 #[cfg(test)]
 mod deploy_tests {
-    use super::*;
     use base64::Engine as _;
+
+    use super::*;
 
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let mut code = Vec::new();
@@ -9483,7 +9514,8 @@ mod deploy_tests {
 
 #[cfg(test)]
 mod soradns_tests {
-    use super::*;
+    use std::{str::FromStr, sync::Arc};
+
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -9497,7 +9529,8 @@ mod soradns_tests {
         soradns::{DIRECTORY_RECORD_VERSION_V1, ResolverDirectoryRecordV1},
     };
     use nonzero_ext::nonzero;
-    use std::{str::FromStr, sync::Arc};
+
+    use super::*;
 
     fn make_state() -> Arc<State> {
         let kura = Kura::blank_kura_for_testing();
@@ -9628,8 +9661,9 @@ mod soradns_tests {
 
 #[cfg(test)]
 mod sorafs_pin_tests {
-    use super::*;
     use iroha_data_model::prelude as dm;
+
+    use super::*;
 
     fn default_manifest() -> ManifestV1 {
         use sorafs_manifest::{ManifestBuilder, PinPolicy};
@@ -9736,8 +9770,7 @@ mod sorafs_pin_tests {
 
     #[tokio::test]
     async fn register_manifest_accepts_alias_binding() {
-        use crate::mk_app_state_for_tests;
-        use crate::routing::PinPolicyStorageClassDto;
+        use crate::{mk_app_state_for_tests, routing::PinPolicyStorageClassDto};
 
         let app = mk_app_state_for_tests();
         let chain_id = Arc::clone(&app.chain_id);
@@ -9827,7 +9860,6 @@ mod sorafs_pin_tests {
 
 #[cfg(test)]
 mod sorafs_capacity_tests {
-    use super::*;
     use base64::Engine as _;
     use iroha_data_model::{
         metadata::Metadata,
@@ -9835,19 +9867,23 @@ mod sorafs_capacity_tests {
         sorafs::capacity::{CapacityDeclarationRecord, CapacityDisputeId, ProviderId},
     };
     use norito::to_bytes;
-    use sorafs_manifest::StakePointer;
-    use sorafs_manifest::capacity::{
-        CapacityDeclarationV1, CapacityDisputeEvidenceV1, CapacityDisputeKind, CapacityDisputeV1,
-        ChunkerCommitmentV1, PricingScheduleV1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
-        ReplicationOrderV1,
-    };
-    use sorafs_manifest::por::{
-        AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
-        POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, PorReportIsoWeek,
-        derive_challenge_id, derive_challenge_seed,
+    use sorafs_manifest::{
+        StakePointer,
+        capacity::{
+            CapacityDeclarationV1, CapacityDisputeEvidenceV1, CapacityDisputeKind,
+            CapacityDisputeV1, ChunkerCommitmentV1, PricingScheduleV1, ReplicationAssignmentV1,
+            ReplicationOrderSlaV1, ReplicationOrderV1,
+        },
+        por::{
+            AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
+            POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, PorReportIsoWeek,
+            derive_challenge_id, derive_challenge_seed,
+        },
     };
     use sorafs_node::config::StorageConfig;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn sample_capacity_declaration() -> CapacityDeclarationV1 {
         CapacityDeclarationV1 {
@@ -10976,8 +11012,7 @@ mod sorafs_capacity_tests {
 }
 
 mod base64_bytes {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use norito::json::{JsonDeserialize, JsonSerialize, Parser};
 
     #[allow(clippy::ref_option)]
@@ -11111,9 +11146,7 @@ fn validate_tx_filter_adapter(
 
     use FilterExpr as F;
     use iroha_crypto::HashOf;
-    use iroha_data_model::prelude as dm;
-    use iroha_data_model::query::error::QueryExecutionFail;
-    use iroha_data_model::transaction::signed;
+    use iroha_data_model::{prelude as dm, query::error::QueryExecutionFail, transaction::signed};
 
     fn validate_rec(
         expr: &FilterExpr,
@@ -11657,8 +11690,9 @@ fn tx_predicate_from_filter(
     #[cfg(not(feature = "tx_predicates"))]
     {
         use iroha_crypto::HashOf;
-        use iroha_data_model::query::dsl::CommittedTxPredicate as TP;
-        use iroha_data_model::transaction::signed::TransactionEntrypoint;
+        use iroha_data_model::{
+            query::dsl::CommittedTxPredicate as TP, transaction::signed::TransactionEntrypoint,
+        };
 
         fn has_result_filter(expr: &FilterExpr) -> bool {
             use FilterExpr as F;
@@ -12039,8 +12073,7 @@ pub fn parse_account_path_segment(
     endpoint: &'static str,
     strict_addresses: bool,
 ) -> Result<(iroha_data_model::account::AccountId, String), Error> {
-    use iroha_data_model::account::AccountId;
-    use iroha_data_model::query::error::QueryExecutionFail;
+    use iroha_data_model::{account::AccountId, query::error::QueryExecutionFail};
 
     parse_account_literal(literal, telemetry, endpoint, strict_addresses)
         .map(|parsed| {
@@ -12059,8 +12092,7 @@ pub fn parse_account_path_segment(
 
 #[cfg(feature = "app_api")]
 pub fn parse_lane_id_literal(literal: &str) -> Result<LaneId, Error> {
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::query::error::QueryExecutionFail;
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     let trimmed = literal.trim();
     let parsed = trimmed.parse::<u32>().map_err(|_| {
@@ -12078,8 +12110,7 @@ fn canonicalize_account_literal_value(
     context: &'static str,
     strict_addresses: bool,
 ) -> Result<(), Error> {
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::query::error::QueryExecutionFail;
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     match value {
         norito::json::Value::String(literal) => {
@@ -12412,8 +12443,8 @@ fn explorer_qr_error(err: qrcode::types::QrError) -> Error {
 
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod address_metrics_tests {
-    use super::*;
-    use crate::filter::{FieldPath, FilterExpr};
+    use std::sync::{LazyLock, Mutex, MutexGuard};
+
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::{
@@ -12423,7 +12454,9 @@ mod address_metrics_tests {
         domain::DomainId,
     };
     use norito::json::Value;
-    use std::sync::{LazyLock, Mutex, MutexGuard};
+
+    use super::*;
+    use crate::filter::{FieldPath, FilterExpr};
 
     const TEST_CONTEXT: &str = "/tests/account-metrics";
     const KAIGI_SSE_CONTEXT: &str = "/v1/kaigi/relays/events?relay";
@@ -12734,11 +12767,12 @@ mod address_metrics_tests {
 
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod account_path_metric_tests {
-    use super::*;
     use iroha_data_model::{
         account::{AccountAddress, AccountAddressError, AccountAddressErrorCode, AccountId},
         domain::DomainId,
     };
+
+    use super::*;
 
     #[tokio::test]
     async fn invalid_literal_records_endpoint_counter() {
@@ -12852,10 +12886,11 @@ pub async fn handle_v1_account_transactions_with_policy(
     telemetry: MaybeTelemetry,
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::transaction::prelude::FindTransactions;
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
+
+    use iroha_core::smartcontracts::ValidQuery;
+    use iroha_data_model::query::transaction::prelude::FindTransactions;
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     #[cfg(feature = "telemetry")]
@@ -13179,10 +13214,11 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     telemetry: MaybeTelemetry,
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::transaction::prelude::FindTransactions;
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
+
+    use iroha_core::smartcontracts::ValidQuery;
+    use iroha_data_model::query::transaction::prelude::FindTransactions;
 
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
@@ -13288,25 +13324,26 @@ pub async fn handle_v1_parameters(state: Arc<CoreState>) -> Result<impl IntoResp
 
 #[cfg(all(test, feature = "app_api"))]
 mod sse_filter_tests {
-    use super::*;
     use iroha_crypto::Hash;
-    use iroha_data_model::block::BlockHeader;
-    use iroha_data_model::events::{
-        EventBox, SharedDataEvent,
-        data::{
-            offline::{OfflineTransferEvent, OfflineTransferSettled},
-            prelude::DataEvent,
-        },
-        pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
-    };
     use iroha_data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
+        block::BlockHeader,
+        events::{
+            EventBox, SharedDataEvent,
+            data::{
+                offline::{OfflineTransferEvent, OfflineTransferSettled},
+                prelude::DataEvent,
+            },
+            pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
+        },
         nexus::{DataSpaceId, LaneId},
         offline::OfflinePlatformTokenSnapshot,
     };
     use iroha_primitives::numeric::Numeric;
     use nonzero_ext::nonzero;
+
+    use super::*;
 
     #[test]
     fn tx_status_eq_builds_matching_filter() {
@@ -13837,11 +13874,12 @@ mod sse_filter_tests {
 
 #[cfg(all(test, feature = "app_api"))]
 mod tx_query_filter_tests {
-    use super::*;
     use iroha_crypto::{Hash, HashOf as GenericHashOf, KeyPair};
     use iroha_data_model::prelude as dm;
     use iroha_primitives::{const_vec::ConstVec, json::Json};
     use norito::json;
+
+    use super::*;
 
     fn dummy_block_hash() -> GenericHashOf<dm::BlockHeader> {
         GenericHashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]))
@@ -14103,21 +14141,23 @@ mod tx_query_filter_tests {
 
 #[cfg(all(test, feature = "app_api"))]
 mod tx_query_integration_smoke {
-    use super::*;
+    use std::{borrow::Cow, sync::Arc};
+
     use axum::http::StatusCode;
     use http_body_util::BodyExt as _;
-    use iroha_core::smartcontracts::Execute as _;
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
         kura::Kura,
         query::store::LiveQueryStore,
+        smartcontracts::Execute as _,
         state::{State, World},
         sumeragi::network_topology::Topology,
         tx::AcceptedTransaction,
     };
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude as dm;
-    use std::{borrow::Cow, sync::Arc};
+
+    use super::*;
     // use tower::ServiceExt; // not needed in this module
 
     const TEST_ACCOUNT: &str =
@@ -14767,13 +14807,14 @@ mod tx_query_integration_smoke {
 
     #[tokio::test]
     async fn handle_v1_account_transactions_emits_requested_format() {
+        use std::borrow::Cow;
+
         use iroha_core::{
             block::{BlockBuilder, ValidBlock},
             tx::AcceptedTransaction,
         };
         use iroha_crypto::KeyPair;
         use iroha_data_model::prelude as dm;
-        use std::borrow::Cow;
 
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -16321,21 +16362,23 @@ mod tx_query_integration_smoke {
 }
 #[cfg(all(test, feature = "app_api"))]
 mod app_api_integration_tests {
-    use super::*;
-    use crate::tests_runtime_handlers::mk_app_state_for_tests;
+    use std::borrow::Cow;
+
     use axum::{Router, routing::post};
     use http_body_util::BodyExt as _;
-    use iroha_core::smartcontracts::Execute as _;
-    use iroha_core::sumeragi::network_topology::Topology;
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
         kura::Kura,
         query::store::LiveQueryStore,
+        smartcontracts::Execute as _,
         state::{State, World},
+        sumeragi::network_topology::Topology,
     };
     use norito::json;
-    use std::borrow::Cow;
     use tower::ServiceExt;
+
+    use super::*;
+    use crate::tests_runtime_handlers::mk_app_state_for_tests;
 
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         crate::json_object(pairs)
@@ -18086,7 +18129,6 @@ mod app_api_integration_tests {
 
 #[cfg(test)]
 mod query_endpoint_tests {
-    use super::*;
     use axum::http::StatusCode;
     use iroha_core::{
         block::BlockBuilder,
@@ -18097,7 +18139,9 @@ mod query_endpoint_tests {
         sumeragi::network_topology::Topology,
     };
     // prelude already imported via super::*
-    use tower::ServiceExt; // Router::oneshot
+    use tower::ServiceExt;
+
+    use super::*; // Router::oneshot
     // avoid depending on test samples here
 
     // NOTE: end-to-end /query handler test omitted; exercised by integration tests.
@@ -18105,10 +18149,10 @@ mod query_endpoint_tests {
     #[tokio::test]
     async fn handle_queries_iterable_assets_non_empty() {
         use iroha_crypto::KeyPair;
-        use iroha_data_model::query::parameters::QueryParams;
         use iroha_data_model::query::{
             QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
             dsl::{CompoundPredicate, SelectorTuple},
+            parameters::QueryParams,
         };
         let alice_keypair = KeyPair::random();
         let alice_id: AccountId = AccountId::new(
@@ -18209,10 +18253,10 @@ mod query_endpoint_tests {
     #[tokio::test]
     async fn handle_queries_rejects_fetch_size_above_max() {
         use iroha_crypto::KeyPair;
-        use iroha_data_model::query::parameters::{FetchSize, MAX_FETCH_SIZE, QueryParams};
         use iroha_data_model::query::{
             QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
             dsl::{CompoundPredicate, SelectorTuple},
+            parameters::{FetchSize, MAX_FETCH_SIZE, QueryParams},
         };
 
         let alice_keypair = KeyPair::random();
@@ -19108,8 +19152,7 @@ pub fn handle_v1_kaigi_relays_sse(
 #[cfg(feature = "app_api")]
 /// GET `/v1/soradns/directory/latest` — return the latest resolver directory record.
 pub fn handle_v1_soradns_directory_latest(state: Arc<CoreState>) -> Result<NoritoJsonBody, Error> {
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::query::error::QueryExecutionFail;
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     let view = state.view();
     let Some(latest_id) = *view.world().soradns_directory_latest() else {
@@ -19157,10 +19200,13 @@ pub fn handle_v1_soradns_directory_events_sse(
 
 #[cfg(feature = "app_api")]
 fn convert_soradns_event(event_box: &EventBox) -> Option<norito::json::Value> {
-    use iroha_data_model::events::data::{DataEvent, soradns::SoradnsDirectoryEvent};
-    use iroha_data_model::soradns::{
-        DirectoryDraftSubmittedEventV1, DirectoryPolicyUpdatedEventV1, DirectoryPublishedEventV1,
-        DirectoryReleaseSignerEventV1, DirectoryRevokedEventV1, DirectoryUnrevokedEventV1,
+    use iroha_data_model::{
+        events::data::{DataEvent, soradns::SoradnsDirectoryEvent},
+        soradns::{
+            DirectoryDraftSubmittedEventV1, DirectoryPolicyUpdatedEventV1,
+            DirectoryPublishedEventV1, DirectoryReleaseSignerEventV1, DirectoryRevokedEventV1,
+            DirectoryUnrevokedEventV1,
+        },
     };
 
     let EventBox::Data(shared) = event_box else {
@@ -20517,7 +20563,6 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
 
 #[cfg(test)]
 mod status_tests {
-    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey};
     use iroha_data_model::{
         DataSpaceId, LaneId,
@@ -20528,6 +20573,8 @@ mod status_tests {
         consensus::{ValidatorElectionOutcome, ValidatorElectionParameters, ValidatorTieBreak},
     };
     use iroha_p2p::ConsensusConfigCaps;
+
+    use super::*;
 
     #[test]
     fn status_snapshot_json_includes_vrf_fields() {
@@ -23297,7 +23344,6 @@ fn parse_sse_filters(
 
 #[cfg(test)]
 mod cursor_mode_tests {
-    use super::*;
     use std::sync::Arc;
 
     use iroha_core::{
@@ -23306,6 +23352,8 @@ mod cursor_mode_tests {
         state::{State, World},
     };
     use iroha_data_model::prelude::*;
+
+    use super::*;
 
     fn make_minimal_state() -> State {
         let kura = Kura::blank_kura_for_testing();
@@ -23434,7 +23482,6 @@ mod cursor_mode_tests {
 
 #[cfg(all(test, feature = "telemetry"))]
 mod lane_admission_metrics_tests {
-    use super::*;
     use std::sync::Arc;
 
     use iroha_core::{
@@ -23445,6 +23492,8 @@ mod lane_admission_metrics_tests {
     };
     use iroha_data_model::prelude::*;
     use iroha_logger::Level;
+
+    use super::*;
 
     #[tokio::test]
     async fn transaction_ingress_records_latency_histogram() {
@@ -24415,8 +24464,9 @@ fn tx_projections_to_json(
 
 #[cfg(all(test, feature = "app_api"))]
 mod tx_projection_display_tests {
-    use super::*;
     use iroha_data_model::account::AccountId;
+
+    use super::*;
 
     #[test]
     fn projections_emit_compressed_authority_when_requested() {
@@ -24656,9 +24706,11 @@ pub async fn handle_v1_account_permissions_with_policy(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::error::{FindError, QueryExecutionFail};
-    use iroha_data_model::query::permission::prelude::FindPermissionsByAccountId;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate,
+        error::{FindError, QueryExecutionFail},
+        permission::prelude::FindPermissionsByAccountId,
+    };
 
     let (account, _) = parse_account_path_segment(
         &account_id,
@@ -24756,8 +24808,7 @@ pub async fn handle_v1_account_assets_with_policy(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::asset::prelude::FindAssets;
-    use iroha_data_model::query::dsl::CompoundPredicate;
+    use iroha_data_model::query::{asset::prelude::FindAssets, dsl::CompoundPredicate};
 
     let state_view = state.view();
     let cap = app_query_page_cap(&state);
@@ -24837,8 +24888,7 @@ pub async fn handle_v1_repo_agreements(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::repo::prelude::FindRepoAgreements;
+    use iroha_data_model::query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements};
 
     let state_view = state.view();
     let iter = ValidQuery::execute(FindRepoAgreements, CompoundPredicate::PASS, &state_view)
@@ -24908,8 +24958,7 @@ pub async fn handle_v1_repo_agreements_query(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::repo::prelude::FindRepoAgreements;
+    use iroha_data_model::query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements};
 
     let state_view = state.view();
     let iter = ValidQuery::execute(FindRepoAgreements, CompoundPredicate::PASS, &state_view)
@@ -24979,16 +25028,17 @@ struct RepoTestFixture {
 
 #[cfg(all(test, feature = "app_api"))]
 fn build_repo_state_for_tests() -> RepoTestFixture {
-    use iroha_core::smartcontracts::Execute;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
+        smartcontracts::Execute,
         state::{State, World},
     };
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude::*;
     use nonzero_ext::nonzero;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     let state = Arc::new(State::new_for_testing(
         World::new(),
@@ -25314,8 +25364,7 @@ pub async fn handle_v1_domains(
     crate::NoritoQuery(p): crate::NoritoQuery<crate::filter::Pagination>,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::domain::prelude::FindDomains;
-    use iroha_data_model::query::dsl::CompoundPredicate;
+    use iroha_data_model::query::{domain::prelude::FindDomains, dsl::CompoundPredicate};
 
     let state_view = state.view();
     let iter = ValidQuery::execute(FindDomains, CompoundPredicate::PASS, &state_view)
@@ -25423,8 +25472,7 @@ pub async fn handle_v1_domains_query(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::domain::prelude::FindDomains;
-    use iroha_data_model::query::dsl::CompoundPredicate;
+    use iroha_data_model::query::{domain::prelude::FindDomains, dsl::CompoundPredicate};
 
     let state_view = state.view();
     let iter = ValidQuery::execute(FindDomains, CompoundPredicate::PASS, &state_view)
@@ -25763,9 +25811,11 @@ fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
 
 #[cfg(all(test, feature = "app_api"))]
 mod uaid_parsing_tests {
-    use super::*;
     use core::str::FromStr;
+
     use iroha_crypto::Hash;
+
+    use super::*;
 
     const SAMPLE_UAID_HEX: &str =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
@@ -25959,8 +26009,7 @@ pub async fn handle_v1_accounts(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::account::prelude::FindAccounts;
-    use iroha_data_model::query::dsl::CompoundPredicate;
+    use iroha_data_model::query::{account::prelude::FindAccounts, dsl::CompoundPredicate};
 
     let state_view = state.view();
     let iter = ValidQuery::execute(FindAccounts, CompoundPredicate::PASS, &state_view)
@@ -26045,8 +26094,7 @@ pub async fn handle_v1_accounts_query(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::account::prelude::FindAccounts;
-    use iroha_data_model::query::dsl::CompoundPredicate;
+    use iroha_data_model::query::{account::prelude::FindAccounts, dsl::CompoundPredicate};
 
     let state_view = state.view();
     if let Some(expr) = envelope.filter.as_mut() {
@@ -26667,7 +26715,8 @@ fn bindings_for_dataspace(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod accounts_query_tests {
-    use super::*;
+    use std::sync::Arc;
+
     use axum::http::StatusCode;
     use http_body_util::BodyExt as _;
     use iroha_core::{
@@ -26680,7 +26729,8 @@ mod accounts_query_tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude as dm;
-    use std::sync::Arc;
+
+    use super::*;
 
     #[tokio::test]
     async fn accounts_query_streams_without_sort() {
@@ -27884,8 +27934,7 @@ pub async fn handle_v1_assets_definitions(
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::asset::prelude::FindAssetsDefinitions;
-    use iroha_data_model::query::dsl::CompoundPredicate;
+    use iroha_data_model::query::{asset::prelude::FindAssetsDefinitions, dsl::CompoundPredicate};
 
     let state_view = state.view();
     let iter = ValidQuery::execute(
@@ -27961,8 +28010,7 @@ pub async fn handle_v1_assets_definitions_query(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::asset::prelude::FindAssetsDefinitions;
-    use iroha_data_model::query::dsl::CompoundPredicate;
+    use iroha_data_model::query::{asset::prelude::FindAssetsDefinitions, dsl::CompoundPredicate};
 
     let state_view = state.view();
     let iter = ValidQuery::execute(
@@ -29664,8 +29712,9 @@ pub async fn handle_v1_offline_allowances(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineAllowances;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate, offline::prelude::FindOfflineAllowances,
+    };
 
     let state_view = state.view();
     let iter = ValidQuery::execute(FindOfflineAllowances, CompoundPredicate::PASS, &state_view)
@@ -29757,8 +29806,9 @@ pub async fn handle_v1_offline_revocations(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineVerdictRevocations;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate, offline::prelude::FindOfflineVerdictRevocations,
+    };
 
     let state_view = state.view();
     let iter = ValidQuery::execute(
@@ -29846,8 +29896,9 @@ pub async fn handle_v1_offline_allowances_query(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineAllowances;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate, offline::prelude::FindOfflineAllowances,
+    };
 
     let state_view = state.view();
     let iter = ValidQuery::execute(FindOfflineAllowances, CompoundPredicate::PASS, &state_view)
@@ -29980,9 +30031,7 @@ pub async fn handle_v1_nexus_public_lane_stake(
     telemetry: MaybeTelemetry,
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::account::AccountId;
-    use iroha_data_model::query::error::QueryExecutionFail;
+    use iroha_data_model::{ValidationFail, account::AccountId, query::error::QueryExecutionFail};
 
     let canonical_validator = canonicalize_query_account_literal(
         "validator",
@@ -30039,12 +30088,13 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     telemetry: MaybeTelemetry,
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::account::AccountId;
-    use iroha_data_model::query::error::QueryExecutionFail;
-    use iroha_data_model::{asset::AssetId, nexus::PublicLanePendingReward};
-    use iroha_primitives::numeric::Numeric;
     use std::collections::BTreeMap;
+
+    use iroha_data_model::{
+        ValidationFail, account::AccountId, asset::AssetId, nexus::PublicLanePendingReward,
+        query::error::QueryExecutionFail,
+    };
+    use iroha_primitives::numeric::Numeric;
 
     let canonical_account = canonicalize_query_account_literal(
         "account",
@@ -30294,11 +30344,14 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
 
 #[cfg(all(test, feature = "app_api"))]
 mod public_lane_tests {
-    use super::*;
-    use iroha_data_model::asset::{AssetDefinitionId, AssetId};
-    use iroha_data_model::nexus::PublicLanePendingReward;
+    use iroha_data_model::{
+        asset::{AssetDefinitionId, AssetId},
+        nexus::PublicLanePendingReward,
+    };
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+    use super::*;
 
     #[test]
     fn validator_record_to_json_respects_address_format() {
@@ -30372,8 +30425,9 @@ pub async fn handle_v1_offline_revocations_query(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineVerdictRevocations;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate, offline::prelude::FindOfflineVerdictRevocations,
+    };
 
     let state_view = state.view();
     let iter = ValidQuery::execute(
@@ -30473,8 +30527,9 @@ pub async fn handle_v1_offline_summaries(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineCounterSummaries;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate, offline::prelude::FindOfflineCounterSummaries,
+    };
 
     let state_view = state.view();
     let iter = ValidQuery::execute(
@@ -30558,8 +30613,9 @@ pub async fn handle_v1_offline_summaries_query(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineCounterSummaries;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate, offline::prelude::FindOfflineCounterSummaries,
+    };
 
     let state_view = state.view();
     let iter = ValidQuery::execute(
@@ -31716,8 +31772,9 @@ pub async fn handle_v1_offline_transfers(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransfers,
+    };
 
     let state_view = state.view();
     let iter = ValidQuery::execute(
@@ -31811,8 +31868,9 @@ pub async fn handle_v1_offline_transfers_query(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse, Error> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransfers,
+    };
 
     let state_view = state.view();
     let iter = ValidQuery::execute(
@@ -31910,10 +31968,13 @@ pub async fn handle_v1_offline_transfer_get(
     _strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::error::QueryExecutionFail;
-    use iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransferById;
+    use iroha_data_model::{
+        ValidationFail,
+        query::{
+            dsl::CompoundPredicate, error::QueryExecutionFail,
+            offline::prelude::FindOfflineToOnlineTransferById,
+        },
+    };
 
     let bundle_id = parse_hash_hex(&bundle_id_hex, "bundle_id_hex")?;
     let state_view = state.view();
@@ -31949,10 +32010,11 @@ pub async fn handle_v1_offline_receipts(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers;
+    use iroha_data_model::{
+        ValidationFail,
+        offline::OFFLINE_REJECTION_REASON_PREFIX,
+        query::{dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransfers},
+    };
 
     let state_view = state.view();
     let iter = ValidQuery::execute(
@@ -32119,9 +32181,10 @@ pub async fn handle_v1_offline_receipts_query(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse, Error> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers;
+    use iroha_data_model::{
+        ValidationFail,
+        query::{dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransfers},
+    };
 
     let state_view = state.view();
     let iter = ValidQuery::execute(
@@ -32229,10 +32292,13 @@ pub async fn handle_v1_offline_bundle_proof_status(
     _strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::error::QueryExecutionFail;
-    use iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransferById;
+    use iroha_data_model::{
+        ValidationFail,
+        query::{
+            dsl::CompoundPredicate, error::QueryExecutionFail,
+            offline::prelude::FindOfflineToOnlineTransferById,
+        },
+    };
 
     let bundle_id = parse_hash_hex(&p.bundle_id_hex, "bundle_id_hex")?;
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
@@ -32294,8 +32360,9 @@ pub async fn handle_v1_offline_transfer_proof(
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse, Error> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransferById;
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransferById,
+    };
 
     let bundle_id = parse_hash_hex(&req.bundle_id_hex, "bundle_id_hex")?;
     let kind = OfflineProofRequestKind::from_str(req.kind.as_str()).map_err(|err| {
@@ -32433,9 +32500,10 @@ pub async fn handle_post_v1_offline_certificates_renew_issue(
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineAllowanceByCertificateId;
+    use iroha_data_model::{
+        ValidationFail,
+        query::{dsl::CompoundPredicate, offline::prelude::FindOfflineAllowanceByCertificateId},
+    };
 
     let issuer = app.offline_issuer.as_ref().ok_or_else(|| {
         Error::Query(ValidationFail::NotPermitted(
@@ -32519,10 +32587,13 @@ pub async fn handle_v1_offline_allowance_get(
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::error::QueryExecutionFail;
-    use iroha_data_model::query::offline::prelude::FindOfflineAllowanceByCertificateId;
+    use iroha_data_model::{
+        ValidationFail,
+        query::{
+            dsl::CompoundPredicate, error::QueryExecutionFail,
+            offline::prelude::FindOfflineAllowanceByCertificateId,
+        },
+    };
 
     let certificate_id = parse_hash_hex(&certificate_id_hex, "certificate_id_hex")?;
     let state_view = state.view();
@@ -32551,11 +32622,13 @@ pub async fn handle_post_v1_offline_allowances_renew(
     NoritoJson(req): NoritoJson<OfflineCertificateRenewRequest>,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineAllowanceByCertificateId;
-    use iroha_data_model::{isi::offline, prelude as dm};
+    use iroha_data_model::{
+        ValidationFail,
+        isi::offline,
+        offline::OFFLINE_REJECTION_REASON_PREFIX,
+        prelude as dm,
+        query::{dsl::CompoundPredicate, offline::prelude::FindOfflineAllowanceByCertificateId},
+    };
 
     let old_certificate_id = parse_hash_hex(&certificate_id_hex, "certificate_id_hex")?;
     let record = {
@@ -32619,11 +32692,13 @@ pub async fn handle_post_v1_offline_certificates_revoke(
     NoritoJson(req): NoritoJson<OfflineCertificateRevokeRequest>,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::ValidationFail;
-    use iroha_data_model::offline::{OFFLINE_REJECTION_REASON_PREFIX, OfflineVerdictRevocation};
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::FindOfflineAllowanceByCertificateId;
-    use iroha_data_model::{isi::offline, prelude as dm};
+    use iroha_data_model::{
+        ValidationFail,
+        isi::offline,
+        offline::{OFFLINE_REJECTION_REASON_PREFIX, OfflineVerdictRevocation},
+        prelude as dm,
+        query::{dsl::CompoundPredicate, offline::prelude::FindOfflineAllowanceByCertificateId},
+    };
 
     let certificate_id = parse_hash_hex(&req.certificate_id_hex, "certificate_id_hex")?;
     let (verdict_id, verdict_id_hex) = {
@@ -32794,10 +32869,12 @@ pub async fn handle_v1_offline_state(
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::offline::prelude::{
-        FindOfflineAllowances, FindOfflineCounterSummaries, FindOfflineToOnlineTransfers,
-        FindOfflineVerdictRevocations,
+    use iroha_data_model::query::{
+        dsl::CompoundPredicate,
+        offline::prelude::{
+            FindOfflineAllowances, FindOfflineCounterSummaries, FindOfflineToOnlineTransfers,
+            FindOfflineVerdictRevocations,
+        },
     };
 
     let state_view = state.view();
@@ -33218,8 +33295,7 @@ pub async fn handle_v1_nfts(
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::nft::prelude::FindNfts;
+    use iroha_data_model::query::{dsl::CompoundPredicate, nft::prelude::FindNfts};
 
     let state_view = state.view();
     let iter = ValidQuery::execute(FindNfts::new(), CompoundPredicate::PASS, &state_view)
@@ -33291,8 +33367,7 @@ pub async fn handle_v1_nfts_query(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::dsl::CompoundPredicate;
-    use iroha_data_model::query::nft::prelude::FindNfts;
+    use iroha_data_model::query::{dsl::CompoundPredicate, nft::prelude::FindNfts};
 
     let state_view = state.view();
     let iter = ValidQuery::execute(FindNfts::new(), CompoundPredicate::PASS, &state_view)
@@ -33664,8 +33739,9 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_allowance_filter_canonicalizes_controller_literals() {
-        use crate::address_format::AddressFormatPreference;
         use iroha_test_samples::ALICE_ID;
+
+        use crate::address_format::AddressFormatPreference;
 
         let compressed = AddressFormatPreference::Compressed.display_literal(&ALICE_ID);
         let mut expr = FilterExpr::Eq(FieldPath("controller_id".into()), Value::from(compressed));
@@ -34229,8 +34305,9 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_transfer_filter_canonicalizes_all_account_fields() {
-        use crate::address_format::AddressFormatPreference;
         use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
+
+        use crate::address_format::AddressFormatPreference;
 
         let controller = AddressFormatPreference::Compressed.display_literal(&ALICE_ID);
         let receiver = AddressFormatPreference::Compressed.display_literal(&BOB_ID);
@@ -34275,8 +34352,9 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_summary_filter_canonicalizes_controller_literals() {
-        use crate::address_format::AddressFormatPreference;
         use iroha_test_samples::ALICE_ID;
+
+        use crate::address_format::AddressFormatPreference;
 
         let compressed = AddressFormatPreference::Compressed.display_literal(&ALICE_ID);
         let mut expr = FilterExpr::Eq(FieldPath("controller_id".into()), Value::from(compressed));
@@ -34318,7 +34396,6 @@ mod adapter_filter_tests {
 #[cfg(all(test, feature = "app_api"))]
 fn sample_transfer_record() -> OfflineTransferRecord {
     use iroha_crypto::{Hash, PublicKey, Signature};
-
     use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 
     let controller = ALICE_ID.clone();
@@ -34358,6 +34435,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
         to: receiver.clone(),
         asset: asset_id.clone(),
         amount: Numeric::new(250, 0),
+        issued_at_ms: 1_700_000_100_000,
         invoice_id: "invoice-1".into(),
         platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
             key_id: "key".into(),
@@ -34380,6 +34458,8 @@ fn sample_transfer_record() -> OfflineTransferRecord {
         proof_replay: None,
         metadata: Metadata::default(),
     });
+    let mut sample_proof = vec![0u8; 12_385];
+    sample_proof[0] = 1;
 
     let transfer = OfflineToOnlineTransfer {
         bundle_id: Hash::new(b"bundle"),
@@ -34394,7 +34474,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
             },
             resulting_commitment: vec![0xEF; 32],
             claimed_delta: Numeric::new(250, 0),
-            zk_proof: None,
+            zk_proof: Some(sample_proof),
         },
         aggregate_proof,
         attachments: None,
@@ -34448,8 +34528,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::asset::prelude::FindAssets;
-    use iroha_data_model::query::dsl::CompoundPredicate;
+    use iroha_data_model::query::{asset::prelude::FindAssets, dsl::CompoundPredicate};
 
     let state_view = state.view();
     let (acct, _) = parse_account_path_segment(
@@ -34750,11 +34829,13 @@ pub async fn handle_v1_asset_holders(
     crate::NoritoQuery(p): crate::NoritoQuery<AssetHolderGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::asset::id::AssetDefinitionId;
-    use iroha_data_model::query::asset::prelude::FindAssets;
-    use iroha_data_model::query::dsl::CompoundPredicate;
     use std::collections::BTreeMap;
+
+    use iroha_core::smartcontracts::ValidQuery;
+    use iroha_data_model::{
+        asset::id::AssetDefinitionId,
+        query::{asset::prelude::FindAssets, dsl::CompoundPredicate},
+    };
 
     let state_view = state.view();
     let def_id: AssetDefinitionId = definition_id
@@ -34838,11 +34919,13 @@ pub async fn handle_v1_asset_holders_query(
     telemetry: MaybeTelemetry,
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::asset::id::AssetDefinitionId;
-    use iroha_data_model::query::asset::prelude::FindAssets;
-    use iroha_data_model::query::dsl::CompoundPredicate;
     use std::collections::BTreeMap;
+
+    use iroha_core::smartcontracts::ValidQuery;
+    use iroha_data_model::{
+        asset::id::AssetDefinitionId,
+        query::{asset::prelude::FindAssets, dsl::CompoundPredicate},
+    };
 
     let state_view = state.view();
     let def_id: AssetDefinitionId = definition_id
@@ -35183,10 +35266,8 @@ pub async fn handle_post_nexus_lane_lifecycle(
 pub mod block {
     //! Blocks stream handler
 
-    use crate::stream::WebSocketNorito;
-
     use super::*;
-    use crate::block;
+    use crate::{block, stream::WebSocketNorito};
 
     /// Type for any error during blocks streaming
     #[derive(Debug, displaydoc::Display, thiserror::Error)]
@@ -35251,10 +35332,8 @@ pub mod block {
 pub mod event {
     //! Events stream handler
 
-    use crate::stream::WebSocketNorito;
-
     use super::*;
-    use crate::event;
+    use crate::{event, stream::WebSocketNorito};
 
     /// Type for any error during events streaming
     #[derive(Debug, displaydoc::Display, thiserror::Error)]
@@ -35729,13 +35808,11 @@ fn is_nexus_status_segment(tail: &str) -> bool {
 
 #[cfg(all(test, feature = "telemetry"))]
 mod tests {
-    use super::sorafs_capacity_tests::build_por_challenge;
-    use super::*;
-    use crate::mk_app_state_for_tests;
+    use std::io::Cursor;
+
     use http::StatusCode;
     use http_body_util::BodyExt;
-    use iroha_core::sumeragi::status;
-    use iroha_core::telemetry::StateTelemetry;
+    use iroha_core::{sumeragi::status, telemetry::StateTelemetry};
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         block::BlockHeader,
@@ -35754,8 +35831,10 @@ mod tests {
         Metrics, MicropaymentCreditSnapshot, MicropaymentSampleStatus, MicropaymentTicketCounters,
     };
     use sorafs_manifest::deal::DealSettlementV1;
-    use std::io::Cursor;
     use tokio::runtime::Runtime;
+
+    use super::{sorafs_capacity_tests::build_por_challenge, *};
+    use crate::mk_app_state_for_tests;
 
     #[test]
     fn openapi_handler_emits_alias_spec() {

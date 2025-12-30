@@ -19,13 +19,16 @@ use crate::fastpq;
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
-    use iroha_data_model::events::data::prelude::{AccountEvent, AssetEvent, MetadataChanged};
-    use iroha_data_model::isi::{RemoveAssetKeyValue, SetAssetKeyValue, error::MintabilityError};
+    use iroha_data_model::{
+        events::data::prelude::{AccountEvent, AssetEvent, MetadataChanged},
+        isi::{RemoveAssetKeyValue, SetAssetKeyValue, error::MintabilityError},
+    };
+    use iroha_primitives::numeric::NumericSpec;
 
     use super::*;
-    use crate::smartcontracts::isi::account_admission::ensure_receiving_account;
-    use crate::state::WorldTransaction;
-    use iroha_primitives::numeric::NumericSpec;
+    use crate::{
+        smartcontracts::isi::account_admission::ensure_receiving_account, state::WorldTransaction,
+    };
 
     // Use elided lifetimes to avoid single-use lifetime warnings in this inherent impl.
     impl WorldTransaction<'_, '_> {
@@ -524,7 +527,7 @@ pub mod query {
         asset::{Asset, AssetDefinition, AssetEntry},
         query::{
             asset::FindAssetById,
-            dsl::CompoundPredicate,
+            dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail as Error,
             json::{EqualsCondition, InCondition, PredicateJson},
         },
@@ -536,7 +539,6 @@ pub mod query {
         smartcontracts::{ValidQuery, ValidSingularQuery},
         state::StateReadOnly,
     };
-    use iroha_data_model::query::dsl::EvaluatePredicate;
 
     #[derive(Debug, Default, Clone)]
     struct AssetPredicateView {
@@ -888,18 +890,18 @@ pub mod query {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
-        use crate::smartcontracts::isi::asset::isi::ensure_non_negative;
-        use crate::{
-            kura::Kura,
-            query::store::LiveQueryStore,
-            smartcontracts::ValidQuery,
-            state::{State, World},
-        };
         use iroha_data_model::query::json::{EqualsCondition, PredicateJson};
         use iroha_primitives::numeric::Numeric;
         use iroha_test_samples::ALICE_ID;
         use norito::json::Value;
+
+        use super::*;
+        use crate::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            smartcontracts::{ValidQuery, isi::asset::isi::ensure_non_negative},
+            state::{State, World},
+        };
 
         #[test]
         fn find_assets_returns_registered_balances() {

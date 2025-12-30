@@ -285,11 +285,8 @@ fn verify_against_store(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::num::NonZeroU32;
-    use std::sync::Arc;
+    use std::{num::NonZeroU32, sync::Arc};
 
-    use crate::{NoritoJson, mk_app_state_for_tests};
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         block::BlockHeader,
@@ -299,6 +296,9 @@ mod tests {
         },
         nexus::{DataSpaceId, LaneCatalog, LaneConfig as LaneMetadata, LaneId},
     };
+
+    use super::*;
+    use crate::{NoritoJson, mk_app_state_for_tests};
 
     fn sample_record(lane: u32, epoch: u64, sequence: u64) -> DaCommitmentRecord {
         DaCommitmentRecord::new(

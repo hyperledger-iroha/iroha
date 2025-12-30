@@ -9,6 +9,12 @@
 use core::{fmt, str::FromStr};
 use std::collections::{BTreeMap, BTreeSet};
 
+use derive_more::Display;
+use iroha_crypto::{PublicKey, SignatureOf};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use thiserror::Error;
+
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -20,11 +26,6 @@ use crate::{
         pin_registry::{ManifestAliasBinding, StorageClass},
     },
 };
-use derive_more::Display;
-use iroha_crypto::{PublicKey, SignatureOf};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
 
 /// Identifier assigned to a Taikai event (e.g., a live stream or conference day).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
@@ -1264,14 +1265,17 @@ impl TaikaiCacheProfileError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::da::types::{
-        BlobDigest, ExtraMetadata, MetadataEntry, MetadataVisibility, StorageTicketId,
-    };
-    use crate::domain::DomainId;
+    use std::{collections::BTreeMap, str::FromStr};
+
     use iroha_crypto::{Algorithm, KeyPair};
-    use std::collections::BTreeMap;
-    use std::str::FromStr;
+
+    use super::*;
+    use crate::{
+        da::types::{
+            BlobDigest, ExtraMetadata, MetadataEntry, MetadataVisibility, StorageTicketId,
+        },
+        domain::DomainId,
+    };
 
     fn digest_from(value: u8) -> BlobDigest {
         let mut bytes = [0u8; 32];

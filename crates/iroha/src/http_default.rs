@@ -348,8 +348,9 @@ impl TryFrom<ClientResponse> for Response<Bytes> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Arc;
+
+    use super::*;
 
     #[test]
     fn send_is_safe_inside_tokio_runtime_multi_thread() {

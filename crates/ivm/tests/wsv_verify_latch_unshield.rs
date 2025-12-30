@@ -4,9 +4,10 @@
 
 use std::collections::HashMap;
 
-use iroha_data_model::prelude::Mintable;
-use iroha_data_model::prelude::*;
-use iroha_data_model::proof::VerifyingKeyId;
+use iroha_data_model::{
+    prelude::{Mintable, *},
+    proof::VerifyingKeyId,
+};
 use ivm::{
     IVM, IVMHost, PointerType,
     host::{ZkCurve, ZkHalo2Backend, ZkHalo2Config},

@@ -7,12 +7,13 @@ use core::ops::Range;
 use std::{format, string::String, vec::Vec};
 
 pub mod build_line;
-pub use crate::build_line::BuildLine;
 /// Re-export derive macros that assist with declaring versioned enums.
 #[cfg(feature = "derive")]
 pub use iroha_version_derive::*;
 /// Re-export Norito codec helpers required by consumers of versioned types.
 pub use norito::codec::{Decode, DecodeAll, Encode};
+
+pub use crate::build_line::BuildLine;
 
 /// JSON field name storing the version discriminator.
 pub const VERSION_FIELD_NAME: &str = "version";
@@ -290,10 +291,9 @@ pub mod json {
 
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
-    pub use super::codec::*;
     #[cfg(feature = "json")]
     pub use super::json::*;
-    pub use super::*;
+    pub use super::{codec::*, *};
 }
 
 #[cfg(test)]

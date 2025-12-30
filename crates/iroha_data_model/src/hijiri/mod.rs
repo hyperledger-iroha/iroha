@@ -9,10 +9,11 @@
 
 use std::{convert::TryFrom, fmt};
 
-use crate::{account::AccountId, metadata::Metadata, name::Name};
 use derive_more::{AsRef, Deref};
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
+
+use crate::{account::AccountId, metadata::Metadata, name::Name};
 
 /// Unsigned Q16.16 fixed-point representation backed by `u32`.
 ///
@@ -491,9 +492,10 @@ pub enum FeePolicyError {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::KeyPair;
+
     use super::*;
     use crate::metadata::Metadata;
-    use iroha_crypto::KeyPair;
 
     #[test]
     fn q16_saturating_mul_caps() {

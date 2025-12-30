@@ -1,6 +1,9 @@
 //! Microbenchmarks to relate native ISI executor latency to the ISI gas meter.
 //! Prints per-instruction `ns/op`, `gas/op`, and `ns/gas` to guide calibration.
 
+#[cfg(feature = "telemetry")]
+use std::sync::{Arc, OnceLock};
+
 use criterion::{BatchSize, Criterion};
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::StateTelemetry;
@@ -24,8 +27,6 @@ use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
-#[cfg(feature = "telemetry")]
-use std::sync::{Arc, OnceLock};
 
 #[derive(Clone)]
 struct BenchContext {

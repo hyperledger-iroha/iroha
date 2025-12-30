@@ -21,12 +21,12 @@
 use std::{convert::TryFrom, mem, vec::Vec};
 
 use aead::{Aead, AeadCore, KeyInit, Payload};
+pub use chacha20poly1305::ChaCha20Poly1305;
 use displaydoc::Display;
 use rand::rngs::OsRng;
 use rand_core::{OsError, TryRngCore};
 
 use crate::SessionKey;
-pub use chacha20poly1305::ChaCha20Poly1305;
 
 /// An error that can occur during encryption or decryption
 #[derive(thiserror::Error, Display, Debug, Clone, Copy)]

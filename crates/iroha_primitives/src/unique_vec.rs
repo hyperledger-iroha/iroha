@@ -6,16 +6,14 @@
 //! discarding any duplicates in the provided list.
 
 use core::borrow::Borrow;
-use std::vec::Vec;
+use std::{io::Write, vec::Vec};
 
 use derive_more::{AsRef, Deref};
 use iroha_schema::IntoSchema;
-use norito::core as ncore;
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize, core as ncore,
     json::{self, JsonDeserialize, JsonSerialize},
 };
-use std::io::Write;
 
 /// Creates a [`UniqueVec`](crate::unique_vec::UniqueVec) from a list of values.
 ///
@@ -192,8 +190,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::codec::{Decode, Encode};
+
+    use super::*;
 
     // Tests covering the behaviour of `UniqueVec` to ensure it maintains
     // uniqueness of elements and behaves like a typical vector otherwise.

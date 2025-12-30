@@ -1,5 +1,7 @@
 //! Tests for the `SoraNet` privacy metrics aggregation pipeline.
 
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetGarAbuseShareV1, SoranetPowFailureCountV1, SoranetPowFailureReasonV1,
     SoranetPrivacyEventActiveSampleV1, SoranetPrivacyEventGarAbuseCategoryV1,
@@ -12,7 +14,6 @@ use iroha_telemetry::privacy::{
     HandshakeFailure, PrivacyBucketConfig, PrivacyThrottleScope, SoranetSecureAggregator,
 };
 use norito::json;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn ts(seconds: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(seconds)

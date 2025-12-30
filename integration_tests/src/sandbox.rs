@@ -9,8 +9,10 @@ use std::{
 
 use eyre::{Report, Result};
 use iroha_test_network::{Network, NetworkBuilder};
-use tokio::runtime::{Handle, Runtime};
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::{
+    runtime::{Handle, Runtime},
+    sync::{Mutex, OwnedMutexGuard},
+};
 
 /// Serialize integration tests that spin up a network to reduce port contention and sandbox flakiness.
 #[must_use]
@@ -320,8 +322,9 @@ fn is_sandbox_message(message: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     #[test]
     fn detects_sandbox_messages() {

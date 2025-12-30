@@ -1,18 +1,21 @@
 //! Iroha Connect SDK helpers: key derivation, AAD, sealing/opening frames.
-use crate::connect::{
-    ConnectCiphertextV1, ConnectFrameV1, ConnectPayloadV1, Dir, EnvelopeV1, FrameKind,
-    PermissionsV1, Role, SignInProofV1,
-};
 use hkdf::Hkdf;
-use iroha_crypto::blake2::digest::VariableOutput;
 use iroha_crypto::{
     SessionKey,
-    blake2::{Blake2bVar, digest::Update},
+    blake2::{
+        Blake2bVar,
+        digest::{Update, VariableOutput},
+    },
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
     kex::{KeyExchangeScheme as _, X25519Sha256},
 };
 use norito::codec::Encode;
 use sha2::Sha256;
+
+use crate::connect::{
+    ConnectCiphertextV1, ConnectFrameV1, ConnectPayloadV1, Dir, EnvelopeV1, FrameKind,
+    PermissionsV1, Role, SignInProofV1,
+};
 
 /// Derive per-direction keys from a `SessionKey` using HKDF-SHA256 with a BLAKE2b(sid) salt.
 pub fn derive_direction_keys(session_key: &SessionKey, sid: &[u8; 32]) -> ([u8; 32], [u8; 32]) {

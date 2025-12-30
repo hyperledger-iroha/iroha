@@ -1,5 +1,11 @@
 //! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical IH58 account IDs.
 
+use std::{
+    fs,
+    path::PathBuf,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox::start_network_async_or_skip;
 use iroha::data_model::{
@@ -17,11 +23,6 @@ use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use reqwest::Client;
-use std::{
-    fs,
-    path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 
 type SurfaceSpec<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
 

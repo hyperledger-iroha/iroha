@@ -2,12 +2,14 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use norito::core::{
-    CompressionConfig, Header, compression_metrics_delta_json, compression_metrics_json_string,
-    compression_metrics_json_value, compression_metrics_reset, compression_metrics_snapshot,
-    to_bytes, to_compressed_bytes,
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    core::{
+        CompressionConfig, Header, compression_metrics_delta_json, compression_metrics_json_string,
+        compression_metrics_json_value, compression_metrics_reset, compression_metrics_snapshot,
+        to_bytes, to_compressed_bytes,
+    },
 };
-use norito::{NoritoDeserialize, NoritoSerialize};
 
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, iroha_schema::IntoSchema,

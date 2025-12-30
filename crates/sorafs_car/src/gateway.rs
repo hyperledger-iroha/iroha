@@ -6,17 +6,18 @@
 //! token) and receive a ready-to-use set of [`FetchProvider`] definitions plus
 //! an async fetcher that issues chunk requests with the correct headers.
 
-use crate::{
-    moderation::{
-        ModerationTokenError, ModerationTokenKey, ValidatedModerationProof,
-        verify_token_for_context,
-    },
-    multi_fetch::{
-        AttemptFailure, ChunkResponse, FetchOptions, FetchOutcome, FetchProvider, FetchRequest,
-        MultiSourceError, PolicyBlockEvidence, ProviderMetadata, RangeCapability, StreamBudget,
-        TransportHint,
+use std::{
+    collections::HashMap,
+    fmt,
+    future::Future,
+    num::NonZeroUsize,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
+
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
@@ -31,18 +32,19 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
 };
 use sorafs_manifest::{ManifestV1, StreamTokenV1};
-use std::{
-    collections::HashMap,
-    fmt,
-    future::Future,
-    num::NonZeroUsize,
-    pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
+use thiserror::Error;
+
+use crate::{
+    moderation::{
+        ModerationTokenError, ModerationTokenKey, ValidatedModerationProof,
+        verify_token_for_context,
+    },
+    multi_fetch::{
+        AttemptFailure, ChunkResponse, FetchOptions, FetchOutcome, FetchProvider, FetchRequest,
+        MultiSourceError, PolicyBlockEvidence, ProviderMetadata, RangeCapability, StreamBudget,
+        TransportHint,
     },
 };
-use thiserror::Error;
 
 const HEADER_SORA_NONCE: &str = "x-sorafs-nonce";
 const HEADER_SORA_CHUNKER: &str = "x-sorafs-chunker";
@@ -1442,14 +1444,17 @@ impl fmt::Display for GatewayFetcher {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::moderation::encode_token;
-    use crate::{CarBuildPlan, ChunkFetchSpec, multi_fetch::FetchProvider};
-    use sorafs_chunker::ChunkProfile;
-    use sorafs_manifest::StreamTokenBodyV1;
     use std::{
         collections::HashMap,
         sync::{Arc, Mutex},
+    };
+
+    use sorafs_chunker::ChunkProfile;
+    use sorafs_manifest::StreamTokenBodyV1;
+
+    use super::*;
+    use crate::{
+        CarBuildPlan, ChunkFetchSpec, moderation::encode_token, multi_fetch::FetchProvider,
     };
 
     fn sample_payload(len: usize) -> Vec<u8> {

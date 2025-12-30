@@ -21,6 +21,7 @@ use iroha_executor_data_model::isi::multisig::{
     MultisigApprove, MultisigInstructionBox, MultisigProposalValue, MultisigPropose,
     MultisigRegister, MultisigSpec,
 };
+use mv::storage::StorageReadOnly;
 
 #[cfg(feature = "telemetry")]
 use crate::telemetry;
@@ -28,7 +29,6 @@ use crate::{
     smartcontracts::Execute,
     state::{StateTransaction, WorldReadOnly},
 };
-use mv::storage::StorageReadOnly;
 
 const DELIMITER: char = '/';
 const MULTISIG: &str = "multisig";

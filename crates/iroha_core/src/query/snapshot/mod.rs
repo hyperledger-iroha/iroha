@@ -131,15 +131,15 @@ pub fn run_on_snapshot(
 mod tests {
     use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
     use iroha_test_samples::ALICE_ID;
+    use mv::storage::StorageReadOnly;
 
     use super::*;
-    use crate::smartcontracts::Execute;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
+        smartcontracts::Execute,
         state::{State, World},
     };
-    use mv::storage::StorageReadOnly;
 
     #[tokio::test]
     async fn snapshot_iterable_is_ephemeral() {

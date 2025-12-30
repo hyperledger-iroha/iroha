@@ -11,8 +11,7 @@ use std::vec::Vec;
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
-use norito::Decode;
-use norito::codec::Encode;
+use norito::{Decode, codec::Encode};
 
 pub use self::model::*;
 
@@ -195,12 +194,12 @@ pub fn alias_frontier_digest(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::account::AccountId;
-    use crate::domain::DomainId;
-    use crate::name::Name;
-    use iroha_crypto::KeyPair;
     use std::str::FromStr;
+
+    use iroha_crypto::KeyPair;
+
+    use super::*;
+    use crate::{account::AccountId, domain::DomainId, name::Name};
 
     fn sample_account_id() -> AccountId {
         let key_pair = KeyPair::random();

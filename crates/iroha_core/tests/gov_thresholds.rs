@@ -2,6 +2,7 @@
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 
 use core::num::NonZeroU64;
+
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,

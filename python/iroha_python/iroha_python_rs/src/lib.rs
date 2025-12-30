@@ -20,18 +20,14 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::hash as blake3_hash;
 use futures::executor::block_on;
-use hex::encode as hex_encode;
-use hex::encode_upper as hex_encode_upper;
+use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
 use iroha_config::parameters::defaults;
-use iroha_crypto::error::ParseError;
-use iroha_crypto::kex::{KeyExchangeScheme, X25519Sha256};
-use iroha_crypto::sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature};
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyGenOption, KeyPair, LaneCommitmentId, PrivateKey, PublicKey,
     Signature, derive_keyset_from_slice,
-};
-use iroha_data_model::repo::prelude::{
-    RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance,
+    error::ParseError,
+    kex::{KeyExchangeScheme, X25519Sha256},
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
 use iroha_data_model::{
     account::Account,
@@ -58,6 +54,7 @@ use iroha_data_model::{
     nft::NftId,
     prelude::{AccountId, ChainId},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
+    repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     transaction::{
         Executable, IvmBytecode, SignedTransaction, TransactionBuilder as ModelTransactionBuilder,
     },
@@ -80,22 +77,15 @@ use iroha_torii_shared::{
     connect_sdk,
 };
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
-use norito::codec::DecodeAll;
-use norito::json::JsonSerialize;
-use norito::{codec, decode_from_bytes, json};
-use pyo3::FromPyObject;
-use pyo3::create_exception;
-use pyo3::wrap_pyfunction;
+use norito::{codec, codec::DecodeAll, decode_from_bytes, json, json::JsonSerialize};
 use pyo3::{
-    Bound,
+    Bound, FromPyObject, create_exception,
     exceptions::{PyException, PyTypeError, PyValueError},
     prelude::*,
     types::{PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyStringMethods, PyType},
+    wrap_pyfunction,
 };
 use rand_core_06::OsRng as OsRng06;
-use sorafs_car::scoreboard::{
-    self, Eligibility, ProviderTelemetry, ScoreboardConfig, TelemetrySnapshot,
-};
 use sorafs_car::{
     CarBuildPlan, CarChunk, FilePlan,
     fetch_plan::chunk_fetch_specs_from_json,
@@ -106,6 +96,7 @@ use sorafs_car::{
         ProviderScoreContext, ProviderScoreDecision, RangeCapability, ScorePolicy, StreamBudget,
         TransportHint, fetch_plan_parallel,
     },
+    scoreboard::{self, Eligibility, ProviderTelemetry, ScoreboardConfig, TelemetrySnapshot},
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
@@ -3458,7 +3449,8 @@ fn open_connect_payload_py(py: Python<'_>, key: &[u8], frame_bytes: &[u8]) -> Py
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs;
+
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
@@ -3472,8 +3464,9 @@ mod tests {
     };
     use sorafs_car::multi_fetch::PolicyBlockEvidence;
     use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
-    use std::fs;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn ensure_python() {
         static INIT: OnceCell<()> = OnceCell::new();

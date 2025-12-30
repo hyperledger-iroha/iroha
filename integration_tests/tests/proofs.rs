@@ -1,13 +1,13 @@
 //! Integration smoke test: submit a proof attachment and query its record via Torii.
 
+use std::{convert::TryFrom as _, str::FromStr as _};
+
 use eyre::{Report, Result};
 use integration_tests::sandbox;
 use iroha_data_model::proof::{ProofId, ProofStatus};
 use iroha_test_network::NetworkBuilder;
 use reqwest::Client as HttpClient;
 use sha2::{Digest as ShaDigest, Sha256};
-use std::convert::TryFrom as _;
-use std::str::FromStr as _;
 
 fn compute_proof_hash(backend: &str, bytes: &[u8]) -> [u8; 32] {
     let mut h = Sha256::new();

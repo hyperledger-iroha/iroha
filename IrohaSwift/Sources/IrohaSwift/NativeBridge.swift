@@ -1082,6 +1082,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UnsafePointer<CChar>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UInt8>?, UInt
@@ -1430,6 +1432,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
@@ -2788,10 +2791,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func offlineReceiptChallenge(
+        chainId: String,
         invoiceId: String,
         receiverId: String,
         assetId: String,
         amount: String,
+        issuedAtMs: UInt64,
         nonceHex: String
     ) throws -> NativeOfflineReceiptChallengeResult? {
         #if canImport(Darwin)
@@ -2807,33 +2812,37 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             guard let hashPtr = hashBuffer.baseAddress else { return -1 }
             return clientHash.withUnsafeMutableBufferPointer { clientBuffer -> Int32 in
                 guard let clientPtr = clientBuffer.baseAddress else { return -1 }
-                return invoiceId.withCString { invoicePtr in
-                    return receiverId.withCString { receiverPtr in
-                        return assetId.withCString { assetPtr in
-                            return amount.withCString { amountPtr in
-                                return nonceHex.withCString { noncePtr in
-                                    offlineReceiptChallengeFn(
-                                        invoicePtr,
-                                        UInt(invoiceId.utf8.count),
-                                        receiverPtr,
-                                        UInt(receiverId.utf8.count),
-                                        assetPtr,
-                                        UInt(assetId.utf8.count),
-                                        amountPtr,
-                                        UInt(amount.utf8.count),
-                                        noncePtr,
-                                        UInt(nonceHex.utf8.count),
-                                        &preimagePtr,
-                                        &preimageLen,
-                                        hashPtr,
-                                        irohaHashCount,
-                                        clientPtr,
-                                        clientHashCount
-                                    )
-        }
-    }
-}
-
+                return chainId.withCString { chainPtr in
+                    return invoiceId.withCString { invoicePtr in
+                        return receiverId.withCString { receiverPtr in
+                            return assetId.withCString { assetPtr in
+                                return amount.withCString { amountPtr in
+                                    return nonceHex.withCString { noncePtr in
+                                        offlineReceiptChallengeFn(
+                                            chainPtr,
+                                            UInt(chainId.utf8.count),
+                                            invoicePtr,
+                                            UInt(invoiceId.utf8.count),
+                                            receiverPtr,
+                                            UInt(receiverId.utf8.count),
+                                            assetPtr,
+                                            UInt(assetId.utf8.count),
+                                            amountPtr,
+                                            UInt(amount.utf8.count),
+                                            issuedAtMs,
+                                            noncePtr,
+                                            UInt(nonceHex.utf8.count),
+                                            &preimagePtr,
+                                            &preimageLen,
+                                            hashPtr,
+                                            irohaHashCount,
+                                            clientPtr,
+                                            clientHashCount
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -6634,6 +6643,7 @@ extension NoritoNativeBridge {
     func offlineBalanceProof(
         chainId: String,
         claimedDelta: String,
+        resultingValue: String,
         initialCommitment: Data,
         resultingCommitment: Data,
         initialBlinding: Data,
@@ -6652,38 +6662,42 @@ extension NoritoNativeBridge {
         var proofLen: UInt = 0
         let status = chainId.withCString { chainPtr in
             claimedDelta.withCString { deltaPtr in
-                initialCommitment.withUnsafeBytes { initCommitBuffer -> Int32 in
-                    guard let initCommitPtr = initCommitBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                        return -1
-                    }
-                    return resultingCommitment.withUnsafeBytes { resCommitBuffer -> Int32 in
-                        guard let resCommitPtr = resCommitBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                resultingValue.withCString { valuePtr in
+                    initialCommitment.withUnsafeBytes { initCommitBuffer -> Int32 in
+                        guard let initCommitPtr = initCommitBuffer.bindMemory(to: UInt8.self).baseAddress else {
                             return -1
                         }
-                        return initialBlinding.withUnsafeBytes { initBlindBuffer -> Int32 in
-                            guard let initBlindPtr = initBlindBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                        return resultingCommitment.withUnsafeBytes { resCommitBuffer -> Int32 in
+                            guard let resCommitPtr = resCommitBuffer.bindMemory(to: UInt8.self).baseAddress else {
                                 return -1
                             }
-                            return resultingBlinding.withUnsafeBytes { resBlindBuffer -> Int32 in
-                                guard let resBlindPtr = resBlindBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                            return initialBlinding.withUnsafeBytes { initBlindBuffer -> Int32 in
+                                guard let initBlindPtr = initBlindBuffer.bindMemory(to: UInt8.self).baseAddress else {
                                     return -1
                                 }
-                                return offlineBalanceProofFn(
-                                    chainPtr,
-                                    UInt(chainId.utf8.count),
-                                    initCommitPtr,
-                                    UInt(initialCommitment.count),
-                                    resCommitPtr,
-                                    UInt(resultingCommitment.count),
-                                    deltaPtr,
-                                    UInt(claimedDelta.utf8.count),
-                                    initBlindPtr,
-                                    UInt(initialBlinding.count),
-                                    resBlindPtr,
-                                    UInt(resultingBlinding.count),
-                                    &proofPtr,
-                                    &proofLen
-                                )
+                                return resultingBlinding.withUnsafeBytes { resBlindBuffer -> Int32 in
+                                    guard let resBlindPtr = resBlindBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                                        return -1
+                                    }
+                                    return offlineBalanceProofFn(
+                                        chainPtr,
+                                        UInt(chainId.utf8.count),
+                                        initCommitPtr,
+                                        UInt(initialCommitment.count),
+                                        resCommitPtr,
+                                        UInt(resultingCommitment.count),
+                                        deltaPtr,
+                                        UInt(claimedDelta.utf8.count),
+                                        valuePtr,
+                                        UInt(resultingValue.utf8.count),
+                                        initBlindPtr,
+                                        UInt(initialBlinding.count),
+                                        resBlindPtr,
+                                        UInt(resultingBlinding.count),
+                                        &proofPtr,
+                                        &proofLen
+                                    )
+                                }
                             }
                         }
                     }

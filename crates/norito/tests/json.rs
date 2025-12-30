@@ -1,8 +1,10 @@
 //! JSON helper tests for Norito (manual, no serde in lib).
 #![cfg(feature = "json")]
 
-use norito::json as nj;
-use norito::json::{JsonDeserialize, JsonSerialize, Parser, from_json, write_json_string};
+use norito::{
+    json as nj,
+    json::{JsonDeserialize, JsonSerialize, Parser, from_json, write_json_string},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Sample {

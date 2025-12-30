@@ -1,3 +1,14 @@
+use std::{fmt, io::Cursor, str::FromStr};
+
+use iroha_crypto::{Hash, HashOf, Signature};
+use iroha_schema::IntoSchema;
+use norito::{
+    codec::{Decode, Encode},
+    core::{self as ncore, DecodeFromSlice},
+    to_bytes,
+};
+use thiserror::Error;
+
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -5,13 +16,6 @@ use crate::{
     nexus::{DataSpaceId, LaneId},
     sorafs::pin_registry::ManifestDigest,
 };
-use iroha_crypto::{Hash, HashOf, Signature};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use norito::core::{self as ncore, DecodeFromSlice};
-use norito::to_bytes;
-use std::{fmt, io::Cursor, str::FromStr};
-use thiserror::Error;
 
 /// Proof scheme used to authenticate DA commitments.
 #[derive(
@@ -407,9 +411,10 @@ pub fn commitment_leaf_hash(record: &DaCommitmentRecord) -> Hash {
 mod tests {
     use std::str::FromStr;
 
-    use super::*;
     use iroha_crypto::Hash;
     use norito::codec::{DecodeAll, encode_adaptive};
+
+    use super::*;
 
     fn sample_record() -> DaCommitmentRecord {
         DaCommitmentRecord {

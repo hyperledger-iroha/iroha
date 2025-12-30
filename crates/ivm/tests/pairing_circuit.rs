@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
-use ivm::halo2::PairingCircuit;
-use ivm::pairing_check_truncated;
+use ivm::{halo2::PairingCircuit, pairing_check_truncated};
 
 #[test]
 fn test_pairing_circuit() {

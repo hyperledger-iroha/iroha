@@ -1,7 +1,9 @@
 //! Benchmarks for Kotodama program parsing and execution in IVM.
 use criterion::Criterion;
-use ivm::kotodama::compiler::{Compiler, encode_add};
-use ivm::{IVM, ProgramMetadata, encoding};
+use ivm::{
+    IVM, ProgramMetadata, encoding,
+    kotodama::compiler::{Compiler, encode_add},
+};
 
 const LITERAL_BENCH_SIZE: usize = 512;
 

@@ -4,11 +4,12 @@
 //! They allow hosts, gateways, and governance tooling to exchange licensing,
 //! moderation, and telemetry directives without relying on ad-hoc JSON maps.
 
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+
 use crate::account::AccountId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 
 /// Licensing bundle referenced by a GAR payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -121,8 +122,9 @@ impl GarModerationAction {
 
 #[cfg(feature = "json")]
 mod gar_json_impl {
-    use super::GarModerationAction;
     use norito::json::{Error, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser};
+
+    use super::GarModerationAction;
 
     impl FastJsonWrite for GarModerationAction {
         fn write_json(&self, out: &mut String) {
@@ -271,8 +273,9 @@ pub struct GarEnforcementReceiptV1 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::str::FromStr;
+
+    use super::*;
 
     #[test]
     fn receipt_round_trip_via_norito_codec() {

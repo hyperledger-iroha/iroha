@@ -1,5 +1,6 @@
-use crate::json::{self, JsonSerialize, Value};
 use std::io::{self, Write};
+
+use crate::json::{self, JsonSerialize, Value};
 
 const INDENT: usize = 2;
 

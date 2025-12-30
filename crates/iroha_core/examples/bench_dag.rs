@@ -466,8 +466,7 @@ fn schedule_wave_by_key(adj: &[Vec<usize>], indeg: &[usize], key: &[u64]) -> Vec
 
 // BinaryHeap ready-queue scheduler by (key, idx)
 fn schedule_heap_by_key(adj: &[Vec<usize>], indeg: &[usize], key: &[u64]) -> Vec<usize> {
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
+    use std::{cmp::Reverse, collections::BinaryHeap};
     let n = indeg.len();
     let mut indeg_s = indeg.to_vec();
     let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::with_capacity(n);
@@ -544,8 +543,7 @@ fn schedule_heap_by_key_csr(
     indeg: &[usize],
     key: &[u64],
 ) -> Vec<usize> {
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
+    use std::{cmp::Reverse, collections::BinaryHeap};
     let n = indeg.len();
     let mut indeg_s = indeg.to_vec();
     let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::with_capacity(n);

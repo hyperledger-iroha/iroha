@@ -344,8 +344,7 @@ mod tests {
     use std::sync::Arc;
 
     use iroha_crypto::KeyPair;
-    use iroha_data_model::isi::error::InvalidParameterError;
-    use iroha_data_model::permission;
+    use iroha_data_model::{isi::error::InvalidParameterError, permission};
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
@@ -438,10 +437,13 @@ mod tests {
 
     #[test]
     async fn account_metadata_limit() -> Result<()> {
-        use iroha_data_model::parameter::{CustomParameter, CustomParameterId};
-        use iroha_data_model::prelude::Parameter;
-        use iroha_primitives::json::Json;
         use std::str::FromStr as _;
+
+        use iroha_data_model::{
+            parameter::{CustomParameter, CustomParameterId},
+            prelude::Parameter,
+        };
+        use iroha_primitives::json::Json;
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
@@ -481,10 +483,10 @@ mod tests {
     #[test]
     async fn register_contract_manifest_requires_permission_and_is_queryable() -> Result<()> {
         use iroha_crypto::Hash;
-        use iroha_data_model::permission;
-        use iroha_data_model::prelude as dm;
-        use iroha_data_model::smart_contract::manifest;
-        use iroha_data_model::{isi::smart_contract_code, query::smart_contract::prelude};
+        use iroha_data_model::{
+            isi::smart_contract_code, permission, prelude as dm, query::smart_contract::prelude,
+            smart_contract::manifest,
+        };
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
@@ -547,10 +549,9 @@ mod tests {
     #[test]
     async fn register_contract_manifest_requires_provenance() -> Result<()> {
         use iroha_crypto::Hash;
-        use iroha_data_model::isi::smart_contract_code;
-        use iroha_data_model::permission;
-        use iroha_data_model::prelude as dm;
-        use iroha_data_model::smart_contract::manifest;
+        use iroha_data_model::{
+            isi::smart_contract_code, permission, prelude as dm, smart_contract::manifest,
+        };
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
@@ -592,10 +593,9 @@ mod tests {
     #[test]
     async fn register_contract_manifest_rejects_wrong_signer() -> Result<()> {
         use iroha_crypto::Hash;
-        use iroha_data_model::isi::smart_contract_code;
-        use iroha_data_model::permission;
-        use iroha_data_model::prelude as dm;
-        use iroha_data_model::smart_contract::manifest;
+        use iroha_data_model::{
+            isi::smart_contract_code, permission, prelude as dm, smart_contract::manifest,
+        };
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;

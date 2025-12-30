@@ -169,8 +169,9 @@ impl AccountAdmissionPolicy {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use super::*;
     use norito::json;
+
+    use super::*;
 
     #[test]
     fn policy_json_roundtrips_with_tagged_mode() {

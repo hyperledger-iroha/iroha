@@ -1,8 +1,9 @@
 //! Cross-backend crypto/vector conformance checks.
 
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
 use ivm::{AccelerationConfig, aesdec, aesdec_impl, aesenc, aesenc_impl, sha256_compress, vadd32};
 use sha2::{Digest, Sha256};
-use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const SHA256_IV: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,

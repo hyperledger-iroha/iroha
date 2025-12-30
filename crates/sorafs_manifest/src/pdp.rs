@@ -1,8 +1,9 @@
 //! Proof-of-Data Possession (PDP) Norito payloads.
 
-use super::{BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1};
 use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
+
+use super::{BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1};
 
 /// PDP commitment schema version (v1).
 pub const PDP_COMMITMENT_VERSION_V1: u8 = 1;

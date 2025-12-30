@@ -2,22 +2,8 @@
 
 //! Metal GPU bindings for FASTPQ.
 
-use crate::metal_config::{self, DeviceHints};
-use crate::overrides;
-use crate::poseidon::FIELD_MODULUS;
-use crate::poseidon_manifest::poseidon_manifest;
-use crate::trace::{PoseidonColumnBatch, PoseidonColumnSlice};
-use crate::{backend::GpuBackend, gpu::GpuError};
-use fastpq_isi::poseidon::STATE_WIDTH;
-use halo2curves::bn256::Fr as Bn254Fr;
-use halo2curves::ff::PrimeField;
-use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
-use metal::{
-    Buffer, CommandBuffer, CommandQueue, ComputeCommandEncoderRef, ComputePipelineState, Device,
-    Library, MTLCommandBufferStatus, MTLDeviceLocation, MTLResourceOptions, MTLSize, NSRange,
-};
-use norito::json::{self, Value};
-use smallvec::SmallVec;
+#[cfg(test)]
+use std::sync::Once;
 use std::{
     collections::HashMap,
     convert::{TryFrom, TryInto},
@@ -38,9 +24,26 @@ use std::{
     vec::Vec,
 };
 
-#[cfg(test)]
-use std::sync::Once;
+use fastpq_isi::poseidon::STATE_WIDTH;
+use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
+use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
+use metal::{
+    Buffer, CommandBuffer, CommandQueue, ComputeCommandEncoderRef, ComputePipelineState, Device,
+    Library, MTLCommandBufferStatus, MTLDeviceLocation, MTLResourceOptions, MTLSize, NSRange,
+};
+use norito::json::{self, Value};
+use smallvec::SmallVec;
 use tracing::{debug, warn};
+
+use crate::{
+    backend::GpuBackend,
+    gpu::GpuError,
+    metal_config::{self, DeviceHints},
+    overrides,
+    poseidon::FIELD_MODULUS,
+    poseidon_manifest::poseidon_manifest,
+    trace::{PoseidonColumnBatch, PoseidonColumnSlice},
+};
 
 type MetalResult<T> = Result<T, GpuError>;
 
@@ -4736,8 +4739,9 @@ mod helper_tests {
 
 #[cfg(test)]
 mod bn254_helper_tests {
-    use super::*;
     use metal::Device;
+
+    use super::*;
 
     #[test]
     fn upload_bn254_twiddles_rejects_non_limb_multiple() {
@@ -4823,10 +4827,12 @@ mod bn254_helper_tests {
 
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod tests {
+    use std::{thread, time::Duration};
+
+    use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
+
     use super::{ensure_multi_queue_env, unwrap_or_skip, *};
     use crate::fft::Planner;
-    use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
-    use std::{thread, time::Duration};
 
     fn sample_fft_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
         let len = 1usize << log_size;

@@ -1,11 +1,10 @@
 //! Baseline throughput and block production under normal conditions.
 
 use eyre::{Result, WrapErr};
+use integration_tests::sandbox;
 use iroha::data_model::{asset::AssetDefinitionId, parameter::BlockParameter, prelude::*};
 use iroha_test_network::*;
 use nonzero_ext::nonzero;
-
-use integration_tests::sandbox;
 
 #[test]
 #[allow(clippy::too_many_lines)]

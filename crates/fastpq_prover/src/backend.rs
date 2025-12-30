@@ -1,4 +1,8 @@
 use core::convert::TryFrom;
+#[cfg(windows)]
+use std::env;
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::{
     collections::BTreeSet,
     fs,
@@ -7,29 +11,22 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
 };
 
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-use metal::{Device, MTLDeviceLocation};
-
-use rayon::prelude::*;
-
-#[cfg(windows)]
-use std::env;
-#[cfg(windows)]
-use std::path::PathBuf;
-
 use fastpq_isi::StarkParameterSet;
 use iroha_crypto::Hash;
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+use metal::{Device, MTLDeviceLocation};
+use rayon::prelude::*;
 
-use crate::fft::Planner;
-use crate::overrides;
-use crate::trace::{
-    PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
-    hash_columns_from_coefficients, merkle_root, merkle_root_with_first_level,
-};
 use crate::{
-    Error, Result, TransitionBatch, pack_bytes,
+    Error, Result, TransitionBatch,
+    fft::Planner,
+    overrides, pack_bytes,
     poseidon::{self, PoseidonSponge},
     proof::PublicIO,
+    trace::{
+        PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
+        hash_columns_from_coefficients, merkle_root, merkle_root_with_first_level,
+    },
 };
 
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
@@ -537,8 +534,9 @@ fn system_root() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod detection_tests {
-    use super::*;
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
+
+    use super::*;
 
     fn availability(enabled: &[GpuBackend]) -> BackendAvailability {
         enabled
@@ -626,8 +624,9 @@ mod detection_tests {
 
 #[cfg(test)]
 mod observer_tests {
-    use super::*;
     use std::sync::mpsc;
+
+    use super::*;
 
     #[test]
     fn execution_mode_observer_receives_resolution() {
@@ -1528,9 +1527,10 @@ fn mul_mod(a: u64, b: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::{OperationKind, StateTransition};
-    use std::collections::BTreeSet;
 
     fn sample_batch(rows: usize) -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced");
@@ -1894,11 +1894,11 @@ mod tests {
     }
 
     mod fri_properties {
+        use fastpq_isi::CANONICAL_PARAMETER_SETS;
+        use proptest::{collection::vec as pvec, prelude::*};
+
         use super::*;
         use crate::Planner;
-        use fastpq_isi::CANONICAL_PARAMETER_SETS;
-        use proptest::collection::vec as pvec;
-        use proptest::prelude::*;
 
         const MAX_TRACE_LOG: u32 = 4;
 

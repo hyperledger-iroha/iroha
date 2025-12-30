@@ -1,7 +1,11 @@
 //! Extensive export tests for `iroha_ffi`: enums, structs, options, slices, and more.
 #![allow(unsafe_code, clippy::pedantic)]
 
-use std::{collections::BTreeMap, mem::MaybeUninit, string::String};
+use std::{
+    collections::BTreeMap,
+    mem::{ManuallyDrop, MaybeUninit},
+    string::String,
+};
 
 use iroha_ffi::{
     FfiConvert, FfiOutPtrRead, FfiReturn, FfiTuple1, FfiTuple2, FfiType, FromFfiReturn,
@@ -14,7 +18,6 @@ use iroha_ffi::{
     },
     slice::OutBoxedSlice,
 };
-use std::mem::ManuallyDrop;
 
 iroha_ffi::handles! {OpaqueStruct}
 iroha_ffi::def_ffi_fns! { dealloc }

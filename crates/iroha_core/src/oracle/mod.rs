@@ -345,7 +345,8 @@ pub type FeedEventRecord = iroha_data_model::events::data::oracle::FeedEventReco
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{num::NonZeroU64, str::FromStr};
+
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         account::AccountId,
@@ -356,7 +357,8 @@ mod tests {
             ObservationValue, OutlierPolicy, RiskClass,
         },
     };
-    use std::{num::NonZeroU64, str::FromStr};
+
+    use super::*;
 
     fn feed_id(name: &str) -> iroha_data_model::oracle::FeedId {
         iroha_data_model::oracle::FeedId(Name::from_str(name).expect("feed name"))

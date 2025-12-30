@@ -617,9 +617,11 @@ fn wrap_config_error(err: PrivacyConfigError, config: &PrivacyBucketConfig) -> B
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write as _;
+
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     fn write_log(lines: &[&str]) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");

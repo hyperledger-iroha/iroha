@@ -137,13 +137,16 @@ impl ConfidentialComputeStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::{Hash, Signature};
-    use iroha_data_model::da::{
-        commitment::{DaProofScheme, KzgCommitment, RetentionClass},
-        types::{BlobDigest, StorageTicketId},
+    use iroha_data_model::{
+        da::{
+            commitment::{DaProofScheme, KzgCommitment, RetentionClass},
+            types::{BlobDigest, StorageTicketId},
+        },
+        nexus::LaneId,
     };
-    use iroha_data_model::nexus::LaneId;
+
+    use super::*;
 
     fn policy(version: u32) -> ConfidentialComputePolicy {
         ConfidentialComputePolicy::new(

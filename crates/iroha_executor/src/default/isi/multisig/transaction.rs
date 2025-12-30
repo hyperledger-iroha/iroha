@@ -2,15 +2,13 @@
 
 use std::collections::BTreeSet;
 
-use iroha_smart_contract::data_model::query::error::QueryExecutionFail;
+use iroha_smart_contract::data_model::{isi::CustomInstruction, query::error::QueryExecutionFail};
 
-use super::account::legacy_derived_multisig_account_id;
-use super::*;
+use super::{account::legacy_derived_multisig_account_id, *};
 use crate::{
     data_model::{Level, query::error::FindError},
     smart_contract::DebugExpectExt as _,
 };
-use iroha_smart_contract::data_model::isi::CustomInstruction;
 
 fn proposer_is_authorized(
     multisig_account: &AccountId,
@@ -404,11 +402,13 @@ fn prune_down<V: Execute + Visit + ?Sized>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::num::{NonZeroU16, NonZeroU64};
+    use std::collections::BTreeMap;
+
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_smart_contract::data_model::{account::AccountId, domain::DomainId};
-    use std::collections::BTreeMap;
+
+    use super::*;
 
     fn account(seed: u8, domain: &DomainId) -> AccountId {
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);

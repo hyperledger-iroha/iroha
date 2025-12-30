@@ -4,9 +4,6 @@ use std::{
     str::FromStr,
 };
 
-use crate::offline_tooling::{
-    build_metadata, parse_private_key, parse_public_key, write_json, write_norito_bytes,
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake2::{Blake2b512, Digest};
 use curve25519_dalek::{
@@ -14,26 +11,36 @@ use curve25519_dalek::{
 };
 use eyre::{Context as _, Result, eyre};
 use hex::encode_upper;
-use iroha::client::Client;
-use iroha::config::{Config, LoadPath};
-use iroha::data_model::{
-    account::AccountId,
-    asset::AssetId,
-    metadata::Metadata,
-    offline::{
-        AndroidIntegrityMetadata, AndroidProvisionedProof, OfflineAllowanceCommitment,
-        OfflineWalletCertificate, OfflineWalletPolicy,
+use iroha::{
+    client::Client,
+    config::{Config, LoadPath},
+    data_model::{
+        account::AccountId,
+        asset::AssetId,
+        isi::offline::RegisterOfflineAllowance,
+        metadata::Metadata,
+        offline::{
+            AndroidIntegrityMetadata, AndroidProvisionedProof, OfflineAllowanceCommitment,
+            OfflineWalletCertificate, OfflineWalletPolicy,
+        },
+        prelude::Numeric,
     },
 };
-use iroha::data_model::{isi::offline::RegisterOfflineAllowance, prelude::Numeric};
-use iroha_crypto::Hash;
-use iroha_crypto::{PrivateKey, PublicKey, Signature};
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json::{self as serde_json, Map as JsonMap, Value as JsonValue};
-use norito::{NoritoDeserialize, from_bytes, json as norito_json, to_bytes};
+use iroha_crypto::{Hash, PrivateKey, PublicKey, Signature};
+use norito::{
+    NoritoDeserialize,
+    derive::{JsonDeserialize, JsonSerialize},
+    from_bytes, json as norito_json,
+    json::{self as serde_json, Map as JsonMap, Value as JsonValue},
+    to_bytes,
+};
 use once_cell::sync::Lazy;
 use rand::RngCore;
 use sha2::Sha512;
+
+use crate::offline_tooling::{
+    build_metadata, parse_private_key, parse_public_key, write_json, write_norito_bytes,
+};
 
 const H_GENERATOR_LABEL: &[u8] = b"iroha.offline.balance.generator.H.v1";
 const BLINDING_DERIVE_LABEL: &[u8] = b"iroha.offline.balance.blind.v1";
@@ -772,13 +779,15 @@ fn ensure_provisioned_metadata_matches(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::Write;
+
     use curve25519_dalek::ristretto::CompressedRistretto;
     use iroha::data_model::{asset::AssetDefinitionId, domain::DomainId, name::Name};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_primitives::json::Json;
-    use std::io::Write;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[test]
     fn validate_android_policy_accepts_marker_key() {

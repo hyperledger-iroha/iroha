@@ -3,8 +3,10 @@
 
 #![cfg(feature = "bridge")]
 
-use iroha_data_model::isi::{InstructionBox, bridge::RecordBridgeReceipt};
-use iroha_data_model::prelude::*;
+use iroha_data_model::{
+    isi::{InstructionBox, bridge::RecordBridgeReceipt},
+    prelude::*,
+};
 
 /// Emit a bridge receipt as a typed data event.
 pub fn emit_bridge_receipt_log<V: Execute + Visit + ?Sized>(
@@ -18,13 +20,17 @@ pub fn emit_bridge_receipt_log<V: Execute + Visit + ?Sized>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::data_model::executor::Result as ExecResult;
-    use crate::prelude::{Context, Visit};
-    use crate::{Execute, Iroha};
     use core::num::NonZeroU64;
+
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude::{AccountId, BlockHeader, LaneId};
+
+    use super::*;
+    use crate::{
+        Execute, Iroha,
+        data_model::executor::Result as ExecResult,
+        prelude::{Context, Visit},
+    };
 
     struct StubExecutor {
         host: Iroha,

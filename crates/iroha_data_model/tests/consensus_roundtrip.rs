@@ -8,26 +8,26 @@ use std::{
 };
 
 use iroha_crypto::{Hash, HashOf, KeyPair};
-use iroha_data_model::block::{
-    Header as BlockHeader,
-    consensus::{
-        AvailableVote, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
-        EvidencePayload, EvidenceRecord, ExecKv, ExecVote, ExecWitness, ExecWitnessMsg,
-        ExecutionQC, LaneBlockCommitment, LaneSettlementReceipt, NewView, NposGenesisParams, Phase,
-        Proposal, Qc, QcAggregate, QcHeaderRef, RbcChunk, RbcDeliver, RbcInit, RbcReady, Reconfig,
-        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiConsensusCapsStatus,
-        SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
-        SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
-        SumeragiLaneGovernance, SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
-        SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
-        SumeragiQcEntry, SumeragiQcSnapshot, SumeragiRbcEvictedSession, SumeragiRbcStoreStatus,
-        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-        SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals, Vote, VrfCommit, VrfReveal,
-        WitnessAvailAck, WitnessAvailQC,
-    },
-};
 use iroha_data_model::{
+    block::{
+        Header as BlockHeader,
+        consensus::{
+            AvailableVote, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
+            EvidencePayload, EvidenceRecord, ExecKv, ExecVote, ExecWitness, ExecWitnessMsg,
+            ExecutionQC, LaneBlockCommitment, LaneSettlementReceipt, NewView, NposGenesisParams,
+            Phase, Proposal, Qc, QcAggregate, QcHeaderRef, RbcChunk, RbcDeliver, RbcInit, RbcReady,
+            Reconfig, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
+            SumeragiConsensusCapsStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
+            SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
+            SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipStatus,
+            SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
+            SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+            SumeragiRbcEvictedSession, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
+            SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+            SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
+            SumeragiWorkerQueueTotals, Vote, VrfCommit, VrfReveal, WitnessAvailAck, WitnessAvailQC,
+        },
+    },
     consensus::ExecutionQcRecord,
     da::commitment,
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},

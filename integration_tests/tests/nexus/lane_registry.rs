@@ -162,8 +162,9 @@ impl Drop for AliasResolverGuard {
 }
 
 fn install_fixture_alias_resolver() -> AliasResolverGuard {
-    use iroha_data_model::account::{self, AccountId};
     use std::{collections::BTreeMap, sync::Arc};
+
+    use iroha_data_model::account::{self, AccountId};
 
     let mut entries: BTreeMap<String, AccountId> = BTreeMap::new();
     entries.insert("alice".into(), iroha_test_samples::ALICE_ID.clone());
@@ -190,9 +191,10 @@ fn install_fixture_alias_resolver() -> AliasResolverGuard {
 }
 
 fn seeded_account(seed: u8) -> iroha_data_model::account::AccountId {
+    use std::str::FromStr;
+
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{account::AccountId, domain::DomainId};
-    use std::str::FromStr;
 
     let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
     let domain = DomainId::from_str("wonderland").expect("fixture domain");

@@ -7,13 +7,12 @@ use iroha_core::{
     state::State,
 };
 use iroha_crypto::KeyPair;
-use iroha_data_model::name::Name;
 use iroha_data_model::{
     ValidationFail,
     metadata::Metadata,
+    name::Name,
     prelude::*,
-    transaction::error::TransactionRejectionReason,
-    transaction::{Executable, TransactionBuilder},
+    transaction::{Executable, TransactionBuilder, error::TransactionRejectionReason},
 };
 use iroha_primitives::json::Json;
 use ivm::{ProgramMetadata, encoding, instruction};

@@ -1,15 +1,13 @@
 use core::marker::PhantomData;
 use std::vec::Vec;
 
+use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
+use group::{Curve, Group as _, prime::PrimeCurveAffine};
+use pairing::{MillerLoopResult as _, MultiMillerLoop};
 #[cfg(feature = "rand")]
 use rand::rngs::OsRng;
-use zeroize::Zeroize as _;
-
-use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
-use group::prime::PrimeCurveAffine;
-use group::{Curve, Group as _};
-use pairing::{MillerLoopResult as _, MultiMillerLoop};
 use w3f_bls::SerializableToBytes as _;
+use zeroize::Zeroize as _;
 
 pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
 

@@ -1,13 +1,13 @@
 //! Torii contract manifest endpoints: POST wraps ISI and GET reads on-chain manifest.
 
+use std::time::Instant;
+
 use eyre::{Result, eyre};
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
 use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
 use iroha_test_network::NetworkBuilder;
-use std::time::Instant;
-
-use integration_tests::sandbox;
 
 fn hex32(hash: &Hash) -> String {
     hex::encode(hash.as_ref())

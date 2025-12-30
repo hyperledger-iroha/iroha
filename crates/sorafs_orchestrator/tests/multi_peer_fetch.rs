@@ -1,17 +1,18 @@
 //! Integration tests for the multi-source orchestrator using fixture providers.
 
-use blake3::hash as blake3_hash;
-use sorafs_car::{
-    fixtures::MultiPeerFixture,
-    multi_fetch::{ChunkResponse, FetchRequest},
-};
-use sorafs_orchestrator::{Orchestrator, OrchestratorConfig, PolicyStatus};
 use std::{
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
     sync::{Arc, Mutex},
     time::Duration,
 };
+
+use blake3::hash as blake3_hash;
+use sorafs_car::{
+    fixtures::MultiPeerFixture,
+    multi_fetch::{ChunkResponse, FetchRequest},
+};
+use sorafs_orchestrator::{Orchestrator, OrchestratorConfig, PolicyStatus};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

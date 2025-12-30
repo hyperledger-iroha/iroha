@@ -4,15 +4,15 @@
 //! lanes. Runtime code and SDKs rely on these helpers to validate Merkle roots
 //! and zk-SNARK attestations before admitting cross-lane transfers.
 
-use blake3::Hasher;
 use core::{convert::TryFrom, fmt};
+
+use blake3::Hasher;
 use iroha_schema::IntoSchema;
+#[cfg(feature = "json")]
+use norito::derive::{JsonDeserialize, JsonSerialize};
 use thiserror::Error;
 
 use crate::{Hash, HashOf, MerkleProof, MerkleTree};
-
-#[cfg(feature = "json")]
-use norito::derive::{JsonDeserialize, JsonSerialize};
 
 /// Result type returned by the privacy commitment helpers.
 pub type Result<T, E = PrivacyError> = core::result::Result<T, E>;

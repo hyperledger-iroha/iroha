@@ -6,8 +6,10 @@
 //! to the BN254 field parameters used by the fastpq Halo2 gadgets to keep all
 //! call-sites in sync with the proving backend.
 
-use halo2curves::bn256::Fr;
-use halo2curves::ff::{Field, PrimeField};
+use halo2curves::{
+    bn256::Fr,
+    ff::{Field, PrimeField},
+};
 use once_cell::sync::OnceCell;
 use poseidon_primitives::poseidon::primitives::Spec;
 

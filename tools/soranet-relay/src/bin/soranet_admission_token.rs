@@ -1,3 +1,10 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process,
+    time::{Duration, SystemTime},
+};
+
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use norito::json::{self, Value};
 use rand::{RngCore, SeedableRng, rng, rngs::StdRng};
@@ -6,12 +13,6 @@ use soranet_relay::token_tool::{
     MintRequest, RevocationList, TokenBundle, decode_token_string, encode_token_base64,
     encode_token_hex, inspect_token, mint_token, parse_hex_array, parse_hex_bytes, parse_rfc3339,
     read_revocation_file,
-};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    process,
-    time::{Duration, SystemTime},
 };
 
 const DEFAULT_TTL_SECS: u64 = 900;

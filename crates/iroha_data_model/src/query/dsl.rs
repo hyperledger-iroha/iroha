@@ -893,8 +893,9 @@ mod tests {
 
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
-    use super::*;
     use norito::json;
+
+    use super::*;
 
     #[test]
     fn compound_predicate_serializes_empty_object() {
@@ -910,14 +911,12 @@ mod json_tests {
 
 #[cfg(all(test, feature = "json"))]
 mod predicate_tests {
-    use super::*;
-    use crate::Registrable;
-    use crate::account::AccountId;
-    use crate::domain::Domain;
-    use crate::query::json::PredicateJson;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::json::Json;
     use norito::json;
+
+    use super::*;
+    use crate::{Registrable, account::AccountId, domain::Domain, query::json::PredicateJson};
 
     fn test_authority() -> AccountId {
         let domain = "wonderland".parse().expect("domain id");
@@ -1003,16 +1002,16 @@ mod selector_tests {
 
 #[cfg(test)]
 mod committed_tx_predicate_tests {
+    use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof};
+    use iroha_primitives::json::Json;
+    use norito::json;
+
     use super::CommittedTxPredicate as P;
-    use crate::prelude as dm;
     // Explicit module/type imports to avoid relying on prelude module paths
     use crate::prelude::{
         DataTriggerSequence, TransactionEntrypoint, TransactionRejectionReason, TransactionResult,
     };
-    use crate::{account, block, query, transaction, transaction::signed, trigger};
-    use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof};
-    use iroha_primitives::json::Json;
-    use norito::json;
+    use crate::{account, block, prelude as dm, query, transaction, transaction::signed, trigger};
 
     fn dummy_block_hash() -> HashOf<block::BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]))

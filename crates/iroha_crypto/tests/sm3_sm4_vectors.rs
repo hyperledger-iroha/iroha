@@ -204,10 +204,13 @@ fn sm4_ccm_rejects_bad_tag() {
 
 #[cfg(feature = "sm_proptest")]
 mod property_tests {
+    use proptest::{
+        array::{uniform12, uniform16},
+        collection::vec,
+        prelude::*,
+    };
+
     use super::*;
-    use proptest::array::{uniform12, uniform16};
-    use proptest::collection::vec;
-    use proptest::prelude::*;
 
     fn bounded_bytes(min: usize, max: usize) -> impl Strategy<Value = Vec<u8>> {
         vec(any::<u8>(), min..=max)

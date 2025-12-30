@@ -1,11 +1,14 @@
 //! Quarantine lane: classification + explicit overflow rejection test.
 #![allow(clippy::items_after_statements)]
 
-use iroha_core::block::{self, BlockBuilder};
-use iroha_core::state::StateReadOnly;
-use iroha_data_model::prelude::*;
 // no nonzero macro used in this file
 use std::borrow::Cow;
+
+use iroha_core::{
+    block::{self, BlockBuilder},
+    state::StateReadOnly,
+};
+use iroha_data_model::prelude::*;
 
 #[test]
 fn quarantine_overflow_rejects_one_tx() {

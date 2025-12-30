@@ -150,7 +150,6 @@ fn build_line_from_env() -> BuildLine {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         isi::SetParameter,
@@ -166,6 +165,8 @@ mod tests {
         transaction::Executable,
     };
     use iroha_primitives::json::Json;
+
+    use super::*;
 
     #[test]
     fn default_manifest_matches_kagami_parameter_baseline() {

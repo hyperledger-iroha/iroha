@@ -1,6 +1,7 @@
+use std::time::Instant;
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use ivm::Registers;
-use std::time::Instant;
 
 const REGISTER_COUNT: usize = 256;
 const WRITABLE_REGISTER_COUNT: usize = REGISTER_COUNT - 1;

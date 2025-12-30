@@ -1,5 +1,10 @@
 #![cfg(feature = "cli")]
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
 use assert_cmd::{Command, cargo::cargo_bin_cmd};
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signer, SigningKey};
@@ -17,10 +22,6 @@ use sorafs_manifest::{
     provider_admission::{
         AdmissionRecord, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
     },
-};
-use std::{
-    fs,
-    path::{Path, PathBuf},
 };
 use tempfile::{TempDir, tempdir};
 

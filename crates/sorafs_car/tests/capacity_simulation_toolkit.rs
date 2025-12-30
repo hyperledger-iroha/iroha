@@ -1,8 +1,9 @@
 #![cfg(feature = "cli")]
 
+use std::{collections::HashMap, fs, path::PathBuf};
+
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
-use std::{collections::HashMap, fs, path::PathBuf};
 use tempfile::tempdir;
 
 fn repo_root() -> PathBuf {

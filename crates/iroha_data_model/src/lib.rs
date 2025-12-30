@@ -21,11 +21,9 @@ extern crate self as iroha_data_model;
 
 pub use iroha_crypto::PublicKey;
 pub use iroha_data_model_derive::model;
-
 pub use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 pub use norito::json::{JsonDeserialize, JsonSerialize};
-
 #[cfg(feature = "json")]
 pub use norito_derive::{
     FastJson as DeriveFastJson, FastJsonWrite as DeriveFastJsonWrite,
@@ -174,8 +172,7 @@ pub mod governance;
 pub mod testing;
 /// Helpers for constructing and accessing instruction registries used by the IVM.
 pub mod instruction_registry {
-    pub use crate::isi::InstructionRegistry;
-    pub use crate::isi::registry::default;
+    pub use crate::isi::{InstructionRegistry, registry::default};
 }
 
 /// Build-time constants generated during the build process (e.g., keyword
@@ -217,7 +214,6 @@ pub use error::{EnumTryAsError, ParseError};
 pub use errors::{
     AmxStage, CanonicalError, CanonicalErrorKind, CircuitBreakerKind, SettlementRouterOutage,
 };
-
 pub use executor::ValidationFail;
 pub use id::{ChainId, IdBox};
 pub use level::Level;
@@ -324,6 +320,7 @@ pub mod prelude {
         account::prelude::*,
         asset::prelude::*,
         block::prelude::*,
+        bridge::*,
         confidential::prelude::*,
         content::prelude::*,
         domain::prelude::*,
@@ -337,14 +334,11 @@ pub mod prelude {
         metadata::prelude::*,
         name::prelude::*,
         nexus::{
-            DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-            LaneCatalogError, LaneConfig, LaneId, LaneIdError, LaneLifecyclePlan, LaneMetadata,
-            LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility,
-            LaneVisibilityParseError,
-        },
-        nexus::{
+            DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata,
             DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementScope,
-            DomainEndorsementSignature, LaneRelayEnvelope,
+            DomainEndorsementSignature, LaneCatalog, LaneCatalogError, LaneConfig, LaneId,
+            LaneIdError, LaneLifecyclePlan, LaneMetadata, LaneRelayEnvelope, LaneStorageProfile,
+            LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
         },
         nft::prelude::*,
         parameter::prelude::*,
@@ -358,6 +352,4 @@ pub mod prelude {
         transaction::prelude::*,
         trigger::prelude::*,
     };
-
-    pub use super::bridge::*;
 }

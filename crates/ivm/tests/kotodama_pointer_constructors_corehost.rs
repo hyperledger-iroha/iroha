@@ -1,8 +1,7 @@
 //! End-to-end test: Kotodama pointer constructors lower to Norito TLVs and
 //! CoreHost validates TLVs for SetAccountDetail.
 
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-use ivm::{CoreHost, IVM};
+use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 
 #[test]
 fn kotodama_set_account_detail_with_constructors() {

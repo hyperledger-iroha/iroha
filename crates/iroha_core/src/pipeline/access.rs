@@ -4,22 +4,26 @@
 //! scheduler described in `new_pipeline.md`.
 
 use core::fmt::Write as _;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, OnceLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, OnceLock},
+};
 
-use crate::state::{StateReadOnly, WorldReadOnly};
 use iroha_crypto::Hash as IrohaHash;
+// ZK ISIs live in the data model; import the module for pattern matches
+use iroha_data_model::isi::ExecuteTrigger;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::{
         BurnBox, GrantBox, InstructionBox, Log, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
-        SetKeyValueBox, TransferBox, UnregisterBox,
+        SetKeyValueBox, TransferBox, UnregisterBox, zk,
     },
     nexus::LaneId,
     nft::NftId,
     permission,
     prelude::*,
+    role::RoleId,
     smart_contract::manifest::{ContractManifest, EntrypointDescriptor},
     state::{
         AccountMetadataKey, AccountRoleKey, AssetDefinitionMetadataKey, AssetMetadataKey,
@@ -30,11 +34,9 @@ use iroha_data_model::{
 };
 use ivm::host::IVMHost;
 use mv::storage::StorageReadOnly; // bring trait into scope for .get()
-// ZK ISIs live in the data model; import the module for pattern matches
-use iroha_data_model::isi::ExecuteTrigger;
-use iroha_data_model::isi::zk;
-use iroha_data_model::role::RoleId;
 use parking_lot::RwLock;
+
+use crate::state::{StateReadOnly, WorldReadOnly};
 
 /// Canonical string key used for conflict detection (Norito-like ordering).
 ///
@@ -1056,13 +1058,13 @@ fn access_key_from_state_log(key: &str) -> AccessKey {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::{
         isi::Log,
         level::Level,
         transaction::{Executable, IvmBytecode, TransactionBuilder},
     };
 
+    use super::*;
     use crate::state::{State, World};
 
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
@@ -1258,9 +1260,9 @@ mod tests {
 
     #[test]
     fn ivm_access_uses_manifest_hints_when_present() {
-        use iroha_data_model::asset::{AssetDefinitionId, AssetId};
-        use iroha_data_model::smart_contract::manifest::{
-            AccessSetHints, ContractManifest, MANIFEST_METADATA_KEY,
+        use iroha_data_model::{
+            asset::{AssetDefinitionId, AssetId},
+            smart_contract::manifest::{AccessSetHints, ContractManifest, MANIFEST_METADATA_KEY},
         };
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
@@ -1616,9 +1618,9 @@ mod tests {
 
     #[test]
     fn ivm_access_uses_entrypoint_hints_for_isi_syscalls_with_wsv_keys() {
-        use iroha_data_model::asset::id::{AssetDefinitionId, AssetId};
-        use iroha_data_model::smart_contract::manifest::{
-            ContractManifest, EntryPointKind, EntrypointDescriptor,
+        use iroha_data_model::{
+            asset::id::{AssetDefinitionId, AssetId},
+            smart_contract::manifest::{ContractManifest, EntryPointKind, EntrypointDescriptor},
         };
         use nonzero_ext::nonzero;
 

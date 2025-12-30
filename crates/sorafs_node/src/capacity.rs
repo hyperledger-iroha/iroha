@@ -663,12 +663,13 @@ pub enum CapacityError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::sorafs::prelude::ProviderId;
     use norito::to_bytes;
     use sorafs_manifest::capacity::{
         CAPACITY_DECLARATION_VERSION_V1, REPLICATION_ORDER_VERSION_V1, ReplicationOrderSlaV1,
     };
+
+    use super::*;
 
     fn make_record_and_manager() -> (CapacityManager, CapacityDeclarationRecord) {
         let declaration = CapacityDeclarationV1 {

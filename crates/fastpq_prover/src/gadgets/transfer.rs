@@ -1,6 +1,7 @@
 //! Transfer gadget scaffolding shared between the planner and trace builder.
 
-use crate::{Error, OperationKind, StateTransition};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -10,7 +11,8 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use iroha_zkp_halo2::poseidon;
 use norito::{codec::Encode as NoritoEncode, decode_from_bytes};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+
+use crate::{Error, OperationKind, StateTransition};
 
 /// Height of the synthetic SMT used by the transfer gadget.
 pub const TRANSFER_MERKLE_HEIGHT: usize = 32;
@@ -710,8 +712,8 @@ fn numeric_to_u64(field: &'static str, value: &Numeric) -> Result<u64, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{OperationKind, StateTransition};
+    use std::str::FromStr;
+
     use iroha_crypto::Hash;
     use iroha_data_model::{
         asset::id::AssetDefinitionId,
@@ -720,7 +722,9 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
-    use std::str::FromStr;
+
+    use super::*;
+    use crate::{OperationKind, StateTransition};
 
     #[test]
     fn decode_transcripts_absent_metadata() {

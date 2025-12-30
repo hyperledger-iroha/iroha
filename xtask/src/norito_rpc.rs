@@ -764,8 +764,9 @@ impl<'a> FixtureComparable<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
+    use super::*;
 
     fn sample_manifest() -> Manifest {
         Manifest {

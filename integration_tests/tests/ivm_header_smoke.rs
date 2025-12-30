@@ -7,9 +7,11 @@
 //! Run manually with:
 //!   cargo test -p `integration_tests` --test `ivm_header_smoke` -- --ignored --nocapture
 
-use std::fs::File;
-use std::io::{Read, Result as IoResult};
-use std::path::PathBuf;
+use std::{
+    fs::File,
+    io::{Read, Result as IoResult},
+    path::PathBuf,
+};
 
 fn read_prefix(path: &PathBuf, n: usize) -> IoResult<Vec<u8>> {
     let mut f = File::open(path)?;

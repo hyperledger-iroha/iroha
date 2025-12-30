@@ -1,19 +1,16 @@
 //! Types representing executable parts of a transaction.
 
-use ::base64::Engine as _;
-use ::base64::engine::general_purpose::STANDARD;
-use std::iter::IntoIterator;
-use std::vec::Vec;
+use std::{iter::IntoIterator, vec::Vec};
 
+use ::base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
+pub use self::model::*;
 #[cfg(test)]
 use crate::isi::Instruction;
 use crate::isi::InstructionBox;
-
-pub use self::model::*;
 
 #[model]
 mod model {
@@ -187,8 +184,9 @@ impl norito::json::FastJsonWrite for Executable {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::any::Any;
+
+    use super::*;
 
     #[derive(Debug, Clone)]
     struct DummyInstruction(pub u32);

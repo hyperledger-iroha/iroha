@@ -1,6 +1,8 @@
 #![doc = "Cross-SDK SM2 fixture validation."]
 #![cfg(feature = "sm")]
 
+use std::{fs, path::PathBuf};
+
 use hex::FromHex;
 use iroha_crypto::{
     Algorithm, PublicKey,
@@ -8,7 +10,6 @@ use iroha_crypto::{
 };
 use norito::json::{self, JsonDeserialize};
 use sm3::{Digest, Sm3};
-use std::{fs, path::PathBuf};
 
 #[derive(Debug, JsonDeserialize)]
 struct FixtureRoot {

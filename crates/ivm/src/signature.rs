@@ -8,7 +8,6 @@
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey as Ed25519VerifyingKey};
 #[cfg(feature = "ed25519")]
 use iroha_crypto::ed25519_verify_batch_deterministic;
-
 #[cfg(feature = "secp256k1")]
 use k256::ecdsa::{
     Signature as Secp256k1Signature, VerifyingKey as Secp256k1VerifyingKey,

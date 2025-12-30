@@ -1284,13 +1284,15 @@ fn delta_bps(current: NonZeroU64, updated: NonZeroU64) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::nexus::UniversalAccountId;
-    use norito::json;
     use std::{
         num::{NonZeroU16, NonZeroU64},
         str::FromStr,
     };
+
+    use norito::json;
+
+    use super::*;
+    use crate::nexus::UniversalAccountId;
 
     fn name(value: &str) -> Name {
         Name::from_str(value).expect("name")

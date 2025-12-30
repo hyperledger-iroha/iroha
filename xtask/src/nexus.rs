@@ -20,12 +20,13 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneCompliancePolicy, LaneId},
 };
 use iroha_telemetry::metrics::Status;
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json::{self as serde_json, Value as JsonValue};
-use norito::{core::NoritoDeserialize as _, json};
-use parquet::arrow::ArrowWriter;
-use parquet::basic::Compression;
-use parquet::file::properties::WriterProperties;
+use norito::{
+    core::NoritoDeserialize as _,
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
+    json::{self as serde_json, Value as JsonValue},
+};
+use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub fn write_lane_commitment_fixtures(output: &Path) -> Result<(), Box<dyn Error>> {
@@ -716,15 +717,17 @@ fn hex32(input: &str) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs;
+
     use arrow_array::{Array, BooleanArray, Float64Array, StringArray, UInt32Array, UInt64Array};
     use iroha_data_model::{
         metadata::Metadata,
         nexus::{AuditControls, JurisdictionSet, LaneCompliancePolicyId},
     };
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    use std::fs;
     use tempfile::{NamedTempFile, tempdir};
+
+    use super::*;
 
     #[test]
     fn teu_utilization_helper_handles_zero_capacity() {

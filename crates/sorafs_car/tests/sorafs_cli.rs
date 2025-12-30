@@ -1,9 +1,18 @@
 #![cfg(feature = "cli")]
 #![cfg_attr(feature = "cli", allow(unexpected_cfgs))]
 
+use std::{
+    convert::TryInto,
+    env, fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use assert_cmd::Command as AssertCommand;
-use base64::Engine;
-use base64::engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
+};
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use hex::{decode as hex_decode, encode as hex_encode};
@@ -28,12 +37,6 @@ use sorafs_manifest::{
     PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
     PorSlashingEventV1, PorWeeklyReportV1, StorageClass, StreamTokenBodyV1, StreamTokenV1,
     XorAmount,
-};
-use std::{
-    convert::TryInto,
-    env, fs,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 use tempfile::tempdir;
 

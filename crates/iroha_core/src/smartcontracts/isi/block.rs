@@ -2,14 +2,16 @@
 use eyre::Result;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
-    query::{dsl::CompoundPredicate, error::QueryExecutionFail},
+    query::{
+        dsl::{CompoundPredicate, EvaluatePredicate},
+        error::QueryExecutionFail,
+    },
 };
 use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
 
 use super::*;
 use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
-use iroha_data_model::query::dsl::EvaluatePredicate;
 
 impl ValidQuery for FindBlocks {
     #[metrics(+"find_blocks")]

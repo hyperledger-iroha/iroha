@@ -12,7 +12,14 @@
 //! admission limits (`pipeline.overlay_max_*`) in one place.
 
 use core::str::FromStr;
+use std::{collections::BTreeMap, sync::Arc};
+#[cfg(test)]
+use std::{
+    collections::VecDeque,
+    sync::{LazyLock, Mutex},
+};
 
+use iroha_config::parameters::actual::QueryCursorMode;
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
     block::BlockHeader,
@@ -28,34 +35,26 @@ use iroha_data_model::{
         },
     },
     name::Name,
+    nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{Executable, SignedTransaction},
+    validation_fail::IvmAdmissionError,
 };
-use mv::storage::StorageReadOnly;
-use std::{collections::BTreeMap, sync::Arc};
-
-#[cfg(test)]
-use std::{
-    collections::VecDeque,
-    sync::{LazyLock, Mutex},
-};
-
-use crate::executor::{
-    ensure_asset_definition_registration_allowed, extract_register_asset_definition,
-};
-use crate::smartcontracts::code;
-use crate::smartcontracts::isi::settlement::{admission_validate_dvp, admission_validate_pvp};
-use crate::smartcontracts::ivm::cache::ProgramSummary;
-use crate::smartcontracts::ivm::host::AmxBudgetViolation;
-use crate::state::StateTransaction;
-use crate::state::{StateReadOnly, WorldReadOnly};
-use crate::streaming;
-use iroha_config::parameters::actual::QueryCursorMode;
-use iroha_data_model::nexus::AxtRejectContext;
-use iroha_data_model::validation_fail::IvmAdmissionError;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
+use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
+
+use crate::{
+    executor::{ensure_asset_definition_registration_allowed, extract_register_asset_definition},
+    smartcontracts::{
+        code,
+        isi::settlement::{admission_validate_dvp, admission_validate_pvp},
+        ivm::{cache::ProgramSummary, host::AmxBudgetViolation},
+    },
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+    streaming,
+};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct StreamingOverlayMetadata {
@@ -1019,12 +1018,13 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
 
 #[cfg(test)]
 mod tests_overlay_manifest {
-    use super::*;
-    use crate::state::State;
     use iroha_data_model::prelude::*;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::state::State;
 
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 
@@ -1155,9 +1155,11 @@ fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmissio
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::{
+        ChainId, Registrable, isi::smart_contract_code::RemoveSmartContractBytes,
+    };
+
     use super::*;
-    use iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes;
-    use iroha_data_model::{ChainId, Registrable};
 
     #[test]
     fn empty_overlay_is_noop() {
@@ -1178,13 +1180,14 @@ mod tests {
 
     #[test]
     fn overlay_rejects_manifest_abi_mismatch_before_execution() {
+        use std::sync::Arc;
+
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
             metadata::Metadata,
             prelude::{AccountId, TransactionBuilder},
         };
         use iroha_primitives::json::Json;
-        use std::sync::Arc;
 
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
@@ -1252,13 +1255,14 @@ mod tests {
 
     #[test]
     fn overlay_rejects_contract_binding_code_hash_mismatch() {
+        use std::sync::Arc;
+
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
             metadata::Metadata,
             prelude::{AccountId, TransactionBuilder},
         };
         use iroha_primitives::json::Json;
-        use std::sync::Arc;
 
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
@@ -1322,13 +1326,14 @@ mod tests {
 
     #[test]
     fn overlay_requires_manifest_for_bound_instance() {
+        use std::sync::Arc;
+
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
             metadata::Metadata,
             prelude::{AccountId, TransactionBuilder},
         };
         use iroha_primitives::json::Json;
-        use std::sync::Arc;
 
         let (program, header_len, meta) = sample_program();
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
@@ -1378,13 +1383,14 @@ mod tests {
 
     #[test]
     fn overlay_requires_manifest_abi_for_bound_instance() {
+        use std::sync::Arc;
+
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
             metadata::Metadata,
             prelude::{AccountId, TransactionBuilder},
         };
         use iroha_primitives::json::Json;
-        use std::sync::Arc;
 
         let (program, header_len, meta) = sample_program();
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
@@ -1477,9 +1483,10 @@ mod tests {
 
     #[test]
     fn pre_execution_policy_denies_system_opcode() {
+        use std::sync::Arc;
+
         use iroha_crypto::KeyPair;
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
-        use std::sync::Arc;
 
         let kp = KeyPair::random();
         let authority = AccountId::new(
@@ -1527,9 +1534,10 @@ mod tests {
 
     #[test]
     fn pre_execution_policy_ignores_literal_table() {
+        use std::sync::Arc;
+
         use iroha_crypto::KeyPair;
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
-        use std::sync::Arc;
 
         let kp = KeyPair::random();
         let authority = AccountId::new(
@@ -1574,9 +1582,11 @@ mod tests {
 
     #[test]
     fn redundant_contract_ops_are_pruned() {
-        use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
-        use iroha_data_model::smart_contract::manifest::ContractManifest;
         use std::sync::Arc;
+
+        use iroha_data_model::smart_contract::manifest::ContractManifest;
+
+        use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
 
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
@@ -1634,12 +1644,12 @@ mod tests {
 
     #[test]
     fn sample_smart_contract_overlay_executes() {
+        use std::sync::Arc;
+
         use iroha_data_model::{
             metadata::Metadata, prelude::TransactionBuilder, transaction::Executable,
         };
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, load_sample_ivm};
-
-        use std::sync::Arc;
 
         let chain: ChainId = "chain".parse().expect("valid chain id");
         let tx = TransactionBuilder::new(chain, ALICE_ID.clone())

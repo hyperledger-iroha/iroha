@@ -6,17 +6,19 @@
 //! evaluates capability constraints, honouring range and stream budgets, and
 //! applies the weighting formula described in `docs/source/sorafs_orchestrator_plan.md`.
 
-use crate::{
-    CarBuildPlan, ChunkFetchSpec,
-    multi_fetch::{CapabilityMismatch, FetchProvider, ProviderMetadata, provider_can_serve_chunk},
-};
-use norito::json::{Map, Number, Value, to_string_pretty};
 use std::{
     collections::HashMap,
     fs, io,
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use norito::json::{Map, Number, Value, to_string_pretty};
+
+use crate::{
+    CarBuildPlan, ChunkFetchSpec,
+    multi_fetch::{CapabilityMismatch, FetchProvider, ProviderMetadata, provider_can_serve_chunk},
 };
 
 /// Default cap (in milliseconds) applied when normalising latency scores.
@@ -517,11 +519,11 @@ fn number_from_f64(value: f64) -> Number {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use blake3::Hash;
     use norito::json::Value;
     use sorafs_chunker::ChunkProfile;
 
+    use super::*;
     use crate::multi_fetch::{RangeCapability, StreamBudget};
 
     fn plan_with_chunk(length: u32) -> CarBuildPlan {

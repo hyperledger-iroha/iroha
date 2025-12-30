@@ -2,8 +2,7 @@
 //!
 //! Error variants cover common failure modes including privacy tag violations
 //! and hardware transactional memory aborts.
-use std::error::Error as StdError;
-use std::fmt;
+use std::{error::Error as StdError, fmt};
 
 /// Memory region permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

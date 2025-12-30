@@ -1,7 +1,7 @@
 //! Resolver attestation directory governance ISIs.
 
-use super::*;
-use crate::state::StateTransaction;
+use std::time::UNIX_EPOCH;
+
 use hex::encode as hex_encode;
 use iroha_data_model::{
     events::data::{DataEvent, soradns::SoradnsDirectoryEvent},
@@ -15,7 +15,9 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, Value};
-use std::time::UNIX_EPOCH;
+
+use super::*;
+use crate::state::StateTransaction;
 
 impl Execute for iroha_data_model::isi::soradns::SubmitDirectoryDraft {
     fn execute(
@@ -564,18 +566,20 @@ fn hex_directory_id(id: &DirectoryId) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_data_model::{
+        account::AccountId, ipfs::IpfsPath, soradns::ResolverDirectoryRecordV1,
+    };
+    use nonzero_ext::nonzero;
+
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::{
-        account::AccountId, ipfs::IpfsPath, soradns::ResolverDirectoryRecordV1,
-    };
-    use nonzero_ext::nonzero;
-    use std::str::FromStr;
 
     fn block_header() -> iroha_data_model::block::BlockHeader {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)

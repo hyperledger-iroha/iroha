@@ -1,19 +1,19 @@
+use std::{collections::HashMap, sync::Arc};
+
 use iroha_crypto::KeyPair;
 use iroha_data_model::nexus::{
     AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId,
 };
-use ivm::axt::{
-    self, AssetHandle, GroupBinding, HandleBudget, HandleSubject, RemoteSpendIntent, SpendOp,
-    TouchManifest,
+use ivm::{
+    IVM, IVMHost, PointerType, VMError,
+    axt::{
+        self, AssetHandle, GroupBinding, HandleBudget, HandleSubject, RemoteSpendIntent, SpendOp,
+        TouchManifest,
+    },
+    host::DefaultHost,
+    mock_wsv::{AccountId as HostAccountId, DomainId as HostDomainId, MockWorldStateView, WsvHost},
+    syscalls,
 };
-use ivm::host::DefaultHost;
-use ivm::mock_wsv::{
-    AccountId as HostAccountId, DomainId as HostDomainId, MockWorldStateView, WsvHost,
-};
-use ivm::syscalls;
-use ivm::{IVM, IVMHost, PointerType, VMError};
-use std::collections::HashMap;
-use std::sync::Arc;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);

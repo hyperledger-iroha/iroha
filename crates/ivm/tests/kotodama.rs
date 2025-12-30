@@ -1,18 +1,21 @@
 //! Tests for Kotodama parsing, semantics, and compilation.
 
-use iroha_crypto as _;
-use iroha_data_model::nexus::{DataSpaceId, LaneId};
 use std::{convert::TryInto, str::FromStr};
 
-use ivm::ProgramMetadata;
-use ivm::axt;
-use ivm::kotodama::ast as kd_ast;
-use ivm::kotodama::ast::{BinaryOp, Expr, Function, Item, Statement};
-use ivm::kotodama::compiler::{Compiler, CompilerOptions};
-use ivm::kotodama::lexer::{TokenKind, lex};
-use ivm::kotodama::parser::parse;
-use ivm::kotodama::semantic::{Type, analyze};
-use ivm::{encoding, instruction, syscalls};
+use iroha_crypto as _;
+use iroha_data_model::nexus::{DataSpaceId, LaneId};
+use ivm::{
+    ProgramMetadata, axt, encoding, instruction,
+    kotodama::{
+        ast as kd_ast,
+        ast::{BinaryOp, Expr, Function, Item, Statement},
+        compiler::{Compiler, CompilerOptions},
+        lexer::{TokenKind, lex},
+        parser::parse,
+        semantic::{Type, analyze},
+    },
+    syscalls,
+};
 
 fn parse_meta_offset(code: &[u8]) -> Result<(ProgramMetadata, usize), ivm::VMError> {
     ProgramMetadata::parse(code).map(|parsed| (parsed.metadata, parsed.code_offset))
@@ -1545,8 +1548,7 @@ fn compiler_abi_version_plumbing() {
 
 #[test]
 fn compile_emits_manifest_hashes() {
-    use ivm::SyscallPolicy;
-    use ivm::syscalls::compute_abi_hash;
+    use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
     let src = "fn f() { let x = 1 + 2; }";
     let (code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
@@ -1623,8 +1625,10 @@ fn manifest_includes_entrypoints_and_features() {
 
 #[test]
 fn manifest_includes_isi_access_hints_for_static_targets() {
-    use iroha_data_model::account::AccountId;
-    use iroha_data_model::asset::id::{AssetDefinitionId, AssetId};
+    use iroha_data_model::{
+        account::AccountId,
+        asset::id::{AssetDefinitionId, AssetId},
+    };
 
     let src = r#"
         fn main() {
@@ -2100,8 +2104,9 @@ fn parse_control_flow() {
 
 #[test]
 fn parse_amm_dex() {
-    use ivm::kotodama::ir::Instr;
     use std::path::Path;
+
+    use ivm::kotodama::ir::Instr;
     let path = Path::new("tests/data/amm.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
@@ -2126,8 +2131,9 @@ fn parse_amm_dex() {
 
 #[test]
 fn parse_dai_clone() {
-    use ivm::kotodama::ir::Instr;
     use std::path::Path;
+
+    use ivm::kotodama::ir::Instr;
     let path = Path::new("tests/data/dai.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
@@ -2270,8 +2276,9 @@ fn parse_create_new_asset_builtin() {
 
 #[test]
 fn parse_mfc_example() {
-    use ivm::kotodama::ir::{Instr, Terminator};
     use std::path::Path;
+
+    use ivm::kotodama::ir::{Instr, Terminator};
     let path = Path::new("tests/data/mfc.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
@@ -2570,10 +2577,14 @@ fn ir_tuple_pack_and_get_general() {
 #[test]
 fn runtime_durable_get_or_insert_default_state_map() {
     // Durable path: Map<int,int> declared in state; first call inserts 0; second returns 0 without inserting again.
-    use ivm::kotodama::compiler::Compiler;
-    use ivm::mock_wsv::{AccountId, MockWorldStateView, WsvHost};
-    use ivm::{IVM, PointerType, validate_tlv_bytes};
     use std::collections::HashMap;
+
+    use ivm::{
+        IVM, PointerType,
+        kotodama::compiler::Compiler,
+        mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+        validate_tlv_bytes,
+    };
     let src = r#"
         seiyaku C {
             state S: Map<int,int>;

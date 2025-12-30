@@ -18,8 +18,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
-use crate::da::commitment::DaProofScheme;
-use crate::id::IdBox;
+use crate::{da::commitment::DaProofScheme, id::IdBox};
 
 mod axt;
 mod compliance;
@@ -907,9 +906,11 @@ impl norito::json::JsonDeserialize for DataSpaceId {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use norito::codec::{DecodeAll, Encode};
     use std::num::NonZeroU32;
+
+    use norito::codec::{DecodeAll, Encode};
+
+    use super::*;
 
     #[test]
     fn lane_id_roundtrip() {

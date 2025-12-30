@@ -1,7 +1,7 @@
 //! Runtime upgrade app API handlers.
 
-use crate::NoritoJson;
-use crate::json_macros::{JsonDeserialize, JsonSerialize};
+use std::sync::Arc;
+
 use axum::{extract::Path, response::IntoResponse};
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_crypto::Algorithm;
@@ -9,7 +9,11 @@ use iroha_data_model::account::curve::CurveId;
 use iroha_logger::warn;
 use mv::storage::StorageReadOnly;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use std::sync::Arc;
+
+use crate::{
+    NoritoJson,
+    json_macros::{JsonDeserialize, JsonSerialize},
+};
 
 const CURVE_REGISTRY_VERSION: u32 = 1;
 
@@ -460,10 +464,9 @@ pub async fn handle_runtime_cancel_upgrade(
 
 #[cfg(test)]
 mod tests {
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
+
     use super::*;
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_core::state::State;
 
     #[tokio::test]
     async fn runtime_abi_hash_matches_ivm() {

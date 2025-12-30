@@ -2,6 +2,7 @@
 
 use std::{path::PathBuf, time::Duration};
 
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     config::{DEFAULT_TRANSACTION_STATUS_TIMEOUT, DEFAULT_TRANSACTION_TIME_TO_LIVE},
@@ -10,8 +11,6 @@ use iroha::{
 use iroha_config_base::toml::WriteExt;
 use iroha_data_model::prelude::AccountId;
 use iroha_test_network::NetworkBuilder;
-
-use integration_tests::sandbox;
 use iroha_test_samples::sample_ivm_path;
 use reqwest::Url;
 

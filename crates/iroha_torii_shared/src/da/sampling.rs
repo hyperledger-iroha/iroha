@@ -162,7 +162,8 @@ fn derive_assignment_hash(block_hash: &Hash, manifest: &DaManifestV1) -> BlobDig
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashSet;
+
     use iroha_data_model::{
         da::{
             manifest::ChunkRole,
@@ -173,7 +174,8 @@ mod tests {
         },
         nexus::LaneId,
     };
-    use std::collections::HashSet;
+
+    use super::*;
 
     fn sample_manifest(chunk_count: u32, total_size: u64) -> DaManifestV1 {
         let chunks = (0..chunk_count)

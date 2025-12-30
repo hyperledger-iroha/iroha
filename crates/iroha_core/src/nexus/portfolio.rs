@@ -140,12 +140,6 @@ impl DataspaceAliasLookup {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
     use iroha_crypto::Hash;
     use iroha_data_model::{
         account::AccountDetails,
@@ -160,6 +154,13 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
 
     #[test]
     fn aggregates_accounts_by_uaid() {

@@ -161,11 +161,12 @@ fn verify_against_store(store: &DaPinStore, proof: &DaPinIntentWithLocation) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_data_model::da::{
-        commitment::DaCommitmentLocation, pin_intent::DaPinIntent, types::StorageTicketId,
+    use iroha_data_model::{
+        da::{commitment::DaCommitmentLocation, pin_intent::DaPinIntent, types::StorageTicketId},
+        nexus::LaneId,
     };
-    use iroha_data_model::nexus::LaneId;
+
+    use super::*;
 
     fn sample_intent(lane: u32, epoch: u64, sequence: u64) -> DaPinIntent {
         DaPinIntent::new(

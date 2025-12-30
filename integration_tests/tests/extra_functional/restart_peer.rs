@@ -1,15 +1,15 @@
 //! Tests that a restarted peer restores its state.
+use std::time::{Duration, Instant};
+
 use eyre::{Result, eyre};
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-use std::time::{Duration, Instant};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
-
-use integration_tests::sandbox;
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]

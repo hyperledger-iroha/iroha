@@ -1,6 +1,5 @@
 //! Pipeline events.
-use std::num::NonZeroU64;
-use std::{boxed::Box, format, string::String, vec::Vec};
+use std::{boxed::Box, format, num::NonZeroU64, string::String, vec::Vec};
 
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;
@@ -259,9 +258,10 @@ impl_json_via_norito_bytes!(
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod getter_tests {
-    use super::*;
     use iroha_crypto::Hash;
     use nonzero_ext::nonzero;
+
+    use super::*;
 
     #[test]
     fn transaction_event_filter_block_height_getter_works() {
@@ -453,12 +453,14 @@ pub mod prelude {
 mod tests {
     use std::vec::Vec;
 
-    use crate::merge::MergeQuorumCertificate;
     use iroha_crypto::Hash;
     use nonzero_ext::nonzero;
 
     use super::{super::EventFilter, *};
-    use crate::{ValidationFail, transaction::error::TransactionRejectionReason::*};
+    use crate::{
+        ValidationFail, merge::MergeQuorumCertificate,
+        transaction::error::TransactionRejectionReason::*,
+    };
 
     impl BlockHeader {
         fn dummy(height: NonZeroU64) -> Self {

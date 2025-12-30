@@ -6,7 +6,6 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use crate::routing::{self, MaybeTelemetry};
 use dashmap::DashMap;
 use eyre::WrapErr as _;
 use iroha_config::parameters::actual;
@@ -30,6 +29,8 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Numeric};
 use ivm::iso20022::{IdentifierKind, InvalidValueKind, MsgError, ParsedMessage, parse_message};
 use norito::json::Value as JsonValue;
+
+use crate::routing::{self, MaybeTelemetry};
 
 /// Runtime bridge configuration derived from Torii settings.
 #[derive(Clone)]
@@ -1304,7 +1305,6 @@ fn dedup_codes(codes: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{io::Write as _, str::FromStr, time::SystemTime};
 
     use iroha_core::iso_bridge::reference_data::SnapshotState;
@@ -1315,6 +1315,8 @@ mod tests {
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     const RAW_PUBLIC_KEY_LITERAL: &str =
         "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@test";

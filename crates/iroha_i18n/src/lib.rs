@@ -481,8 +481,9 @@ impl Localizer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{collections::BTreeSet, fs, path::Path};
+
+    use super::*;
 
     fn expected_file_stems() -> BTreeSet<String> {
         Language::ALL

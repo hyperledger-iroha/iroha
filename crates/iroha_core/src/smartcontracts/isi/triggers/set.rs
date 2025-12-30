@@ -11,11 +11,6 @@
 use core::cmp::min;
 use std::{fmt, num::NonZeroU64};
 
-#[cfg(feature = "json")]
-use norito::json;
-#[cfg(feature = "json")]
-use norito::json::{FastJsonWrite, JsonSerialize as JsonSerializeTrait};
-
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     events::EventFilter,
@@ -27,17 +22,21 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::const_vec::ConstVec;
+use ivm::VMError;
 use mv::storage::{
     Block as StorageBlock, Storage, StorageReadOnly, Transaction as StorageTransaction,
     View as StorageView,
 };
 use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json;
+#[cfg(feature = "json")]
+use norito::json::{FastJsonWrite, JsonSerialize as JsonSerializeTrait};
 use thiserror::Error;
 
 use crate::smartcontracts::isi::triggers::specialized::{
     LoadedAction, LoadedActionTrait, SpecializedAction, SpecializedTrigger,
 };
-use ivm::VMError;
 
 /// Error type for [`Set`] operations.
 #[derive(Debug, Error, displaydoc::Display)]
@@ -1098,15 +1097,18 @@ impl json::JsonDeserialize for ExecutableRef {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use super::*;
     use core::time::Duration;
-    use iroha_data_model::metadata::Metadata;
-    use iroha_data_model::prelude::{
-        AccountId, Executable, ExecutionTime, InstructionBox, Level, Log, TimeEvent,
-        TimeEventFilter, TimeInterval, TriggerId,
+
+    use iroha_data_model::{
+        metadata::Metadata,
+        prelude::{
+            AccountId, Executable, ExecutionTime, InstructionBox, Level, Log, TimeEvent,
+            TimeEventFilter, TimeInterval, TriggerId,
+        },
     };
-    use iroha_primitives::const_vec::ConstVec;
-    use iroha_primitives::json::Json;
+    use iroha_primitives::{const_vec::ConstVec, json::Json};
+
+    use super::*;
 
     fn sample_hash() -> HashOf<IvmBytecode> {
         let bytecode = IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]);
@@ -1366,14 +1368,18 @@ impl TryFrom<SetDto> for Set {
 
 #[cfg(test)]
 mod dto_tests {
-    use super::*;
+    use std::num::NonZeroU64;
+
     use iroha_crypto::KeyPair;
-    use iroha_data_model::events::pipeline;
-    use iroha_data_model::prelude as dm;
-    use iroha_data_model::prelude::{BlockStatus, ExecutionTime, IvmBytecode, Log, SetKeyValue};
+    use iroha_data_model::{
+        events::pipeline,
+        prelude as dm,
+        prelude::{BlockStatus, ExecutionTime, IvmBytecode, Log, SetKeyValue},
+    };
     use iroha_primitives::const_vec::ConstVec;
     use norito::json;
-    use std::num::NonZeroU64;
+
+    use super::*;
 
     fn sample_set() -> Set {
         let domain: dm::DomainId = "wonderland".parse().unwrap();

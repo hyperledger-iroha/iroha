@@ -29,9 +29,9 @@
 //!
 //! ```
 //! use iroha_config_base::{
+//!     WithOrigin,
 //!     read::{ConfigReader, FinalWrap, ReadConfig},
 //!     toml::TomlSource,
-//!     WithOrigin,
 //! };
 //! use norito::derive::JsonDeserialize;
 //! use toml::toml;
@@ -91,9 +91,9 @@
 //!
 //! ```
 //! use iroha_config_base::{
+//!     ReadConfig, WithOrigin,
 //!     read::{ConfigReader, ReadConfig},
 //!     toml::TomlSource,
-//!     ReadConfig, WithOrigin,
 //! };
 //! use norito::derive::JsonDeserialize;
 //! use toml::toml;

@@ -1,7 +1,8 @@
 //! Debug helper for inspecting persisted RBC sessions.
 
-use iroha_core::sumeragi::rbc_status;
 use std::{env, path::Path};
+
+use iroha_core::sumeragi::rbc_status;
 
 fn main() {
     let mut args = env::args().skip(1);

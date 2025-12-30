@@ -4,13 +4,15 @@
 //! - cargo bench -p norito --bench adaptive_telemetry
 //! - With times: cargo bench -p norito --bench adaptive_telemetry --features adaptive-telemetry
 
-use norito::codec;
-use norito::columnar::{
-    EnumBorrow, adaptive_metrics_reset, adaptive_metrics_snapshot,
-    encode_rows_u64_bytes_bool_adaptive, encode_rows_u64_bytes_u32_bool_adaptive,
-    encode_rows_u64_enum_bool_adaptive, encode_rows_u64_optstr_bool_adaptive,
-    encode_rows_u64_optu32_bool_adaptive, encode_rows_u64_str_bool_adaptive,
-    encode_rows_u64_str_u32_bool_adaptive, encode_rows_u64_u32_bool_adaptive,
+use norito::{
+    codec,
+    columnar::{
+        EnumBorrow, adaptive_metrics_reset, adaptive_metrics_snapshot,
+        encode_rows_u64_bytes_bool_adaptive, encode_rows_u64_bytes_u32_bool_adaptive,
+        encode_rows_u64_enum_bool_adaptive, encode_rows_u64_optstr_bool_adaptive,
+        encode_rows_u64_optu32_bool_adaptive, encode_rows_u64_str_bool_adaptive,
+        encode_rows_u64_str_u32_bool_adaptive, encode_rows_u64_u32_bool_adaptive,
+    },
 };
 
 fn main() {

@@ -4,9 +4,12 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    convert::TryInto,
     fs,
     net::SocketAddr,
+    num::NonZeroU64,
     path::PathBuf,
+    str::FromStr,
     sync::Arc,
     time::{Duration, UNIX_EPOCH},
 };
@@ -23,8 +26,10 @@ use hex::ToHex;
 use http::header::{AGE, CACHE_CONTROL, RETRY_AFTER, WARNING};
 use http_body_util::BodyExt;
 use humantime::format_rfc3339;
-use iroha_config::base::util::Bytes;
-use iroha_config::parameters::actual::{self as actual_cfg, SorafsAdmission};
+use iroha_config::{
+    base::util::Bytes,
+    parameters::actual::{self as actual_cfg, SorafsAdmission},
+};
 use iroha_core::{
     kiso::KisoHandle,
     kura::Kura,
@@ -51,25 +56,22 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::Child;
 use iroha_primitives::json::Json;
-use iroha_torii::sorafs::{
-    AdmissionCheckError, AdmissionRegistry, AliasCachePolicyExt,
-    api::StorageStateResponseDto,
-    discovery::{
-        AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
-    },
-    unix_now_secs,
-};
-use iroha_torii::test_utils::{AuthorityCreds, drain_queue_and_apply_all, random_authority};
 use iroha_torii::{
     MaybeTelemetry, OnlinePeersProvider, PinPolicyDto, PinPolicyStorageClassDto,
     RegisterPinManifestDto, Torii,
+    sorafs::{
+        AdmissionCheckError, AdmissionRegistry, AliasCachePolicyExt,
+        api::StorageStateResponseDto,
+        discovery::{
+            AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
+        },
+        unix_now_secs,
+    },
+    test_utils::{AuthorityCreds, drain_queue_and_apply_all, random_authority},
 };
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, to_bytes};
 use sorafs_car::{ChunkStore, por_json::proof_from_value};
-use sorafs_manifest::pin_registry::{
-    AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
-};
 use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, AvailabilityTier, BLAKE3_256_MULTIHASH_CODE,
     CapabilityTlv, CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
@@ -80,9 +82,10 @@ use sorafs_manifest::{
     ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic, SignatureAlgorithm,
     StakePointer, StorageClass as ManifestStorageClass, StreamBudgetV1, TransportHintV1,
     TransportProtocol, compute_advert_body_digest, compute_proposal_digest,
+    pin_registry::{
+        AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
+    },
 };
-use std::str::FromStr;
-use std::{convert::TryInto, num::NonZeroU64};
 use tempfile::tempdir;
 use tower::ServiceExt as _;
 

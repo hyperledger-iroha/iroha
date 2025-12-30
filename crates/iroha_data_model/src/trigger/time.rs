@@ -6,7 +6,8 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    account::AccountId, transaction::ExecutionStep, transaction::TransactionEntrypoint,
+    account::AccountId,
+    transaction::{ExecutionStep, TransactionEntrypoint},
     trigger::TriggerId,
 };
 

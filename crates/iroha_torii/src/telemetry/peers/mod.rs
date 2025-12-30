@@ -8,17 +8,17 @@ use std::{
     sync::Arc,
 };
 
+use iroha_config::client_api::ConfigGetDTO;
+use iroha_crypto::PublicKey;
+use iroha_logger::prelude::*;
+pub use monitor::Update;
+use tokio::sync::RwLock;
+use url::Url;
+
 use crate::{
     explorer::ExplorerDurationDto,
     json_macros::{JsonDeserialize, JsonSerialize},
 };
-use iroha_config::client_api::ConfigGetDTO;
-use iroha_crypto::PublicKey;
-use iroha_logger::prelude::*;
-use tokio::sync::RwLock;
-use url::Url;
-
-pub use monitor::Update;
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub struct GeoLocation {
@@ -145,6 +145,12 @@ impl FromStr for ToriiUrl {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Url::parse(s).map(Self)
+    }
+}
+
+impl From<Url> for ToriiUrl {
+    fn from(url: Url) -> Self {
+        Self(url)
     }
 }
 

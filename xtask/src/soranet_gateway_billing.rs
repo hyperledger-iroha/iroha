@@ -19,11 +19,11 @@ use iroha_data_model::{
     isi::{InstructionBox, TransferAssetBatch, TransferAssetBatchEntry},
 };
 use iroha_primitives::numeric::Numeric;
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json;
-use parquet::arrow::ArrowWriter;
-use parquet::basic::Compression;
-use parquet::file::properties::WriterProperties;
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
+};
+use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct MeterDefinition {
@@ -654,12 +654,12 @@ Next steps:\n\
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::fs::File;
+    use std::{collections::BTreeMap, fs::File};
 
-    use super::*;
     use norito::json::{self, Value};
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn billing_normalizes_duplicate_usage_entries() {

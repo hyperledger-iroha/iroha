@@ -5,21 +5,19 @@ use std::{fmt::Write as _, iter::once, time::Duration};
 use assert_matches::assert_matches;
 use eyre::{Result, WrapErr, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
+use integration_tests::sandbox;
 use iroha::data_model::{
     Level,
     isi::{InstructionBox, Log, SetParameter, Unregister, register::RegisterPeerWithPop},
     parameter::{Parameter, SumeragiParameter},
 };
 use iroha_test_network::*;
-use rand::SeedableRng;
-use rand::prelude::IteratorRandom;
+use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
 use tokio::{
     task::spawn_blocking,
     time::{Instant, sleep, timeout},
 };
-
-use integration_tests::sandbox;
 
 fn leader_peer<'a>(peers: impl IntoIterator<Item = &'a NetworkPeer>) -> &'a NetworkPeer {
     peers

@@ -1,5 +1,4 @@
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use tempfile::tempdir;

@@ -212,8 +212,9 @@ impl SchemaRegistry for DefaultRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::json as njson;
+
+    use super::*;
 
     fn eq_json(a: &[u8], b: &[u8]) -> bool {
         let va: njson::Value = match njson::from_slice(a) {

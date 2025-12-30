@@ -1,9 +1,10 @@
 //! Pallas (Pasta) backend wiring for IPA commitments.
 
-use crate::backend::{IpaBackend, IpaGroup, IpaScalar};
-use crate::field;
-use crate::group;
-use crate::norito_types::ZkCurveId;
+use crate::{
+    backend::{IpaBackend, IpaGroup, IpaScalar},
+    field, group,
+    norito_types::ZkCurveId,
+};
 
 /// Scalar type for the Pallas backend (existing implementation).
 pub type Scalar = field::PrimeField64;

@@ -1,7 +1,8 @@
 //! Benchmarks for Poseidon hash functions used by IVM.
+use std::hint::black_box;
+
 use criterion::{BenchmarkId, Criterion};
 use ivm::{poseidon2, poseidon2_many, poseidon6, poseidon6_many};
-use std::hint::black_box;
 
 fn bench_poseidon2(c: &mut Criterion) {
     c.bench_function("poseidon2", |b| {

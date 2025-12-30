@@ -8,10 +8,12 @@ use derive_more::Display;
 use getset::Getters;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_schema::IntoSchema;
-use norito::derive::{JsonDeserialize, JsonSerialize};
+use norito::{
+    codec::{Decode, Encode},
+    derive::{JsonDeserialize, JsonSerialize},
+};
 
 use crate::{account::AccountId, domain::DomainId, metadata::Metadata, name::Name};
-use norito::codec::{Decode, Encode};
 
 /// Domain separation tag for Kaigi roster commitment leaves.
 const KAIGI_ROSTER_LEAF_TAG: &[u8] = b"iroha:kaigi:roster:leaf:v1\x00";
@@ -715,10 +717,12 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::str::FromStr;
+
     use iroha_crypto::KeyPair;
     use norito::codec::{decode_adaptive, encode_adaptive};
-    use std::str::FromStr;
+
+    use super::*;
 
     #[test]
     fn metadata_key_prefixes_call_name() {

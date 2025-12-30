@@ -312,6 +312,10 @@ shell).
   and `kdf_work_factor`. Argon2id (64 MiB, 3 iterations, parallelism = 2) is preferred, with a
   PBKDF2-HMAC-SHA256 fallback at 350 k iterations. Passphrases must be ≥12 characters and the importer
   rejects all-zero salt/nonce seeds.
+- `SoftwareKeyProvider` can persist deterministic exports by wiring a `KeyExportStore` plus
+  `KeyPassphraseProvider` (for example, `FileKeyExportStore` on Android/JVM, or
+  `InMemoryKeyExportStore` in tests). The provider rehydrates keys from the store before generating
+  new material, keeping software-backed accounts stable across app restarts.
 - Legacy v0/v1/v2 bundles stay decodable: call `KeyExportBundle.decode(Base64|bytes)` to inspect the
   version/KDF metadata, import with the original passphrase, then re-export to v3 to rotate to the
   memory-hard format. Treat salt/nonce errors as tampering and capture a fresh bundle rather than
@@ -687,6 +691,26 @@ provider on emulators or desktop JVMs. Pass custom `KeyGenParameters` when you
 need to enforce StrongBox-only keys or user-authentication requirements while
 retaining a deterministic software fallback for local testing.
 If your desktop JVM lacks built-in Ed25519 support, drop in BouncyCastle (the test harness ships a stub provider) so the software fallback can generate keys without the Android keystore.
+Hardware-backed keys remain non-extractable; for user-scoped accounts that must
+roam across devices, prefer `SOFTWARE_ONLY` (or `withSoftwareFallback`) and use
+`exportDeterministicKey(...)` / `importDeterministicKey(...)` to move key
+material between devices securely. When you need fully exportable keys, build
+the software provider with BouncyCastle enforced and a persistent export store:
+
+```java
+KeyExportStore store = new FileKeyExportStore(new File(filesDir, "keys.properties"));
+KeyPassphraseProvider passphraseProvider = () -> "export-passphrase".toCharArray();
+SoftwareKeyProvider provider =
+    new SoftwareKeyProvider(
+        SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED,
+        store,
+        passphraseProvider);
+IrohaKeyManager manager = IrohaKeyManager.fromProviders(List.of(provider));
+```
+
+The manager validates Ed25519 SPKI output and skips providers that return a
+different algorithm (common on emulators), falling back to the next configured
+provider.
 
 `generateOrLoad(alias, preference)` accepts a `KeySecurityPreference` that
 describes the required hardware tier:

@@ -12,14 +12,17 @@
 
 #![deny(missing_docs)]
 
+use std::{
+    num::NonZeroU64,
+    sync::{Arc, OnceLock},
+};
+
 #[cfg(test)]
 use iroha_crypto::HashOf;
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use ivm::zk::{Constraint, MemEvent, RegEvent, RegisterState, StepEntry};
 use norito::streaming::CapabilityFlags;
 use sha2::{Digest, Sha256};
-use std::sync::OnceLock;
-use std::{num::NonZeroU64, sync::Arc};
 use tokio::sync::mpsc;
 
 /// Task carrying a single IVM execution's formal trace and metadata.
@@ -321,8 +324,9 @@ mod tests {
     #[cfg(feature = "zk-preverify")]
     #[test]
     fn process_batch_enqueues_digest_and_trace_jobs() {
-        use iroha_data_model::block::BlockHeader;
         use std::num::NonZeroU64;
+
+        use iroha_data_model::block::BlockHeader;
 
         crate::zk::reset_trace_proof_state_for_tests();
         crate::zk::reset_trace_proving_state_for_tests();

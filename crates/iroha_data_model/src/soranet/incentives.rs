@@ -11,7 +11,10 @@ use iroha_crypto::Signature;
 use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 
+use super::{Digest32, RelayId};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -20,10 +23,6 @@ use crate::{
     isi::{InstructionBox, Transfer},
     metadata::Metadata,
 };
-#[cfg(feature = "json")]
-use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
-
-use super::{Digest32, RelayId};
 
 /// Identifier assigned to blinded measurement clients.
 pub type MeasurementId = Digest32;
@@ -433,11 +432,13 @@ impl RelayRewardDisputeV1 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{domain::DomainId, isi::TransferBox, name::Name};
+    use std::str::FromStr;
+
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::json::Json;
-    use std::str::FromStr;
+
+    use super::*;
+    use crate::{domain::DomainId, isi::TransferBox, name::Name};
 
     fn numeric(value: u64) -> Numeric {
         Numeric::from(value)

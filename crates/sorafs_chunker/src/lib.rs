@@ -11,16 +11,21 @@
 //! # Examples
 //!
 //! ```rust
-//! use sorafs_chunker::{chunk_bytes, ChunkProfile};
+//! use sorafs_chunker::{ChunkProfile, chunk_bytes};
 //!
 //! let data = vec![42u8; 600 * 1024];
 //! let chunks = chunk_bytes(&data);
 //! assert_eq!(chunks.iter().map(|c| c.length).sum::<usize>(), data.len());
-//! assert!(chunks.iter().all(|c| c.length >= ChunkProfile::DEFAULT.min_size));
+//! assert!(
+//!     chunks
+//!         .iter()
+//!         .all(|c| c.length >= ChunkProfile::DEFAULT.min_size)
+//! );
 //! ```
 
-use sha3::{Digest, Sha3_256};
 use std::sync::OnceLock;
+
+use sha3::{Digest, Sha3_256};
 
 /// Rolling hash mask controlling the probability of a boundary for the default profile.
 const BREAK_MASK: u64 = 0x0000_FFFF;
@@ -305,8 +310,9 @@ impl Chunker {
 
 /// Canonical fixtures for the SoraFS chunker.
 pub mod fixtures {
-    use super::{ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile};
     use sha3::{Digest, Sha3_256};
+
+    use super::{ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile};
 
     /// Parameters for the deterministic pseudo-random generator.
     #[derive(Debug, Clone, Copy)]

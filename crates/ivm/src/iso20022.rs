@@ -9,20 +9,23 @@
 //! behaviour without bringing in heavy dependencies or parsing logic.
 
 use core::fmt;
-use std::borrow::Cow;
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead as _, BufReader, Write};
-use std::net::TcpStream;
-use std::str::FromStr;
-use std::time::Duration;
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+    io::{BufRead as _, BufReader, Write},
+    net::TcpStream,
+    str::FromStr,
+    time::Duration,
+};
 
-#[cfg(any(feature = "ed25519", feature = "ml-dsa", feature = "secp256k1"))]
-use crate::signature::{SignatureScheme, verify_signature};
 #[cfg(feature = "ed25519")]
 use ed25519_dalek::{Signer as _, SigningKey};
 #[cfg(feature = "secp256k1")]
 use k256::ecdsa::{SigningKey as Secp256k1SigningKey, signature::Signer as _};
+
+#[cfg(any(feature = "ed25519", feature = "ml-dsa", feature = "secp256k1"))]
+use crate::signature::{SignatureScheme, verify_signature};
 
 /// Extremely small ISO 20022 message representation used for testing.
 #[derive(Clone, Default)]
@@ -1626,8 +1629,9 @@ pub fn parse_message(message_type: &str, data: &[u8]) -> Result<ParsedMessage, M
 /// this helper. These structs make it easy to encode/decode settlement payloads
 /// alongside the VM message stack without reimplementing field mapping.
 pub mod norito_schemas {
-    use super::{InvalidValueKind, MsgError, ParsedMessage, msg_add, msg_create, msg_set};
     use norito::codec::{Decode, Encode};
+
+    use super::{InvalidValueKind, MsgError, ParsedMessage, msg_add, msg_create, msg_set};
 
     fn required_text(parsed: &ParsedMessage, field: &'static str) -> Result<String, MsgError> {
         parsed
@@ -3970,11 +3974,14 @@ fn set_http_sender_override(callback: Option<TestHttpSender>) {
 
 #[cfg(test)]
 mod tests {
-    use super::norito_schemas::{Colr007, Linkage, Sese023, Sese025};
-    use super::*;
     #[cfg(feature = "ed25519")]
     use ed25519_dalek::SigningKey;
     use norito::codec::{Decode, Encode};
+
+    use super::{
+        norito_schemas::{Colr007, Linkage, Sese023, Sese025},
+        *,
+    };
 
     thread_local! {
         static HTTP_CALLS: RefCell<Vec<(String, u16, String, Vec<u8>)>> = const {

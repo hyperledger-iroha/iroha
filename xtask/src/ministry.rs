@@ -1823,7 +1823,6 @@ fn now_rfc3339() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::{Algorithm, PublicKey, Signature, SignatureOf};
     use iroha_data_model::{
         ministry::{
@@ -1841,6 +1840,8 @@ mod tests {
     };
     use norito::decode_from_bytes;
     use tempfile::{NamedTempFile, TempDir};
+
+    use super::*;
 
     #[test]
     fn volunteer_validator_accepts_template() {

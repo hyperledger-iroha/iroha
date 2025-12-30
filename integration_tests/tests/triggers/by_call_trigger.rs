@@ -2,6 +2,7 @@
 
 use eyre::{Result, WrapErr};
 use futures_util::StreamExt as _;
+use integration_tests::sandbox;
 use iroha::{
     crypto::KeyPair,
     data_model::{
@@ -20,8 +21,6 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, load_sample_ivm};
 use mint_rose_trigger_data_model::MintRoseArgs;
 use tokio::{task::spawn_blocking, time::timeout};
-
-use integration_tests::sandbox;
 
 use crate::triggers::get_asset_value;
 

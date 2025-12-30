@@ -1,10 +1,11 @@
+use fastpq_isi::StarkParameterSet;
+use iroha_crypto::Hash;
+
 use crate::{
     Error, Result,
     batch::TransitionBatch,
     trace::{ColumnDigests, Trace, build_trace, column_hashes, merkle_root_with_first_level},
 };
-use fastpq_isi::StarkParameterSet;
-use iroha_crypto::Hash;
 
 /// Domain separator applied to the Stage 1 commitment payload.
 const TRACE_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:trace_commitment";
@@ -94,13 +95,14 @@ fn append_length_prefixed(buffer: &mut Vec<u8>, bytes: &[u8]) -> Result<(), Erro
 
 #[cfg(test)]
 mod tests {
+    use fastpq_isi::CANONICAL_PARAMETER_SETS;
+
     use super::*;
     use crate::{
         OperationKind, Planner, StateTransition, TransitionBatch,
         backend::{self, ExecutionMode},
         trace::{derive_polynomial_data, hash_columns_from_coefficients},
     };
-    use fastpq_isi::CANONICAL_PARAMETER_SETS;
 
     fn sample_batch() -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced");

@@ -5,12 +5,14 @@
 //! tracks provider capacity declarations, telemetry snapshots, and
 //! fee accrual ledgers.
 
-use crate::metadata::Metadata;
 use core::fmt;
+use std::cmp::Ordering;
+
 use hex;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use std::cmp::Ordering;
+
+use crate::metadata::Metadata;
 
 /// Provider identifier (BLAKE3-256 digest allocated by governance).
 #[derive(

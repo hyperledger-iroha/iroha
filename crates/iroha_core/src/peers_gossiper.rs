@@ -18,9 +18,7 @@ use iroha_data_model::peer::{Peer, PeerId};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, UpdatePeers, UpdateTopology, UpdateTrustedPeers};
 use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
-use norito::codec::Encode;
-use norito::core as ncore;
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{NoritoDeserialize, NoritoSerialize, codec::Encode, core as ncore};
 use tokio::sync::mpsc;
 
 use crate::{IrohaNetwork, NetworkMessage};
@@ -783,12 +781,14 @@ impl<'a> NoritoDeserialize<'a> for PeersGossip {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_crypto::{Algorithm, KeyPair};
     use std::{
         collections::{BTreeSet, HashSet},
         time::Instant,
     };
+
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    use super::*;
     #[test]
     fn peers_gossip_roundtrip() {
         // Use seeded keypairs to produce valid Ed25519 public keys deterministically.

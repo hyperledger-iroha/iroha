@@ -232,8 +232,7 @@ fn merkle_random_matrix_equivalence() {
 
 #[cfg(feature = "ivm_prop")]
 mod prop_equivalence {
-    use proptest::array::uniform32;
-    use proptest::prelude::*;
+    use proptest::{array::uniform32, prelude::*};
 
     #[inline]
     fn dirs_reference(mut cur: u64, mut dirs: u32, path: &[u64; 32], depth: usize) -> u64 {

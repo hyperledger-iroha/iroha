@@ -7,11 +7,6 @@
 //! ABR ladders in one run.
 #![allow(unexpected_cfgs)]
 
-use blake3::hash as blake3_hash;
-use iroha_data_model::taikai::{CekRotationReceiptV1, TaikaiSegmentEnvelopeV1};
-use iroha_telemetry::metrics::Metrics;
-use norito::json::{Map, Value};
-use norito::{decode_from_bytes, json};
 use std::{
     collections::HashMap,
     env,
@@ -19,6 +14,14 @@ use std::{
     io,
     path::{Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
+};
+
+use blake3::hash as blake3_hash;
+use iroha_data_model::taikai::{CekRotationReceiptV1, TaikaiSegmentEnvelopeV1};
+use iroha_telemetry::metrics::Metrics;
+use norito::{
+    decode_from_bytes, json,
+    json::{Map, Value},
 };
 
 const USAGE: &str = "\

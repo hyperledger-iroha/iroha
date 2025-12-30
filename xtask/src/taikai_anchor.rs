@@ -1,9 +1,3 @@
-use crate::{JsonTarget, workspace_root, write_json_output};
-use blake3::hash as blake3_hash;
-use eyre::{Context as _, Result, ensure, eyre};
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
-use norito::{derive::JsonSerialize, json};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -11,6 +5,14 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use blake3::hash as blake3_hash;
+use eyre::{Context as _, Result, ensure, eyre};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+use norito::{derive::JsonSerialize, json};
+use sha2::{Digest, Sha256};
+
+use crate::{JsonTarget, workspace_root, write_json_output};
 
 const ANCHOR_REQUEST_PREFIX: &str = "taikai-anchor-request-";
 const ANCHOR_REQUEST_SUFFIX: &str = ".json";
@@ -413,10 +415,11 @@ struct HashedBytes {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::Algorithm;
     use norito::json::Value;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn collects_pending_and_delivered_entries() -> Result<()> {

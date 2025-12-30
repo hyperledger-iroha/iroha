@@ -5,10 +5,8 @@
 //! derive transport keys, and unwrap Group Content Keys (GCKs) while enforcing
 //! the monotonic counter and suite invariants mandated by the spec.
 
-use crate::{
-    Algorithm, KeyPair, PrivateKey, PublicKey, SessionKey, Signature, rng,
-    signature::ed25519::Ed25519Sha512,
-};
+use std::{cmp, convert::TryInto, fmt};
+
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::DecodeFromSlice,
@@ -25,10 +23,14 @@ use norito::{
 use rand::RngCore;
 use sha3::{Digest, Sha3_256};
 use soranet_pq::{MlKemSuite, decapsulate_mlkem, encapsulate_mlkem};
-use std::{cmp, convert::TryInto, fmt};
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
+
+use crate::{
+    Algorithm, KeyPair, PrivateKey, PublicKey, SessionKey, Signature, rng,
+    signature::ed25519::Ed25519Sha512,
+};
 
 const SNAPSHOT_KEY_DOMAIN: &[u8] = b"iroha.streaming.snapshot-key";
 const FEEDBACK_FP_SHIFT: u32 = 16;

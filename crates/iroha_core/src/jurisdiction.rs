@@ -965,7 +965,6 @@ pub enum JdgAttestationGuardError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Cursor;
 
     #[cfg(feature = "bls")]
@@ -978,6 +977,8 @@ mod tests {
         nexus::DataSpaceId,
     };
     use tempfile::tempdir;
+
+    use super::*;
 
     fn simple_signature_schemes() -> BTreeSet<JdgSignatureScheme> {
         BTreeSet::from([JdgSignatureScheme::SimpleThreshold])

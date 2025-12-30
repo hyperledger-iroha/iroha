@@ -809,10 +809,11 @@ fn current_unix() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::sorafs::gar::GarCdnPolicyV1;
     use norito::json;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn empty_cdn_policy() -> GarCdnPolicyV1 {
         GarCdnPolicyV1 {

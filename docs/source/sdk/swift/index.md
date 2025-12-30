@@ -239,10 +239,10 @@ instead of composing JSON predicates. The helper lowercases verdict IDs and
 rejects invalid combinations before the request is executed, keeping the Swift
 surface aligned with the OA11 roadmap guarantees.
 
-`OfflineReceiptChallenge.encode(...)` reuses the shared native helper to emit the canonical Norito
-payload plus the `irohaHash`/`clientDataHash` pair that Apple App Attest and Android KeyMint expect.
-Call it before generating platform proofs so every device feeds the exact same bytes into the
-attestation chain.【IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift:1】【IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift:1】
+`OfflineReceiptChallenge.encode(chainId, ...)` reuses the shared native helper to emit the canonical
+Norito payload plus the chain-bound `irohaHash`/`clientDataHash` pair that Apple App Attest and
+Android KeyMint expect. Call it before generating platform proofs so every device feeds the exact
+same bytes into the attestation chain.【IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift:1】【IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift:1】
 
 ### Offline receipt builders
 
@@ -250,11 +250,13 @@ attestation chain.【IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift
 signature verification, account-id/policy checks, platform snapshot policy binding, aggregate
 proof root matching, and challenge-hash verification for App Attest/provisioned proofs. Use
 `OfflineWallet.buildSignedReceipt` to sign with the spend key and append to the journal and audit
-log in one call:
+log in one call. Pass `chainId` so the challenge hash is bound to the target network:
 
 ```swift
+let chainId = "testnet"
 let journal = try OfflineJournal(url: journalURL, key: OfflineJournalKey.derive(from: seed))
 let receipt = try wallet.buildSignedReceipt(
+    chainId: chainId,
     receiverAccountId: certificate.controller,
     amount: "10",
     invoiceId: "inv-001",
@@ -265,13 +267,25 @@ let receipt = try wallet.buildSignedReceipt(
 )
 
 let claimedDelta = try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt])
+let resultingValue = "90" // current balance minus claimedDelta
+let initialBlindingHex = "<current-blinding-hex>"
+let resultingBlindingHex = "<next-blinding-hex>"
+let artifacts = try OfflineBalanceProofBuilder.advanceCommitment(
+    chainId: chainId,
+    claimedDelta: claimedDelta,
+    resultingValue: resultingValue,
+    initialCommitmentHex: certificate.allowance.commitment.hexUppercased(),
+    initialBlindingHex: initialBlindingHex,
+    resultingBlindingHex: resultingBlindingHex
+)
 let balanceProof = OfflineBalanceProof(
     initialCommitment: certificate.allowance,
-    resultingCommitment: resultingCommitment,
+    resultingCommitment: artifacts.resultingCommitment,
     claimedDelta: claimedDelta,
-    zkProof: zkProof
+    zkProof: artifacts.proof
 )
 let transfer = try OfflineReceiptBuilder.buildTransfer(
+    chainId: chainId,
     receiver: certificate.controller,
     depositAccount: certificate.controller,
     receipts: [receipt],
@@ -279,16 +293,21 @@ let transfer = try OfflineReceiptBuilder.buildTransfer(
 )
 ```
 
+Balance proofs are required for settlement; `OfflineBalanceProofBuilder` emits the versioned
+12,385-byte v1 proof blob (delta + range proofs) that Torii expects.
+
 If you need deterministic IDs or direct journal/audit wiring without `OfflineWallet`, use
 `OfflineReceiptRecorder` alongside the builder:
 
 ```swift
 let logger = try OfflineAuditLogger(isEnabled: true)
 let recorder = OfflineReceiptRecorder(journal: journal, auditLogger: logger)
+let chainId = "testnet"
 let seed = Data("receipt-seed".utf8)
 let bundleSeed = Data("bundle-seed".utf8)
 let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
     txIdSeed: seed,
+    chainId: chainId,
     receiverAccountId: certificate.controller,
     amount: "10",
     invoiceId: "inv-002",
@@ -301,6 +320,7 @@ let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
 
 let transfer = try OfflineReceiptBuilder.buildTransfer(
     bundleIdSeed: bundleSeed,
+    chainId: chainId,
     receiver: certificate.controller,
     depositAccount: certificate.controller,
     receipts: [receipt],

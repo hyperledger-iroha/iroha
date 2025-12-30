@@ -1,6 +1,5 @@
 //! Utility crate for standardized and random signatories.
 
-use std::sync::LazyLock;
 #[cfg(all(test, feature = "rand"))]
 use std::sync::Mutex;
 #[cfg(feature = "rand")]
@@ -12,6 +11,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::LazyLock,
 };
 
 use iroha_crypto::KeyPair;
@@ -88,9 +88,11 @@ fn set_calibration_seed_override(seed: Option<&str>) {
 
 #[cfg(all(test, feature = "rand"))]
 mod calibration_tests {
-    use super::*;
-    use iroha_data_model::prelude::AccountId;
     use std::sync::atomic::Ordering;
+
+    use iroha_data_model::prelude::AccountId;
+
+    use super::*;
 
     #[test]
     fn gen_account_in_uses_seed_when_present() {

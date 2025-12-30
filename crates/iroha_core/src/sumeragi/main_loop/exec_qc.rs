@@ -4,11 +4,10 @@ use eyre::{Result, bail};
 use iroha_crypto::HashOf;
 use iroha_data_model::{block::BlockHeader, consensus::ExecutionQcRecord};
 use iroha_logger::prelude::*;
-
-use crate::state::{State, WorldReadOnly};
 use mv::storage::StorageReadOnly;
 
 use super::{Actor, PendingBlock, ProofPolicy};
+use crate::state::{State, WorldReadOnly};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ExecQcGateStatus {
@@ -260,15 +259,16 @@ impl Actor {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{block::BlockHeader, consensus::ExecutionQcRecord};
+    use mv::storage::StorageReadOnly;
+
     use super::persist_execution_qc_record_in_wsv;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World, WorldReadOnly},
     };
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::{block::BlockHeader, consensus::ExecutionQcRecord};
-    use mv::storage::StorageReadOnly;
 
     #[test]
     fn persist_execution_qc_record_writes_root() {

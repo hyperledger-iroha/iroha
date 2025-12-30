@@ -1,6 +1,5 @@
 //! Time event and filter
-use std::string::String;
-use std::{convert::TryFrom, ops::Range, time::Duration};
+use std::{convert::TryFrom, ops::Range, string::String, time::Duration};
 
 use derive_more::Constructor;
 use getset::Getters;
@@ -106,8 +105,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TimeEventFilter {
 
 // Internal wire helper with a stable Norito tuple layout
 mod wire {
-    use super::*;
     use norito::core as ncore;
+
+    use super::*;
 
     pub(super) struct TimeIntervalWire(pub u64, pub u64);
 

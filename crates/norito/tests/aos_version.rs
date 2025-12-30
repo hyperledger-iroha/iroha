@@ -1,11 +1,14 @@
 //! AoS ad-hoc body version nibble tests (roundtrip + malformed).
 #![cfg(feature = "json")]
 
-use norito::columnar::{
-    ADAPTIVE_TAG_AOS, decode_rows_u64_bytes_bool_adaptive, decode_rows_u64_optu32_bool_adaptive,
-    decode_rows_u64_str_bool_adaptive, decode_rows_u64_str_u32_bool_adaptive,
+use norito::{
+    columnar::{
+        ADAPTIVE_TAG_AOS, decode_rows_u64_bytes_bool_adaptive,
+        decode_rows_u64_optu32_bool_adaptive, decode_rows_u64_str_bool_adaptive,
+        decode_rows_u64_str_u32_bool_adaptive,
+    },
+    core::Error,
 };
-use norito::core::Error;
 
 // Compute the offset in the adaptive AoS body where the version byte sits: after [n varint]
 fn aos_version_offset_for_len(n: usize) -> usize {

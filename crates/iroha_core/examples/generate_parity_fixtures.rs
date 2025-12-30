@@ -7,8 +7,10 @@
 
 use std::{fs, io::Write, path::PathBuf};
 
-use iroha_core::block::{BlockBuilder, ValidBlock};
-use iroha_core::state::StateReadOnly;
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    state::StateReadOnly,
+};
 use iroha_data_model::prelude::*;
 use iroha_primitives::numeric::Numeric;
 // use mv::storage::StorageReadOnly; // not needed in example

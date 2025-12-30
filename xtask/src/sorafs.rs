@@ -60,13 +60,6 @@ use serde_json::{self, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use sorafs_car::chunker_registry::{self, ChunkerProfileDescriptor};
 use sorafs_chunker::fixtures::{FixtureProfile, to_hex};
-use sorafs_manifest::alias_cache::{
-    AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof,
-};
-use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorAmount};
-use sorafs_manifest::pin_registry::{
-    AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
-};
 use sorafs_manifest::{
     AdmissionRecord, AdvertEndpoint, AliasBindingV1, AvailabilityTier, CapabilityTlv,
     CapabilityType, CouncilSignature, EndpointAdmissionV1, EndpointAttestationKind,
@@ -75,8 +68,12 @@ use sorafs_manifest::{
     ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints,
     REPLICATION_ORDER_VERSION_V1, RendezvousTopic, ReplicationAssignmentV1, ReplicationOrderSlaV1,
     ReplicationOrderV1, SignatureAlgorithm, StakePointer, StreamBudgetV1, TransportHintV1,
-    TransportProtocol, compute_advert_body_digest, compute_envelope_digest,
-    compute_proposal_digest, verify_advert_against_record,
+    TransportProtocol,
+    alias_cache::{AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof},
+    compute_advert_body_digest, compute_envelope_digest, compute_proposal_digest,
+    deal::{MICRO_XOR_PER_XOR, XorAmount},
+    pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
+    verify_advert_against_record,
 };
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -2760,8 +2757,9 @@ fn slugify_label(raw: &str) -> String {
 
 #[cfg(test)]
 mod reserve_matrix_tests {
-    use super::*;
     use serde_json::Value as SerdeJsonValue;
+
+    use super::*;
 
     fn render_matrix_json(options: ReserveMatrixOptions) -> SerdeJsonValue {
         let value = reserve_matrix_report(options).expect("matrix report");
@@ -2832,9 +2830,11 @@ mod reserve_matrix_tests {
 
 #[cfg(test)]
 mod rollout_tests {
-    use super::*;
     use std::fs;
+
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn route_plan_generates_headers_and_plan() {
@@ -7973,9 +7973,11 @@ impl BurnInAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{collections::HashSet, fs, path::Path, time::Duration};
+
     use tempfile::tempdir;
+
+    use super::*;
 
     const TEST_MANIFEST_ID: &str = "fixture-manifest";
     const TEST_MANIFEST_CID: &str = "fixture-cid";

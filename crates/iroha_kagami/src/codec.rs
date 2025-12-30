@@ -16,12 +16,14 @@ use color_eyre::{
     eyre::{Result, eyre},
     owo_colors::OwoColorize,
 };
+use iroha_data_model::{account::NewAccount, domain::Domain, peer::Peer};
 use iroha_genesis::RawGenesisTransaction;
-use norito::codec::{DecodeAll, Encode};
-use norito::json::{JsonDeserializeOwned, JsonSerialize};
+use norito::{
+    codec::{DecodeAll, Encode},
+    json::{JsonDeserializeOwned, JsonSerialize},
+};
 
 use crate::{Outcome, RunArgs, tui};
-use iroha_data_model::{account::NewAccount, domain::Domain, peer::Peer};
 
 /// Generate map with types and converter trait object
 fn generate_map() -> ConverterMap {
@@ -376,15 +378,16 @@ fn list_types<W: io::Write>(map: &ConverterMap, writer: &mut W) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Converter, ConverterImpl, ConverterMap, NoritoToRustArgs, NoritoToRustDecoder, generate_map,
-    };
+    use std::{path::PathBuf, sync::Arc};
+
     use color_eyre::eyre::Result as EyreResult;
     use iroha_data_model::{account::NewAccount, peer::Peer};
     use iroha_genesis::RawGenesisTransaction;
-    use iroha_schema::Compact;
-    use iroha_schema::TypeId;
-    use std::{path::PathBuf, sync::Arc};
+    use iroha_schema::{Compact, TypeId};
+
+    use super::{
+        Converter, ConverterImpl, ConverterMap, NoritoToRustArgs, NoritoToRustDecoder, generate_map,
+    };
 
     #[test]
     fn json_norito_roundtrip() {

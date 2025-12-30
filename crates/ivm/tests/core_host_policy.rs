@@ -1,17 +1,20 @@
 //! Ensure CoreHost enforces the same ABI gating as DefaultHost.
 #[path = "../../iroha_data_model/tests/fixtures/axt_golden.rs"]
 mod axt_golden;
-use iroha_data_model::nexus as model;
-use iroha_data_model::nexus::{
-    AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId,
-};
-use ivm::axt::{
-    self, AssetHandle, AxtProofEnvelope, GroupBinding, HandleBudget, HandleSubject, ProofBlob,
-    RemoteSpendIntent, SpendOp, TouchManifest,
-};
-use ivm::mock_wsv::{DataspaceAxtPolicy, MockWorldStateView, SpaceDirectoryAxtPolicy};
-use ivm::{CoreHost, IVM, IVMHost, PointerType, VMError};
 use std::{collections::HashMap, sync::Arc};
+
+use iroha_data_model::{
+    nexus as model,
+    nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId},
+};
+use ivm::{
+    CoreHost, IVM, IVMHost, PointerType, VMError,
+    axt::{
+        self, AssetHandle, AxtProofEnvelope, GroupBinding, HandleBudget, HandleSubject, ProofBlob,
+        RemoteSpendIntent, SpendOp, TouchManifest,
+    },
+    mock_wsv::{DataspaceAxtPolicy, MockWorldStateView, SpaceDirectoryAxtPolicy},
+};
 
 #[test]
 fn core_host_rejects_unknown_syscalls() {
@@ -920,8 +923,9 @@ fn core_host_enforces_fixture_snapshot_fields() {
     );
 
     {
-        use axt::AxtPolicy;
         use std::num::NonZeroU64;
+
+        use axt::AxtPolicy;
         let dsid = base_intent.asset_dsid;
         let binding = axt::compute_binding(&descriptor).expect("binding");
         assert_eq!(

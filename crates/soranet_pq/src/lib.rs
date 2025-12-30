@@ -21,15 +21,17 @@ mod mldsa;
 mod mlkem;
 mod rng;
 
-pub use crate::hkdf::{HkdfDomain, HkdfSuite, derive_labeled_hkdf};
-pub use crate::mldsa::{
-    MlDsaError, MlDsaKeyPair, MlDsaSignature, MlDsaSuite, generate_mldsa_keypair, sign_mldsa,
-    verify_mldsa,
+pub use crate::{
+    hkdf::{HkdfDomain, HkdfSuite, derive_labeled_hkdf},
+    mldsa::{
+        MlDsaError, MlDsaKeyPair, MlDsaSignature, MlDsaSuite, generate_mldsa_keypair, sign_mldsa,
+        verify_mldsa,
+    },
+    mlkem::{
+        MlKemCiphertext, MlKemKeyPair, MlKemMetadata, MlKemParameters, MlKemSharedSecret,
+        MlKemSuite, SuiteParseError, decapsulate_mlkem, encapsulate_mlkem, generate_mlkem_keypair,
+        mlkem_metadata, mlkem_parameters, validate_mlkem_ciphertext, validate_mlkem_public_key,
+        validate_mlkem_secret_key,
+    },
+    rng::{HedgedRngSeed, hedged_chacha20_rng},
 };
-pub use crate::mlkem::{
-    MlKemCiphertext, MlKemKeyPair, MlKemMetadata, MlKemParameters, MlKemSharedSecret, MlKemSuite,
-    SuiteParseError, decapsulate_mlkem, encapsulate_mlkem, generate_mlkem_keypair, mlkem_metadata,
-    mlkem_parameters, validate_mlkem_ciphertext, validate_mlkem_public_key,
-    validate_mlkem_secret_key,
-};
-pub use crate::rng::{HedgedRngSeed, hedged_chacha20_rng};

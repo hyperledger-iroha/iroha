@@ -102,7 +102,10 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        num::NonZeroU64,
+        sync::{Arc, Mutex},
+    };
 
     use iroha_crypto::{Hash as UntypedHash, HashOf};
     use iroha_data_model::{
@@ -112,7 +115,6 @@ mod tests {
         },
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     };
-    use std::num::NonZeroU64;
 
     use super::{LaneRelayBroadcaster, LaneRelayTx};
 

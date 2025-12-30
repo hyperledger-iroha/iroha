@@ -6,8 +6,10 @@
 
 use std::{collections::BTreeMap, str::FromStr};
 
-use iroha_crypto::HashOf;
-use iroha_crypto::blake2::{Blake2b512, Digest};
+use iroha_crypto::{
+    HashOf,
+    blake2::{Blake2b512, Digest},
+};
 use iroha_data_model::{
     consensus::{ValidatorElectionOutcome, ValidatorElectionParameters, ValidatorTieBreak},
     name::Name,
@@ -256,13 +258,14 @@ fn entity_key(record: Option<&PublicLaneValidatorRecord>, peer_id: &PeerId) -> S
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
         account::AccountId,
         nexus::LaneId,
         prelude::{DomainId, Json, Metadata},
     };
+
+    use super::*;
 
     fn parse_public_key(hex: &str) -> PublicKey {
         match PublicKey::from_hex(Algorithm::Ed25519, hex) {

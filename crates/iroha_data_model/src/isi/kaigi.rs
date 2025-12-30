@@ -1,9 +1,10 @@
+use iroha_crypto::Hash;
+
 use super::*;
 use crate::kaigi::{
     KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
     KaigiRelayManifest, KaigiRelayRegistration, NewKaigi,
 };
-use iroha_crypto::Hash;
 
 isi! {
     /// Create a new Kaigi session anchored to a domain.

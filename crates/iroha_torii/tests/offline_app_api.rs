@@ -1,6 +1,8 @@
 //! Integration tests for offline app API write endpoints.
 #![cfg(feature = "app_api")]
 
+mod offline_balance_proof_utils;
+
 use std::{str::FromStr, sync::Arc};
 
 use axum::{
@@ -27,15 +29,16 @@ use iroha_data_model::{
     isi::offline::RegisterOfflineAllowance,
     metadata::Metadata,
     offline::{
-        AppleAppAttestProof, OfflineAllowanceCommitment, OfflineBalanceProof, OfflinePlatformProof,
-        OfflineSpendReceipt, OfflineToOnlineTransfer, OfflineWalletCertificate,
-        OfflineWalletPolicy, compute_receipts_root,
+        AppleAppAttestProof, OfflineAllowanceCommitment, OfflinePlatformProof, OfflineSpendReceipt,
+        OfflineToOnlineTransfer, OfflineWalletCertificate, OfflineWalletPolicy,
+        compute_receipts_root,
     },
 };
 use iroha_primitives::numeric::Numeric;
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use nonzero_ext::nonzero;
 use norito::json::{self, Value};
+use offline_balance_proof_utils::{build_balance_proof_for_allowance, scalar_bytes};
 use tokio::sync::{broadcast, watch};
 use tower::ServiceExt as _;
 
@@ -138,12 +141,23 @@ fn build_fixtures() -> Fixtures {
             .expect("certificate signing bytes"),
     );
 
+    let claimed_delta = Numeric::new(100, 0);
+    let balance_proof = build_balance_proof_for_allowance(
+        &chain_id,
+        &certificate.allowance,
+        &claimed_delta,
+        scalar_bytes(1),
+        scalar_bytes(2),
+    );
+    certificate.allowance.commitment = balance_proof.initial_commitment.commitment.clone();
+
     let mut receipt = OfflineSpendReceipt {
         tx_id: Hash::new(b"receipt-1"),
         from: controller.clone(),
         to: receiver.clone(),
         asset: allowance_asset.clone(),
         amount: Numeric::new(100, 0),
+        issued_at_ms: certificate.issued_at_ms + 100,
         invoice_id: "INV-001".into(),
         platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
             key_id: "apple".into(),
@@ -160,12 +174,6 @@ fn build_fixtures() -> Fixtures {
         &receipt.signing_bytes().expect("receipt signing bytes"),
     );
 
-    let balance_proof = OfflineBalanceProof {
-        initial_commitment: certificate.allowance.clone(),
-        resulting_commitment: vec![0xBB; 32],
-        claimed_delta: Numeric::new(100, 0),
-        zk_proof: None,
-    };
     let transfer = OfflineToOnlineTransfer {
         bundle_id: Hash::new(b"bundle-1"),
         receiver: receiver.clone(),

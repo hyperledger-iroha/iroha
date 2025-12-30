@@ -1,5 +1,4 @@
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-use ivm::{CoreHost, IVM};
+use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 
 fn run_prog(src: &str) {
     let compiler = KotodamaCompiler::new();

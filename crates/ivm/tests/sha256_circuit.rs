@@ -1,7 +1,6 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::Sha256BlockCircuit;
-use rand_core::OsRng;
-use rand_core::RngCore;
+use rand_core::{OsRng, RngCore};
 
 fn sha256_compress_ref(state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     const K: [u32; 64] = [

@@ -15,11 +15,11 @@ use std::{
 };
 
 use iroha_crypto::{Hash, HashOf, SignatureOf};
+use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{account::AccountId, error::ParseError, name::Name, nexus::UniversalAccountId};
-use iroha_primitives::numeric::Numeric;
 
 /// Oracle identifier (validator-bound oracle signing key).
 pub type OracleId = AccountId;
@@ -2248,8 +2248,9 @@ pub enum OracleModelError {
 
 /// Reference oracle kits used by SDK/CLI examples and fixtures.
 pub mod kits {
-    use super::*;
     use norito::json;
+
+    use super::*;
 
     /// Bundled reference assets for an oracle feed.
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2389,11 +2390,13 @@ pub mod kits {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::domain::DomainId;
+    use std::str::FromStr;
+
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use norito::json;
-    use std::str::FromStr;
+
+    use super::*;
+    use crate::domain::DomainId;
 
     fn feed_id(name: &str) -> FeedId {
         FeedId(Name::from_str(name).expect("feed name"))

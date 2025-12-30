@@ -1,7 +1,6 @@
 //! This module contains [`Nft`] structure and it's implementation
 
-use std::str::FromStr;
-use std::{format, string::String, vec::Vec};
+use std::{format, str::FromStr, string::String, vec::Vec};
 
 use iroha_data_model_derive::model;
 

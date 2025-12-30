@@ -268,9 +268,10 @@ impl Registrable for NewRole {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
+    use iroha_primitives::json::Json;
+
     use super::*;
     use crate::permission::Permission;
-    use iroha_primitives::json::Json;
 
     #[test]
     fn role_json_roundtrip() {

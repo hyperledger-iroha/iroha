@@ -7,8 +7,7 @@
 
 #[test]
 fn compress_auto_is_noop_without_compression_feature() {
-    use norito::Compression;
-    use norito::core::heuristics::compress_auto;
+    use norito::{Compression, core::heuristics::compress_auto};
 
     let payload = vec![0u8; 8 * 1024];
     let (algo, out) = compress_auto(payload.clone()).expect("compress_auto should not fail");

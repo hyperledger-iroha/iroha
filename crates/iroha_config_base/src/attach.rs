@@ -369,14 +369,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{
+        io::{Error, ErrorKind},
+        sync::{Mutex, OnceLock},
+    };
+
     use error_stack::{Report, fmt::ColorMode};
-    use std::io::{Error, ErrorKind};
-    use std::sync::{Mutex, OnceLock};
+
+    use super::*;
 
     static COLOR_MODE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-    use crate::ParameterId;
     use toml::Value;
+
+    use crate::ParameterId;
 
     fn reset_color_mode(mode: ColorMode) {
         Report::set_color_mode(mode);

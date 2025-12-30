@@ -1,37 +1,61 @@
 //! `World`-related ISI implementations.
 
+use iroha_data_model::smart_contract::manifest::{ContractManifest, ManifestProvenance};
 use iroha_telemetry::metrics;
 
 use super::prelude::*;
 use crate::{prelude::*, state::WorldTransaction};
-use iroha_data_model::smart_contract::manifest::{ContractManifest, ManifestProvenance};
 
 /// Iroha Special Instructions that have `World` as their target.
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
-    use base64::engine::Engine as _;
     use core::{
         cmp::Ordering,
         convert::{TryFrom, TryInto},
         time::Duration,
     };
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        str::FromStr,
+    };
+
+    use base64::engine::Engine as _;
     use eyre::Result;
-    use iroha_data_model::account::AccountController;
-    use iroha_data_model::isi::{bridge, consensus_keys, endorsement, verifying_keys};
+    use iroha_crypto::{Hash, Hash as CryptoHash, PublicKey, blake2::Blake2b512};
+    // Governance ISIs
+    use iroha_data_model::isi::confidential;
+    // Bring runtime upgrade ISIs into scope
+    use iroha_data_model::isi::runtime_upgrade;
     use iroha_data_model::{
         Level,
+        account::AccountController,
         asset::definition::{
             AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
         },
         confidential::ConfidentialStatus,
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         da::pin_intent::DaPinIntentWithLocation,
+        events::data::{
+            confidential::{
+                ConfidentialEvent, ConfidentialShielded, ConfidentialTransferred,
+                ConfidentialUnshielded,
+            },
+            governance::{
+                GovernanceEvent, GovernanceParliamentApprovalRecorded, GovernanceSlashReason,
+            },
+            smart_contract::{
+                ContractCodeRegistered, ContractCodeRemoved, ContractInstanceActivated,
+                ContractInstanceDeactivated, SmartContractEvent,
+            },
+        },
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
             ProposalKind,
         },
-        isi::error::{
-            InstructionExecutionError, InvalidParameterError, MathError, RepetitionError,
+        isi::{
+            bridge, consensus_keys, endorsement,
+            error::{InstructionExecutionError, InvalidParameterError, MathError, RepetitionError},
+            governance as gov, smart_contract_code as scode, verifying_keys,
         },
         name::{self, Name},
         nexus::{
@@ -41,45 +65,22 @@ pub mod isi {
         prelude::*,
         proof::{ProofId, VerifyingKeyId, VerifyingKeyRecord},
         query::error::FindError,
+        zk::{BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope},
     };
     use iroha_primitives::{
         numeric::{Numeric, NumericSpec},
         unique_vec::PushResult,
     };
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::str::FromStr;
-
-    use super::*;
-    use crate::governance::selector::derive_parliament_bodies;
-    use crate::state::derive_validator_key_id;
-    use crate::sumeragi::status::PeerKeyPolicyRejectReason;
-    use crate::zk::hash_vk;
-    use iroha_crypto::{Hash, PublicKey};
-    use iroha_crypto::{Hash as CryptoHash, blake2::Blake2b512};
-    use iroha_data_model::events::data::{
-        confidential::{
-            ConfidentialEvent, ConfidentialShielded, ConfidentialTransferred,
-            ConfidentialUnshielded,
-        },
-        governance::{
-            GovernanceEvent, GovernanceParliamentApprovalRecorded, GovernanceSlashReason,
-        },
-        smart_contract::{
-            ContractCodeRegistered, ContractCodeRemoved, ContractInstanceActivated,
-            ContractInstanceDeactivated, SmartContractEvent,
-        },
-    };
-    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope};
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::GovernanceManifestActivation;
-    use sha2::{Digest as _, Sha256};
-    // Bring runtime upgrade ISIs into scope
-    use iroha_data_model::isi::runtime_upgrade;
-    // Governance ISIs
-    use iroha_data_model::isi::confidential;
-    use iroha_data_model::isi::governance as gov;
-    use iroha_data_model::isi::smart_contract_code as scode;
     use mv::storage::StorageReadOnly;
+    use sha2::{Digest as _, Sha256};
+
+    use super::*;
+    use crate::{
+        governance::selector::derive_parliament_bodies, state::derive_validator_key_id,
+        sumeragi::status::PeerKeyPolicyRejectReason, zk::hash_vk,
+    };
 
     fn has_permission(world: &WorldTransaction<'_, '_>, who: &AccountId, name: &str) -> bool {
         world
@@ -4984,10 +4985,11 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            use std::collections::BTreeSet;
+
             use iroha_data_model::events::data::proof::{
                 ProofEvent, ProofPruneOrigin, ProofPruned,
             };
-            use std::collections::BTreeSet;
 
             let cap = state_transaction.zk.proof_history_cap;
             let grace = state_transaction.zk.proof_retention_grace_blocks;
@@ -8619,23 +8621,10 @@ pub mod isi {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
-        use crate::zk::{hash_proof, hash_vk};
-        use crate::{
-            block::ValidBlock,
-            executor::Executor,
-            kura::Kura,
-            query::store::LiveQueryStore,
-            state::storage_transactions::TransactionsBlockError,
-            state::{State, StateTransaction, SumeragiPolicyConfig, SumeragiPolicyFlags, World},
-        };
         use core::num::NonZeroU64;
+        use std::{collections::BTreeMap, str::FromStr, sync::Arc};
+
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
-        use iroha_data_model::isi::SetParameter;
-        use iroha_data_model::isi::bridge::RecordBridgeReceipt;
-        use iroha_data_model::parameter::system::{SumeragiConsensusMode, SumeragiParameter};
-        use iroha_data_model::prelude::Parameter;
-        use iroha_data_model::zk::OpenVerifyEnvelope;
         #[allow(unused_imports)]
         use iroha_data_model::{
             bridge::BridgeReceipt,
@@ -8656,11 +8645,29 @@ pub mod isi {
             },
             zk::BackendTag,
         };
+        use iroha_data_model::{
+            isi::{SetParameter, bridge::RecordBridgeReceipt},
+            parameter::system::{SumeragiConsensusMode, SumeragiParameter},
+            prelude::Parameter,
+            zk::OpenVerifyEnvelope,
+        };
         use iroha_primitives::json::Json;
         #[allow(unused_imports)]
         use iroha_schema::Ident;
         use iroha_test_samples::ALICE_ID;
-        use std::{collections::BTreeMap, str::FromStr, sync::Arc};
+
+        use super::*;
+        use crate::{
+            block::ValidBlock,
+            executor::Executor,
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{
+                State, StateTransaction, SumeragiPolicyConfig, SumeragiPolicyFlags, World,
+                storage_transactions::TransactionsBlockError,
+            },
+            zk::{hash_proof, hash_vk},
+        };
 
         fn new_dummy_block() -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) =

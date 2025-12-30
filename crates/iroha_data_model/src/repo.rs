@@ -8,18 +8,19 @@ use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use mv::json::JsonKeyCodec;
+use norito::{
+    codec::{Decode, Encode},
+    derive::{JsonDeserialize, JsonSerialize},
+};
 
-use crate::Identifiable;
 use crate::{
-    Name,
+    Identifiable, Name,
     asset::prelude::AssetDefinitionId,
     metadata::Metadata,
     prelude::{AccountId, Numeric},
 };
-#[cfg(feature = "json")]
-use mv::json::JsonKeyCodec;
-use norito::derive::{JsonDeserialize, JsonSerialize};
 
 #[model]
 mod model {

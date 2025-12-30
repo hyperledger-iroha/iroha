@@ -4,11 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{Outcome, RunArgs, genesis::ensure_npos_parameters, localnet::ConsensusModeArg, tui};
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{WrapErr as _, ensure, eyre};
 use iroha_genesis::RawGenesisTransaction;
 use iroha_swarm::PeerOverride;
+
+use crate::{Outcome, RunArgs, genesis::ensure_npos_parameters, localnet::ConsensusModeArg, tui};
 
 /// Docker Compose configuration generator for Iroha.
 #[allow(clippy::struct_excessive_bools)]
@@ -304,21 +305,23 @@ fn ensure_npos_genesis(config_dir: &Path) -> color_eyre::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Args, ConsensusModeArg, ensure_npos_genesis, load_peer_overrides, parse_peer_override_toml,
-    };
-    use crate::RunArgs;
-    use iroha_data_model::{
-        ChainId,
-        parameter::{Parameter, system::SumeragiNposParameters},
-    };
-    use iroha_genesis::GenesisBuilder;
     use std::{
         fs,
         io::{BufWriter, Write},
         num::NonZeroU16,
         path::{Path, PathBuf},
     };
+
+    use iroha_data_model::{
+        ChainId,
+        parameter::{Parameter, system::SumeragiNposParameters},
+    };
+    use iroha_genesis::GenesisBuilder;
+
+    use super::{
+        Args, ConsensusModeArg, ensure_npos_genesis, load_peer_overrides, parse_peer_override_toml,
+    };
+    use crate::RunArgs;
 
     #[test]
     fn run_succeeds_without_banner() {

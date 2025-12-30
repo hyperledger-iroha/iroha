@@ -1,25 +1,26 @@
 use core::convert::{Infallible, TryFrom};
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
+#[cfg(feature = "ecc-batch")]
+use curve25519_dalek::edwards::EdwardsPoint;
+#[cfg(feature = "ecc-batch")]
+use curve25519_dalek::{constants, scalar::Scalar, traits::IsIdentity};
 use ed25519_dalek::Signature;
 use signature::{Signer as _, Verifier as _};
 
 #[cfg(feature = "rand")]
 use crate::rng::os_rng;
 use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
-#[cfg(feature = "ecc-batch")]
-use curve25519_dalek::edwards::EdwardsPoint;
-#[cfg(feature = "ecc-batch")]
-use curve25519_dalek::{constants, scalar::Scalar, traits::IsIdentity};
 
 pub type PublicKey = ed25519_dalek::VerifyingKey;
 pub type PrivateKey = ed25519_dalek::SigningKey;
 
 #[cfg(feature = "ecc-batch")]
-use sha2::{Digest, Sha512};
-#[cfg(feature = "ecc-batch")]
 use std::iter;
 use std::{format, string::ToString as _, vec::Vec};
+
+#[cfg(feature = "ecc-batch")]
+use sha2::{Digest, Sha512};
 
 fn parse_fixed_size<T, E, F, const SIZE: usize>(
     payload: &[u8],
@@ -126,6 +127,7 @@ impl Ed25519Sha512 {
         #[cfg(feature = "ecc-batch")]
         {
             use core::cmp::Ordering;
+
             use ed25519_dalek as dalek;
 
             // Pre-parse keys and signatures; collect indices for stable sort.
@@ -288,14 +290,14 @@ fn verify_batch_with_seed(
 #[allow(unsafe_code)]
 mod test {
     use libsodium_sys as ffi;
+    #[cfg(feature = "ecc-batch")]
+    use rand::{RngCore, SeedableRng, rngs::StdRng};
 
     use self::Ed25519Sha512;
     use super::*;
     use crate::{
         Algorithm, Error, KeyGenOption, PrivateKey, PublicKey, secrecy::Secret, signature::ed25519,
     };
-    #[cfg(feature = "ecc-batch")]
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
 
     const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";
     const SIGNATURE_1: &str = "451b5b8e8725321541954997781de51f4142e4a56bab68d24f6a6b92615de5eefb74134138315859a32c7cf5fe5a488bc545e2e08e5eedfd1fb10188d532d808";

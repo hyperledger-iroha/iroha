@@ -4,13 +4,11 @@
 mod streaming;
 
 use hex::encode as hex_encode;
-use norito::streaming::chunk::{self, BaselineDecoder};
-use norito::streaming::codec::{
-    BaselineEncoderConfig, BaselineManifestParams, EncodedSegment, RawFrame,
-};
 use norito::streaming::{
     CapabilityFlags, FecScheme, Hash, Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute,
     Signature, StreamMetadata,
+    chunk::{self, BaselineDecoder},
+    codec::{BaselineEncoderConfig, BaselineManifestParams, EncodedSegment, RawFrame},
 };
 
 struct SegmentFixture {

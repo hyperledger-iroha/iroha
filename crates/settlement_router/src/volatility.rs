@@ -1,9 +1,10 @@
 //! Volatility bucketing derived from oracle signals.
 
 use derive_more::Display;
-
-use norito::json::{JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    json::{JsonDeserialize, JsonSerialize},
+};
 
 /// Rolling-volatility classification that drives extra settlement margin.
 #[derive(

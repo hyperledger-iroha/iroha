@@ -2,12 +2,11 @@
 
 use eyre::Result;
 use futures_util::StreamExt;
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use tokio::{task::spawn_blocking, time::timeout};
-
-use integration_tests::sandbox;
 
 #[tokio::test]
 async fn trigger_completion_success_should_produce_event() -> Result<()> {

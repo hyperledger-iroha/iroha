@@ -206,10 +206,12 @@ pub enum ProofBundleValidationError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::Cursor;
+
     use expect_test::expect;
     use norito::{Compression, deserialize_from, serialize_into};
-    use std::io::Cursor;
+
+    use super::*;
 
     fn make_hash(seed: u8) -> [u8; BLAKE3_HASH_LEN] {
         let mut hash = [0_u8; BLAKE3_HASH_LEN];

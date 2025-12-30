@@ -840,8 +840,9 @@ fn convert_field_to_codegen(field: &IntoSchemaField) -> Option<CodegenField> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use syn::parse_quote;
+
+    use super::*;
 
     #[test]
     fn container_flags_are_recorded() {

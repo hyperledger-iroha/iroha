@@ -183,9 +183,10 @@ impl ErasedQueryIterator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::prelude::*;
     use nonzero_ext::nonzero;
+
+    use super::*;
 
     #[test]
     fn empty_selector_projects_full_items() {

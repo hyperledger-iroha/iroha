@@ -23,10 +23,12 @@ public final class OfflineReceiptChallengeTest {
 
     final OfflineReceiptChallenge challenge =
         OfflineReceiptChallenge.compute(
+            "testnet",
             "inv-android-tests",
             "bob@wonderland",
             "usd#wonderland#treasury@wonderland",
             "100",
+            1_700_000_000_000L,
             "ABCDEF1234");
 
     expectByteEquals('N', challenge.getPreimage()[0], "preimage[0]");

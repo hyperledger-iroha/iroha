@@ -1,7 +1,9 @@
 #![allow(clippy::disallowed_types, clippy::items_after_test_module)]
 
-use std::num::{NonZeroU16, NonZeroU64};
-use std::sync::Arc;
+use std::{
+    num::{NonZeroU16, NonZeroU64},
+    sync::Arc,
+};
 
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
@@ -296,13 +298,14 @@ fn generate_account_id(domain_id: DomainId, seed: u128) -> AccountId {
 #[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
-    use super::build_state;
-    #[allow(unused_imports)]
     use iroha_crypto::KeyPair;
     #[allow(unused_imports)]
     use iroha_data_model::prelude::AccountId;
     #[allow(unused_imports)]
     use tokio::runtime::Runtime;
+
+    #[allow(unused_imports)]
+    use super::build_state;
 
     #[test]
     fn build_state_succeeds_without_executor_bytecode() {

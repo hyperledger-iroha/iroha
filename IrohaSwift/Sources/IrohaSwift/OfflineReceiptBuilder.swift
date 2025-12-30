@@ -19,6 +19,7 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
     case invalidAmount(String)
     case nonPositiveAmount(String)
     case amountExceedsPolicy(amount: String, max: String)
+    case invalidReceiptTimestamp(String)
     case receiptReceiverMismatch
     case receiptSenderMismatch
     case receiptAssetMismatch
@@ -36,6 +37,9 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
     case signatureVerificationUnavailable(String)
     case invalidCommitmentLength(Int)
     case invalidResultingCommitmentLength(Int)
+    case missingBalanceProof
+    case invalidBalanceProofLength(expected: Int, actual: Int)
+    case unsupportedBalanceProofVersion(UInt8)
     case aggregateOverflow
     case aggregateProofVersionUnsupported(UInt16)
     case aggregateProofRootMismatch
@@ -78,6 +82,8 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
             return "Receipt amount must be positive: \(value)."
         case let .amountExceedsPolicy(amount, max):
             return "Receipt amount \(amount) exceeds policy max_tx_value \(max)."
+        case let .invalidReceiptTimestamp(reason):
+            return "Receipt issued_at_ms is invalid: \(reason)."
         case .receiptReceiverMismatch:
             return "Receipt receiver must match the bundle receiver."
         case .receiptSenderMismatch:
@@ -112,6 +118,12 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
             return "Commitment must be 32 bytes (got \(length))."
         case let .invalidResultingCommitmentLength(length):
             return "Resulting commitment must be 32 bytes (got \(length))."
+        case .missingBalanceProof:
+            return "Balance proof zk_proof must be provided."
+        case let .invalidBalanceProofLength(expected, actual):
+            return "Balance proof must be \(expected) bytes (got \(actual))."
+        case let .unsupportedBalanceProofVersion(version):
+            return "Balance proof version \(version) is not supported."
         case .aggregateOverflow:
             return "Aggregate amount exceeds numeric bounds."
         case let .aggregateProofVersionUnsupported(version):
@@ -189,10 +201,12 @@ public enum OfflineReceiptBuilder {
     }
 
     /// Builds and signs a receipt using the spend key from the sender certificate.
+    /// The `chainId` is hashed into the platform challenge to prevent cross-chain replays.
     @available(macOS 10.15, iOS 13.0, *)
     public static func buildSignedReceipt(
         txId: Data? = nil,
         txIdSeed: Data? = nil,
+        chainId: String,
         receiverAccountId: String,
         amount: String,
         invoiceId: String,
@@ -201,7 +215,8 @@ public enum OfflineReceiptBuilder {
         senderCertificate: OfflineWalletCertificate,
         signingKey: SigningKey,
         recorder: OfflineReceiptRecorder? = nil,
-        timestampMs: UInt64? = nil
+        timestampMs: UInt64? = nil,
+        issuedAtMs: UInt64? = nil
     ) throws -> OfflineSpendReceipt {
         let finalTxId: Data
         if let txId {
@@ -211,6 +226,7 @@ public enum OfflineReceiptBuilder {
         } else {
             finalTxId = generateReceiptId()
         }
+        let issuedAt = issuedAtMs ?? timestampMs ?? UInt64(Date().timeIntervalSince1970 * 1000.0)
         try validateAccountId(receiverAccountId, field: "receiver")
         try validateSpendKey(signingKey: signingKey, certificate: senderCertificate)
         let receipt = OfflineSpendReceipt(
@@ -219,6 +235,7 @@ public enum OfflineReceiptBuilder {
             to: receiverAccountId,
             assetId: senderCertificate.allowance.assetId,
             amount: amount,
+            issuedAtMs: issuedAt,
             invoiceId: invoiceId,
             platformProof: platformProof,
             platformSnapshot: platformSnapshot,
@@ -226,9 +243,9 @@ public enum OfflineReceiptBuilder {
             senderSignature: Data()
         )
         let signed = try receipt.signed(with: signingKey)
-        try validateReceipt(signed)
+        try validateReceipt(signed, chainId: chainId)
         if let recorder {
-            try recorder.appendPending(receipt: signed, timestampMs: timestampMs)
+            try recorder.appendPending(receipt: signed, timestampMs: timestampMs ?? issuedAt)
         }
         return signed
     }
@@ -387,6 +404,7 @@ public enum OfflineReceiptBuilder {
     public static func buildTransfer(
         bundleId: Data? = nil,
         bundleIdSeed: Data? = nil,
+        chainId: String,
         receiver: String,
         depositAccount: String,
         receipts: [OfflineSpendReceipt],
@@ -415,12 +433,12 @@ public enum OfflineReceiptBuilder {
             attachments: attachments,
             platformSnapshot: platformSnapshot
         )
-        try validateTransfer(transfer)
+        try validateTransfer(transfer, chainId: chainId)
         return transfer
     }
 
     /// Validates a receipt for offline submission.
-    public static func validateReceipt(_ receipt: OfflineSpendReceipt) throws {
+    public static func validateReceipt(_ receipt: OfflineSpendReceipt, chainId: String) throws {
         try validateTxId(receipt.txId)
         if receipt.invoiceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw OfflineReceiptBuilderError.emptyInvoiceId
@@ -436,6 +454,7 @@ public enum OfflineReceiptBuilder {
         guard !amount.isNegative, !amount.isZero else {
             throw OfflineReceiptBuilderError.nonPositiveAmount(receipt.amount)
         }
+        try validateReceiptTimestamp(receipt)
         if receipt.from != receipt.senderCertificate.controller {
             throw OfflineReceiptBuilderError.receiptSenderMismatch
         }
@@ -452,11 +471,30 @@ public enum OfflineReceiptBuilder {
         }
         try verifyReceiptSignature(receipt)
         try validateSnapshot(receipt.platformSnapshot, metadata: receipt.senderCertificate.metadata)
-        try validatePlatformProof(receipt)
+        try validatePlatformProof(receipt, chainId: chainId)
+    }
+
+    private static func validateReceiptTimestamp(_ receipt: OfflineSpendReceipt) throws {
+        let issuedAtMs = receipt.issuedAtMs
+        if issuedAtMs == 0 {
+            throw OfflineReceiptBuilderError.invalidReceiptTimestamp("issued_at_ms must be > 0")
+        }
+        if issuedAtMs < receipt.senderCertificate.issuedAtMs {
+            throw OfflineReceiptBuilderError.invalidReceiptTimestamp(
+                "issued_at_ms predates certificate issuance"
+            )
+        }
+        let expiryBound = min(receipt.senderCertificate.expiresAtMs,
+                              receipt.senderCertificate.policy.expiresAtMs)
+        if issuedAtMs > expiryBound {
+            throw OfflineReceiptBuilderError.invalidReceiptTimestamp(
+                "issued_at_ms exceeds certificate/policy expiry"
+            )
+        }
     }
 
     /// Validates a transfer bundle before submission.
-    public static func validateTransfer(_ transfer: OfflineToOnlineTransfer) throws {
+    public static func validateTransfer(_ transfer: OfflineToOnlineTransfer, chainId: String) throws {
         try validateBundleId(transfer.bundleId)
         try validateAccountId(transfer.receiver, field: "receiver")
         try validateAccountId(transfer.depositAccount, field: "depositAccount")
@@ -473,6 +511,18 @@ public enum OfflineReceiptBuilder {
 
         try validateCommitmentLength(transfer.balanceProof.initialCommitment.commitment)
         try validateResultingCommitmentLength(transfer.balanceProof.resultingCommitment)
+        guard let proof = transfer.balanceProof.zkProof, !proof.isEmpty else {
+            throw OfflineReceiptBuilderError.missingBalanceProof
+        }
+        if proof.count != OfflineBalanceProofBuilder.proofLength {
+            throw OfflineReceiptBuilderError.invalidBalanceProofLength(
+                expected: OfflineBalanceProofBuilder.proofLength,
+                actual: proof.count
+            )
+        }
+        if proof.first != 1 {
+            throw OfflineReceiptBuilderError.unsupportedBalanceProofVersion(proof.first ?? 0)
+        }
         if transfer.balanceProof.initialCommitment.assetId != expectedAssetId {
             throw OfflineReceiptBuilderError.balanceProofAssetMismatch
         }
@@ -486,7 +536,7 @@ public enum OfflineReceiptBuilder {
 
         var invoiceIds = Set<String>()
         for receipt in transfer.receipts {
-            try validateReceipt(receipt)
+            try validateReceipt(receipt, chainId: chainId)
             if !invoiceIds.insert(receipt.invoiceId).inserted {
                 throw OfflineReceiptBuilderError.duplicateInvoiceId(receipt.invoiceId)
             }
@@ -849,11 +899,15 @@ public enum OfflineReceiptBuilder {
         }
     }
 
-    private static func validatePlatformProof(_ receipt: OfflineSpendReceipt) throws {
+    private static func validatePlatformProof(_ receipt: OfflineSpendReceipt,
+                                              chainId: String) throws {
+        if chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw OfflineReceiptBuilderError.invalidPlatformProof("chainId must be non-empty")
+        }
         switch receipt.platformProof {
         case .appleAppAttest(let proof):
             try validateHash(proof.challengeHash, context: "apple_app_attest.challenge_hash")
-            let expected = try receipt.challengeHash()
+            let expected = try receipt.challengeHash(chainId: chainId)
             guard proof.challengeHash == expected else {
                 throw OfflineReceiptBuilderError.challengeHashMismatch
             }
@@ -862,7 +916,7 @@ public enum OfflineReceiptBuilder {
                 throw OfflineReceiptBuilderError.invalidPlatformProof("provisioned challenge hash is missing")
             }
             try validateHash(challenge, context: "provisioned.challenge_hash")
-            let expected = try receipt.challengeHash()
+            let expected = try receipt.challengeHash(chainId: chainId)
             guard challenge == expected else {
                 throw OfflineReceiptBuilderError.challengeHashMismatch
             }

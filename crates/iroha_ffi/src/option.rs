@@ -249,9 +249,10 @@ unsafe impl<R: Ir + NonLocal<R::Type>> NonLocal<Option<WithoutNiche>> for Option
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use crate::repr_c::CTypeConvert;
-    use core::sync::atomic::{AtomicUsize, Ordering};
 
     static CLONE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 

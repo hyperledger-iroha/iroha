@@ -2,16 +2,16 @@
 
 use std::collections::HashMap;
 
-use crate::gar::{
-    GarCdnPolicyV1, GarLicenseSetV1, GarMetricsPolicyV1, GarModerationAction,
-    GarModerationDirectiveV1, GarPolicyPayloadV1,
-};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hex::FromHex;
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use norito::json::{Map, Value};
 use thiserror::Error;
+
+use crate::gar::{
+    GarCdnPolicyV1, GarLicenseSetV1, GarMetricsPolicyV1, GarModerationAction,
+    GarModerationDirectiveV1, GarPolicyPayloadV1,
+};
 
 const MAX_SAMPLING_BPS: u64 = 10_000;
 
@@ -878,9 +878,10 @@ fn take_optional_array(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, PublicKey};
+
+    use super::*;
 
     fn build_test_verifier() -> (GatewayAuthorizationVerifier, SigningKey) {
         let signing_key = SigningKey::from_bytes(&[0x11; 32]);

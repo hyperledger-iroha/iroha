@@ -2,8 +2,6 @@
 
 use std::{format, string::String, vec::Vec};
 
-pub use self::model::*;
-use crate::{transaction::TransactionEntrypoint, trigger::TriggerId};
 use derive_more::Constructor;
 use getset::Getters;
 use iroha_crypto::HashOf;
@@ -11,6 +9,9 @@ use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+
+pub use self::model::*;
+use crate::{transaction::TransactionEntrypoint, trigger::TriggerId};
 
 #[model]
 mod model {

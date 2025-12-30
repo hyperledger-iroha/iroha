@@ -1,6 +1,8 @@
 //! Verify that `ProofEvent::{Verified,Rejected}` carry the transaction `call_hash`.
 #![cfg(feature = "zk-tests")]
 
+use std::borrow::Cow;
+
 use iroha_core::block::{BlockBuilder, ValidBlock};
 use iroha_data_model::{
     events::{
@@ -9,7 +11,6 @@ use iroha_data_model::{
     },
     prelude::*,
 };
-use std::borrow::Cow;
 
 #[test]
 fn proof_event_includes_call_hash() {

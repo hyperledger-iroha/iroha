@@ -1,13 +1,14 @@
 #[path = "./common.rs"]
 mod common;
 
+use std::sync::Arc;
+
 use common::*;
 use iroha_core::{
     block::CommittedBlock, prelude::*, state::State, sumeragi::network_topology::Topology,
 };
 use iroha_data_model::peer::PeerId;
 use iroha_test_samples::gen_account_in;
-use std::sync::Arc;
 
 pub struct StateApplyBlocks {
     state: State,

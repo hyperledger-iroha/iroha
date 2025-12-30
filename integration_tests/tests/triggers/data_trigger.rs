@@ -1,12 +1,11 @@
 //! Data-trigger execution and rollback scenarios.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::{client, data_model::prelude::*};
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use tokio::task::spawn_blocking;
-
-use integration_tests::sandbox;
 
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await

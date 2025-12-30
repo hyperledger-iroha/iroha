@@ -426,8 +426,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::governance::manifest::LaneManifestStatus;
-    use crate::interlane::LanePrivacyRegistry;
+    use crate::{governance::manifest::LaneManifestStatus, interlane::LanePrivacyRegistry};
 
     fn account(name: &str, domain: &str) -> AccountId {
         let domain_id = DomainId::from_str(domain).expect("domain");

@@ -4,12 +4,15 @@
 //! value is assigned once and identified by a `Temp` index. Control flow is
 //! expressed with explicit jumps between labeled blocks.
 
-use super::ast::{BinaryOp, UnaryOp};
-use super::semantic::{
-    self, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedProgram, TypedStatement,
-    state_env_snapshot,
-};
 use std::collections::{BTreeSet, HashMap};
+
+use super::{
+    ast::{BinaryOp, UnaryOp},
+    semantic::{
+        self, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedProgram, TypedStatement,
+        state_env_snapshot,
+    },
+};
 
 fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
     fn rec(expr: &semantic::TypedExpr, indices: &mut Vec<usize>) -> Option<String> {
@@ -3346,8 +3349,7 @@ fn decode_value_from_norito(ctx: &mut LowerCtx, blob: Temp, codec: &ValueCodec) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kotodama::parser::parse;
-    use crate::kotodama::semantic::analyze;
+    use crate::kotodama::{parser::parse, semantic::analyze};
 
     #[test]
     fn lower_simple_function() {

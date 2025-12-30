@@ -2,11 +2,14 @@
 #![allow(clippy::needless_borrows_for_generic_args)]
 #![allow(clippy::needless_range_loop)]
 
-use norito::columnar::{
-    encode_ncb_u64_str_bool, encode_ncb_u64_str_bool_force_dict, encode_ncb_u64_str_bool_no_dict,
-    materialize_ncb, should_use_columnar, view_ncb_u64_str_bool,
+use norito::{
+    columnar::{
+        encode_ncb_u64_str_bool, encode_ncb_u64_str_bool_force_dict,
+        encode_ncb_u64_str_bool_no_dict, materialize_ncb, should_use_columnar,
+        view_ncb_u64_str_bool,
+    },
+    core,
 };
-use norito::core;
 
 #[test]
 fn ncb_roundtrip_u64_str_bool() {

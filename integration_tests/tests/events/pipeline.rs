@@ -7,6 +7,7 @@ use std::{
 
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
+use integration_tests::sandbox;
 use iroha::data_model::{
     ValidationFail,
     events::pipeline::{TransactionEventFilter, TransactionStatus},
@@ -15,14 +16,12 @@ use iroha::data_model::{
     query::error::FindError,
     transaction::error::TransactionRejectionReason,
 };
+use iroha_config::parameters::actual::LaneConfig;
 use iroha_test_network::*;
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
-
-use integration_tests::sandbox;
-use iroha_config::parameters::actual::LaneConfig;
 
 #[tokio::test]
 async fn transaction_with_ok_instruction_should_be_committed() -> Result<()> {

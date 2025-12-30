@@ -1,7 +1,9 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
 
 use ivm::{IVM, Memory, VMError, encoding, host::IVMHost, instruction, syscalls};
-use std::any::Any;
 mod common;
 use common::assemble;
 

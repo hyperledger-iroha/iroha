@@ -9,8 +9,10 @@ use core::{
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
-use halo2curves::ff::{Field, FromUniformBytes, PrimeField};
-use halo2curves::pasta::Fp;
+use halo2curves::{
+    ff::{Field, FromUniformBytes, PrimeField},
+    pasta::Fp,
+};
 
 use crate::errors::Error;
 

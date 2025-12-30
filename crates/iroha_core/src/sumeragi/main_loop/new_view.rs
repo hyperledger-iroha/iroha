@@ -3,9 +3,8 @@
 use iroha_crypto::Signature;
 use iroha_data_model::{ChainId, peer::PeerId};
 
-use crate::sumeragi::consensus::{NewView, Phase, Qc, QcHeaderRef, new_view_preimage};
-
 use super::locked_qc::{LockedQcRejection, ensure_locked_qc_allows};
+use crate::sumeragi::consensus::{NewView, Phase, Qc, QcHeaderRef, new_view_preimage};
 
 fn highest_qc_is_precommit(qc: &Qc) -> bool {
     matches!(qc.phase, Phase::Precommit)

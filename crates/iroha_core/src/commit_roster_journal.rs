@@ -289,13 +289,17 @@ impl CommitRosterJournal {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
-    use iroha_data_model::block::{BlockHeader, BlockSignature};
-    use iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1;
-    use iroha_data_model::peer::PeerId;
     use std::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+    use iroha_data_model::{
+        block::{BlockHeader, BlockSignature},
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        peer::PeerId,
+    };
     use tempfile::tempdir;
+
+    use super::*;
 
     fn sample_cert(view: u64) -> (CommitCertificate, ValidatorSetCheckpoint) {
         cert_with_height(2, view)

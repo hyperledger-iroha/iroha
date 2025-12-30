@@ -17,9 +17,7 @@ use norito::{
     derive::JsonSerialize,
     json::{self, JsonSerialize as JsonValueSerialize},
 };
-use parquet::arrow::ArrowWriter;
-use parquet::basic::Compression;
-use parquet::file::properties::WriterProperties;
+use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 use serde::Serialize;
 
 const BILLING_CURRENCY: &str = "XOR";
@@ -1479,9 +1477,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn meters_expose_expected_regions_and_tiers() {

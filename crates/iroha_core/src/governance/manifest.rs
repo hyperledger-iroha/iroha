@@ -1175,15 +1175,19 @@ impl fmt::Display for GovernanceGuardError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{path::PathBuf, str::FromStr};
+
     use iroha_config::parameters::actual::{
         GovernanceCatalog, GovernanceModule as ConfigGovernanceModule, LaneRegistry,
     };
-    use iroha_data_model::nexus::{LaneCatalog, LaneMetadata};
-    use iroha_data_model::prelude::Name;
+    use iroha_data_model::{
+        nexus::{LaneCatalog, LaneMetadata},
+        prelude::Name,
+    };
     use nonzero_ext::nonzero;
-    use std::{path::PathBuf, str::FromStr};
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn builder_requires_manifest_components() {

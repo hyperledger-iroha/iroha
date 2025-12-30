@@ -1,9 +1,10 @@
+use std::collections::HashMap;
+
 use ivm::{
     IVM,
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost},
 };
-use std::collections::HashMap;
 
 #[test]
 fn kotodama_create_and_grant_role_enables_mint() {

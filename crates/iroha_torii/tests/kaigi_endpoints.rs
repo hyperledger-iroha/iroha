@@ -21,8 +21,7 @@ use iroha_data_model::{
     metadata::Metadata,
     prelude::{AccountId, DomainId, Name},
 };
-use iroha_primitives::json::Json;
-use iroha_primitives::time::TimeSource;
+use iroha_primitives::{json::Json, time::TimeSource};
 use tower::ServiceExt;
 
 #[path = "fixtures.rs"]

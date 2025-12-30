@@ -427,6 +427,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
     public let to: String
     public let assetId: String
     public let amount: String
+    public let issuedAtMs: UInt64
     public let invoiceId: String
     public let platformProof: OfflinePlatformProof
     public let platformSnapshot: OfflinePlatformTokenSnapshot?
@@ -438,6 +439,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
                 to: String,
                 assetId: String,
                 amount: String,
+                issuedAtMs: UInt64,
                 invoiceId: String,
                 platformProof: OfflinePlatformProof,
                 platformSnapshot: OfflinePlatformTokenSnapshot?,
@@ -448,6 +450,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
         self.to = to
         self.assetId = assetId
         self.amount = amount
+        self.issuedAtMs = issuedAtMs
         self.invoiceId = invoiceId
         self.platformProof = platformProof
         self.platformSnapshot = platformSnapshot
@@ -467,14 +470,21 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
             receiverAccountId: to,
             assetId: assetId,
             amount: amount,
+            issuedAtMs: issuedAtMs,
             nonceHex: txId.hexUppercased()
         )
         return OfflineNorito.wrap(typeName: OfflineReceiptChallengePreimage.noritoTypeName,
                                   payload: try preimage.noritoPayload())
     }
 
-    public func challengeHash() throws -> Data {
-        IrohaHash.hash(try challengeBytes())
+    public func challengeHash(chainId: String) throws -> Data {
+        let bytes = try challengeBytes()
+        let context = IrohaHash.hash(Data(chainId.utf8))
+        var hashInput = Data()
+        hashInput.reserveCapacity(context.count + bytes.count)
+        hashInput.append(context)
+        hashInput.append(bytes)
+        return IrohaHash.hash(hashInput)
     }
 
     public func noritoPayload() throws -> Data {
@@ -484,6 +494,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
         writer.writeField(OfflineNorito.encodeString(to))
         writer.writeField(try OfflineNorito.encodeAssetId(assetId))
         writer.writeField(try OfflineNorito.encodeNumeric(amount))
+        writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))
         writer.writeField(OfflineNorito.encodeString(invoiceId))
         writer.writeField(try platformProof.noritoPayload())
         writer.writeField(try OfflineNorito.encodeOption(platformSnapshot, encode: { try $0.noritoPayload() }))
@@ -504,6 +515,7 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
                                    to: to,
                                    assetId: assetId,
                                    amount: amount,
+                                   issuedAtMs: issuedAtMs,
                                    invoiceId: invoiceId,
                                    platformProof: platformProof,
                                    platformSnapshot: platformSnapshot,
@@ -732,6 +744,7 @@ struct OfflineSpendReceiptPayload {
     let to: String
     let assetId: String
     let amount: String
+    let issuedAtMs: UInt64
     let invoiceId: String
     let platformProof: OfflinePlatformProof
     let senderCertificate: OfflineWalletCertificate
@@ -742,6 +755,7 @@ struct OfflineSpendReceiptPayload {
         to = receipt.to
         assetId = receipt.assetId
         amount = receipt.amount
+        issuedAtMs = receipt.issuedAtMs
         invoiceId = receipt.invoiceId
         platformProof = receipt.platformProof
         senderCertificate = receipt.senderCertificate
@@ -754,6 +768,7 @@ struct OfflineSpendReceiptPayload {
         writer.writeField(OfflineNorito.encodeString(to))
         writer.writeField(try OfflineNorito.encodeAssetId(assetId))
         writer.writeField(try OfflineNorito.encodeNumeric(amount))
+        writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))
         writer.writeField(OfflineNorito.encodeString(invoiceId))
         writer.writeField(try platformProof.noritoPayload())
         writer.writeField(try senderCertificate.noritoPayload())
@@ -768,6 +783,7 @@ struct OfflineReceiptChallengePreimage {
     let receiverAccountId: String
     let assetId: String
     let amount: String
+    let issuedAtMs: UInt64
     let nonceHex: String
 
     func noritoPayload() throws -> Data {
@@ -776,6 +792,7 @@ struct OfflineReceiptChallengePreimage {
         writer.writeField(OfflineNorito.encodeString(receiverAccountId))
         writer.writeField(try OfflineNorito.encodeAssetId(assetId))
         writer.writeField(try OfflineNorito.encodeNumeric(amount))
+        writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))
         guard let nonce = Data(hexString: nonceHex) else {
             throw OfflineNoritoError.invalidHex("nonce_hex")
         }

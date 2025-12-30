@@ -1,7 +1,9 @@
 //! Benchmarks for IVM parallel scheduler and execution paths.
 use criterion::Criterion;
-use ivm::parallel::{Block, Scheduler, State, StateAccessSet, Transaction, TxResult};
-use ivm::{IVM, ProgramMetadata, encoding};
+use ivm::{
+    IVM, ProgramMetadata, encoding,
+    parallel::{Block, Scheduler, State, StateAccessSet, Transaction, TxResult},
+};
 
 fn build_block(n: usize) -> Block {
     let mut txs = Vec::new();

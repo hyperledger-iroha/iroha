@@ -262,8 +262,9 @@ pub struct SloTargets {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::compute::{ComputeAuthz, ComputeCodec};
+
+    use super::*;
 
     #[test]
     fn entrypoint_respects_gas_and_size_caps() {

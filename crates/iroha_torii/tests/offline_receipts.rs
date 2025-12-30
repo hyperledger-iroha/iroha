@@ -1,6 +1,8 @@
 //! Integration tests for the `/v1/offline/receipts{,/query}` endpoints.
 #![cfg(feature = "app_api")]
 
+mod offline_balance_proof_utils;
+
 use std::{str::FromStr, sync::Arc};
 
 use axum::{
@@ -28,19 +30,23 @@ use iroha_data_model::{
     },
     block::BlockHeader,
     domain::Domain,
-    isi::{Register, offline::RegisterOfflineAllowance, offline::SubmitOfflineToOnlineTransfer},
+    isi::{
+        Register,
+        offline::{RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer},
+    },
     metadata::Metadata,
     name::Name,
     offline::{
-        AndroidProvisionedProof, OfflineAllowanceCommitment, OfflineBalanceProof,
-        OfflinePlatformProof, OfflineSpendReceipt, OfflineToOnlineTransfer,
-        OfflineWalletCertificate, OfflineWalletPolicy,
+        AndroidProvisionedProof, OfflineAllowanceCommitment, OfflinePlatformProof,
+        OfflineSpendReceipt, OfflineToOnlineTransfer, OfflineWalletCertificate,
+        OfflineWalletPolicy,
     },
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use nonzero_ext::nonzero;
 use norito::json::{self, Map, Value};
+use offline_balance_proof_utils::{build_balance_proof_for_allowance, scalar_bytes};
 use tokio::sync::{broadcast, watch};
 use tower::ServiceExt as _;
 
@@ -189,6 +195,7 @@ fn build_receipt_harness() -> ReceiptHarness {
 
 #[allow(clippy::too_many_lines)]
 fn build_receipt_fixtures() -> ReceiptFixtures {
+    let chain_id = ChainId::from("test-chain");
     let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
     let operator_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
     let operator = AccountId::of(domain.clone(), operator_keys.public_key().clone());
@@ -253,7 +260,18 @@ fn build_receipt_fixtures() -> ReceiptFixtures {
             .expect("certificate signing bytes"),
     );
 
+    let claimed_delta = Numeric::new(150, 0);
+    let balance_proof = build_balance_proof_for_allowance(
+        &chain_id,
+        &certificate.allowance,
+        &claimed_delta,
+        scalar_bytes(1),
+        scalar_bytes(2),
+    );
+    certificate.allowance.commitment = balance_proof.initial_commitment.commitment.clone();
+
     let receipt_one = build_receipt(
+        &chain_id,
         b"receipt-1",
         "INV-001",
         1,
@@ -266,6 +284,7 @@ fn build_receipt_fixtures() -> ReceiptFixtures {
         "offline_provisioning_v1",
     );
     let receipt_two = build_receipt(
+        &chain_id,
         b"receipt-2",
         "INV-002",
         2,
@@ -278,13 +297,6 @@ fn build_receipt_fixtures() -> ReceiptFixtures {
         "offline_provisioning_v1",
     );
 
-    let claimed_delta = Numeric::new(150, 0);
-    let balance_proof = OfflineBalanceProof {
-        initial_commitment: certificate.allowance.clone(),
-        resulting_commitment: vec![0xBB; 32],
-        claimed_delta: claimed_delta.clone(),
-        zk_proof: None,
-    };
     let transfer = OfflineToOnlineTransfer {
         bundle_id: Hash::new(b"bundle-1"),
         receiver: receiver.clone(),
@@ -309,6 +321,7 @@ fn build_receipt_fixtures() -> ReceiptFixtures {
 
 #[allow(clippy::too_many_arguments)]
 fn build_receipt(
+    chain_id: &ChainId,
     tag: &'static [u8],
     invoice_id: &str,
     counter: u64,
@@ -333,6 +346,7 @@ fn build_receipt(
         to: receiver.clone(),
         asset: certificate.allowance.asset.clone(),
         amount,
+        issued_at_ms: certificate.issued_at_ms + 100,
         invoice_id: invoice_id.to_owned(),
         platform_proof: OfflinePlatformProof::Provisioned(AndroidProvisionedProof {
             manifest_schema: manifest_schema.to_owned(),
@@ -347,7 +361,9 @@ fn build_receipt(
         sender_certificate: certificate.clone(),
         sender_signature: Signature::from_bytes(&[0; 64]),
     };
-    let challenge_hash = receipt.challenge_hash().expect("challenge hash");
+    let challenge_hash = receipt
+        .challenge_hash_with_chain_id(chain_id)
+        .expect("challenge hash");
     let mut proof = AndroidProvisionedProof {
         manifest_schema: manifest_schema.to_owned(),
         manifest_version: None,

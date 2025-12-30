@@ -481,12 +481,13 @@ impl Circuit<Scalar> for KaigiUsageCommitmentCircuit {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp as FieldScalar},
         plonk::{keygen_pk, keygen_vk},
         poly::{commitment::ParamsProver, ipa::commitment::ParamsIPA},
     };
+
+    use super::*;
 
     #[test]
     fn compressors_return_distinct_outputs() {

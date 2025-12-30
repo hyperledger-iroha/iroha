@@ -10,12 +10,12 @@ use iroha_data_model::{
     trigger::action::EnsureTriggerAuthority,
 };
 use iroha_logger::trace;
-
-use crate::smartcontracts::triggers::set::ExecutableRef;
 #[cfg(feature = "json")]
 use norito::json::native::Number as JsonNumber;
 #[cfg(feature = "json")]
 use norito::json::{self, JsonSerialize as JsonSerializeTrait, Value as JsonValue};
+
+use crate::smartcontracts::triggers::set::ExecutableRef;
 
 /// Same as [`iroha_data_model::trigger::action::Action`] but generic over the filter type
 ///
@@ -486,13 +486,14 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(feature = "json")]
     use iroha_data_model::prelude::{
         DataEventFilter, InstructionBox, Level, Log, Metadata, Repeats,
     };
     #[cfg(feature = "json")]
     use iroha_primitives::const_vec::ConstVec;
+
+    use super::*;
 
     #[test]
     fn trigger_with_filterbox_can_be_unboxed() {

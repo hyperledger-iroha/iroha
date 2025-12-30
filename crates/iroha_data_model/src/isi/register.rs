@@ -1,8 +1,10 @@
-use super::*;
-use crate::{account::NewAccount, consensus::HsmBinding, domain::NewDomain};
+use std::fmt::Display;
+
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
-use std::fmt::Display;
+
+use super::*;
+use crate::{account::NewAccount, consensus::HsmBinding, domain::NewDomain};
 
 isi! {
     /// Generic instruction for a registration of an object to the identifiable destination.
@@ -354,9 +356,10 @@ impl UnregisterBox {
 
 #[cfg(test)]
 mod tests {
+    use norito::codec::{Decode, Encode};
+
     use super::*;
     use crate::peer::PeerId;
-    use norito::codec::{Decode, Encode};
 
     #[test]
     fn register_peer_with_pop_roundtrip() {

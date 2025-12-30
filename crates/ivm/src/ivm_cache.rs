@@ -9,13 +9,19 @@
 //! a HashMap for lookups. On capacity overflow, it evicts the least-recently
 //! used item. Accessing an existing entry marks it as most-recently used.
 
-use crate::{decoder, memory::Memory, metadata::ProgramMetadata};
+use std::{
+    collections::{HashMap, VecDeque},
+    hash::{Hash, Hasher},
+    sync::{
+        Arc, Mutex, OnceLock, RwLock,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
+    time::Instant,
+};
+
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
-use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
-use std::time::Instant;
+
+use crate::{decoder, memory::Memory, metadata::ProgramMetadata};
 
 /// A decoded instruction with its byte offset and length.
 #[derive(Clone, Debug, PartialEq, Eq)]

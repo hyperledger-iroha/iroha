@@ -2,15 +2,16 @@
 //! when callers submit stale values. The manifest fetched from Torii should
 //! always expose the canonical policy, not the caller intent.
 
-use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+};
 
 use eyre::Result;
 use hex::encode as hex_encode;
 use integration_tests::sandbox::start_network_async_or_skip;
 use iroha_config::parameters::actual::DaReplicationPolicy;
-use iroha_crypto::Hash;
-use iroha_crypto::Signature;
+use iroha_crypto::{Hash, Signature};
 use iroha_data_model::{
     da::{
         ingest::{DaIngestReceipt, DaIngestRequest},

@@ -3,8 +3,7 @@
 //! `FieldArithmetic` is implemented for scalar and SIMD variants.
 //! [`field_impl`] chooses between them based on [`vector::simd_choice`],
 //! enabling SSE2/AVX2/AVX-512 or NEON acceleration transparently.
-use std::any::Any;
-use std::sync::OnceLock;
+use std::{any::Any, sync::OnceLock};
 
 use crate::vector::{SimdChoice, simd_choice};
 
@@ -39,8 +38,10 @@ pub struct NeonField;
 
 static FIELD_IMPL: OnceLock<&'static dyn FieldArithmetic> = OnceLock::new();
 
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{
+    Mutex, MutexGuard,
+    atomic::{AtomicU8, Ordering},
+};
 
 #[doc(hidden)]
 static FIELD_IMPL_TEST_LOCK: Mutex<()> = Mutex::new(());

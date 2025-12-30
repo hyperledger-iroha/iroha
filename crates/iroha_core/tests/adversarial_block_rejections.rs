@@ -1,5 +1,7 @@
 //! Adversarial block validation regressions for forged/invalid transactions.
 
+use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
+
 use iroha_core::{
     block::{BlockBuilder, BlockValidationError, ValidBlock},
     kura::Kura,
@@ -19,7 +21,6 @@ use iroha_primitives::{
 };
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
-use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 
 fn balance(state: &State, id: &AssetId) -> Numeric {
     state

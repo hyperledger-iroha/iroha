@@ -1076,8 +1076,7 @@ async fn connect_status_present_when_enabled() {
 
 #[tokio::test]
 async fn connect_session_delete_endpoint_removes_tokens() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
@@ -1143,8 +1142,7 @@ async fn connect_session_delete_endpoint_removes_tokens() {
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_session_delete_rejects_ws_attach() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -1236,8 +1234,7 @@ async fn connect_session_delete_rejects_ws_attach() {
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_handshake_succeeds_when_enabled() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     // Build enabled config and Torii router
@@ -1308,8 +1305,7 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_accepts_protocol_token() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::header};
 
@@ -1379,8 +1375,7 @@ async fn connect_ws_accepts_protocol_token() {
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_accepts_legacy_query_token() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
 
     let cfg = minimal_actual_config(true);

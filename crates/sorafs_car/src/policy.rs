@@ -200,18 +200,20 @@ mod tests {
 
 #[cfg(feature = "manifest")]
 mod compliance {
+    use std::{fmt, sync::Arc};
+
+    use blake3::Hasher;
+    use ed25519_dalek::VerifyingKey;
+    use iroha_crypto::sorafs::proof_token::{ProofToken, ProofTokenDigestKey};
+    use reqwest::StatusCode;
+    use thiserror::Error;
+
     use crate::{
         ChunkFetchSpec,
         gateway::{GatewayFailureEvidence, GatewayFetchError, GatewayFetcher},
         moderation::ValidatedModerationProof,
         multi_fetch::FetchRequest,
     };
-    use blake3::Hasher;
-    use ed25519_dalek::VerifyingKey;
-    use iroha_crypto::sorafs::proof_token::{ProofToken, ProofTokenDigestKey};
-    use reqwest::StatusCode;
-    use std::{fmt, sync::Arc};
-    use thiserror::Error;
 
     const POLICY_BINDING_DOMAIN: &[u8] = b"sorafs.policy.binding.v1";
 
@@ -516,19 +518,12 @@ pub use compliance::*;
 
 #[cfg(all(feature = "manifest", test))]
 mod compliance_tests {
-    use super::*;
-    use crate::{
-        CarBuildPlan, ChunkFetchSpec,
-        gateway::{
-            GatewayFailureEvidence, GatewayFetchConfig, GatewayFetchContext, GatewayProviderInput,
-            HttpEngine, HttpError, HttpFuture, HttpRequest, HttpResponse,
-        },
-        moderation::{ModerationTokenBodyV1, ValidatedModerationProof},
-        policy::{
-            PolicyEvidenceValidator, ProofTokenVerifier, compute_policy_binding_digest,
-            run_honey_probe,
-        },
+    use std::{
+        collections::HashMap,
+        sync::Arc,
+        time::{Duration, SystemTime},
     };
+
     use base64::Engine as _;
     use blake3;
     use ed25519_dalek::SigningKey;
@@ -542,10 +537,19 @@ mod compliance_tests {
     };
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
-    use std::{
-        collections::HashMap,
-        sync::Arc,
-        time::{Duration, SystemTime},
+
+    use super::*;
+    use crate::{
+        CarBuildPlan, ChunkFetchSpec,
+        gateway::{
+            GatewayFailureEvidence, GatewayFetchConfig, GatewayFetchContext, GatewayProviderInput,
+            HttpEngine, HttpError, HttpFuture, HttpRequest, HttpResponse,
+        },
+        moderation::{ModerationTokenBodyV1, ValidatedModerationProof},
+        policy::{
+            PolicyEvidenceValidator, ProofTokenVerifier, compute_policy_binding_digest,
+            run_honey_probe,
+        },
     };
 
     const MODERATION_HEADER: &str = "sora-moderation-token";

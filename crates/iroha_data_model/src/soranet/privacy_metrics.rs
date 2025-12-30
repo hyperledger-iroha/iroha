@@ -12,11 +12,11 @@
 
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json;
 
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-#[cfg(feature = "json")]
-use norito::json;
 
 /// Aggregated GAR abuse report counts keyed by the truncated category hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]

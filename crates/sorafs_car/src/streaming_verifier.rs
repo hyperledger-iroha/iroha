@@ -4,13 +4,15 @@
 //! It validates the CAR header, section headers, and payload chunks against a trusted root CID/Manifest.
 //! It is designed to be used in network streams where backpressure is required.
 
+use std::convert::TryInto;
+
+use blake3::Hasher;
+use sorafs_manifest::ManifestV1;
+
 use crate::{
     BLAKE3_256_MULTIHASH_CODE, DAG_CBOR_CODEC, HEADER_LEN, PRAGMA, RAW_CODEC,
     verifier::CarVerifyError,
 };
-use blake3::Hasher;
-use sorafs_manifest::ManifestV1;
-use std::convert::TryInto;
 
 /// Configuration for the streaming verifier.
 #[derive(Debug, Clone)]

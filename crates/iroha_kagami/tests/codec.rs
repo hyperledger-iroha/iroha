@@ -4,9 +4,12 @@ use std::{fmt::Debug, fs};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_data_model::{account::NewAccount, domain::Domain, trigger::Trigger};
-use norito::core::{Error, MAGIC};
-use norito::json::{JsonDeserializeOwned, JsonSerialize};
-use norito::{decode_from_bytes, to_bytes};
+use norito::{
+    core::{Error, MAGIC},
+    decode_from_bytes,
+    json::{JsonDeserializeOwned, JsonSerialize},
+    to_bytes,
+};
 
 const SAMPLE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/samples/codec");
 

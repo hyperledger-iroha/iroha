@@ -2,12 +2,11 @@
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 #![allow(clippy::items_after_statements)]
 
-use iroha_core::state::WorldReadOnly;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World},
+    state::{State, World, WorldReadOnly},
 };
 use mv::storage::StorageReadOnly;
 
@@ -23,12 +22,12 @@ fn approves_when_ratio_and_turnout_met() {
     }
     use core::num::NonZeroU64;
 
-    use iroha_data_model::events::data::{DataEvent, governance::GovernanceEvent};
-    use iroha_data_model::isi::governance::{
-        CastPlainBallot, FinalizeReferendum, ProposeDeployContract, VotingMode,
+    use iroha_data_model::{
+        events::data::{DataEvent, governance::GovernanceEvent},
+        isi::governance::{CastPlainBallot, FinalizeReferendum, ProposeDeployContract, VotingMode},
+        permission::Permission,
+        prelude::Grant,
     };
-    use iroha_data_model::permission::Permission;
-    use iroha_data_model::prelude::Grant;
     use iroha_executor_data_model::permission::governance::{
         CanProposeContractDeployment, CanSubmitGovernanceBallot,
     };

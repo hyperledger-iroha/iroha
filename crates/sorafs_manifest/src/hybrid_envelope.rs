@@ -6,6 +6,8 @@
 //! part of the `sorafs_manifest_stub` CLI and Torii publishing flows to wrap and
 //! unwrap manifest payloads.
 
+use std::str::FromStr;
+
 use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit as _,
     aead::{Aead as _, Payload},
@@ -16,7 +18,6 @@ use iroha_crypto::{
 };
 use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use rand::{CryptoRng, RngCore};
-use std::str::FromStr;
 use thiserror::Error;
 
 /// Envelope schema version.
@@ -120,10 +121,11 @@ pub fn decrypt_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::HybridKeyPair;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
+
+    use super::*;
 
     #[test]
     fn envelope_roundtrip() {

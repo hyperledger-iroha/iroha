@@ -13,13 +13,13 @@
 #![allow(unused)]
 #![allow(clippy::large_enum_variant)]
 
-use crate::DarlingErrorWrapper;
 use darling::{FromAttributes, FromDeriveInput};
 use iroha_derive_primitives::Emitter;
 use manyhow::emit;
 use proc_macro2::TokenStream;
 
 use self::ast::Input;
+use crate::DarlingErrorWrapper;
 
 /// Derive `iroha_config_base::reader::ReadConfig` trait.
 ///

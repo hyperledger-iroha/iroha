@@ -1,16 +1,17 @@
 //! `CoreHost`: verify that the host binds the last verify envelope hash
 //! to subsequently enqueued ZK ISIs via the vendor bridge.
 
+use std::sync::Arc;
+
 use iroha_core::smartcontracts::ivm::host::CoreHost;
-use iroha_data_model::prelude::*;
 use iroha_data_model::{
     isi::InstructionBox,
+    prelude::*,
     proof::{ProofBox, VerifyingKeyBox},
 };
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, IVMHost, PointerType, ProgramMetadata, syscalls as ivm_sys};
 use norito::to_bytes;
-use std::sync::Arc;
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);

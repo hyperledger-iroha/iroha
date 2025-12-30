@@ -144,11 +144,12 @@ pub mod json_utils {
     }
 }
 
+pub use json_utils::{json_array, json_entry, json_object, json_value};
+
 pub use crate::app_auth::{
     HEADER_ACCOUNT, HEADER_SIGNATURE, Method, Uri, canonical_request_message,
     signature_header_value,
 };
-pub use json_utils::{json_array, json_entry, json_object, json_value};
 
 pub mod openapi;
 
@@ -168,43 +169,41 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use axum::body::{Body, Bytes};
-use axum::extract::connect_info::IntoMakeServiceWithConnectInfo;
-use axum::middleware::Next;
 use axum::{
-    Router, debug_handler,
-    extract::{DefaultBodyLimit, Extension, State, WebSocketUpgrade},
+    Router,
+    body::{Body, Bytes},
+    debug_handler,
+    extract::{
+        DefaultBodyLimit, Extension, State, WebSocketUpgrade,
+        connect_info::IntoMakeServiceWithConnectInfo,
+    },
     http::{HeaderMap, HeaderValue, Request, StatusCode, header::HeaderName},
+    middleware::Next,
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post},
 };
-use dashmap::DashMap;
-// Bring connect-info make service into scope for axum 0.8 serve path
-use crate::iso20022_bridge::{Iso20022BridgeRuntime, IsoMessageState, Pacs002Status};
-use crate::router::builder::RouterBuilder;
-use crate::routing::conversion_error;
 #[allow(unused_imports)]
 use base64::Engine;
 use blake3::hash as blake3_hash;
+use dashmap::DashMap;
 use error_stack::{Report, ResultExt};
-use iroha_config::base::util::Bytes as ConfigBytes;
 use iroha_config::{
-    base::WithOrigin,
+    base::{WithOrigin, util::Bytes as ConfigBytes},
     client_api::ConfigUpdateDTO,
     parameters::actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile, Torii as Config},
 };
-use iroha_core::alias::{AliasError, AliasMetricKind, AliasService};
-use iroha_core::sumeragi::rbc_store::SoftwareManifest;
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::Telemetry;
 use iroha_core::{
     EventsSender,
+    alias::{AliasError, AliasMetricKind, AliasService},
     kiso::{Error as KisoError, KisoHandle},
     kura::Kura,
     prelude::*,
     query::store::LiveQueryStoreHandle,
     queue::{self, Queue},
     state::{BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions},
+    sumeragi::rbc_store::SoftwareManifest,
 };
 use iroha_crypto::{
     ExposedPrivateKey, Hash, HashOf, KeyPair,
@@ -212,7 +211,6 @@ use iroha_crypto::{
 };
 #[cfg(feature = "app_api")]
 use iroha_data_model::alias::{AliasRecord, AliasTarget};
-use iroha_data_model::consensus::ExecutionQcRecord;
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
     SharedDataEvent,
@@ -229,6 +227,7 @@ use iroha_data_model::{
     alias::AliasIndex,
     asset::{AssetDefinitionId, AssetId},
     block::{BlockHeader, proofs::BlockProofs},
+    consensus::ExecutionQcRecord,
     domain::DomainId,
     events::{
         EventBox,
@@ -261,6 +260,10 @@ use tower_http::{
     trace::{DefaultMakeSpan, TraceLayer},
 };
 use utils::extractors::NoritoVersioned;
+
+// Bring connect-info make service into scope for axum 0.8 serve path
+use crate::iso20022_bridge::{Iso20022BridgeRuntime, IsoMessageState, Pacs002Status};
+use crate::{router::builder::RouterBuilder, routing::conversion_error};
 
 /// Norito JSON derive macros used across Torii modules.
 pub mod json_macros {
@@ -315,6 +318,10 @@ pub use gov::{
 };
 // Routing helpers used by tests
 pub use routing::event::handle_events_stream;
+// Additional public re-exports of app endpoints used by tests
+pub use routing::event_to_json_value;
+#[cfg(feature = "zk-proof-tags")]
+pub use routing::handle_get_proof_tags;
 #[cfg(feature = "p2p_ws")]
 pub use routing::handle_p2p_ws;
 pub use routing::{
@@ -322,40 +329,29 @@ pub use routing::{
     DeployAndActivateInstanceDto, DeployAndActivateInstanceResponseDto, DeployContractDto,
     DeployContractResponseDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
     KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
-    KaigiRelaySummaryListDto, MaybeTelemetry, SpaceDirectoryManifestPublishDto,
-    SpaceDirectoryManifestRevokeDto, ZkRootsGetRequestDto, ZkVkDeprecateDto, ZkVkRegisterDto,
-    ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_get_contract_code_bytes, handle_get_vk,
-    handle_post_contract_call, handle_post_contract_deploy, handle_post_contract_instance,
-    handle_post_contract_instance_activate, handle_post_sorafs_register_manifest,
-    handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
-    handle_post_sumeragi_evidence_submit, handle_post_vk_deprecate, handle_post_vk_register,
-    handle_post_vk_update, handle_v1_events_sse, handle_v1_sumeragi_evidence_count,
-    handle_v1_sumeragi_evidence_list, handle_v1_zk_roots, handle_v1_zk_submit_proof,
-    handle_v1_zk_verify, handle_v1_zk_vote_tally,
+    KaigiRelaySummaryListDto, MaybeTelemetry, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
+    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions, RegisterPinManifestDto,
+    RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
+    SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkDeprecateDto,
+    ZkVkRegisterDto, ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs,
+    handle_get_contract_code_bytes, handle_get_proof, handle_get_vk, handle_list_proofs,
+    handle_list_vk, handle_post_contract_call, handle_post_contract_deploy,
+    handle_post_contract_instance, handle_post_contract_instance_activate,
+    handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
+    handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
+    handle_post_vk_deprecate, handle_post_vk_register, handle_post_vk_update,
+    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
+    handle_v1_new_view_json, handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count,
+    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots,
+    handle_v1_zk_submit_proof, handle_v1_zk_verify, handle_v1_zk_vote_tally,
+    signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
-
-pub use runtime::{
-    ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
-    handle_runtime_upgrades_list,
-};
-
-// Additional public re-exports of app endpoints used by tests
-pub use routing::event_to_json_value;
-#[cfg(feature = "zk-proof-tags")]
-pub use routing::handle_get_proof_tags;
-pub use routing::handle_queries_with_opts as handle_queries;
+#[cfg(feature = "telemetry")]
 pub use routing::{
-    PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto,
-    ProofListQuery, QueryOptions, RegisterPinManifestDto, RegisterPinManifestResponseDto,
-    VkListQuery, handle_count_proofs, handle_get_proof, handle_list_proofs, handle_list_vk,
-    handle_queries_with_opts, handle_v1_new_view_json, handle_v1_sumeragi_vrf_penalties,
-    signed_find_proof_by_id,
+    RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
 };
-
-pub use routing::handle_v1_new_view_sse;
-
 #[cfg(feature = "telemetry")]
 pub use routing::{
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
@@ -366,10 +362,9 @@ pub use routing::{
     handle_v1_sumeragi_rbc_delivered_height_view, handle_v1_sumeragi_rbc_sessions,
     handle_v1_sumeragi_rbc_status, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
 };
-
-#[cfg(feature = "telemetry")]
-pub use routing::{
-    RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
+pub use runtime::{
+    ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
+    handle_runtime_upgrades_list,
 };
 
 // Shared app state for handlers to avoid large inline closures that break axum Handler bounds
@@ -745,8 +740,18 @@ fn telemetry_unavailable_response(
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-fn collect_peer_urls(online_peers: &OnlinePeersProvider) -> Vec<telemetry::peers::ToriiUrl> {
+fn collect_peer_urls(
+    online_peers: &OnlinePeersProvider,
+    configured: &[telemetry::peers::ToriiUrl],
+) -> Vec<telemetry::peers::ToriiUrl> {
     use std::net::ToSocketAddrs;
+
+    if !configured.is_empty() {
+        let mut urls = configured.to_vec();
+        urls.sort();
+        urls.dedup();
+        return urls;
+    }
 
     let snapshot = online_peers.get();
     let mut urls = Vec::with_capacity(snapshot.len());
@@ -1261,8 +1266,7 @@ async fn inject_remote_addr_header(
     mut req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
-    use axum::extract::ConnectInfo;
-    use axum::http::header::HeaderName;
+    use axum::{extract::ConnectInfo, http::header::HeaderName};
 
     let header = HeaderName::from_static(limits::REMOTE_ADDR_HEADER);
     req.headers_mut().remove(&header);
@@ -1280,8 +1284,7 @@ async fn enforce_preauth(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
-    use axum::extract::ConnectInfo;
-    use axum::response::IntoResponse;
+    use axum::{extract::ConnectInfo, response::IntoResponse};
 
     let remote_ip = req
         .extensions()
@@ -1809,9 +1812,9 @@ async fn enforce_proof_egress(
 }
 
 // -------------- Governance handlers (AppState-based) --------------
+use axum::{extract::Path as AxPath, response::Response as AxResponse};
+
 use crate::NoritoQuery as AxQuery;
-use axum::extract::Path as AxPath;
-use axum::response::Response as AxResponse;
 
 async fn handler_contracts_instances_by_ns(
     State(app): State<SharedAppState>,
@@ -9492,8 +9495,7 @@ async fn handler_connect_session(
     headers: axum::http::HeaderMap,
     NoritoJson(req): NoritoJson<routing::ConnectSessionRequest>,
 ) -> Result<JsonBody<routing::ConnectSessionResponse>> {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 
     let remote_ip = headers
         .get(limits::REMOTE_ADDR_HEADER)
@@ -9763,8 +9765,7 @@ fn parse_protocol_token(
 #[allow(clippy::result_large_err)]
 fn decode_protocol_token(encoded: &str) -> Result<String, axum::response::Response> {
     use axum::http::StatusCode;
-    use base64::Engine as _;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 
     let bytes = B64.decode(encoded).map_err(|_| {
         (
@@ -10625,6 +10626,8 @@ pub struct Torii {
     telemetry_profile: TelemetryProfile,
     api_versions: api_version::ApiVersionPolicy,
     online_peers: OnlinePeersProvider,
+    #[cfg(all(feature = "app_api", feature = "telemetry"))]
+    peer_telemetry_urls: Vec<telemetry::peers::ToriiUrl>,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
@@ -12272,6 +12275,14 @@ impl Torii {
 
         let telemetry_profile = telemetry.profile();
 
+        #[cfg(all(feature = "app_api", feature = "telemetry"))]
+        let peer_telemetry_urls = config
+            .peer_telemetry_urls
+            .iter()
+            .cloned()
+            .map(telemetry::peers::ToriiUrl::from)
+            .collect::<Vec<_>>();
+
         #[cfg(feature = "telemetry")]
         telemetry.with_metrics(|metrics| {
             metrics.set_torii_address_strict_mode(config.strict_addresses);
@@ -12360,6 +12371,8 @@ impl Torii {
             kura,
             state,
             online_peers,
+            #[cfg(all(feature = "app_api", feature = "telemetry"))]
+            peer_telemetry_urls,
             sumeragi,
             telemetry,
             telemetry_profile,
@@ -12567,8 +12580,10 @@ impl Torii {
         });
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
-        let peer_telemetry =
-            telemetry::peers::PeerTelemetryService::new(collect_peer_urls(&self.online_peers));
+        let peer_telemetry = telemetry::peers::PeerTelemetryService::new(collect_peer_urls(
+            &self.online_peers,
+            &self.peer_telemetry_urls,
+        ));
 
         let app_state: SharedAppState = Arc::new(AppState {
             events: self.events.clone(),
@@ -13490,9 +13505,10 @@ fn build_account_alias_denylist_entry(
 
 #[cfg(all(test, feature = "app_api"))]
 mod gateway_denylist_loader_tests {
-    use super::*;
     use iroha_crypto::PublicKey;
     use iroha_data_model::{account::AccountId, domain::DomainId};
+
+    use super::*;
 
     fn sample_policy() -> sorafs::gateway::DenylistPolicy {
         sorafs::gateway::DenylistPolicy::new(
@@ -14091,43 +14107,51 @@ fn _assert_torii_types_are_send_sync() {
 
 #[cfg(test)]
 pub(crate) mod tests_runtime_handlers {
-    use super::*;
-    use crate::routing::handle_v1_sumeragi_commit_certificates;
-    use crate::routing::{ActivateInstanceDto, DeployContractDto, RegisterContractCodeDto};
-    use crate::utils::extractors::NoritoJson;
-    #[cfg(feature = "telemetry")]
-    use crate::{RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto};
+    use std::{collections::HashSet, net::SocketAddr, sync::Arc};
+
     use axum::{
         extract::{Extension, State},
         http::{HeaderMap, HeaderValue, StatusCode},
     };
     use base64::Engine as _;
     use futures::executor;
-    use iroha_config::client_api::ConfigGetDTO;
-    use iroha_config::parameters::{
-        actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile},
-        defaults,
+    use iroha_config::{
+        client_api::ConfigGetDTO,
+        parameters::{
+            actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile},
+            defaults,
+        },
     };
-    use iroha_core::kiso::KisoHandle;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
-    use iroha_core::sumeragi::status::record_commit_certificate;
+    use iroha_core::{
+        kiso::KisoHandle,
+        query::store::LiveQueryStore,
+        sumeragi::{consensus::PERMISSIONED_TAG, status::record_commit_certificate},
+    };
     use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
-    use iroha_data_model::consensus::{CommitCertificate, ExecutionQcRecord};
-    use iroha_data_model::soranet::privacy_metrics::{
-        SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1,
-        SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
-    };
     use iroha_data_model::{
         block::{BlockSignature, SignedBlock},
+        consensus::{CommitCertificate, ExecutionQcRecord},
         nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId},
         peer::{Peer, PeerId},
+        soranet::privacy_metrics::{
+            SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1,
+            SoranetPrivacyEventV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
+        },
         transaction::signed::{TransactionBuilder, TransactionResultInner},
         trigger::DataTriggerSequence,
     };
-    use norito::codec::DecodeAll;
-    use norito::core::NoritoDeserialize;
-    use std::{collections::HashSet, net::SocketAddr, sync::Arc};
+    use norito::{codec::DecodeAll, core::NoritoDeserialize};
+
+    use super::*;
+    #[cfg(feature = "telemetry")]
+    use crate::{RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto};
+    use crate::{
+        routing::{
+            ActivateInstanceDto, DeployContractDto, RegisterContractCodeDto,
+            handle_v1_sumeragi_commit_certificates,
+        },
+        utils::extractors::NoritoJson,
+    };
 
     pub fn negotiated(app: &SharedAppState) -> Extension<api_version::NegotiatedVersion> {
         Extension(api_version::NegotiatedVersion {
@@ -16393,8 +16417,9 @@ pub(crate) mod tests_runtime_handlers {
 
     #[test]
     fn offline_reason_query_error_sets_reject_code_header() {
-        use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
-        use iroha_data_model::query::error::QueryExecutionFail;
+        use iroha_data_model::{
+            offline::OFFLINE_REJECTION_REASON_PREFIX, query::error::QueryExecutionFail,
+        };
 
         let message =
             format!("{OFFLINE_REJECTION_REASON_PREFIX}certificate_expired:certificate expired");
@@ -16801,37 +16826,43 @@ impl OnlinePeersProvider {
 #[cfg(test)]
 mod tests {
     // for `collect`
-    use http_body_util::BodyExt as _;
-
-    use super::*;
-    use crate::limits;
-    #[cfg(feature = "telemetry")]
-    use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
-    use crate::tests_runtime_handlers::{
-        mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
-        mk_app_state_for_tests_with_options, negotiated,
+    use std::{
+        collections::HashSet,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
     };
-    use axum::extract::State;
-    use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
+
+    use axum::{
+        extract::State,
+        http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
+    };
     use futures::executor;
+    use http_body_util::BodyExt as _;
     use iroha_config::parameters::actual;
     use iroha_crypto::{KeyPair, SignatureOf};
-    use iroha_data_model::nexus::{
-        AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId,
-    };
     use iroha_data_model::{
         ChainId, ValidationFail,
         account::AccountId,
         block::{BlockHeader, BlockSignature, SignedBlock},
         consensus::ExecutionQcRecord,
         domain::DomainId,
+        nexus::{AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
         proof::{ProofId, ProofRecord, ProofStatus},
         transaction::signed::{TransactionBuilder, TransactionResultInner},
     };
     use nonzero_ext::nonzero;
     use norito::codec::DecodeAll;
-    use std::num::{NonZeroU64, NonZeroUsize};
-    use std::{collections::HashSet, sync::Arc};
+
+    use super::*;
+    #[cfg(feature = "telemetry")]
+    use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
+    use crate::{
+        limits,
+        tests_runtime_handlers::{
+            mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
+            mk_app_state_for_tests_with_options, negotiated,
+        },
+    };
 
     fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoBridge {
         let signer_keypair = KeyPair::random();
@@ -17391,8 +17422,7 @@ mod tests {
             .await
             .unwrap()
             .to_bytes();
-        use iroha_data_model::ValidationFail;
-        use iroha_data_model::query::error::QueryExecutionFail;
+        use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
         let validation: ValidationFail =
             norito::decode_from_bytes(&body).expect("validation fail payload");
@@ -17426,8 +17456,7 @@ mod tests {
             .await
             .unwrap()
             .to_bytes();
-        use iroha_data_model::ValidationFail;
-        use iroha_data_model::query::error::QueryExecutionFail;
+        use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
         let validation: ValidationFail =
             norito::decode_from_bytes(&body).expect("validation fail payload");
@@ -17801,12 +17830,14 @@ fn conn_scheme_flags_websocket_upgrade() {
 
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod peer_telemetry_tests {
-    use super::{OnlinePeersProvider, collect_peer_urls};
-    use crate::telemetry::peers::ToriiUrl;
+    use std::{collections::HashSet, net::ToSocketAddrs, str::FromStr};
+
     use iroha_crypto::KeyPair;
     use iroha_data_model::peer::Peer;
-    use std::{collections::HashSet, net::ToSocketAddrs};
     use tokio::sync::watch;
+
+    use super::{OnlinePeersProvider, collect_peer_urls};
+    use crate::telemetry::peers::ToriiUrl;
 
     #[test]
     fn collect_peer_urls_reflects_online_peers_snapshot() {
@@ -17825,7 +17856,7 @@ mod peer_telemetry_tests {
         tx.send(HashSet::from([peer_a.clone(), peer_b.clone()]))
             .expect("watch update should succeed");
 
-        let urls = collect_peer_urls(&provider);
+        let urls = collect_peer_urls(&provider, &[]);
 
         let to_url = |peer: &Peer| {
             peer.address()
@@ -17843,6 +17874,35 @@ mod peer_telemetry_tests {
         assert_eq!(
             urls, expected,
             "telemetry seed should reflect current peers"
+        );
+    }
+
+    #[test]
+    fn collect_peer_urls_prefers_configured_urls() {
+        let (tx, rx) = watch::channel(HashSet::new());
+        let provider = OnlinePeersProvider::new(rx);
+
+        let peer = Peer::new(
+            "127.0.0.1:1337".parse().expect("valid socket address"),
+            KeyPair::random().public_key().clone(),
+        );
+        tx.send(HashSet::from([peer]))
+            .expect("watch update should succeed");
+
+        let configured = vec![
+            ToriiUrl::from_str("http://127.0.0.1:8080").expect("valid torii url"),
+            ToriiUrl::from_str("http://127.0.0.1:8080").expect("duplicate torii url"),
+            ToriiUrl::from_str("http://127.0.0.1:8081").expect("valid torii url"),
+        ];
+        let mut expected = configured.clone();
+        expected.sort();
+        expected.dedup();
+
+        let urls = collect_peer_urls(&provider, &configured);
+
+        assert_eq!(
+            urls, expected,
+            "configured URLs should override peer-derived telemetry targets"
         );
     }
 }

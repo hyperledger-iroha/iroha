@@ -1,5 +1,7 @@
 //! Benchmarks for Kura block size and storage characteristics.
 #![allow(clippy::disallowed_types)]
+use std::fs;
+
 use criterion::Criterion;
 use iroha_config::{
     base::WithOrigin,
@@ -20,7 +22,6 @@ use iroha_core::{
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::gen_account_in;
-use std::fs;
 use tokio::runtime::Builder;
 
 fn measure_block_size_for_n_executors(n_executors: u32) {

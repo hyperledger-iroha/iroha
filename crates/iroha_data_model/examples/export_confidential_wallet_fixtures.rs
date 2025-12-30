@@ -6,6 +6,8 @@
 //! The resulting hashes/bytes can be copied into
 //! `fixtures/confidential/wallet_flows_v1.json`.
 
+use std::{str::FromStr, time::Duration};
+
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     confidential::ConfidentialEncryptedPayload,
@@ -15,7 +17,6 @@ use iroha_data_model::{
     transaction::SignedTransaction,
 };
 use norito::json::{self, Map, Number, Value};
-use std::{str::FromStr, time::Duration};
 
 fn main() {
     let chain_id = ChainId::from_str("00000000-0000-0000-0000-000000000000").unwrap();

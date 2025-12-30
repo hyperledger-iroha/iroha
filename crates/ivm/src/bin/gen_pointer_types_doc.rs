@@ -3,8 +3,7 @@
 //!   cargo run -p ivm --bin gen_pointer_types_doc -- --write
 //!   cargo run -p ivm --bin gen_pointer_types_doc -- --check
 
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED POINTER TYPES -->";
 const END: &str = "<!-- END GENERATED POINTER TYPES -->";

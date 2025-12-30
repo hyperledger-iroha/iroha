@@ -8,11 +8,13 @@
 //! checks through tiny Halo2 gadgets so the proving backend observes real
 //! constraints during tests and benchmarks.
 
-use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
-use halo2_proofs::dev::MockProver;
-use halo2_proofs::halo2curves::pasta::Fp as HaloScalar;
-use halo2_proofs::plonk::{Circuit, Column, ConstraintSystem, Error as PlonkError, Selector};
-use halo2_proofs::poly::Rotation;
+use halo2_proofs::{
+    circuit::{Layouter, SimpleFloorPlanner, Value},
+    dev::MockProver,
+    halo2curves::pasta::Fp as HaloScalar,
+    plonk::{Circuit, Column, ConstraintSystem, Error as PlonkError, Selector},
+    poly::Rotation,
+};
 
 /// Scalar field element type used for secret scalars in the circuits.
 pub type Scalar = u64;
@@ -1060,8 +1062,10 @@ pub struct Secp256k1AddCircuit {
 
 impl Secp256k1AddCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
-        use k256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-        use k256::{EncodedPoint, ProjectivePoint};
+        use k256::{
+            EncodedPoint, ProjectivePoint,
+            elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
+        };
         let p_enc =
             EncodedPoint::from_bytes(self.p).map_err(|_| "secp256k1 point P decode failed")?;
         let q_enc =
@@ -1091,8 +1095,10 @@ pub struct Secp256k1MulCircuit {
 
 impl Secp256k1MulCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
-        use k256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-        use k256::{EncodedPoint, ProjectivePoint, Scalar};
+        use k256::{
+            EncodedPoint, ProjectivePoint, Scalar,
+            elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
+        };
         let pt_enc =
             EncodedPoint::from_bytes(self.point).map_err(|_| "secp256k1 point decode failed")?;
         let res_enc = EncodedPoint::from_bytes(self.result)

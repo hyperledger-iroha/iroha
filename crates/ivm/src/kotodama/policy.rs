@@ -250,8 +250,10 @@ fn display_type(ty: &Type) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::semantic::{ExprKind, Type, TypedExpr, TypedStatement};
-    use super::*;
+    use super::{
+        semantic::{ExprKind, Type, TypedExpr, TypedStatement},
+        *,
+    };
 
     #[test]
     fn map_key_violation_reports_origin() {

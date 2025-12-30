@@ -28,14 +28,18 @@
     clippy::missing_panics_doc
 )]
 
-use rust_decimal::Decimal;
-use std::fmt;
-use std::ops::{Deref, DerefMut};
-use std::str::FromStr;
-use time::{Duration, OffsetDateTime};
+use std::{
+    fmt,
+    ops::{Deref, DerefMut},
+    str::FromStr,
+};
 
-use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser};
-use norito::{Archived, Error, NoritoDeserialize, NoritoSerialize};
+use norito::{
+    Archived, Error, NoritoDeserialize, NoritoSerialize,
+    json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser},
+};
+use rust_decimal::Decimal;
+use time::{Duration, OffsetDateTime};
 
 pub mod config;
 pub mod haircut;
@@ -316,9 +320,10 @@ impl fmt::Display for MicroXor {
 
 #[cfg(test)]
 mod tests {
-    use super::MicroXor;
     use norito::decode_from_bytes;
     use rust_decimal::Decimal;
+
+    use super::MicroXor;
 
     #[test]
     fn micro_xor_norito_roundtrip() {

@@ -16,16 +16,16 @@ use std::{
     fs,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
-use std::sync::OnceLock;
+use iroha_logger::prelude::*;
+use norito::json;
 use tokio::sync::Mutex;
 
 use crate::{NoritoJson, NoritoQuery};
-use iroha_logger::prelude::*;
-use norito::json;
 
 const MAX_ATTACHMENT_BYTES_FALLBACK: usize = 4 * 1024 * 1024; // fallback 4 MiB
 const ATTACHMENT_TTL_SECS_FALLBACK: u64 = 7 * 24 * 60 * 60; // fallback 7 days
@@ -648,9 +648,9 @@ fn quota_lock() -> &'static Mutex<()> {
 
 #[cfg(test)]
 mod tests {
+    use axum::{http::StatusCode, response::IntoResponse};
+
     use super::{AttachmentMeta, json, sanitize_attachment_id};
-    use axum::http::StatusCode;
-    use axum::response::IntoResponse;
 
     #[test]
     fn attachment_meta_norito_roundtrip() {

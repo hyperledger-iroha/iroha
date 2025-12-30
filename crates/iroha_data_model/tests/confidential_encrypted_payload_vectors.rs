@@ -4,8 +4,10 @@ use std::path::Path;
 
 use hex::FromHex;
 use iroha_data_model::confidential::ConfidentialEncryptedPayload;
-use norito::codec::{decode_adaptive, encode_adaptive};
-use norito::json::{self, JsonDeserialize};
+use norito::{
+    codec::{decode_adaptive, encode_adaptive},
+    json::{self, JsonDeserialize},
+};
 
 #[derive(Debug, JsonDeserialize)]
 struct Fixture {

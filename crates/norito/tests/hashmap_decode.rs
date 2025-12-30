@@ -1,9 +1,7 @@
 //! Regression tests for HashMap decode performance path.
 //! Ensures functional equivalence after optimizing allocations.
 
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use norito::{decode_from_bytes, to_bytes};
 use rand::{Rng, SeedableRng, rngs::StdRng};

@@ -4,6 +4,8 @@ import XCTest
 @testable import IrohaSwift
 
 final class OfflineWalletReceiptTests: XCTestCase {
+    private let chainId = "testnet"
+
     func testBuildSignedReceiptRecordsJournalAndAudit() throws {
         let logger = try OfflineAuditLogger(storageURL: temporaryLogURL(), isEnabled: true)
         let counterJournal = try OfflineCounterJournal(storageURL: temporaryCounterURL())
@@ -27,6 +29,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
 
         let receipt = try wallet.buildSignedReceipt(
             txId: txId,
+            chainId: chainId,
             receiverAccountId: certificate.controller,
             amount: amount,
             invoiceId: invoiceId,
@@ -81,6 +84,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
         XCTAssertThrowsError(
             try wallet.buildSignedReceipt(
                 txId: txId,
+                chainId: chainId,
                 receiverAccountId: certificate.controller,
                 amount: amount,
                 invoiceId: invoiceId,
@@ -104,6 +108,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
                            invoiceId: String,
                            counter: UInt64 = 1) throws -> OfflinePlatformProof {
         let challenge = try challengeHash(txId: txId,
+                                          chainId: chainId,
                                           receiver: receiver,
                                           assetId: assetId,
                                           amount: amount,
@@ -116,6 +121,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
     }
 
     private func challengeHash(txId: Data,
+                               chainId: String,
                                receiver: String,
                                assetId: String,
                                amount: String,
@@ -130,7 +136,12 @@ final class OfflineWalletReceiptTests: XCTestCase {
         let payload = try preimage.noritoPayload()
         let bytes = OfflineNorito.wrap(typeName: OfflineReceiptChallengePreimage.noritoTypeName,
                                        payload: payload)
-        return IrohaHash.hash(bytes)
+        let context = IrohaHash.hash(Data(chainId.utf8))
+        var hashInput = Data()
+        hashInput.reserveCapacity(context.count + bytes.count)
+        hashInput.append(context)
+        hashInput.append(bytes)
+        return IrohaHash.hash(hashInput)
     }
 
     private func fixtureURL(_ name: String) -> URL {

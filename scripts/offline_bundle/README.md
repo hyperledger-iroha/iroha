@@ -55,6 +55,7 @@ following structure:
       "to": "account_id",
       "asset": "asset_id",
       "amount": "decimal string",
+      "issued_at_ms": 1730314876000,
       "invoice_id": "string",
       "platform_proof": {
         "kind": "apple_app_attest" | "android_marker_key" | "android_provisioned",

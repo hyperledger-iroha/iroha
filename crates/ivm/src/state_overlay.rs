@@ -1,9 +1,7 @@
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as B64_STANDARD;
+use std::{collections::BTreeMap, fs, path::PathBuf};
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64_STANDARD};
 use norito::json::{self, Map, Value};
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::PathBuf;
 
 use crate::VMError;
 

@@ -11,8 +11,9 @@
 //! - Vector length scaling and HTM retry penalties are supported; current VM uses
 //!   a fixed 128‑bit vector width and rarely incurs HTM retries.
 
-use crate::instruction::wide;
 use iroha_crypto::Hash;
+
+use crate::instruction::wide;
 
 /// Gas accounting treats two lanes as the baseline for vector operations.
 pub const VECTOR_BASE_LANES: usize = 2;

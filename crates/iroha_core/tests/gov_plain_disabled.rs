@@ -2,14 +2,16 @@
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 
 use core::num::NonZeroU64;
+
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, World},
 };
-use iroha_data_model::events::data::governance::GovernanceEvent;
-use iroha_data_model::isi::governance::CastPlainBallot;
+use iroha_data_model::{
+    events::data::governance::GovernanceEvent, isi::governance::CastPlainBallot,
+};
 use iroha_test_samples::ALICE_ID;
 
 #[test]

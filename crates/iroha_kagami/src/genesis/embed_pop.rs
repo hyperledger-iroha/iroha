@@ -126,9 +126,11 @@ fn encode_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::BufWriter;
+
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[test]
     fn rejects_non_object_transactions() {

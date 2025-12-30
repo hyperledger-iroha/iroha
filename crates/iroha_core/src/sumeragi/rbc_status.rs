@@ -526,11 +526,13 @@ fn ms_to_system_time(ms: u64) -> SystemTime {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::Duration;
+
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
-    use std::time::Duration;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn hash(byte: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32]))

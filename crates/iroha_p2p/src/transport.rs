@@ -53,12 +53,13 @@ pub mod tls {
 
     use std::sync::Arc;
 
-    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-    use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, SignatureScheme};
+    use rustls::{
+        ClientConfig, DigitallySignedStruct, Error as RustlsError, SignatureScheme,
+        client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+        pki_types::{CertificateDer, ServerName, UnixTime},
+    };
     use tokio::net::TcpStream;
-    use tokio_rustls::TlsConnector;
-    use tokio_rustls::client::TlsStream;
+    use tokio_rustls::{TlsConnector, client::TlsStream};
 
     #[derive(Debug)]
     struct NoCertificateVerification;
@@ -135,8 +136,7 @@ pub mod ws {
     //! WebSocket fallback transport (client-side) over WSS to Torii `/p2p`.
     use futures::{SinkExt, StreamExt};
     use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-    use tokio_tungstenite::tungstenite::Message;
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
     /// A duplex adaptor that implements `AsyncRead`/`AsyncWrite` over a WebSocket stream.
     /// Bytes written are sent as a single Binary frame on `poll_flush`. Bytes are read by
@@ -448,15 +448,19 @@ pub trait TransportConnector {
     fn dial(endpoint: &str) -> tokio::io::Result<Self::Stream>;
 }
 
-use crate::sampler::LogSampler;
+use std::{
+    env,
+    sync::{Mutex, OnceLock},
+};
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_primitives::addr::SocketAddr;
-use std::env;
-use std::sync::{Mutex, OnceLock};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt, Result},
     net::TcpStream,
 };
+
+use crate::sampler::LogSampler;
 
 #[derive(Debug, Clone)]
 struct Proxy {

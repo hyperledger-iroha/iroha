@@ -8,16 +8,17 @@
 //! schema so we can avoid pulling an additional dependency while keeping the
 //! encoding canonical and deterministic.
 
-use crate::soranet::handshake::HandshakeSuite;
-use blake3::Hasher as Blake3;
-use ed25519_dalek::Signer;
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
-use soranet_pq::{MlDsaSuite, sign_mldsa, verify_mldsa};
 use std::{
     convert::{TryFrom, TryInto},
     time::Duration,
 };
+
+use blake3::Hasher as Blake3;
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use soranet_pq::{MlDsaSuite, sign_mldsa, verify_mldsa};
 use thiserror::Error;
+
+use crate::soranet::handshake::HandshakeSuite;
 
 /// Canonical Blake3 domain separator for `SRCv2` digests.
 const SRC_V2_DOMAIN: &[u8] = b"soranet.src.v2.digest";
@@ -1341,10 +1342,11 @@ impl<'a> CborDecoder<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::{SECRET_KEY_LENGTH, SigningKey};
     use rand::{RngCore, SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+
+    use super::*;
 
     fn sample_certificate() -> RelayCertificateV2 {
         RelayCertificateV2 {

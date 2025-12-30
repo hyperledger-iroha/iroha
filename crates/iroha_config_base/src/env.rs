@@ -4,12 +4,11 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
+    error::Error as StdError,
     ops::Sub,
     rc::Rc,
     str::FromStr,
 };
-
-use std::error::Error as StdError;
 
 /// Convertation from a string read from an environment variable to a specific value.
 ///

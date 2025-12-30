@@ -2,7 +2,13 @@
 
 #![allow(unexpected_cfgs)]
 
-use crate::config::{ConfigError, GuardDirectoryConfig};
+use std::{
+    fs,
+    io::Write as _,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use ed25519_dalek::VerifyingKey;
 use hex::{FromHexError, encode as hex_encode};
 use iroha_crypto::soranet::{
@@ -13,14 +19,10 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
-use std::{
-    fs,
-    io::Write as _,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
 use tempfile::NamedTempFile;
 use thiserror::Error;
+
+use crate::config::{ConfigError, GuardDirectoryConfig};
 
 /// Result of resolving the relay entry from a guard directory snapshot.
 #[derive(Debug)]
@@ -571,8 +573,6 @@ impl From<GuardDirectoryError> for ConfigError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::GuardDirectoryConfig;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::soranet::{
         certificate::{
@@ -588,6 +588,9 @@ mod tests {
     use rand::{RngCore, SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
     use tempfile::NamedTempFile;
+
+    use super::*;
+    use crate::config::GuardDirectoryConfig;
 
     struct SnapshotFixture {
         config: GuardDirectoryConfig,

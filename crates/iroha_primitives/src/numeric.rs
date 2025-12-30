@@ -5,15 +5,21 @@
 //! fractional digits (e.g., `1.88` => mantissa `188`, scale `2`).
 
 use core::{cmp::Ordering, str::FromStr};
-use std::{io::Write, string::String, string::ToString, vec, vec::Vec};
+use std::{
+    io::Write,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 
 use derive_more::From;
-use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
-use norito::{Archived, Error, NoritoDeserialize, NoritoSerialize};
+pub use iroha_primitives_derive::numeric;
+use norito::{
+    Archived, Error, NoritoDeserialize, NoritoSerialize,
+    json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
+};
 
 use crate::bigint::{BigInt, MAX_BITS as BIGINT_MAX_BITS};
-
-pub use iroha_primitives_derive::numeric;
 
 /// Decimal number with arbitrary precision and scale.
 ///
@@ -735,8 +741,9 @@ mod schema_ {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::cmp::Ordering;
+
+    use super::*;
 
     #[test]
     fn check_add() {

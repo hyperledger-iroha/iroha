@@ -322,12 +322,14 @@ pub mod query {
     use iroha_data_model::{
         account::Account,
         permission::Permission,
-        query::{dsl::CompoundPredicate, error::QueryExecutionFail as Error},
+        query::{
+            dsl::{CompoundPredicate, EvaluatePredicate},
+            error::QueryExecutionFail as Error,
+        },
     };
 
     use super::*;
     use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
-    use iroha_data_model::query::dsl::EvaluatePredicate;
 
     impl ValidQuery for FindRolesByAccountId {
         #[metrics(+"find_roles_by_account_id")]
@@ -421,6 +423,11 @@ pub mod query {
 
     #[cfg(test)]
     mod tests {
+        use core::num::NonZeroU64;
+
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::{ALICE_ID, gen_account_in};
+
         use super::*;
         use crate::{
             block::ValidBlock,
@@ -428,9 +435,6 @@ pub mod query {
             query::store::LiveQueryStore,
             state::{State, World},
         };
-        use core::num::NonZeroU64;
-        use iroha_primitives::json::Json;
-        use iroha_test_samples::{ALICE_ID, gen_account_in};
 
         fn new_dummy_block() -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) =

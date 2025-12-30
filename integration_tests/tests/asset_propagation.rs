@@ -1,12 +1,12 @@
 //! Ensures that minting an asset on one peer propagates to other peers with the correct quantity.
 
+use std::time::Duration;
+
 use eyre::{Result, eyre};
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
-
-use integration_tests::sandbox;
-use std::time::Duration;
 
 #[test]
 #[allow(clippy::too_many_lines)]

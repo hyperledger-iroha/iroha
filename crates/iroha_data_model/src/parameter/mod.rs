@@ -5,7 +5,6 @@ pub mod system;
 
 pub(crate) use custom::CustomParameters;
 pub use custom::{CustomParameter, CustomParameterId};
-
 pub use system::{
     BlockParameter, BlockParameters, Parameter, Parameters, SmartContractParameter,
     SmartContractParameters, SumeragiParameter, SumeragiParameters, TransactionParameter,

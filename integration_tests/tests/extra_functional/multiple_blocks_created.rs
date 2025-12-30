@@ -7,6 +7,7 @@ use std::{
 
 use eyre::{Result, eyre};
 use futures_util::StreamExt;
+use integration_tests::sandbox;
 use iroha::data_model::{
     events::pipeline::{BlockEventFilter, TransactionEventFilter},
     parameter::BlockParameter,
@@ -14,16 +15,13 @@ use iroha::data_model::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
-use rand::SeedableRng;
-use rand::prelude::IteratorRandom;
+use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
 use tokio::{
     sync::{mpsc, watch},
     task::{JoinSet, spawn_blocking},
     time::{sleep, timeout},
 };
-
-use integration_tests::sandbox;
 
 /// Bombard random peers with random mints in multiple rounds, ensuring they all have
 /// a consistent total amount in the end.

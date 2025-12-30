@@ -7,13 +7,12 @@
 use std::sync::Arc;
 
 use axum::http::{Request, StatusCode, Uri};
-use tower::ServiceExt as _; // for Router::oneshot
-
 // use iroha_config::base::WithOrigin; // unused in this smoke test
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
 };
 use iroha_data_model::ChainId;
+use tower::ServiceExt as _; // for Router::oneshot
 // use iroha_primitives::addr::socket_addr; // unused in this smoke test
 
 #[path = "fixtures.rs"]

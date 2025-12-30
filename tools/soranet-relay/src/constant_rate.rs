@@ -1,7 +1,8 @@
 //! Shared constant-rate profile catalogue used by the relay runtime and tooling.
 
-use norito::json::{self, Error as JsonError, JsonDeserialize, JsonSerialize, Parser};
 use std::{fmt, str::FromStr};
+
+use norito::json::{self, Error as JsonError, JsonDeserialize, JsonSerialize, Parser};
 
 /// Payload bytes carried by each constant-rate cell.
 pub const CONSTANT_RATE_CELL_BYTES: u32 = 1_024;
@@ -167,8 +168,9 @@ impl JsonDeserialize for ConstantRateProfileName {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::str::FromStr;
+
+    use super::*;
 
     #[test]
     fn null_profile_is_registered_and_parses() {

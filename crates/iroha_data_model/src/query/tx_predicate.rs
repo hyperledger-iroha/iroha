@@ -2,16 +2,16 @@
 
 #![allow(clippy::missing_errors_doc)]
 
+use iroha_crypto::HashOf;
+use iroha_primitives::json::Json;
+use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
+#[cfg(feature = "json")]
+use norito::json::Value;
+
 use crate::{
     name::Name,
     query::{CommittedTransaction, CommittedTxFilters},
 };
-use iroha_crypto::HashOf;
-use iroha_primitives::json::Json;
-
-use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
-#[cfg(feature = "json")]
-use norito::json::Value;
 
 /// Predicate tree over committed transactions.
 #[derive(Clone)]
@@ -232,15 +232,13 @@ impl CommittedTxPredicate {
 }
 
 mod wire {
-    use super::CommittedTxPredicate;
-    use crate::name::Name;
     use iroha_crypto::HashOf;
     use iroha_primitives::json::Json;
-    use norito::{NoritoDeserialize, NoritoSerialize};
-
-    use norito::core::Error;
-
     use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
+    use norito::{NoritoDeserialize, NoritoSerialize, core::Error};
+
+    use super::CommittedTxPredicate;
+    use crate::name::Name;
 
     #[derive(Clone, NoritoSerialize, NoritoDeserialize)]
     pub(super) enum Node {
@@ -820,9 +818,10 @@ where
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use super::*;
     use hex;
     use iroha_crypto::{Algorithm, Hash};
+
+    use super::*;
 
     type EntryHash = HashOf<crate::transaction::signed::TransactionEntrypoint>;
 

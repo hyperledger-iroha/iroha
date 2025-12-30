@@ -2,6 +2,8 @@
 #![cfg(feature = "app_api")]
 #![allow(clippy::redundant_closure_for_method_calls)]
 
+use std::sync::Arc;
+
 use axum::response::IntoResponse;
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -11,9 +13,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::ChainId;
-use iroha_torii::NoritoJson;
-use iroha_torii::{EnactDto, MaybeTelemetry, handle_gov_enact};
-use std::sync::Arc;
+use iroha_torii::{EnactDto, MaybeTelemetry, NoritoJson, handle_gov_enact};
 
 fn mk_basic_context() -> (Arc<State>, Arc<Queue>, Arc<ChainId>) {
     let kura = Kura::blank_kura_for_testing();

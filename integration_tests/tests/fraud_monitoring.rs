@@ -3,12 +3,11 @@
 use std::str::FromStr;
 
 use eyre::{Report, Result};
+use integration_tests::sandbox;
 use iroha::data_model::{Level, metadata::Metadata, name::Name, prelude::*};
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
 use toml::Value as TomlValue;
-
-use integration_tests::sandbox;
 
 fn error_chain(err: &Report) -> Vec<String> {
     err.chain().map(ToString::to_string).collect()

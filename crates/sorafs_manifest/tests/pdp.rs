@@ -1,9 +1,11 @@
-use sorafs_manifest::pdp::{
-    HashAlgorithmV1, PDP_CHALLENGE_VERSION_V1, PDP_COMMITMENT_VERSION_V1, PDP_PROOF_VERSION_V1,
-    PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
-    PdpHotLeafProofV1, PdpProofLeafV1, PdpProofV1, PdpProofValidationError, PdpSampleV1,
+use sorafs_manifest::{
+    ChunkingProfileV1, ProfileId,
+    pdp::{
+        HashAlgorithmV1, PDP_CHALLENGE_VERSION_V1, PDP_COMMITMENT_VERSION_V1, PDP_PROOF_VERSION_V1,
+        PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
+        PdpHotLeafProofV1, PdpProofLeafV1, PdpProofV1, PdpProofValidationError, PdpSampleV1,
+    },
 };
-use sorafs_manifest::{ChunkingProfileV1, ProfileId};
 
 fn sample_profile() -> ChunkingProfileV1 {
     ChunkingProfileV1 {

@@ -17,9 +17,10 @@ use std::{
     },
 };
 
-use crate::state::{WorldReadOnly, WorldStateSnapshot};
 use iroha_data_model::block::consensus::EvidenceRecord;
 use mv::storage::StorageReadOnly;
+
+use crate::state::{WorldReadOnly, WorldStateSnapshot};
 
 /// Return the number of persisted evidence entries currently stored in WSV.
 pub fn evidence_count(state: &impl WorldStateSnapshot) -> usize {

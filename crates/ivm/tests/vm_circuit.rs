@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
-use ivm::kotodama::wide as kwide;
-use ivm::{IVM, encoding, halo2::VMExecutionCircuit, instruction};
+use ivm::{IVM, encoding, halo2::VMExecutionCircuit, instruction, kotodama::wide as kwide};
 mod common;
 use common::assemble_zk;
 

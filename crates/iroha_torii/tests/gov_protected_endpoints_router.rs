@@ -3,7 +3,6 @@
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs)]
 
-use norito::json;
 use std::sync::Arc;
 
 use axum::{Router, routing::get};
@@ -13,6 +12,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
+use norito::json;
 use tower::ServiceExt as _; // for Router::oneshot
 
 #[tokio::test]

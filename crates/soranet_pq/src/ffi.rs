@@ -1,14 +1,15 @@
 //! C-friendly bindings for the `soranet_pq` primitives.
 
-use crate::mldsa::MlDsaError;
-use crate::mlkem::MlKemError;
+use core::{
+    convert::TryFrom,
+    ffi::{c_int, c_uchar, c_uint, c_ulong},
+    slice,
+};
+
 use crate::{
     MlDsaSuite, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem, generate_mldsa_keypair,
-    generate_mlkem_keypair, sign_mldsa, verify_mldsa,
+    generate_mlkem_keypair, mldsa::MlDsaError, mlkem::MlKemError, sign_mldsa, verify_mldsa,
 };
-use core::convert::TryFrom;
-use core::ffi::{c_int, c_uchar, c_uint, c_ulong};
-use core::slice;
 
 const ERR_INVALID_SUITE: c_int = -1;
 const ERR_NULL_POINTER: c_int = -2;
@@ -390,8 +391,9 @@ pub unsafe extern "C" fn soranet_mldsa_verify(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pqcrypto_traits::sign::VerificationError;
+
+    use super::*;
 
     #[test]
     fn ffi_mlkem_roundtrip() {

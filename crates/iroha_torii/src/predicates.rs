@@ -72,8 +72,9 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
         s.parse().ok()
     }
     fn map(expr: &FilterExpr) -> TP {
-        use crate::filter::FieldPath;
         use FilterExpr as F;
+
+        use crate::filter::FieldPath;
 
         fn metadata_key(field: &str) -> Option<Name> {
             field

@@ -11,10 +11,9 @@ use std::{
 };
 
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
+use thiserror::Error;
 
 use crate::query::dsl::CompoundPredicate;
-
-use thiserror::Error;
 
 /// JSON representation of a lightweight predicate tree.
 ///

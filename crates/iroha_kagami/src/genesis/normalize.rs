@@ -102,9 +102,11 @@ fn render_text<T: Write>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs::File;
+
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     fn minimal_genesis() -> NamedTempFile {
         let genesis_file = NamedTempFile::new().expect("create temp genesis");

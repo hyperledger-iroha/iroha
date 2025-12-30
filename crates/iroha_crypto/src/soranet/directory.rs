@@ -2,9 +2,10 @@
 
 #![allow(unexpected_cfgs)]
 
+use std::convert::TryFrom;
+
 use blake3::Hasher as Blake3Hasher;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
-use std::convert::TryFrom;
 
 use crate::soranet::certificate::CertificateValidationPhase;
 

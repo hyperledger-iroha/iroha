@@ -79,8 +79,9 @@ pub fn unpack_bytes(packed: &PackedBytes) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::convert::TryFrom;
+
+    use super::*;
 
     #[test]
     fn roundtrip_empty() {

@@ -1,16 +1,17 @@
 //! CLI helper for ingesting payloads with the SoraFS chunk store prototype.
 
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
+
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_car::{
     CarBuildPlan, CarChunk, ChunkStore, ProfileId,
     chunker_registry::{self, ChunkerProfileDescriptor},
     fetch_plan::{chunk_fetch_specs_to_json, chunk_fetch_specs_to_string},
     por_json::{parse_proof_spec, proof_from_value, proof_to_value, sample_to_map, tree_to_value},
-};
-use std::{
-    env, fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
 };
 
 fn main() {
@@ -355,9 +356,10 @@ fn parse_u64(value: &str) -> Result<u64, std::num::ParseIntError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::json::Value;
     use sorafs_chunker::ChunkProfile;
+
+    use super::*;
 
     #[test]
     fn default_descriptor_matches_known_values() {

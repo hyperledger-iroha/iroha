@@ -1,11 +1,14 @@
 //! Tests for nonpanic, structured-error Norito decode paths.
 //! These validate that malformed inputs return errors instead of panicking.
 
-use norito::Error;
-use norito::core::{self, Header};
+use std::num::NonZeroU32;
+
+use norito::{
+    Error,
+    core::{self, Header},
+};
 #[allow(unused_imports)]
 use norito::{NoritoSerialize, decode_from_bytes, to_bytes};
-use std::num::NonZeroU32;
 
 fn rewrite_checksum(bytes: &mut [u8]) {
     // Header layout: magic(4) maj(1) min(1) schema(16) comp(1) len(8) crc(8) flags(1) = 40 bytes

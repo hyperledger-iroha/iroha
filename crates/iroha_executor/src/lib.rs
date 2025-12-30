@@ -326,21 +326,23 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::{
         mem::ManuallyDrop,
         sync::atomic::{AtomicBool, Ordering},
-    };
-    use data_model::{
-        permission::Permission,
-        prelude::Json,
-        query::{QueryOutput, QueryOutputBatchBoxTuple, QueryResponse},
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
         slice,
         sync::Mutex,
     };
+
+    use data_model::{
+        permission::Permission,
+        prelude::Json,
+        query::{QueryOutput, QueryOutputBatchBoxTuple, QueryResponse},
+    };
+
+    use super::*;
 
     static CALLED: AtomicBool = AtomicBool::new(false);
     static QUERY_PERMISSIONS: Mutex<Vec<Permission>> = Mutex::new(Vec::new());

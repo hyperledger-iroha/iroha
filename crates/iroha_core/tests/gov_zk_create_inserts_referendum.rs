@@ -7,8 +7,8 @@ use iroha_core::{
     state::{State, World},
     zk::hash_vk,
 };
-use iroha_data_model::Registrable;
 use iroha_data_model::{
+    Registrable,
     account::Account,
     asset::AssetDefinition,
     block::BlockHeader,

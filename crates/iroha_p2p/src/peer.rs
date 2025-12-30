@@ -1,21 +1,16 @@
 //! Tokio actor Peer
 
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    panic,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::SystemTime,
+};
 
 use bytes::{Buf, BufMut, BytesMut};
-use message::*;
-use norito::codec::{Decode, DecodeAll, Encode};
-use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::TcpStream,
-    sync::{mpsc, oneshot},
-    time::Duration,
-};
-
-use crate::{
-    ConsensusConfigCaps, ConsensusHandshakeCaps, Error, RelayRole, boilerplate::*,
-    sampler::LogSampler,
-};
 #[cfg(not(feature = "noise_handshake"))]
 use iroha_crypto::SessionKey;
 #[cfg(feature = "noise_handshake")]
@@ -36,16 +31,21 @@ use iroha_crypto::soranet::{
     },
     puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
 };
+use message::*;
+use norito::codec::{Decode, DecodeAll, Encode};
 use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
 #[cfg(feature = "noise_handshake")]
 use snow::{Builder, params::NoiseParams};
-use std::{
-    panic,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::SystemTime,
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::TcpStream,
+    sync::{mpsc, oneshot},
+    time::Duration,
+};
+
+use crate::{
+    ConsensusConfigCaps, ConsensusHandshakeCaps, Error, RelayRole, boilerplate::*,
+    sampler::LogSampler,
 };
 // (keep fully-qualified uses inline; avoid unused import warnings)
 
@@ -570,11 +570,13 @@ pub struct MintedChallenge {
 
 #[cfg(test)]
 mod handshake_config_tests {
-    use super::*;
+    use std::num::NonZeroU32;
+
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
-    use std::num::NonZeroU32;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn sanitises_invalid_kem_and_signature_ids() {
@@ -1517,10 +1519,11 @@ pub mod handles {
 mod run {
     //! Module with peer [`run`] function.
 
+    use std::task::Poll;
+
     use futures::future::poll_fn;
     use iroha_logger::prelude::*;
     use norito::codec::Decode;
-    use std::task::Poll;
     use tokio::time::Instant;
     use tracing;
 
@@ -2161,11 +2164,12 @@ mod run {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
         use bytes::Bytes;
         use iroha_crypto::encryption::ChaCha20Poly1305;
         use norito::codec::{Decode, Encode};
         use tokio::io::{AsyncRead, AsyncWrite};
+
+        use super::*;
 
         #[derive(Encode, Decode, Clone, Debug)]
         struct Dummy;
@@ -3774,10 +3778,11 @@ mod state {
 
     #[cfg(test)]
     mod tests {
-        use super::*;
-        use iroha_crypto::encryption::ChaCha20Poly1305;
-        use iroha_crypto::kex::X25519Sha256 as KexAlgo;
         use std::sync::Arc;
+
+        use iroha_crypto::{encryption::ChaCha20Poly1305, kex::X25519Sha256 as KexAlgo};
+
+        use super::*;
 
         #[cfg(feature = "noise_handshake")]
         #[tokio::test(flavor = "current_thread")]
@@ -3834,16 +3839,18 @@ mod state {
 
 #[cfg(test)]
 mod tests {
-    use super::state::*;
-    use super::{Connection, SoranetHandshakeConfig, cryptographer::Cryptographer};
-    use crate::{ConfidentialHandshakeCaps, RelayRole};
-    use iroha_crypto::encryption::ChaCha20Poly1305;
-    use iroha_crypto::kex::KeyExchangeScheme;
-    use iroha_crypto::kex::X25519Sha256 as KexAlgo;
-    use iroha_crypto::{KeyGenOption, KeyPair};
+    use std::sync::Arc;
+
+    use iroha_crypto::{
+        KeyGenOption, KeyPair,
+        encryption::ChaCha20Poly1305,
+        kex::{KeyExchangeScheme, X25519Sha256 as KexAlgo},
+    };
     use iroha_primitives::addr::SocketAddr;
     use norito::codec::Encode;
-    use std::sync::Arc;
+
+    use super::{Connection, SoranetHandshakeConfig, cryptographer::Cryptographer, state::*};
+    use crate::{ConfidentialHandshakeCaps, RelayRole};
 
     #[test]
     fn payload_with_address_is_consistent_between_sides() {

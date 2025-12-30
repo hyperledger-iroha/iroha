@@ -19,9 +19,10 @@ use norito::core::{DecodeFromSlice, Error as NoritoError};
 
 const ERR_DOMAIN_NORMALISATION: &str = "domain name failed UTS-46 STD3 normalization requirements";
 
+use icu_normalizer::{ComposingNormalizer, ComposingNormalizerBorrowed};
+
 pub use self::model::*;
 use crate::error::ParseError;
-use icu_normalizer::{ComposingNormalizer, ComposingNormalizerBorrowed};
 
 type NormalizerCell = OnceLock<ComposingNormalizerBorrowed<'static>>;
 
@@ -272,8 +273,9 @@ pub mod prelude {
 mod tests {
     use std::borrow::ToOwned as _;
 
-    use super::*;
     use norito::codec::{Decode, Encode};
+
+    use super::*;
     // Trait import not required; tests roundtrip via header-framed helpers.
 
     const INVALID_NAMES: [&str; 4] = ["", " ", "@", "#"];

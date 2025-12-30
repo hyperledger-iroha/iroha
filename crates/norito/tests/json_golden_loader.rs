@@ -5,8 +5,10 @@
 //! the expected output. Also verifies that parsing the output round-trips to an
 //! equivalent `Value`.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use norito::json;
 

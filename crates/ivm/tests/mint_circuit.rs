@@ -1,6 +1,8 @@
 #![cfg(feature = "ivm_zk_tests")]
-use ivm::halo2::{ECPoint, MintCircuit, MintPublic, MintWitness};
-use ivm::{pedersen_commit_truncated, poseidon};
+use ivm::{
+    halo2::{ECPoint, MintCircuit, MintPublic, MintWitness},
+    pedersen_commit_truncated, poseidon,
+};
 
 fn poseidon_hash(inputs: &[u64]) -> u64 {
     if inputs.is_empty() {

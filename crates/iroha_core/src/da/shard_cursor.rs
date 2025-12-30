@@ -594,7 +594,6 @@ impl DaShardCursorJournal {
 mod tests {
     use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf};
 
-    use super::*;
     use iroha_config::parameters::actual::LaneConfig;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
@@ -612,6 +611,8 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
     };
     use tempfile::tempdir;
+
+    use super::*;
 
     fn sample_record(lane_id: u32, epoch: u64, sequence: u64) -> DaCommitmentRecord {
         let lane_byte = u8::try_from(lane_id).expect("lane fits in u8 for test record");

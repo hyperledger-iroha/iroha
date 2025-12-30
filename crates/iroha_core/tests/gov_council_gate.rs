@@ -1,5 +1,7 @@
 //! Council gating for governance proposals: referenda open only after quorum.
 
+use std::num::NonZeroU64;
+
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -17,7 +19,6 @@ use iroha_data_model::{
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::num::NonZeroU64;
 
 fn setup_council_state() -> State {
     let kura = Kura::blank_kura_for_testing();

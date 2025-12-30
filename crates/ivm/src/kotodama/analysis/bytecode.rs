@@ -1,13 +1,12 @@
-use std::collections::HashSet;
-use std::error::Error;
-use std::fmt;
+use std::{collections::HashSet, error::Error, fmt};
+
+use norito::json as norito_json_mod;
 
 use super::{AnalysisCategory, AnalysisFinding, SimpleRng};
-use crate::instruction::wide;
-use crate::ivm_cache::IvmCache;
-use crate::metadata::ProgramMetadata;
-use crate::{IVM, VMError, kotodama::std as kstd};
-use norito::json as norito_json_mod;
+use crate::{
+    IVM, VMError, instruction::wide, ivm_cache::IvmCache, kotodama::std as kstd,
+    metadata::ProgramMetadata,
+};
 
 /// Result of analysing a Kotodama bytecode artifact.
 #[derive(Debug)]

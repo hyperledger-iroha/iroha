@@ -3,14 +3,13 @@
 use std::{collections::HashSet, time::Duration};
 
 use eyre::{WrapErr, ensure};
+use integration_tests::sandbox;
 use iroha_config::parameters::actual::ConsensusMode;
 use iroha_core::sumeragi::{collectors::deterministic_collectors, network_topology::Topology};
 use iroha_data_model::peer::PeerId;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Value};
 use tokio::time::sleep;
-
-use integration_tests::sandbox;
 
 /// Ensure `/v1/sumeragi/collectors` aligns with deterministic PRF-based selection and
 /// rotates collectors as block heights advance.

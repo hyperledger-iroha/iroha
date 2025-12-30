@@ -287,14 +287,16 @@ fn print_digest(label: &str, digest: &DigestCheck) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::str::FromStr;
+
     use iroha_data_model::{
         name::Name,
         taikai::{TaikaiEventId, TaikaiRenditionId, TaikaiStreamId},
     };
     use norito::codec::Encode;
-    use std::str::FromStr;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn sample_name(raw: &str) -> Name {
         Name::from_str(raw).expect("valid name")

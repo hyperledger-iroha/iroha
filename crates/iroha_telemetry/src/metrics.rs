@@ -1,6 +1,10 @@
 //! [`Metrics`] and [`Status`]-related logic and functions.
 #![allow(clippy::doc_markdown)]
 
+use core::{
+    convert::{TryFrom, TryInto},
+    ops::Deref,
+};
 #[cfg(feature = "otel-exporter")]
 use std::{collections::HashMap, sync::Mutex};
 use std::{
@@ -13,11 +17,6 @@ use std::{
     vec::Vec,
 };
 
-use crate::privacy::PrivacyDrainSnapshot;
-use core::{
-    convert::{TryFrom, TryInto},
-    ops::Deref,
-};
 use iroha_config::{kura::FsyncMode, parameters::actual::ConfidentialGas as ActualConfidentialGas};
 use iroha_data_model::{
     block::consensus::PERMISSIONED_TAG,
@@ -40,13 +39,14 @@ use opentelemetry::{
     KeyValue,
     metrics::{Counter, Histogram as OtelHistogram, UpDownCounter},
 };
-pub use prometheus::GaugeVec;
-pub use prometheus::core::Collector;
 use prometheus::{
     CounterVec, Encoder, Gauge, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec,
     IntGauge, IntGaugeVec, Opts, Registry,
     core::{AtomicU64, GenericGauge, GenericGaugeVec},
 };
+pub use prometheus::{GaugeVec, core::Collector};
+
+use crate::privacy::PrivacyDrainSnapshot;
 
 /// Type for reporting amount of dropped messages for sumeragi
 pub type DroppedMessagesCounter = IntCounter;
@@ -2251,8 +2251,9 @@ pub fn global_sorafs_node_otel() -> Arc<SorafsNodeOtel> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::{from_bytes, to_bytes};
+
+    use super::*;
 
     fn find_metric_line<'a>(dump: &'a str, prefix: &str) -> &'a str {
         dump.lines()
@@ -2843,8 +2844,9 @@ pub fn install_sorafs_node_otlp_exporter(
 
 #[cfg(test)]
 mod otel_tests {
-    use super::*;
     use std::sync::Arc;
+
+    use super::*;
 
     #[test]
     fn global_fetch_otel_is_singleton() {
@@ -15104,10 +15106,14 @@ fn family_has_lane_labels(family: &prometheus::proto::MetricFamily) -> bool {
 mod test {
     #![allow(clippy::restriction)]
 
-    use super::*;
-    use norito::codec::Encode;
-    use norito::json::{self, Value};
     use std::time::Duration;
+
+    use norito::{
+        codec::Encode,
+        json::{self, Value},
+    };
+
+    use super::*;
 
     #[test]
     fn metrics_lifecycle() {

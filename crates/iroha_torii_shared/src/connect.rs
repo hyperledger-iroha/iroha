@@ -866,9 +866,10 @@ pub struct SignInProofV1 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use norito::core::{Error, header_flags};
     use rand::{Rng, SeedableRng};
+
+    use super::*;
 
     fn sample_open_frame() -> ConnectFrameV1 {
         let sid = [0xAB; 32];

@@ -10,19 +10,23 @@
 
 use blake3::Hasher;
 use iroha_crypto::{Algorithm, PublicKey, Signature};
-use norito::core::Error as NoritoError;
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
+use norito::{
+    core::Error as NoritoError,
+    derive::{NoritoDeserialize, NoritoSerialize},
+};
 use thiserror::Error;
 
 #[cfg(test)]
 use crate::provider_advert::TransportProtocol;
-use crate::provider_advert::{
-    AdvertEndpoint, CapabilityTlv, CapabilityType, EndpointKind, PqCapabilityError,
-    ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
-    ProviderCapabilitySoranetPqV1, RangeCapabilityError, StakePointer, StreamBudgetError,
-    StreamBudgetV1, TransportHintError, TransportHintV1,
+use crate::{
+    CouncilSignature, chunker_registry,
+    provider_advert::{
+        AdvertEndpoint, CapabilityTlv, CapabilityType, EndpointKind, PqCapabilityError,
+        ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
+        ProviderCapabilitySoranetPqV1, RangeCapabilityError, StakePointer, StreamBudgetError,
+        StreamBudgetV1, TransportHintError, TransportHintV1,
+    },
 };
-use crate::{CouncilSignature, chunker_registry};
 
 /// Current proposal schema version.
 pub const PROVIDER_ADMISSION_PROPOSAL_VERSION_V1: u8 = 1;
@@ -1042,13 +1046,16 @@ pub enum EndpointAttestationError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::provider_advert::{
-        AvailabilityTier, CapabilityType, PathDiversityPolicy, ProviderCapabilityRangeV1, QosHints,
-        RendezvousTopic,
-    };
-    use crate::{AdvertSignature, PROVIDER_ADVERT_VERSION_V1, SignatureAlgorithm};
     use ed25519_dalek::{Signer, SigningKey};
+
+    use super::*;
+    use crate::{
+        AdvertSignature, PROVIDER_ADVERT_VERSION_V1, SignatureAlgorithm,
+        provider_advert::{
+            AvailabilityTier, CapabilityType, PathDiversityPolicy, ProviderCapabilityRangeV1,
+            QosHints, RendezvousTopic,
+        },
+    };
 
     fn council_signature() -> CouncilSignature {
         CouncilSignature {

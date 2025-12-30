@@ -13,13 +13,16 @@
 //! - Perfect proportionality to runtime wall-clock. Costs are calibrated to be
 //!   monotonic with payload sizes and relative complexity.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
 use iroha_data_model::{
-    isi as dm_isi, isi::Instruction as _, isi::InstructionBox, proof::ProofAttachment,
+    isi as dm_isi,
+    isi::{Instruction as _, InstructionBox},
+    proof::ProofAttachment,
     zk::OpenVerifyEnvelope,
 };
 use norito::decode_from_bytes;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Per-instruction family base costs.
 /// Chosen to be small compared to the default per-block gas limit.
@@ -384,13 +387,16 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::zk::test_utils::halo2_fixture_envelope;
-    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
     use iroha_config::parameters::actual as cfg;
     use iroha_data_model::prelude::*;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
+
+    use super::*;
+    use crate::{
+        kura::Kura, query::store::LiveQueryStore, state::State,
+        zk::test_utils::halo2_fixture_envelope,
+    };
 
     fn sample_account() -> AccountId {
         gen_account_in("wonderland").0

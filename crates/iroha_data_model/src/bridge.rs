@@ -676,10 +676,12 @@ impl BridgeFinalityVerifier {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::num::NonZeroU64;
+
     use iroha_crypto::{HashOf, KeyPair, SignatureOf};
     use iroha_version::DecodeAll;
-    use std::num::NonZeroU64;
+
+    use super::*;
 
     fn validator_set_from_keys(keys: &[KeyPair]) -> Vec<PeerId> {
         keys.iter()
@@ -789,9 +791,11 @@ mod tests {
 
     #[test]
     fn bridge_finality_proof_roundtrip() {
-        use crate::block::BlockHeader;
-        use iroha_crypto::{HashOf, KeyPair};
         use std::num::NonZeroU64;
+
+        use iroha_crypto::{HashOf, KeyPair};
+
+        use crate::block::BlockHeader;
 
         let _kp = KeyPair::random();
         let header = BlockHeader::new(

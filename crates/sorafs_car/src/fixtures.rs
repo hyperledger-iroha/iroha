@@ -6,12 +6,13 @@
 //! snapshots so integration tests can exercise end-to-end fetch flows without
 //! standing up real storage nodes.
 
+use sorafs_chunker::{ChunkProfile, fixtures::FixtureProfile};
+
 use crate::{
     CarBuildPlan,
     multi_fetch::{ProviderMetadata, RangeCapability, StreamBudget, TransportHint},
     scoreboard::{ProviderTelemetry, TelemetrySnapshot},
 };
-use sorafs_chunker::{ChunkProfile, fixtures::FixtureProfile};
 
 /// Unix timestamp (seconds) used across fixture artefacts.
 const FIXTURE_NOW_UNIX_SECS: u64 = 1_725_000_000;

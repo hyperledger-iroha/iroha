@@ -3,11 +3,6 @@
 //! Writes Norito-encoded `RelayEpochMetricsV1` payloads to a spool directory so
 //! offline auditors can replay the incentive pipeline deterministically.
 
-use crate::error::RelayError;
-use iroha_data_model::soranet::incentives::RelayEpochMetricsV1;
-use norito::codec::Encode;
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
@@ -16,7 +11,16 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use iroha_data_model::soranet::incentives::RelayEpochMetricsV1;
+use norito::{
+    codec::Encode,
+    derive::{JsonDeserialize, JsonSerialize},
+};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+use crate::error::RelayError;
 
 /// Errors surfaced while persisting incentive snapshots.
 #[derive(Debug, Error)]
@@ -147,12 +151,13 @@ impl IncentiveLogger {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_data_model::{
         metadata::Metadata,
         soranet::incentives::{RelayComplianceStatusV1, RelayEpochMetricsV1},
     };
     use tempfile::TempDir;
+
+    use super::*;
 
     fn sample_metrics(epoch: u32) -> RelayEpochMetricsV1 {
         RelayEpochMetricsV1 {

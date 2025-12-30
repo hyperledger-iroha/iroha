@@ -486,8 +486,9 @@ pub fn parse_drawn_at(value: &str) -> Result<OffsetDateTime, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[test]
     fn parse_beacon_validates_length() {

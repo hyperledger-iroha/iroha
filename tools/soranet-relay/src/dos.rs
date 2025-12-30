@@ -1,22 +1,5 @@
 //! DoS and abuse mitigation utilities for the relay handshake path.
 
-use crate::{
-    capability,
-    config::{
-        AdaptiveDifficultyConfig, EmergencyThrottleConfig, PowConfig, QuotaConfig, RelayMode,
-        SlowlorisConfig, TokenPolicySource,
-    },
-    metrics::Metrics,
-};
-use blake3::Hasher;
-use hex;
-use iroha_crypto::soranet::{
-    pow::Parameters,
-    puzzle,
-    token::{AdmissionToken, AdmissionTokenVerifier, VerifyError as TokenVerifyError},
-};
-use norito::derive::JsonDeserialize;
-use norito::json;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt, fs,
@@ -29,8 +12,26 @@ use std::{
     },
     time::{Duration, Instant, SystemTime},
 };
+
+use blake3::Hasher;
+use hex;
+use iroha_crypto::soranet::{
+    pow::Parameters,
+    puzzle,
+    token::{AdmissionToken, AdmissionTokenVerifier, VerifyError as TokenVerifyError},
+};
+use norito::{derive::JsonDeserialize, json};
 use thiserror::Error;
 use tracing::warn;
+
+use crate::{
+    capability,
+    config::{
+        AdaptiveDifficultyConfig, EmergencyThrottleConfig, PowConfig, QuotaConfig, RelayMode,
+        SlowlorisConfig, TokenPolicySource,
+    },
+    metrics::Metrics,
+};
 
 /// Aggregated controls applied to inbound handshakes.
 pub struct DoSControls {
@@ -1121,15 +1122,20 @@ impl SlowlorisDetector {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        net::SocketAddr,
+        thread,
+        time::{Duration as StdDuration, UNIX_EPOCH},
+    };
+
+    use iroha_crypto::soranet::token::compute_issuer_fingerprint;
+    use rand::{SeedableRng, rngs::StdRng};
+
     use super::*;
     use crate::{
         config::{PuzzleConfig, ReplayFilterConfig, TokenConfig},
         metrics::TokenOutcomeKey,
     };
-    use iroha_crypto::soranet::token::compute_issuer_fingerprint;
-    use rand::{SeedableRng, rngs::StdRng};
-    use std::time::UNIX_EPOCH;
-    use std::{net::SocketAddr, thread, time::Duration as StdDuration};
 
     fn base_params() -> Parameters {
         Parameters::new(8, Duration::from_secs(600), Duration::from_secs(30))

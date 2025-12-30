@@ -14,8 +14,9 @@ use std::{
 };
 
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
-use mochi_core::supervisor::RestartPolicy;
-use mochi_core::{GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder};
+use mochi_core::{
+    GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder, supervisor::RestartPolicy,
+};
 
 const DEFAULT_RESTART_MAX_RESTARTS: usize = 3;
 const DEFAULT_RESTART_BACKOFF_MS: u64 = 1_000;

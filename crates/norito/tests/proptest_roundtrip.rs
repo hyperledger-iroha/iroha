@@ -1,6 +1,8 @@
-use norito::NoritoDeserialize;
-use norito::core::{NoritoSerialize, decode_from_bytes, to_bytes};
-use norito::from_bytes;
+use norito::{
+    NoritoDeserialize,
+    core::{NoritoSerialize, decode_from_bytes, to_bytes},
+    from_bytes,
+};
 use proptest::prelude::*;
 
 #[derive(

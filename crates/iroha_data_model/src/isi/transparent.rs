@@ -1,11 +1,11 @@
-use iroha_primitives::json::Json;
-
-use super::*;
 use std::fmt::Display;
 
-use crate::asset::id::AssetId;
+use iroha_primitives::json::Json;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
+
+use super::*;
+use crate::asset::id::AssetId;
 
 iroha_data_model_derive::model_single! {
     /// Generic instruction for setting a chain-wide config parameter.

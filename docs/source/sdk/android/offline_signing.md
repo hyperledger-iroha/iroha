@@ -267,17 +267,32 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
   admission (submits `SubmitOfflineToOnlineTransfer`). When rejection occurs,
   Torii surfaces a stable reason code in the `x-iroha-reject-code` response
   header (for example `certificate_expired`, `counter_conflict`,
-  `allowance_exceeded`, `invoice_duplicate`) so apps can map failures to
+  `max_tx_value_exceeded`, `allowance_exceeded`, `invoice_duplicate`) so apps can map failures to
   deterministic UX copy across platforms.
 - When OA2 journaling is required, persist envelopes via
   `OfflineJournal` (`offline/OfflineJournal.java`). The helper mirrors the
   Rust/Swift layout: entries are hash-chained with BLAKE2b-256 and authenticated
   via HMAC-SHA256 using a 32-byte key derived from operator seed material so
   regulators can replay the write-ahead log across platforms.
-- `OfflineReceiptChallenge.compute(...)` wraps the shared native helper
+- `OfflineReceiptChallenge.compute(chainId, ...)` wraps the shared native helper
   (`connect_norito_offline_receipt_challenge`) so Android apps can derive the
-  canonical Norito payload plus the BLAKE2b/SHA-256 hashes that KeyMint proofs
-  expect without touching the codec directly.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallenge.java:1】【java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallengeTest.java:1】
+  canonical Norito payload plus the chain-bound BLAKE2b/SHA-256 hashes that
+  KeyMint proofs expect without touching the codec directly.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallenge.java:1】【java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallengeTest.java:1】
+- `OfflineBalanceProof.advanceCommitment(...)` generates the new commitment and
+  the required v1 proof blob (12,385 bytes: version + delta proof + range proof)
+  for offline-to-online settlement. Provide the claimed delta, resulting value,
+  and current/next blinding factors to stay aligned with the ledger verifier:
+
+```java
+OfflineBalanceProof.Artifacts artifacts =
+    OfflineBalanceProof.advanceCommitment(
+        chainId,
+        claimedDelta,
+        resultingValue,
+        initialCommitmentHex,
+        initialBlindingHex,
+        resultingBlindingHex);
+```
 - `OfflineWallet.CirculationMode` distinguishes between ledger-reconcilable
   allowances and pure offline/bearer pilots. Provide a
   `OfflineWallet.ModeChangeListener` to surface the warning copy from

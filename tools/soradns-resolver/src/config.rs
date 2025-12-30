@@ -1,15 +1,3 @@
-use crate::{
-    bundle::ProofBundleV1,
-    rad::{ResolverAttestation, decode_rad_entries},
-};
-use eyre::{Context, Result, bail};
-use hickory_proto::rr::{
-    Name, RData, Record,
-    rdata::{A, AAAA, CNAME, TXT},
-};
-use norito::{decode_from_bytes, json};
-use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use reqwest::header::HeaderName;
 use std::{
     convert::TryFrom,
     fs::File,
@@ -19,7 +7,21 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+
+use eyre::{Context, Result, bail};
+use hickory_proto::rr::{
+    Name, RData, Record,
+    rdata::{A, AAAA, CNAME, TXT},
+};
+use norito::{decode_from_bytes, json};
+use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use reqwest::header::HeaderName;
 use tokio::fs;
+
+use crate::{
+    bundle::ProofBundleV1,
+    rad::{ResolverAttestation, decode_rad_entries},
+};
 
 /// Resolver configuration with normalised runtime values.
 #[derive(Debug, Clone)]
@@ -726,10 +728,12 @@ impl StaticRecordConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use expect_test::expect;
     use std::io::Write;
+
+    use expect_test::expect;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     fn write_config(contents: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");

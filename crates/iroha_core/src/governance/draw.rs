@@ -1,9 +1,7 @@
 //! Governance VRF draw utilities (members + alternates) for on-chain bodies.
 
-use crate::governance::{
-    parliament::{CandidateRef, CandidateVariant, build_input, compute_seed, derive_committee},
-    sortition,
-};
+use std::collections::BTreeSet;
+
 use iroha_config::parameters::actual::Governance;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{
@@ -11,7 +9,11 @@ use iroha_data_model::{
     account::AccountId,
     governance::types::{ParliamentBodies, ParliamentBody, ParliamentRoster},
 };
-use std::collections::BTreeSet;
+
+use crate::governance::{
+    parliament::{CandidateRef, CandidateVariant, build_input, compute_seed, derive_committee},
+    sortition,
+};
 
 /// VRF draw result with winners and alternates.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,10 +280,12 @@ fn body_selection(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::BTreeSet;
+
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{account::AccountId, domain::DomainId};
-    use std::collections::BTreeSet;
+
+    use super::*;
 
     fn mk_account(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);

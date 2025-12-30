@@ -9,12 +9,12 @@ use std::{
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use hex::FromHexError;
-use iroha_crypto::soranet::directory::GuardDirectorySnapshotV2;
 use iroha_crypto::soranet::{
     certificate::{CertificateError, CertificateValidationPhase, RelayCertificateBundleV2},
     directory::{
         GUARD_DIRECTORY_VERSION_V2, GuardDirectoryIssuerV1, GuardDirectoryRelayEntryV2,
-        compute_issuer_fingerprint, decode_validation_phase, encode_validation_phase,
+        GuardDirectorySnapshotV2, compute_issuer_fingerprint, decode_validation_phase,
+        encode_validation_phase,
     },
 };
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -1137,17 +1137,21 @@ fn update_field(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::guard::{GuardDirectoryEntry, persist_guard_pinning_proof};
-    use iroha_crypto::soranet::certificate::{
-        CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
-        RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
+    use std::time::{Duration, SystemTime};
+
+    use iroha_crypto::soranet::{
+        certificate::{
+            CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
+            RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
+        },
+        handshake::HandshakeSuite,
     };
-    use iroha_crypto::soranet::handshake::HandshakeSuite;
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair;
-    use std::time::{Duration, SystemTime};
     use tempfile::tempdir;
+
+    use super::*;
+    use crate::guard::{GuardDirectoryEntry, persist_guard_pinning_proof};
 
     #[test]
     fn build_snapshot_from_config_roundtrip() {

@@ -1,15 +1,18 @@
 //! Regression tests ensuring decode_from_slice rejects truncated or tampered
 //! buffers with `Error::LengthMismatch` instead of panicking.
 
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
-use std::convert::TryInto;
-
-use norito::NoritoSerialize;
-use norito::core::{
-    DecodeFlagsGuard, DecodeFromSlice, Error, Header, PayloadCtxGuard, read_seq_len_slice,
-    reset_decode_state,
+use std::{
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque},
+    convert::TryInto,
 };
-use norito::core::{header_flags, read_len_dyn};
+
+use norito::{
+    NoritoSerialize,
+    core::{
+        DecodeFlagsGuard, DecodeFromSlice, Error, Header, PayloadCtxGuard, header_flags,
+        read_len_dyn, read_seq_len_slice, reset_decode_state,
+    },
+};
 
 fn packed_seq_supported() -> bool {
     norito::core::default_encode_flags() & header_flags::PACKED_SEQ != 0

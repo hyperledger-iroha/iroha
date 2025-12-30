@@ -6,14 +6,17 @@
 //! produced by that backend. Norito serialization preserves both fields
 //! byte-for-byte to ensure stable hashing and compatibility across nodes.
 
+use std::io::Write;
+
 #[cfg(feature = "json")]
 use base64::Engine as _;
 #[cfg(feature = "json")]
 use base64::engine::general_purpose::STANDARD;
 use iroha_schema::{Ident, IntoSchema};
-use norito::codec::{Decode, Encode};
-use norito::core as ncore;
-use std::io::Write;
+use norito::{
+    codec::{Decode, Encode},
+    core as ncore,
+};
 
 use crate::{confidential::ConfidentialStatus, zk::BackendTag};
 
@@ -792,8 +795,9 @@ pub type CommittedTransactionWithProof = ProofedCommittedTransaction;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::LaneCommitmentId;
+
+    use super::*;
     fn run_or_skip() -> bool {
         std::env::var("IROHA_RUN_IGNORED").ok().as_deref() == Some("1")
     }
@@ -940,8 +944,9 @@ mod tests {
 
     #[test]
     fn proofed_committed_tx_roundtrip() {
-        use crate::query::CommittedTransaction;
         use iroha_crypto::{Hash, HashOf};
+
+        use crate::query::CommittedTransaction;
         if !run_or_skip() {
             eprintln!(
                 "Skipping: Norito derive decode mismatch (nested). Set IROHA_RUN_IGNORED=1 to run."

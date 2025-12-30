@@ -2,9 +2,11 @@
 
 use iroha_primitives::numeric::Numeric;
 
-use crate::isi::staking::{ActivatePublicLaneValidator, ExitPublicLaneValidator};
 use crate::{
-    isi::{Log, RegisterPeerWithPop},
+    isi::{
+        Log, RegisterPeerWithPop,
+        staking::{ActivatePublicLaneValidator, ExitPublicLaneValidator},
+    },
     prelude::*,
     query::{AnyQueryBox, QueryWithParams, SingularQueryBox},
 };

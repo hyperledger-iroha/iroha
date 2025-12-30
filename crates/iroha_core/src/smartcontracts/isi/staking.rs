@@ -2,11 +2,6 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use super::prelude::*;
-use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
-use crate::state::{ConsensusKeyGate, WorldTransaction, peer_consensus_key_gate};
-use crate::sumeragi::status as sumeragi_status;
-use crate::telemetry::StateTelemetry;
 use iroha_data_model::{
     asset::{Asset, AssetDefinitionId, AssetId},
     isi::{
@@ -27,6 +22,14 @@ use iroha_data_model::{
     prelude::AccountId,
 };
 use iroha_primitives::{BigInt, numeric::Numeric};
+
+use super::prelude::*;
+use crate::{
+    smartcontracts::isi::asset::isi::assert_numeric_spec_with,
+    state::{ConsensusKeyGate, WorldTransaction, peer_consensus_key_gate},
+    sumeragi::status as sumeragi_status,
+    telemetry::StateTelemetry,
+};
 
 fn current_epoch(block_height: u64, epoch_length_blocks: u64) -> Result<u64, Error> {
     if epoch_length_blocks == 0 {
@@ -1527,6 +1530,25 @@ fn assert_stake_amount_matches_spec(
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZeroU64;
+    use std::time::Duration;
+
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_data_model::{
+        account::{Account, MultisigMember, MultisigPolicy},
+        asset::{AssetDefinition, AssetDefinitionId},
+        consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
+        domain::Domain,
+        isi::error::InvalidParameterError,
+        nexus::{DataSpaceId, LaneCatalog, LaneMetadata, LaneVisibility, PublicLaneRewardShare},
+        parameter::{Parameter, system::SumeragiNposParameters},
+        peer::Peer,
+        prelude::*,
+    };
+    use iroha_primitives::numeric::Numeric;
+    use iroha_test_samples::{ALICE_ID, gen_account_in};
+    use nonzero_ext::nonzero;
+
     use super::*;
     use crate::{
         block::ValidBlock,
@@ -1534,25 +1556,6 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, StateBlock, StateTransaction, World},
     };
-    use core::num::NonZeroU64;
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::isi::error::InvalidParameterError;
-    use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
-    use iroha_data_model::{
-        account::{Account, MultisigMember, MultisigPolicy},
-        asset::{AssetDefinition, AssetDefinitionId},
-        domain::Domain,
-        prelude::*,
-    };
-    use iroha_data_model::{
-        consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
-        nexus::{DataSpaceId, LaneCatalog, LaneMetadata, LaneVisibility, PublicLaneRewardShare},
-        peer::Peer,
-    };
-    use iroha_primitives::numeric::Numeric;
-    use iroha_test_samples::{ALICE_ID, gen_account_in};
-    use nonzero_ext::nonzero;
-    use std::time::Duration;
 
     fn new_block() -> crate::block::CommittedBlock {
         let (_leader_public_key, leader_private_key) = iroha_crypto::KeyPair::random().into_parts();

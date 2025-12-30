@@ -15,8 +15,6 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-
-use crate::compose::SigningAuthority;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     Identifiable,
@@ -59,6 +57,8 @@ use tokio_tungstenite::{
     tungstenite::{Error as WebSocketError, Message, client::IntoClientRequest},
 };
 use url::Url;
+
+use crate::compose::SigningAuthority;
 
 /// Convenience result alias for Torii client operations.
 pub type ToriiResult<T> = std::result::Result<T, ToriiError>;
@@ -4428,7 +4428,6 @@ async fn wait_for_shutdown_or_delay(shutdown: &mut watch::Receiver<bool>, delay:
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{
         collections::VecDeque,
         fs,
@@ -4478,8 +4477,12 @@ mod tests {
         GovernanceStatus, Status as TelemetryStatus, TxGossipSnapshot, Uptime,
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, PEER_KEYPAIR};
-    use reqwest::StatusCode;
-    use reqwest::header::{HeaderMap, HeaderValue};
+    use reqwest::{
+        StatusCode,
+        header::{HeaderMap, HeaderValue},
+    };
+
+    use super::*;
 
     fn handle_bind_result<T>(result: std::io::Result<T>, context: &str) -> Option<T> {
         match result {
@@ -4491,8 +4494,8 @@ mod tests {
             Err(err) => panic!("{context}: {err}"),
         }
     }
-    use std::iter;
-    use std::str::FromStr;
+    use std::{iter, str::FromStr};
+
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -5346,14 +5349,17 @@ mod tests {
     fn sample_sumeragi_status_wire() -> SumeragiStatusWire {
         use iroha_crypto::{Hash, HashOf};
         use iroha_data_model::{
-            block::BlockHeader,
-            block::consensus::{
-                SumeragiBlockSyncRosterStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
-                SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
-                SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipStatus,
-                SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus, SumeragiRbcStoreStatus,
-                SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-                SumeragiViewChangeCauseStatus,
+            block::{
+                BlockHeader,
+                consensus::{
+                    SumeragiBlockSyncRosterStatus, SumeragiDaGateReason,
+                    SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiDataspaceCommitment,
+                    SumeragiKuraStoreStatus, SumeragiLaneCommitment, SumeragiLaneGovernance,
+                    SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
+                    SumeragiPendingRbcStatus, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
+                    SumeragiStatusWire, SumeragiValidationRejectStatus,
+                    SumeragiViewChangeCauseStatus,
+                },
             },
             nexus::{DataSpaceId, LaneId},
         };

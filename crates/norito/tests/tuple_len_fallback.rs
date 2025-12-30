@@ -1,6 +1,9 @@
 //! Mismatched compact flags should reject fixed-width tuple payloads.
 
-use norito::{core::NoritoSerialize, core::header_flags, decode_from_bytes};
+use norito::{
+    core::{NoritoSerialize, header_flags},
+    decode_from_bytes,
+};
 
 #[test]
 fn tuple_fixed_u64_rejected_under_compact_flag() {

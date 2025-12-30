@@ -6,7 +6,6 @@
 //! `cargo run -p norito --example stage1_cutover --release --features bench-internal`
 
 use norito::core::read_len_dyn_slice;
-
 #[cfg(feature = "bench-internal")]
 use norito::json::{build_struct_index, build_struct_index_scalar_bench};
 

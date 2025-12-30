@@ -17,12 +17,14 @@ final class OfflineToriiEncodingTests: XCTestCase {
         let snapshot = OfflinePlatformTokenSnapshot(policy: "play_integrity",
                                                      attestationJwsB64: "token")
         let signature = Data(repeating: 0xAB, count: 64)
+        let issuedAtMs = certificate.issuedAtMs + 1000
         let receipt = OfflineSpendReceipt(
             txId: txId,
             from: certificate.controller,
             to: certificate.controller,
             assetId: certificate.allowance.assetId,
             amount: certificate.allowance.amount,
+            issuedAtMs: issuedAtMs,
             invoiceId: "inv-001",
             platformProof: proof,
             platformSnapshot: snapshot,
@@ -36,6 +38,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
         }
 
         XCTAssertEqual(object["tx_id"]?.normalizedString, hashLiteral(txId))
+        XCTAssertEqual(object["issued_at_ms"]?.numberValue, Double(issuedAtMs))
         XCTAssertEqual(object["sender_signature"]?.normalizedString, signature.hexUppercased())
 
         guard case let .object(platformProof) = object["platform_proof"] else {
@@ -70,7 +73,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
             initialCommitment: certificate.allowance,
             resultingCommitment: resultingCommitment,
             claimedDelta: "10",
-            zkProof: Data([0x01, 0x02, 0x03])
+            zkProof: validZkProof()
         )
         let receiptsRoot = OfflinePoseidonDigest(bytes: Data(repeating: 0x11, count: 32))
         let aggregateProof = OfflineAggregateProofEnvelope(
@@ -187,7 +190,8 @@ final class OfflineToriiEncodingTests: XCTestCase {
         let balanceProof = OfflineBalanceProof(
             initialCommitment: certificate.allowance,
             resultingCommitment: Data(repeating: 0x22, count: 32),
-            claimedDelta: "10"
+            claimedDelta: "10",
+            zkProof: validZkProof()
         )
         let transfer = OfflineToOnlineTransfer(
             bundleId: IrohaHash.hash(Data("bundle".utf8)),
@@ -236,12 +240,19 @@ final class OfflineToriiEncodingTests: XCTestCase {
             to: certificate.controller,
             assetId: certificate.allowance.assetId,
             amount: "10",
+            issuedAtMs: 1_700_000_000_000,
             invoiceId: "inv-1",
             platformProof: proof,
             platformSnapshot: nil,
             senderCertificate: certificate,
             senderSignature: Data(repeating: 0x01, count: 64)
         )
+    }
+
+    private func validZkProof(version: UInt8 = 1) -> Data {
+        var proof = Data(repeating: 0, count: OfflineBalanceProofBuilder.proofLength)
+        proof[0] = version
+        return proof
     }
 
     private func hashLiteral(_ bytes: Data) -> String {

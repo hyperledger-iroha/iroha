@@ -4,8 +4,8 @@
     allow(dead_code)
 )]
 
-use std::env;
-use std::sync::OnceLock;
+use std::{env, sync::OnceLock};
+
 use tracing::{debug, warn};
 
 const FFT_LANES_ENV: &str = "FASTPQ_METAL_FFT_LANES";

@@ -1,3 +1,9 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
+
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
@@ -12,11 +18,6 @@ use norito::json::{self, Map, Value};
 use sorafs_car::taikai::{
     BundleRequest, BundleSummary, RehydrateRequest, bundle_segment, load_extra_metadata,
     rehydrate_from_car,
-};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
 };
 
 #[derive(Parser, Debug)]

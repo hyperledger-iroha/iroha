@@ -6,13 +6,13 @@
 
 use blake3::Hasher;
 use iroha_data_model::soranet::vpn::{VpnCellClassV1, VpnCellFlagsV1, VpnCellV1, VpnFlowLabelV1};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::vpn::{
     CoverFrameMeta, PaddedCell, VpnFrameBuildError, VpnFrameIoError, VpnOverlay, VpnSession,
     read_frame as read_padded_frame, schedule_frames, send_scheduled_frames_with_adapter,
     write_frame as write_padded_frame,
 };
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Batch parameters for building data-class VPN frames.
 #[derive(Debug, Clone)]
@@ -426,9 +426,10 @@ impl VpnBridge {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::metrics::Metrics;
-    use std::sync::Arc;
 
     #[test]
     fn bridge_derives_default_cover_seed() {

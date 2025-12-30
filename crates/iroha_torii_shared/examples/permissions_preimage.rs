@@ -5,8 +5,7 @@
 //!   cargo run -p `iroha_torii_shared` --example `permissions_preimage`
 
 use iroha_crypto::{Algorithm, Signature};
-use iroha_torii_shared::connect as proto;
-use iroha_torii_shared::connect_sdk as sdk;
+use iroha_torii_shared::{connect as proto, connect_sdk as sdk};
 
 fn hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";

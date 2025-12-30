@@ -1,8 +1,10 @@
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
 use iroha_schema::IntoSchema;
 use norito::core::*;
-
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct CountingAlloc;
 

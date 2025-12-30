@@ -17,8 +17,10 @@ use axum::{
 };
 use eyre::eyre;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json;
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
+};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use sha2::{Digest, Sha256};
@@ -807,8 +809,9 @@ async fn proof_handler(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn bench_suite_smoke() {

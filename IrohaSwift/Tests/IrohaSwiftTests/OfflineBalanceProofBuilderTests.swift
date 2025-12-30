@@ -8,6 +8,7 @@ final class OfflineBalanceProofBuilderTests: XCTestCase {
             let artifacts = try OfflineBalanceProofBuilder.advanceCommitment(
                 chainId: "swift-testnet",
                 claimedDelta: "5",
+                resultingValue: "5",
                 initialCommitmentHex: String(repeating: "0", count: 64),
                 initialBlindingHex: String(repeating: "0", count: 64),
                 resultingBlindingHex: "01" + String(repeating: "0", count: 62)

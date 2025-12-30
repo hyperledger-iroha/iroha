@@ -14,14 +14,16 @@ use axum::{
 use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
-    block::BlockHeader,
-    block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
-        SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
-        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipStatus,
-        SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus, SumeragiRbcStoreStatus,
-        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-        SumeragiViewChangeCauseStatus,
+    block::{
+        BlockHeader,
+        consensus::{
+            SumeragiBlockSyncRosterStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
+            SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
+            SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipStatus,
+            SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus, SumeragiRbcStoreStatus,
+            SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
+            SumeragiViewChangeCauseStatus,
+        },
     },
     nexus::{DataSpaceId, LaneId},
     parameter::system::SumeragiConsensusMode,

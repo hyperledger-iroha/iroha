@@ -8,28 +8,31 @@
 //! containing archived values. Every value has a corresponding [`Archived`] type
 //! which represents the layout in the buffer.
 
-pub use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::convert::TryFrom;
-use std::alloc::{Layout, alloc, handle_alloc_error};
-use std::any::TypeId;
-use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
-use std::hash::Hash;
-use std::io::{Read, Write};
-use std::marker::PhantomData;
-use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
-use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    alloc::{Layout, alloc, handle_alloc_error},
+    any::TypeId,
+    borrow::Cow,
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque},
+    hash::Hash,
+    io::{Read, Write},
+    marker::PhantomData,
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
-use crate::{ArchiveSlice, codec::encode_adaptive, guarded_try_deserialize};
+pub use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+#[cfg(feature = "derive")]
+pub use norito_derive::{NoritoDeserialize, NoritoSerialize};
 
 #[cfg(feature = "schema-structural")]
 use crate::json;
-
-#[cfg(feature = "derive")]
-pub use norito_derive::{NoritoDeserialize, NoritoSerialize};
+use crate::{ArchiveSlice, codec::encode_adaptive, guarded_try_deserialize};
 
 pub mod heuristics;
 pub mod hw;
@@ -4108,16 +4111,20 @@ impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'
 }
 
 pub mod stream {
+    #[cfg(feature = "compression")]
+    use std::io::BufReader;
+    use std::{
+        alloc::{Layout, alloc, dealloc, handle_alloc_error},
+        io::{self, Read},
+    };
+
+    use crc64fast::Digest;
+
     use super::{
         Archived, Compression, DecodeFlagsGuard, Error, Header, NoritoDeserialize, PayloadCtxGuard,
         header_flags,
     };
     use crate::guarded_try_deserialize;
-    use crc64fast::Digest;
-    use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
-    #[cfg(feature = "compression")]
-    use std::io::BufReader;
-    use std::io::{self, Read};
 
     pub(crate) fn fold_sequence_from_reader<R, T, Acc, Init, F>(
         mut reader: R,
@@ -5866,10 +5873,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::codec::encode_with_header_flags;
-    use crate::{NoritoDeserialize, NoritoSerialize, codec};
     use crc64fast::Digest;
+
+    use super::*;
+    use crate::{NoritoDeserialize, NoritoSerialize, codec, codec::encode_with_header_flags};
 
     #[test]
     fn crc64_matches_digest() {

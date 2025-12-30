@@ -5,16 +5,15 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use http_body_util::BodyExt as _;
-use iroha_core::kura::Kura;
-use iroha_core::query::{insert_evidence_record_for_test, store::LiveQueryStore};
-use iroha_core::state::{State as CoreState, World};
-use iroha_core::sumeragi::consensus::{
-    Evidence, EvidenceKind, EvidencePayload, Phase, Qc, QcAggregate, Vote,
+use iroha_core::{
+    kura::Kura,
+    query::{insert_evidence_record_for_test, store::LiveQueryStore},
+    state::{State as CoreState, World},
+    sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Qc, QcAggregate, Vote},
+    telemetry::StateTelemetry,
 };
-use iroha_core::telemetry::StateTelemetry;
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::BlockHeader;
-use iroha_data_model::block::consensus::EvidenceRecord;
+use iroha_data_model::block::{BlockHeader, consensus::EvidenceRecord};
 use iroha_torii::{EvidenceListQuery, NoritoQuery, handle_v1_sumeragi_evidence_list};
 
 fn make_invalid_qc_evidence(height: u64, seed: u8) -> Evidence {

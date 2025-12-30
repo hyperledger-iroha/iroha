@@ -1,15 +1,16 @@
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use hex::FromHexError;
-use iroha_crypto::soranet::token::{self, AdmissionToken, MintError, compute_issuer_fingerprint};
-use norito::json::{self, Value};
-use rand::{CryptoRng, RngCore};
-use soranet_pq::MlDsaSuite;
 use std::{
     collections::BTreeSet,
     fs, io,
     path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use hex::FromHexError;
+use iroha_crypto::soranet::token::{self, AdmissionToken, MintError, compute_issuer_fingerprint};
+use norito::json::{self, Value};
+use rand::{CryptoRng, RngCore};
+use soranet_pq::MlDsaSuite;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -343,10 +344,11 @@ pub fn parse_hex_bytes(value: &str, field: &'static str) -> Result<Vec<u8>, Toke
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair;
     use tempfile::tempdir;
+
+    use super::*;
 
     const RELAY_ID: [u8; 32] = [0x45; 32];
     const TRANSCRIPT: [u8; 32] = [0xAB; 32];

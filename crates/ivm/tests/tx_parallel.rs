@@ -196,8 +196,10 @@ fn store_u32_conflict_detected() {
 
 #[test]
 fn post_run_final_invoked_once_per_tx() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     let dest = Memory::HEAP_START + 0x3C0;
     let spec_counter = Arc::new(AtomicUsize::new(0));

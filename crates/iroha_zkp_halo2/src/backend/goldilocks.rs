@@ -1,11 +1,12 @@
 //! Goldilocks (64-bit) backend with a deterministic multiplicative group.
 
-use core::convert::TryInto;
-use core::fmt;
+use core::{convert::TryInto, fmt};
 
-use crate::backend::{IpaBackend, IpaGroup, IpaScalar};
-use crate::errors::Error;
-use crate::norito_types::ZkCurveId;
+use crate::{
+    backend::{IpaBackend, IpaGroup, IpaScalar},
+    errors::Error,
+    norito_types::ZkCurveId,
+};
 
 const MODULUS: u128 = 0xffff_ffff_0000_0001;
 const MODULUS_U64: u64 = MODULUS as u64;

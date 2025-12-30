@@ -1,6 +1,7 @@
+use std::{fs, path::PathBuf};
+
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self as serde_json, Value};
-use std::{fs, path::PathBuf};
 use tempfile::TempDir;
 
 fn workspace_root() -> PathBuf {

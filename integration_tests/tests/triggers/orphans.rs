@@ -1,5 +1,6 @@
 //! Orphaned trigger cleanup scenarios.
 
+use integration_tests::sandbox;
 use iroha::{
     client::Client,
     data_model::{prelude::*, query::trigger::FindTriggers},
@@ -7,8 +8,6 @@ use iroha::{
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use tokio::task::spawn_blocking;
-
-use integration_tests::sandbox;
 
 async fn start_network(context: &'static str) -> eyre::Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await

@@ -9,8 +9,10 @@ use iroha::data_model::{
     offline::{AndroidProvisionedProof, OfflineReceiptChallengePreimage},
 };
 use iroha_crypto::{Hash, PrivateKey, Signature};
-use norito::derive::{JsonDeserialize, JsonSerialize};
-use norito::json::{self as serde_json, Value as JsonValue};
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json::{self as serde_json, Value as JsonValue},
+};
 
 use crate::offline_tooling::{
     build_metadata, parse_account_id, parse_asset_id, parse_hash_hex, parse_numeric,

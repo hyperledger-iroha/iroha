@@ -4,6 +4,26 @@
 //! arguments and returns success. It is intended for end-to-end tests that
 //! exercise TLV validation from VM bytecode through host dispatch.
 
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::Cursor,
+    num::NonZeroU64,
+    str::FromStr,
+    sync::Arc,
+};
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use iroha_crypto::{Hash as IrohaHash, Sm3Digest};
+use iroha_data_model::{
+    isi::transfer::TransferAssetBatch,
+    nexus::{AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId},
+    prelude::Name,
+};
+use norito::{
+    codec::{Decode as NoritoDecode, Encode as NoritoEncode},
+    decode_from_bytes, json as njson,
+};
+
 use crate::{
     VMError,
     axt::{self, AxtPolicy},
@@ -17,24 +37,6 @@ use crate::{
     schema_registry::{DefaultRegistry, SchemaInfo, SchemaRegistry},
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     syscalls,
-};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_crypto::{Hash as IrohaHash, Sm3Digest};
-use iroha_data_model::{
-    isi::transfer::TransferAssetBatch,
-    nexus::{AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId},
-    prelude::Name,
-};
-use norito::{
-    codec::{Decode as NoritoDecode, Encode as NoritoEncode},
-    decode_from_bytes, json as njson,
-};
-use std::{
-    collections::{BTreeMap, HashMap},
-    io::Cursor,
-    num::NonZeroU64,
-    str::FromStr,
-    sync::Arc,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

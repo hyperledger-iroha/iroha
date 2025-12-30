@@ -247,8 +247,9 @@ impl IvmCache {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ivm::runtime::IvmConfig;
+
+    use super::*;
 
     /// Assemble a minimal program containing only a HALT instruction.
     fn minimal_program() -> Vec<u8> {

@@ -232,9 +232,10 @@ impl JsonDeserialize for Peer {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use super::*;
     use iroha_primitives::addr::SocketAddr;
     use norito::json::{self, FastJsonWrite};
+
+    use super::*;
 
     #[test]
     fn peer_json_roundtrip() {

@@ -4,22 +4,24 @@
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_bundle {
     use base64::Engine as _;
-    use halo2_proofs::SerdeFormat;
-    use halo2_proofs::circuit::Value;
-    use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-    use halo2_proofs::plonk::{
-        Circuit, ConstraintSystem, Error as PlonkError, Selector, create_proof, keygen_pk,
-        keygen_vk,
-    };
-    use halo2_proofs::poly::{
-        Rotation, VerificationStrategy as _,
-        commitment::{CommitmentScheme, ParamsProver as _},
-        ipa::{
-            commitment::{IPACommitmentScheme, ParamsIPA},
-            multiopen::ProverIPA,
+    use halo2_proofs::{
+        SerdeFormat,
+        circuit::Value,
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{
+            Circuit, ConstraintSystem, Error as PlonkError, Selector, create_proof, keygen_pk,
+            keygen_vk,
         },
+        poly::{
+            Rotation, VerificationStrategy as _,
+            commitment::{CommitmentScheme, ParamsProver as _},
+            ipa::{
+                commitment::{IPACommitmentScheme, ParamsIPA},
+                multiopen::ProverIPA,
+            },
+        },
+        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
     };
-    use halo2_proofs::transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _};
     use iroha_core::zk::{self, zk1_test_helpers as zk1};
     use iroha_crypto::Hash as CryptoHash;
     use iroha_data_model::{
@@ -194,10 +196,14 @@ mod halo2_bundle {
 
     /// Generate a Halo2/IPA proof bundle for the production vote tally circuit.
     pub fn vote_merkle8_bundle() -> VoteTallyProofBundle {
-        use halo2_proofs::halo2curves::ff::PrimeField as _;
-        use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-        use halo2_proofs::plonk::{create_proof, keygen_pk, keygen_vk};
-        use halo2_proofs::transcript::{Blake2bWrite, Challenge255};
+        use halo2_proofs::{
+            halo2curves::{
+                ff::PrimeField as _,
+                pasta::{EqAffine as Curve, Fp as Scalar},
+            },
+            plonk::{create_proof, keygen_pk, keygen_vk},
+            transcript::{Blake2bWrite, Challenge255},
+        };
 
         let backend = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1";
         let circuit_id = "halo2/pasta/vote-bool-commit-merkle8-v1";
@@ -278,8 +284,9 @@ mod halo2_bundle {
 
         // Sanity check: the generated proof should verify before wrapping.
         {
-            use halo2_proofs::transcript::{Blake2bRead, TranscriptReadBuffer};
             use std::io::Cursor;
+
+            use halo2_proofs::transcript::{Blake2bRead, TranscriptReadBuffer};
 
             #[cfg(debug_assertions)]
             {
@@ -392,11 +399,14 @@ pub use halo2_bundle::{
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 mod vote_bundle_sanity {
+    use halo2_proofs::{
+        dev::MockProver,
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{Circuit, ConstraintSystem},
+        poly::{commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
+    };
+
     use super::halo2_bundle::vote_merkle8_bundle;
-    use halo2_proofs::dev::MockProver;
-    use halo2_proofs::halo2curves::pasta::{EqAffine as Curve, Fp as Scalar};
-    use halo2_proofs::plonk::{Circuit, ConstraintSystem};
-    use halo2_proofs::poly::{commitment::ParamsProver as _, ipa::commitment::ParamsIPA};
 
     #[test]
     fn mock_prover_satisfies_vote_bundle() {

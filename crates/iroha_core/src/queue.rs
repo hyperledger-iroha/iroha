@@ -9,27 +9,20 @@ mod router;
 pub(crate) mod routing_ledger;
 
 use core::time::Duration;
-use mv::storage::StorageReadOnly;
-pub use router::{
-    ConfigLaneRouter, LaneRouter, RoutingDecision, SingleLaneRouter, evaluate_policy,
-};
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     num::NonZeroUsize,
     ops::Deref,
     str::FromStr,
-    sync::{Arc, LazyLock},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
-use crate::{
-    governance::manifest::{
-        GovernanceGuardError, GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle,
-    },
-    interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
-    telemetry::StateTelemetry,
-};
 use crossbeam_queue::ArrayQueue;
 use dashmap::{DashMap, mapref::entry::Entry};
 use eyre::Result;
@@ -44,17 +37,26 @@ use iroha_data_model::nexus::{
 use iroha_data_model::{
     account::AccountId,
     events::pipeline::{TransactionEvent, TransactionStatus},
-    isi::runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
-    isi::smart_contract_code::{
-        ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
-        RegisterSmartContractCode, RemoveSmartContractBytes,
+    isi::{
+        runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
+        smart_contract_code::{
+            ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
+            RegisterSmartContractCode, RemoveSmartContractBytes,
+        },
     },
     name::Name,
     transaction::Executable,
 };
 use iroha_logger::{trace, warn};
 use iroha_primitives::time::TimeSource;
+#[cfg(feature = "telemetry")]
+use iroha_telemetry::metrics::NexusLaneTeuBuckets;
+use ivm::ProgramMetadata;
+use mv::storage::StorageReadOnly;
 use parking_lot::RwLock;
+pub use router::{
+    ConfigLaneRouter, LaneRouter, RoutingDecision, SingleLaneRouter, evaluate_policy,
+};
 use thiserror::Error;
 use tokio::{
     sync::watch,
@@ -63,19 +65,18 @@ use tokio::{
 
 #[cfg(feature = "telemetry")]
 use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
-use crate::{gas, sumeragi::status};
-#[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::NexusLaneTeuBuckets;
-use ivm::ProgramMetadata;
-
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
-
 use crate::{
     EventsSender,
     compliance::{LaneComplianceContext, LaneComplianceEngine, LaneComplianceEvaluation},
+    gas,
+    governance::manifest::{
+        GovernanceGuardError, GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle,
+    },
+    interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
     prelude::*,
     state::{LaneLifecycleError, State},
+    sumeragi::status,
+    telemetry::StateTelemetry,
     tx::CheckedTransaction,
 };
 
@@ -2455,34 +2456,47 @@ impl Queue {
 #[cfg(test)]
 /// Test helpers and cases for `Queue` and related logic.
 pub mod tests {
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+        time::Duration,
+    };
+
     use crossbeam_queue::ArrayQueue;
     use dashmap::DashMap;
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::{path::PathBuf, sync::Arc, thread, time::Duration};
-
+    use iroha_crypto::{
+        Hash, KeyPair, MerkleTree,
+        privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
+    };
     use iroha_data_model::{
+        block::SignedBlock,
+        events::pipeline::PipelineEventBox,
+        isi::runtime_upgrade::ProposeRuntimeUpgrade,
         metadata::Metadata,
         name::Name,
         nexus::{
-            AssetPermissionManifest, AuditControls, LaneCompliancePolicy, LaneCompliancePolicyId,
-            LaneComplianceRule, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
-            ManifestVersion, ParticipantSelector,
+            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceId, JurisdictionSet,
+            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule, LaneId,
+            LaneLifecyclePlan, LaneMetadata, LanePrivacyMerkleWitness, LanePrivacyProof,
+            LanePrivacyWitness, ManifestVersion, ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
+        runtime::RuntimeUpgradeManifest,
     };
     use iroha_primitives::json::Json;
     use iroha_schema::Ident;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
-    use iroha_test_samples::gen_account_in;
+    use iroha_test_samples::{ALICE_KEYPAIR, gen_account_in};
     use nonzero_ext::nonzero;
     use rand::Rng as _;
-
-    use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
-    use iroha_crypto::{Hash, KeyPair, MerkleTree};
 
     #[allow(unused_imports)]
     use super::*;
@@ -2500,17 +2514,6 @@ pub mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_data_model::{
-        block::SignedBlock,
-        events::pipeline::PipelineEventBox,
-        isi::runtime_upgrade::ProposeRuntimeUpgrade,
-        nexus::{
-            DataSpaceCatalog, DataSpaceId, JurisdictionSet, LaneCatalog, LaneId, LaneLifecyclePlan,
-            LaneMetadata,
-        },
-        runtime::RuntimeUpgradeManifest,
-    };
-    use iroha_test_samples::ALICE_KEYPAIR;
 
     impl Queue {
         /// Construct a `Queue` instance suitable for unit tests.

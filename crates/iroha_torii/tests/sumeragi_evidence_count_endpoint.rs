@@ -7,15 +7,13 @@ use axum::{Router, extract::State, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,
-    query::insert_evidence_record_for_test,
-    query::store::LiveQueryStore,
+    query::{insert_evidence_record_for_test, store::LiveQueryStore},
     state::{State as CoreState, World},
     sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Qc, QcAggregate},
     telemetry::StateTelemetry,
 };
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::BlockHeader;
-use iroha_data_model::block::consensus::EvidenceRecord;
+use iroha_data_model::block::{BlockHeader, consensus::EvidenceRecord};
 use iroha_torii::handle_v1_sumeragi_evidence_count;
 use tower::ServiceExt as _; // for Router::oneshot
 

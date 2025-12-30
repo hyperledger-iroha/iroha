@@ -119,9 +119,7 @@ pub unsafe extern "C" fn norito_crc64_cuda(
 
 #[cfg(test)]
 mod tests {
-    use super::crc64_cpu;
-    use super::json_stage1_build_tape;
-    use super::norito_crc64_cuda;
+    use super::{crc64_cpu, json_stage1_build_tape, norito_crc64_cuda};
 
     const CRC_123456789: u64 = 0x6C40_DF5F_0B49_7347;
     const CHUNK_SIZE: usize = 16 * 1024;

@@ -1,10 +1,11 @@
 //! Ensure structured data events are emitted in the same order as instructions
 //! execute within a single transaction (WSV Overlays & Commit ordering).
 
+use std::borrow::Cow;
+
 use iroha_core::block::{BlockBuilder, ValidBlock};
 // no specific event enum imports needed here
 use iroha_data_model::prelude::*;
-use std::borrow::Cow;
 
 #[test]
 fn data_events_follow_instruction_order_in_tx() {

@@ -2,16 +2,14 @@
 use std::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-    string::String,
-    sync::LazyLock,
-    vec::Vec,
-};
-use std::{
     convert::TryFrom,
     iter::IntoIterator,
     num::{NonZeroU32, NonZeroU64},
+    str::FromStr,
+    string::String,
+    sync::LazyLock,
     time::Duration,
+    vec::Vec,
 };
 
 #[cfg(feature = "fault_injection")]
@@ -19,16 +17,17 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use derive_more::{Deref, Display, From, TryInto};
 use iroha_crypto::{Algorithm, HashOf, PublicKey, Signature, SignatureOf};
 use iroha_data_model_derive::model;
-use iroha_primitives::time::TimeSource;
-use iroha_primitives::{const_vec::ConstVec, json::Json};
+use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
 use iroha_schema::IntoSchema;
 use iroha_version::Version;
 use norito::codec::{Decode, DecodeAll, Encode};
 use thiserror::Error;
 
 pub use self::model::*;
-use super::error;
-use super::executable::{Executable, IvmBytecode};
+use super::{
+    error,
+    executable::{Executable, IvmBytecode},
+};
 use crate::{
     ChainId,
     account::{AccountController, AccountId, MultisigPolicy},

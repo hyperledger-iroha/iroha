@@ -6,7 +6,13 @@
 //! contribution thresholds; otherwise they surface as
 //! `soranet_privacy_bucket_suppressed` markers.
 
-use crate::config::{PrivacyTelemetryConfig, RelayMode};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    fmt::Write as _,
+    sync::Mutex,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
 use blake3::Hasher as Blake3Hasher;
 use hex::ToHex;
 use iroha_data_model::soranet::privacy_metrics::{
@@ -17,12 +23,8 @@ use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyThrottleScopeV1,
 };
 use norito::json;
-use std::{
-    collections::{BTreeMap, VecDeque},
-    fmt::Write as _,
-    sync::Mutex,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+
+use crate::config::{PrivacyTelemetryConfig, RelayMode};
 
 /// Percentiles captured in RTT exports.
 const RTT_PERCENTILES: &[f64] = &[0.5, 0.9, 0.99];

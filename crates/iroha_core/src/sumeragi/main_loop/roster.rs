@@ -5,14 +5,14 @@ use std::{
     sync::Arc,
 };
 
-use iroha_crypto::blake2::digest::Update as BlakeUpdate;
-use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
-use iroha_data_model::Encode as _;
-use iroha_data_model::{ChainId, peer::PeerId};
+use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest, digest::Update as BlakeUpdate};
+use iroha_data_model::{ChainId, Encode as _, peer::PeerId};
 use iroha_logger::prelude::*;
 
-use crate::state::{State, StateView, WorldReadOnly};
-use crate::sumeragi::{WsvEpochRosterAdapter, consensus::ValidatorIndex, epoch::EpochManager};
+use crate::{
+    state::{State, StateView, WorldReadOnly},
+    sumeragi::{WsvEpochRosterAdapter, consensus::ValidatorIndex, epoch::EpochManager},
+};
 
 pub(super) fn canonicalize_roster(mut roster: Vec<PeerId>) -> Vec<PeerId> {
     roster.sort();

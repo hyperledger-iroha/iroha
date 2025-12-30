@@ -6,6 +6,20 @@
 //! state is snapshotted to disk using Norito so operators can recover history
 //! across restarts.
 
+use std::{
+    cmp::Ordering,
+    collections::{BTreeSet, HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+#[cfg(feature = "app_api")]
+use std::{
+    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
+    time::Duration as StdDuration,
+};
+
 #[cfg(feature = "app_api")]
 use blake3::Hasher;
 use dashmap::DashMap;
@@ -30,19 +44,6 @@ use sorafs_manifest::por::{
 use sorafs_node::PorVerdictOutcome;
 #[cfg(feature = "app_api")]
 use sorafs_node::{ManifestVrfBundle, PlannedChallenge, PorChallengePlannerError, PorRandomness};
-use std::{
-    cmp::Ordering,
-    collections::{BTreeSet, HashMap, HashSet},
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
-#[cfg(feature = "app_api")]
-use std::{
-    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
-    time::Duration as StdDuration,
-};
 use thiserror::Error;
 use time::{Date, Duration, OffsetDateTime, Weekday};
 #[cfg(feature = "app_api")]
@@ -1528,12 +1529,16 @@ fn iso_week_bounds(
 // ------------- Tests -------------
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use sorafs_manifest::por::{
-        POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1, derive_challenge_id, derive_challenge_seed,
+    use sorafs_manifest::{
+        por::{
+            POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1, derive_challenge_id,
+            derive_challenge_seed,
+        },
+        provider_advert::{AdvertSignature, SignatureAlgorithm},
     };
-    use sorafs_manifest::provider_advert::{AdvertSignature, SignatureAlgorithm};
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn persistence_temp_path_preserves_suffixes() {
@@ -1742,8 +1747,8 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     mod runtime {
-        use super::*;
-        use crate::sorafs::por::{RandomnessProvider, VrfProvider};
+        use std::{collections::HashMap, fs, path::Path, str::FromStr, sync::Arc};
+
         use iroha_config::base::util::Bytes;
         use iroha_data_model::{
             metadata::Metadata,
@@ -1759,9 +1764,10 @@ mod tests {
             provider_advert::StakePointer,
         };
         use sorafs_node::{NodeHandle, config::StorageConfig};
-        use std::str::FromStr;
-        use std::{collections::HashMap, fs, path::Path, sync::Arc};
         use tempfile::tempdir;
+
+        use super::*;
+        use crate::sorafs::por::{RandomnessProvider, VrfProvider};
 
         #[derive(Clone)]
         struct StaticRandomnessProvider {

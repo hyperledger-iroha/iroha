@@ -1,5 +1,4 @@
-use super::super::Messages;
-use super::english;
+use super::{super::Messages, english};
 
 pub const MESSAGES: Messages = Messages {
     no_functions: "𒅆𒅁𒊒 𒀭𒈾 𒈾𒀊𒆷𒅆 𒌑𒇻 𒄿𒋫𒆷𒀝",

@@ -9,9 +9,7 @@
 //!   koto_compile <input.ko> [--out <output.to>] [--manifest-out <manifest.json>] [--abi <u8>] [--vl <u8>]
 //!                 [--max-cycles <u64>] [--iter-cap <u8>] [--force-zk] [--force-vector]
 
-use std::env;
-use std::fs;
-use std::path::PathBuf;
+use std::{env, fs, path::PathBuf};
 
 use ivm::{KotodamaCompiler, ProgramMetadata, kotodama};
 

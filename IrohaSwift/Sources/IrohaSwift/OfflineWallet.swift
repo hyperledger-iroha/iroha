@@ -221,10 +221,12 @@ public final class OfflineWallet {
     // MARK: Receipt helpers
 
     /// Builds a signed receipt and optionally records it in the journal and audit log.
+    /// The `chainId` is bound into the platform challenge hash for replay protection.
     @available(macOS 10.15, iOS 13.0, *)
     @discardableResult
     public func buildSignedReceipt(
         txId: Data? = nil,
+        chainId: String,
         receiverAccountId: String,
         amount: String,
         invoiceId: String,
@@ -238,13 +240,15 @@ public final class OfflineWallet {
         let recordedAt = timestampMs ?? OfflineWallet.currentTimestampMs()
         let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
             txId: txId,
+            chainId: chainId,
             receiverAccountId: receiverAccountId,
             amount: amount,
             invoiceId: invoiceId,
             platformProof: platformProof,
             platformSnapshot: platformSnapshot,
             senderCertificate: senderCertificate,
-            signingKey: signingKey
+            signingKey: signingKey,
+            issuedAtMs: recordedAt
         )
         _ = try counterJournal.advanceCounter(certificate: senderCertificate,
                                               platformProof: platformProof,

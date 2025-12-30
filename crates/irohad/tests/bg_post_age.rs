@@ -2,9 +2,11 @@
 
 #[test]
 fn bg_post_age_histogram_observes_positive_value() {
-    use std::sync::Arc;
-    use std::thread;
-    use std::time::{Duration, Instant};
+    use std::{
+        sync::Arc,
+        thread,
+        time::{Duration, Instant},
+    };
 
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
     let telemetry = iroha_core::telemetry::Telemetry::new(metrics.clone(), true);

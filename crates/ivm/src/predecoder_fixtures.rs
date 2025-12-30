@@ -2,13 +2,14 @@
 //!
 //! Exposed so unit tests can generate fixtures on demand without shelling out to Cargo.
 
-use crate::kotodama::wide as kwide;
-use crate::{ProgramMetadata, encoding, instruction, ivm_cache::IvmCache};
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
+
+use sha2::{Digest, Sha256};
+
+use crate::{ProgramMetadata, encoding, instruction, ivm_cache::IvmCache, kotodama::wide as kwide};
 
 fn build_mixed_code() -> Vec<u8> {
     let mut code = Vec::new();

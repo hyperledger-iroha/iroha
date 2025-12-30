@@ -10,8 +10,7 @@ use std::{
 use derive_more::Display;
 use error_stack::{Report, ResultExt};
 use eyre::Result;
-use iroha_config::parameters::actual::SorafsRolloutPhase;
-use iroha_config::parameters::defaults;
+use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{env::ReadEnv, read::ConfigReader, toml::TomlSource};
 use iroha_primitives::small::SmallStr;
 use norito::json::{self, JsonDeserialize, JsonSerialize};

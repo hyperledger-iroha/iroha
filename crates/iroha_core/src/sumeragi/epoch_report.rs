@@ -2,8 +2,10 @@
 //! Not consensus-critical. Used by operator endpoints.
 
 use core::sync::atomic::{AtomicU64, Ordering};
-use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock};
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, OnceLock},
+};
 
 /// Report for VRF penalties at a given epoch.
 #[derive(Clone, Debug)]

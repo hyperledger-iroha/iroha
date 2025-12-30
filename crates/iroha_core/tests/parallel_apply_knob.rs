@@ -4,10 +4,13 @@
 //! With telemetry enabled, the detached-pipeline counters should remain zero in
 //! sequential mode and be non-zero in parallel mode (at least `prepared`).
 
-use iroha_core::block::{BlockBuilder, ValidBlock};
-use iroha_core::state::StateReadOnly;
-use iroha_data_model::prelude::*;
 use std::borrow::Cow;
+
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    state::StateReadOnly,
+};
+use iroha_data_model::prelude::*;
 
 fn build_world() -> (
     iroha_core::state::State,

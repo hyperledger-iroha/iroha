@@ -1,22 +1,23 @@
 //! Viral incentive contract flows (SOC-2): follow rewards, escrows, caps, and governance controls.
 
+use std::num::NonZeroU64;
+
 use iroha_config::parameters::{actual::ViralIncentives, defaults};
-use iroha_core::state::WorldReadOnly;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute as _,
-    state::{State, StateTransaction, World},
+    state::{State, StateTransaction, World, WorldReadOnly},
 };
 use iroha_crypto::{Hash, KeyPair, SignatureOf};
-use iroha_data_model::isi::{
-    AggregateOracleFeed, RecordTwitterBinding, RegisterOracleFeed, SubmitOracleObservation,
-};
 use iroha_data_model::{
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::Domain,
-    isi::social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
+    isi::{
+        AggregateOracleFeed, RecordTwitterBinding, RegisterOracleFeed, SubmitOracleObservation,
+        social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
+    },
     nexus::UniversalAccountId,
     oracle::{
         FeedConfig, FeedConfigVersion, FeedId, KeyedHash, Observation, ObservationBody,
@@ -29,7 +30,6 @@ use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::num::NonZeroU64;
 
 fn oracle_config() -> iroha_config::parameters::actual::Oracle {
     use iroha_config::parameters::actual::{

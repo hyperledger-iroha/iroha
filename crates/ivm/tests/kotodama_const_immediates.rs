@@ -1,7 +1,6 @@
 //! Kotodama integer constant lowering regression tests.
 
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-use ivm::{CoreHost, IVM};
+use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 
 #[test]
 fn compile_large_positive_constant_executes() {

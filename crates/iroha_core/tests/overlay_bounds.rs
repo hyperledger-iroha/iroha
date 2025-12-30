@@ -3,11 +3,10 @@
 //! `overlay_max_instructions` or `overlay_max_bytes`, and other transactions in
 //! the same block still apply (non-forking semantics).
 
-use iroha_core::state::StateReadOnly;
-use iroha_core::{block::BlockBuilder, smartcontracts::Execute};
+use std::{borrow::Cow, str::FromStr};
+
+use iroha_core::{block::BlockBuilder, smartcontracts::Execute, state::StateReadOnly};
 use iroha_data_model::prelude::*;
-use std::borrow::Cow;
-use std::str::FromStr;
 
 fn build_min_world() -> (
     iroha_core::state::State,

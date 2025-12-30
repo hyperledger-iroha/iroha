@@ -7,8 +7,7 @@
 //! now encoded as fixed-size payloads, the packed-struct bitset should remain
 //! zero for both positions.
 
-use iroha_crypto::Signature;
-use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature, SignatureOf};
 
 #[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
 struct USig {

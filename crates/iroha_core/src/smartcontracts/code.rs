@@ -7,8 +7,6 @@
 //! process-global map and ensures every node observes the same registry
 //! contents.
 
-use crate::smartcontracts::Execute;
-use crate::state::{StateReadOnly, StateTransaction, WorldReadOnly};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -19,6 +17,11 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
+
+use crate::{
+    smartcontracts::Execute,
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+};
 
 /// Smart contract registry errors.
 #[derive(Debug, Error)]
@@ -187,12 +190,6 @@ pub fn fetch_instance_binding(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
     use iroha_data_model::{
         isi::{Grant, SetParameter},
         parameter::custom::{CustomParameter, CustomParameterId},
@@ -200,6 +197,13 @@ mod tests {
         prelude::*,
     };
     use iroha_executor_data_model::permission::parameter::CanSetParameters;
+
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
 
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let mut code = Vec::new();

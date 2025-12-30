@@ -1,6 +1,21 @@
 //! High-level orchestrator facade wiring SoraFS scoreboards to the async
 //! multi-source fetch loop implemented in `sorafs_car`.
 
+use std::{
+    cmp::Ordering as CmpOrdering,
+    collections::{HashMap, VecDeque},
+    future::Future,
+    io::Cursor,
+    num::{NonZeroU32, NonZeroUsize},
+    pin::Pin,
+    str::FromStr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
 use iroha_core::prelude::Hash;
 use iroha_data_model::{
     name::Name,
@@ -15,7 +30,9 @@ use iroha_telemetry::{
     metrics::{SorafsFetchOtel, global_or_default, global_sorafs_fetch_otel},
     privacy::{PrivacyBucketConfig, PrivacyConfigError, SoranetSecureAggregator},
 };
+use norito::json;
 use rand::Rng;
+use reqwest::{Client, StatusCode, Url};
 use sorafs_car::{
     CarBuildPlan, CarVerifier, CarWriteStats, CarWriter, TaikaiSegmentHint,
     gateway::{
@@ -32,29 +49,12 @@ use sorafs_manifest::{
     GovernanceProofs,
     validation::{PinPolicyConstraints, validate_manifest},
 };
-use std::{
-    cmp::Ordering as CmpOrdering,
-    collections::{HashMap, VecDeque},
-    future::Future,
-    io::Cursor,
-    num::{NonZeroU32, NonZeroUsize},
-    pin::Pin,
-    str::FromStr,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering as AtomicOrdering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use thiserror::Error;
 use tokio::{
     sync::{Mutex as AsyncMutex, Notify},
     task::JoinHandle,
     time::sleep,
 };
-
-use norito::json;
-use reqwest::{Client, StatusCode, Url};
 
 pub mod appeals;
 pub mod compliance;
@@ -67,10 +67,6 @@ pub mod treasury;
 pub(crate) const SORANET_PQ_RANK_STEP_WEIGHT: u32 = 250;
 pub(crate) const SORANET_PQ_CERTIFICATE_BONUS: u32 = 500;
 pub(crate) const SORANET_BANDWIDTH_UNIT_BYTES: u64 = 256 * 1024; // 256 KiB per weight step.
-use crate::proxy::{
-    BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle, PROXY_MANIFEST_ID,
-    PROXY_PROTOCOL_LABEL, ProxyError, ProxyMode, spawn_local_quic_proxy,
-};
 use compliance::{CompliancePolicy, ComplianceReason};
 use soranet::{
     CircuitEvent, CircuitId, CircuitInfo, CircuitManager, CircuitManagerConfig,
@@ -84,47 +80,13 @@ use taikai_cache::{
     TaikaiPullTicket, TaikaiQueueError,
 };
 
+use crate::proxy::{
+    BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle, PROXY_MANIFEST_ID,
+    PROXY_PROTOCOL_LABEL, ProxyError, ProxyMode, spawn_local_quic_proxy,
+};
+
 /// Convenient re-exports for downstream callers.
 pub mod prelude {
-    pub use crate::appeals::{
-        AppealClass, AppealClassConfig, AppealDecision, AppealDisbursementError,
-        AppealDisbursementInput, AppealDisbursementPlan, AppealPricingConfig, AppealPricingError,
-        AppealQuote, AppealQuoteBreakdown, AppealQuoteInput, AppealSettlementBreakdown,
-        AppealSettlementConfig, AppealSettlementError, AppealUrgency, AppealVerdict, JurorPayout,
-    };
-    pub use crate::soranet::{
-        CircuitEvent, CircuitId, CircuitInfo, CircuitLatencySnapshot, CircuitManager,
-        CircuitManagerConfig, CircuitManagerError, CircuitRetirementReason, CircuitRotationRecord,
-        Endpoint, ExitDemotion, ExitDemotionReason, GuardCacheKey, GuardCacheKeyError, GuardRecord,
-        GuardRetention, GuardSelector, GuardSet, PathHintReport, PathMetadata, RelayDescriptor,
-        RelayDirectory, RelayPathHint, RelayRoles,
-    };
-    pub use crate::{
-        AnonymityPolicy, CircuitRefreshReport, FetchSession, GatewayCarVerification,
-        GatewayOrchestratorError, ManifestVerificationContext, ManifestVerificationError,
-        Orchestrator, OrchestratorConfig, PolicyFallback, PolicyReport, PolicyStatus,
-        TransportPolicy, WriteModeHint,
-        bindings::{ConfigJsonError, config_from_json, config_to_json},
-        compliance::{CompliancePolicy, ComplianceReason},
-        fetch_via_gateway,
-        incentives::{RelayRewardEngine, RewardConfig, RewardConfigError},
-        provider_supports_pq, provider_supports_soranet,
-        proxy::{BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle},
-        taikai_cache::{
-            CacheEviction as TaikaiCacheEviction, CacheEvictionReason as TaikaiCacheEvictionReason,
-            CachePromotion as TaikaiCachePromotion, CacheTierKind as TaikaiCacheTierKind,
-            CachedSegment as TaikaiCachedSegment, QosClass as TaikaiQosClass,
-            QosConfig as TaikaiQosConfig, QosError as TaikaiQosError,
-            SegmentKey as TaikaiSegmentKey, TaikaiCache, TaikaiCacheConfig,
-            TaikaiCacheInsertOutcome, TaikaiCacheQueryOutcome, TaikaiShardId, TaikaiShardRing,
-        },
-        treasury::{
-            AdjustmentKind, AdjustmentRequest, DisputeId, DisputeOutcome, DisputeResolution,
-            EarningsDashboard, EarningsRow, PayoutInput, PayoutOutcome, PayoutServiceError,
-            RelayPayoutService, RewardDispute, RewardDisputeRegistry, RewardLedgerError,
-            RewardLedgerSnapshot,
-        },
-    };
     pub use blake3::Hash as Blake3Hash;
     pub use sorafs_car::{
         CarBuildPlan, CarChunk, ChunkStore, FilePlan, InMemoryPayload, PorProof,
@@ -140,6 +102,48 @@ pub mod prelude {
         },
     };
     pub use sorafs_chunker::ChunkProfile;
+
+    pub use crate::{
+        AnonymityPolicy, CircuitRefreshReport, FetchSession, GatewayCarVerification,
+        GatewayOrchestratorError, ManifestVerificationContext, ManifestVerificationError,
+        Orchestrator, OrchestratorConfig, PolicyFallback, PolicyReport, PolicyStatus,
+        TransportPolicy, WriteModeHint,
+        appeals::{
+            AppealClass, AppealClassConfig, AppealDecision, AppealDisbursementError,
+            AppealDisbursementInput, AppealDisbursementPlan, AppealPricingConfig,
+            AppealPricingError, AppealQuote, AppealQuoteBreakdown, AppealQuoteInput,
+            AppealSettlementBreakdown, AppealSettlementConfig, AppealSettlementError,
+            AppealUrgency, AppealVerdict, JurorPayout,
+        },
+        bindings::{ConfigJsonError, config_from_json, config_to_json},
+        compliance::{CompliancePolicy, ComplianceReason},
+        fetch_via_gateway,
+        incentives::{RelayRewardEngine, RewardConfig, RewardConfigError},
+        provider_supports_pq, provider_supports_soranet,
+        proxy::{BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle},
+        soranet::{
+            CircuitEvent, CircuitId, CircuitInfo, CircuitLatencySnapshot, CircuitManager,
+            CircuitManagerConfig, CircuitManagerError, CircuitRetirementReason,
+            CircuitRotationRecord, Endpoint, ExitDemotion, ExitDemotionReason, GuardCacheKey,
+            GuardCacheKeyError, GuardRecord, GuardRetention, GuardSelector, GuardSet,
+            PathHintReport, PathMetadata, RelayDescriptor, RelayDirectory, RelayPathHint,
+            RelayRoles,
+        },
+        taikai_cache::{
+            CacheEviction as TaikaiCacheEviction, CacheEvictionReason as TaikaiCacheEvictionReason,
+            CachePromotion as TaikaiCachePromotion, CacheTierKind as TaikaiCacheTierKind,
+            CachedSegment as TaikaiCachedSegment, QosClass as TaikaiQosClass,
+            QosConfig as TaikaiQosConfig, QosError as TaikaiQosError,
+            SegmentKey as TaikaiSegmentKey, TaikaiCache, TaikaiCacheConfig,
+            TaikaiCacheInsertOutcome, TaikaiCacheQueryOutcome, TaikaiShardId, TaikaiShardRing,
+        },
+        treasury::{
+            AdjustmentKind, AdjustmentRequest, DisputeId, DisputeOutcome, DisputeResolution,
+            EarningsDashboard, EarningsRow, PayoutInput, PayoutOutcome, PayoutServiceError,
+            RelayPayoutService, RewardDispute, RewardDisputeRegistry, RewardLedgerError,
+            RewardLedgerSnapshot,
+        },
+    };
 }
 
 /// Outcome captured after reconciling the circuit manager with the current SoraNet state.
@@ -805,11 +809,13 @@ impl Default for OrchestratorConfig {
 
 /// Helper utilities for configuring the orchestrator via Norito JSON payloads.
 pub mod bindings {
-    use super::*;
-    use norito::json::{Map, Value};
     use std::{
         collections::BTreeSet, convert::TryFrom, num::NonZeroU32, path::PathBuf, time::Duration,
     };
+
+    use norito::json::{Map, Value};
+
+    use super::*;
 
     /// Errors that may occur while parsing [`OrchestratorConfig`] from JSON.
     #[derive(Debug, Error)]
@@ -5841,35 +5847,6 @@ pub async fn fetch_via_gateway(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::bindings::{config_from_json, config_to_json};
-    use crate::proxy::ProxyMode;
-    use crate::soranet::{
-        CircuitId, CircuitRetirementReason, Endpoint, GuardRecord, GuardSet, PathMetadata,
-        RelayDescriptor, RelayDirectory, RelayRoles,
-    };
-    use crate::taikai_cache::TaikaiPullQueueConfig;
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-    use futures::executor::block_on;
-    use iroha_data_model::soranet::privacy_metrics::{
-        SoranetPrivacyEventActiveSampleV1, SoranetPrivacyEventHandshakeFailureV1,
-        SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1,
-        SoranetPrivacyEventThrottleV1, SoranetPrivacyEventV1, SoranetPrivacyEventVerifiedBytesV1,
-        SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
-        SoranetPrivacyThrottleScopeV1,
-    };
-    use iroha_logger::{telemetry::Channel, test_logger};
-    use iroha_telemetry::metrics::global_or_default;
-    use norito::json::{self, Map, Value};
-    use reqwest::Url;
-    use sorafs_car::multi_fetch::{ChunkResponse, FetchProvider, FetchRequest, TransportHint};
-    use sorafs_car::scoreboard::{IneligibilityReason, ProviderTelemetry};
-    use sorafs_car::{
-        CarBuildPlan, CarChunk, ChunkFetchSpec, ChunkStore, FilePlan, TaikaiSegmentHint,
-    };
-    use sorafs_chunker::ChunkProfile;
-    use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
     use std::{
         collections::{BTreeSet, HashMap},
         convert::TryInto,
@@ -5886,7 +5863,39 @@ mod tests {
         thread,
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use futures::executor::block_on;
+    use iroha_data_model::soranet::privacy_metrics::{
+        SoranetPrivacyEventActiveSampleV1, SoranetPrivacyEventHandshakeFailureV1,
+        SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1,
+        SoranetPrivacyEventThrottleV1, SoranetPrivacyEventV1, SoranetPrivacyEventVerifiedBytesV1,
+        SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
+        SoranetPrivacyThrottleScopeV1,
+    };
+    use iroha_logger::{telemetry::Channel, test_logger};
+    use iroha_telemetry::metrics::global_or_default;
+    use norito::json::{self, Map, Value};
+    use reqwest::Url;
+    use sorafs_car::{
+        CarBuildPlan, CarChunk, ChunkFetchSpec, ChunkStore, FilePlan, TaikaiSegmentHint,
+        multi_fetch::{ChunkResponse, FetchProvider, FetchRequest, TransportHint},
+        scoreboard::{IneligibilityReason, ProviderTelemetry},
+    };
+    use sorafs_chunker::ChunkProfile;
+    use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
     use tokio::sync::Mutex as AsyncMutex;
+
+    use super::*;
+    use crate::{
+        bindings::{config_from_json, config_to_json},
+        proxy::ProxyMode,
+        soranet::{
+            CircuitId, CircuitRetirementReason, Endpoint, GuardRecord, GuardSet, PathMetadata,
+            RelayDescriptor, RelayDirectory, RelayRoles,
+        },
+        taikai_cache::TaikaiPullQueueConfig,
+    };
 
     fn relay_id(byte: u8) -> [u8; 32] {
         [byte; 32]

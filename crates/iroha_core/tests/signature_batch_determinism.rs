@@ -4,20 +4,20 @@
 //! the offending transaction identified by batch verification is stable across
 //! different input orders.
 
-use iroha_core::block::BlockValidationError as BErr;
-use iroha_core::block::ValidBlock;
-use iroha_core::prelude::*;
-use iroha_core::state::{State, StateReadOnly};
-use iroha_core::tx::AcceptTransactionFail as AF;
-use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
-use iroha_data_model::block::builder::BlockBuilder;
-use iroha_data_model::prelude::*;
-use nonzero_ext::nonzero;
 use std::sync::Arc;
 
+use iroha_core::{
+    block::{BlockValidationError as BErr, ValidBlock},
+    prelude::*,
+    state::{State, StateReadOnly},
+    tx::AcceptTransactionFail as AF,
+};
+use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+use iroha_data_model::{block::builder::BlockBuilder, prelude::*};
+use nonzero_ext::nonzero;
+
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyPair) {
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -222,8 +222,7 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
         let block = mk_block_with_permuted_txs(perm, height, Some(genesis_hash), &leader);
         let err = run_validate(&mut state, block, &chain, &authority, &leader)
             .expect_err("block must be rejected due to bad signature");
-        use iroha_core::block::BlockValidationError as BErr;
-        use iroha_core::tx::AcceptTransactionFail as AF;
+        use iroha_core::{block::BlockValidationError as BErr, tx::AcceptTransactionFail as AF};
         match *err {
             BErr::TransactionAccept(AF::SignatureVerification(fail)) => {
                 assert_eq!(
@@ -339,8 +338,7 @@ fn bls_batch_permutation_finds_same_bad_sig() {
         let block = mk_block_with_permuted_txs(perm, height, Some(genesis_hash), &leader);
         let err = run_validate(&mut state, block, &chain, &authority, &leader)
             .expect_err("block must be rejected due to bad signature");
-        use iroha_core::block::BlockValidationError as BErr;
-        use iroha_core::tx::AcceptTransactionFail as AF;
+        use iroha_core::{block::BlockValidationError as BErr, tx::AcceptTransactionFail as AF};
         match *err {
             BErr::TransactionAccept(AF::SignatureVerification(fail)) => {
                 assert_eq!(

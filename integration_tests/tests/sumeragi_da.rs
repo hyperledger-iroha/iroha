@@ -9,6 +9,7 @@ use std::{
 
 use ascii_table::AsciiTable;
 use eyre::{Report, Result, WrapErr, ensure, eyre};
+use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::{
     client::{Client, Status},
     data_model::{
@@ -27,8 +28,6 @@ use rand::{Rng, SeedableRng, distr::Alphanumeric};
 use rand_chacha::ChaCha8Rng;
 use tokio::time::sleep;
 use toml::Table;
-
-use integration_tests::{metrics::MetricsReader, sandbox};
 
 #[derive(Clone)]
 struct ConfigLayer(Table);

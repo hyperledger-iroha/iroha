@@ -22,6 +22,13 @@ use std::{
     thread,
 };
 
+use fastpq_isi::StarkParameterSet;
+#[cfg(feature = "fastpq-gpu")]
+use fastpq_isi::poseidon::RATE;
+use iroha_crypto::Hash;
+use rayon::prelude::*;
+use tracing::warn;
+
 #[cfg(feature = "fastpq-gpu")]
 use crate::gpu;
 #[cfg(feature = "fastpq-gpu")]
@@ -34,12 +41,6 @@ use crate::{
     pack_bytes,
     poseidon::{self, PoseidonSponge},
 };
-use fastpq_isi::StarkParameterSet;
-#[cfg(feature = "fastpq-gpu")]
-use fastpq_isi::poseidon::RATE;
-use iroha_crypto::Hash;
-use rayon::prelude::*;
-use tracing::warn;
 
 /// Goldilocks modulus used by the FASTPQ AIR.
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
@@ -1910,11 +1911,8 @@ fn compute_merkle_level(input: &[u64]) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        ExecutionMode, OperationKind, PoseidonExecutionMode, StateTransition, TransitionBatch,
-        backend, gadgets::transfer, gpu,
-    };
+    use std::str::FromStr;
+
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use iroha_crypto::Hash;
     use iroha_data_model::{
@@ -1924,7 +1922,12 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
-    use std::str::FromStr;
+
+    use super::*;
+    use crate::{
+        ExecutionMode, OperationKind, PoseidonExecutionMode, StateTransition, TransitionBatch,
+        backend, gadgets::transfer, gpu,
+    };
 
     fn sample_batch() -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced");

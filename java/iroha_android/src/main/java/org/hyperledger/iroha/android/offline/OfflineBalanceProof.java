@@ -37,6 +37,7 @@ public final class OfflineBalanceProof {
       final byte[] initialCommitment,
       final byte[] resultingCommitment,
       final String claimedDelta,
+      final String resultingValue,
       final byte[] initialBlinding,
       final byte[] resultingBlinding) {
     if (!NATIVE_AVAILABLE) {
@@ -47,6 +48,7 @@ public final class OfflineBalanceProof {
         initialCommitment,
         resultingCommitment,
         claimedDelta,
+        resultingValue,
         initialBlinding,
         resultingBlinding);
   }
@@ -54,6 +56,7 @@ public final class OfflineBalanceProof {
   public static Artifacts advanceCommitment(
       final String chainId,
       final String claimedDelta,
+      final String resultingValue,
       final String initialCommitmentHex,
       final String initialBlindingHex,
       final String resultingBlindingHex) {
@@ -68,6 +71,7 @@ public final class OfflineBalanceProof {
             initialCommitment,
             resultingCommitment,
             claimedDelta,
+            resultingValue,
             initialBlinding,
             resultingBlinding);
     return new Artifacts(resultingCommitment, proof);
@@ -110,6 +114,7 @@ public final class OfflineBalanceProof {
       byte[] initialCommitment,
       byte[] resultingCommitment,
       String claimedDelta,
+      String resultingValue,
       byte[] initialBlinding,
       byte[] resultingBlinding);
 

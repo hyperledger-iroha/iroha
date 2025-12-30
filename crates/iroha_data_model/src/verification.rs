@@ -7,12 +7,13 @@ use std::{
     vec::Vec,
 };
 
+use iroha_primitives::numeric::Numeric;
+
 use crate::{
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     domain::{Domain, DomainId},
 };
-use iroha_primitives::numeric::Numeric;
 
 const INVARIANT_DOMAIN_UNIQUE: &str = "domain.unique_id";
 const INVARIANT_DOMAIN_OWNER_EXISTS: &str = "domain.owner_exists";
@@ -387,14 +388,16 @@ fn verify_asset_totals(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use iroha_crypto::KeyPair;
+    use iroha_primitives::numeric::NumericSpec;
+
     use super::*;
     use crate::{
         asset::{Mintable, definition::AssetConfidentialPolicy},
         metadata::Metadata,
     };
-    use iroha_crypto::KeyPair;
-    use iroha_primitives::numeric::NumericSpec;
-    use std::collections::BTreeSet;
 
     #[test]
     fn valid_snapshot_passes_formal_verification() {

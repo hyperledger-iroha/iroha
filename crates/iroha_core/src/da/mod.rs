@@ -17,7 +17,22 @@ pub mod receipts;
 pub mod replay_cache;
 pub mod shard_cursor;
 
+use std::collections::BTreeSet;
+
 pub use confidential::{ConfidentialComputeError, validate_confidential_compute_record};
+use iroha_config::parameters::actual::LaneConfig;
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{
+    account::AccountId,
+    da::{
+        commitment::{
+            DaCommitmentBundle, DaCommitmentKey, DaCommitmentRecord, DaProofPolicyBundle,
+            DaProofScheme, KzgCommitment,
+        },
+        prelude::DaProofPolicy,
+    },
+    nexus::LaneId,
+};
 pub use proofs::{DaProofVerificationError, build_da_commitment_proof, verify_da_commitment_proof};
 pub use replay_cache::{
     LaneEpoch, ReplayCache, ReplayCacheConfig, ReplayFingerprint, ReplayInsertOutcome, ReplayKey,
@@ -26,20 +41,9 @@ pub use shard_cursor::{
     DaShardCursor, DaShardCursorError, DaShardCursorIndex, DaShardCursorJournal, LaneShardCursor,
     ShardCursorJournalError,
 };
-
-use std::collections::BTreeSet;
+use thiserror::Error;
 
 use crate::da::pin_intents::{PinIntentDropReason, canonicalize_bundle};
-use iroha_config::parameters::actual::LaneConfig;
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::account::AccountId;
-use iroha_data_model::da::commitment::{
-    DaCommitmentBundle, DaCommitmentKey, DaCommitmentRecord, DaProofPolicyBundle, DaProofScheme,
-    KzgCommitment,
-};
-use iroha_data_model::da::prelude::DaProofPolicy;
-use iroha_data_model::nexus::LaneId;
-use thiserror::Error;
 
 /// Errors returned when a DA commitment violates the configured lane proof policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -421,10 +425,13 @@ pub fn validate_commitment_bundle(
 
 #[cfg(test)]
 mod proof_policy_tests {
+    use iroha_data_model::{
+        da::{pin_intent::DaPinIntent, types::StorageTicketId},
+        nexus::LaneId,
+        sorafs::pin_registry::ManifestDigest,
+    };
+
     use super::*;
-    use iroha_data_model::da::{pin_intent::DaPinIntent, types::StorageTicketId};
-    use iroha_data_model::nexus::LaneId;
-    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
 
     fn intent(
         lane: LaneId,
@@ -579,14 +586,20 @@ pub fn proof_policy_bundle_hash(lane_config: &LaneConfig) -> HashOf<DaProofPolic
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::num::NonZeroU32;
+
     use iroha_config::parameters::actual::LaneConfig as DerivedLaneConfig;
     use iroha_crypto::{Hash, Signature};
-    use iroha_data_model::da::commitment::RetentionClass;
-    use iroha_data_model::da::types::{BlobDigest, StorageTicketId};
-    use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneMetadata};
+    use iroha_data_model::{
+        da::{
+            commitment::RetentionClass,
+            types::{BlobDigest, StorageTicketId},
+        },
+        nexus::{DataSpaceId, LaneCatalog, LaneMetadata},
+    };
     use norito::to_bytes;
-    use std::num::NonZeroU32;
+
+    use super::*;
 
     fn lane_config_with(lanes: Vec<LaneMetadata>) -> LaneConfig {
         let max_lane = lanes

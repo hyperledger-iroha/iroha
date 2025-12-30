@@ -5,14 +5,35 @@ import CryptoKit
 #endif
 
 final class OfflineReceiptChallengeTests: XCTestCase {
+    func testEncodeRejectsEmptyChainId() {
+        XCTAssertThrowsError(
+            try OfflineReceiptChallenge.encode(
+                chainId: " ",
+                invoiceId: "inv-empty",
+                receiverAccountId: "alice@wonderland",
+                assetId: "xor##alice@wonderland",
+                amount: "1",
+                issuedAtMs: 1_700_000_000_000,
+                nonceHex: "00"
+            )
+        ) { error in
+            guard case let OfflineReceiptChallenge.Error.invalidInput(message) = error else {
+                return XCTFail("expected invalidInput error")
+            }
+            XCTAssertEqual(message, "chainId must not be empty")
+        }
+    }
+
     func testEncodeProducesDeterministicHashes() throws {
         #if canImport(Darwin)
         let nonce = IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
         let result = try OfflineReceiptChallenge.encode(
+            chainId: "testnet",
             invoiceId: "inv-swift-tests",
             receiverAccountId: "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland",
             assetId: "xor##34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1@sora",
             amount: "250",
+            issuedAtMs: 1_700_000_000_000,
             nonceHex: nonce
         )
 

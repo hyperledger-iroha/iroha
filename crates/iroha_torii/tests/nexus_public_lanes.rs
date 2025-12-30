@@ -36,8 +36,10 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_torii::Torii;
-use norito::derive::NoritoDeserialize;
-use norito::json::{self, Value};
+use norito::{
+    derive::NoritoDeserialize,
+    json::{self, Value},
+};
 use tokio::sync::{broadcast, watch};
 use tower::ServiceExt as _;
 

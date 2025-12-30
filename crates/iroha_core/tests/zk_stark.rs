@@ -5,11 +5,14 @@
 #![cfg(feature = "zk-stark")]
 
 use expect_test::expect;
-use iroha_core::zk::verify_backend;
-use iroha_core::zk_stark::{
-    FoldDecommitV1, MerklePath, STARK_HASH_SHA256_V1, StarkCommitmentsV1, StarkCompositionTermV1,
-    StarkCompositionValueV1, StarkFriParamsV1, StarkProofV1, StarkVerifierLimits,
-    StarkVerifyEnvelopeV1, verify_stark_fri_envelope, verify_stark_fri_envelope_with_limits,
+use iroha_core::{
+    zk::verify_backend,
+    zk_stark::{
+        FoldDecommitV1, MerklePath, STARK_HASH_SHA256_V1, StarkCommitmentsV1,
+        StarkCompositionTermV1, StarkCompositionValueV1, StarkFriParamsV1, StarkProofV1,
+        StarkVerifierLimits, StarkVerifyEnvelopeV1, verify_stark_fri_envelope,
+        verify_stark_fri_envelope_with_limits,
+    },
 };
 use sha2::{Digest, Sha256};
 

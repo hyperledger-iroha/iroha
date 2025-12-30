@@ -6,7 +6,6 @@
 //! keep error reporting stable via [`AccountAddressErrorCode`].
 
 use iroha_data_model::account::AccountId;
-
 pub use iroha_data_model::account::{
     AccountAddressSource, ParsedAccountId,
     address::{
@@ -114,8 +113,9 @@ pub fn parse_account_address(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
+
+    use super::*;
 
     #[test]
     fn roundtrip_ih58_encoding() {

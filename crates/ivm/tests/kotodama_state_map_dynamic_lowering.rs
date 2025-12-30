@@ -3,8 +3,10 @@
 use std::str::FromStr;
 
 use iroha_data_model::prelude::Name;
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-use ivm::{CoreHost, IVM, PointerType, encoding, instruction, syscalls};
+use ivm::{
+    CoreHost, IVM, PointerType, encoding, instruction,
+    kotodama::compiler::Compiler as KotodamaCompiler, syscalls,
+};
 use norito::codec::Encode as NoritoEncode;
 mod common;
 

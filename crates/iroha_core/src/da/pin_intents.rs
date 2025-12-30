@@ -307,7 +307,8 @@ fn is_zero_manifest(digest: &iroha_data_model::sorafs::pin_registry::ManifestDig
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{convert::TryFrom, path::PathBuf};
+
     use iroha_data_model::{
         da::{
             pin_intent::{DaPinIntent, DaPinIntentBundle},
@@ -317,8 +318,9 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
     };
     use norito::to_bytes;
-    use std::{convert::TryFrom, path::PathBuf};
     use tempfile::tempdir;
+
+    use super::*;
 
     fn sample_intent(lane: u32, seq: u64) -> DaPinIntent {
         let lane_byte = u8::try_from(lane).expect("lane id fits in byte for test intent");

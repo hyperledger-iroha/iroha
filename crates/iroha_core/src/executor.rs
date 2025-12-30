@@ -11,20 +11,35 @@ use base64::Engine as _;
 use derive_more::Debug;
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
 use iroha_data_model::{
-    ValidationFail,
+    Identifiable as _, Registrable as _, ValidationFail,
     account::AccountId,
+    asset::{
+        AssetDefinition,
+        id::{AssetDefinitionId, AssetId},
+        value::Asset,
+    },
     block::BlockHeader,
     executor::{self as data_model_executor, ExecutorDataModel},
-    isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox},
+    isi::{
+        CustomInstruction, InstructionBox, InstructionBox as DMInstructionBox, RemoveKeyValueBox,
+        SetKeyValueBox, error::InstructionExecutionError, register::RegisterBox,
+    },
     metadata::Metadata,
+    parameter::CustomParameterId,
     permission::Permission,
+    prelude::{Register, Trigger},
     query::{AnyQueryBox, QueryRequest},
+    role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
     transaction::{Executable, SignedTransaction},
 };
-use iroha_executor_data_model::permission as executor_permission;
+use iroha_executor_data_model::{
+    isi::multisig::MultisigInstructionBox, permission as executor_permission,
+};
 use iroha_logger::{debug, info, trace, warn};
+use iroha_primitives::numeric::Numeric;
 use ivm::{IVM, Memory, VMError};
+use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
     json::{self, JsonDeserialize as JsonDeserializeTrait, JsonSerialize as JsonSerializeTrait},
@@ -33,31 +48,15 @@ use norito::{
 use rust_decimal::Decimal;
 use settlement_router::haircut::LiquidityProfile;
 
-use crate::gas as isi_gas;
-use crate::settlement::{PendingSettlement, QuoteError, VolatilityBucket};
-use crate::sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer};
 #[cfg(feature = "zk-preverify")]
 use crate::zk::PreverifyResult;
 use crate::{
+    gas as isi_gas,
+    settlement::{PendingSettlement, QuoteError, VolatilityBucket},
     smartcontracts::{Execute as _, ivm::cache::IvmCache},
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
+    sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
 };
-use iroha_data_model::asset::{
-    AssetDefinition,
-    id::{AssetDefinitionId, AssetId},
-    value::Asset,
-};
-use iroha_data_model::isi::{
-    CustomInstruction, InstructionBox as DMInstructionBox, error::InstructionExecutionError,
-    register::RegisterBox,
-};
-use iroha_data_model::parameter::CustomParameterId;
-use iroha_data_model::prelude::{Register, Trigger};
-use iroha_data_model::role::{Role, RoleId};
-use iroha_data_model::{Identifiable as _, Registrable as _};
-use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
-use iroha_primitives::numeric::Numeric;
-use mv::storage::StorageReadOnly;
 // NoritoDecode alias is unused; keep Decode via norito::codec where needed inline
 
 #[cfg(test)]
@@ -2176,8 +2175,9 @@ impl LoadedExecutor {
 /// payload using a local DTO and provide a materialization path that loads a
 /// `LoadedExecutor` when required.
 pub mod executor_norito {
-    use super::*;
     use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::*;
 
     /// Local DTO used for Norito encoding of `Executor`.
     #[derive(Encode, Decode)]
@@ -2253,12 +2253,6 @@ pub mod executor_norito {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query,
-        state::{State, World},
-    };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         executor::{self as data_model_executor, ExecutorDataModel},
@@ -2275,6 +2269,13 @@ mod tests {
     use ivm::instruction;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query,
+        state::{State, World},
+    };
 
     fn make_peer_id() -> crate::PeerId {
         let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -2634,8 +2635,9 @@ mod tests {
 
     fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
         const LITERAL_HEADER_LEN: usize = 4 + 12;
-        use ivm::{ProgramMetadata, encoding, instruction};
         use std::mem::size_of;
+
+        use ivm::{ProgramMetadata, encoding, instruction};
 
         let len_size = size_of::<usize>();
         let total_len = len_size

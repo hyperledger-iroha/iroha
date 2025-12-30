@@ -2,12 +2,13 @@
 
 use core::fmt;
 
-use halo2curves::ff::Field;
-use halo2curves::group::{Group, GroupEncoding};
-use halo2curves::pasta::{Fp, Vesta, VestaAffine};
+use halo2curves::{
+    ff::Field,
+    group::{Group, GroupEncoding},
+    pasta::{Fp, Vesta, VestaAffine},
+};
 
-use crate::errors::Error;
-use crate::field::PrimeField64;
+use crate::{errors::Error, field::PrimeField64};
 
 /// Group element on the Vesta curve (projective form).
 #[derive(Copy, Clone, PartialEq, Eq)]

@@ -1,5 +1,12 @@
 //! Offline transfer query responses shared with Torii and SDKs.
 
+use std::convert::TryFrom;
+
+use hex::encode as encode_hex;
+use iroha_primitives::numeric::Numeric;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+
 use crate::{
     account::AccountId,
     offline::{
@@ -8,11 +15,6 @@ use crate::{
         OfflineVerdictSnapshot, OfflineWalletCertificate,
     },
 };
-use hex::encode as encode_hex;
-use iroha_primitives::numeric::Numeric;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use std::convert::TryFrom;
 
 /// Canonical list response returned by the offline transfer endpoints.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -285,6 +287,12 @@ fn resolve_platform_policy_label(
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
+    use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
+    use iroha_primitives::{json::Json, numeric::Numeric};
+    use norito::json::{self, Value};
+
     use super::*;
     use crate::{
         asset::AssetDefinitionId,
@@ -297,10 +305,6 @@ mod tests {
             OfflineSpendReceipt, OfflineWalletPolicy,
         },
     };
-    use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
-    use iroha_primitives::{json::Json, numeric::Numeric};
-    use norito::json::{self, Value};
-    use std::str::FromStr;
 
     fn sample_signature(seed: u8) -> Signature {
         let mut payload = [0u8; 64];
@@ -409,6 +413,7 @@ mod tests {
             to: sample_account(0xB2, "sbp"),
             asset: sample_asset("sbp"),
             amount: Numeric::new(250, 0),
+            issued_at_ms: 1_700_000_250,
             invoice_id: "inv-001".into(),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
                 key_id: "AA_KEY".into(),

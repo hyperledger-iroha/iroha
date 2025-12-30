@@ -187,13 +187,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_crypto::{
-        BlsNormal, KeyGenOption,
+        Algorithm, BlsNormal, KeyGenOption, KeyPair,
         vrf::{VrfProof, prove_normal_with_chain},
     };
     use iroha_data_model::{account::AccountId, domain::DomainId};
+
+    use super::*;
 
     fn mk_account(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);

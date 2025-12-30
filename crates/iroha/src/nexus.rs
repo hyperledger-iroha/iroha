@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 
 use iroha_crypto::HashOf;
+pub use iroha_data_model::nexus::LaneRelayQuorumContext;
 use iroha_data_model::{
     block::{BlockHeader, consensus::LaneBlockCommitment},
     consensus::ExecutionQcRecord,
@@ -15,8 +16,6 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 use thiserror::Error;
-
-pub use iroha_data_model::nexus::LaneRelayQuorumContext;
 
 /// Error surfaced when validating or building cross-lane relay proofs.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -175,7 +174,8 @@ pub fn verify_lane_relay_envelopes(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::num::NonZeroU64;
+
     use iroha_crypto::Hash;
     use iroha_data_model::{
         block::consensus::{
@@ -183,7 +183,8 @@ mod tests {
         },
         nexus::LaneId,
     };
-    use std::num::NonZeroU64;
+
+    use super::*;
 
     fn sample_settlement(lane_id: LaneId, dataspace_id: DataSpaceId) -> LaneBlockCommitment {
         LaneBlockCommitment {

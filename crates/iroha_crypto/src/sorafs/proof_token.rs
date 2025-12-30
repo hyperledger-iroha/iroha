@@ -4,16 +4,17 @@
 //! compliance plan and provide deterministic helpers for minting and verifying
 //! response headers (`Sora-Moderation-Token`).
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use blake3::Hasher;
-use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use rand::{CryptoRng, RngCore};
 use std::{
     convert::TryFrom as _,
     string::String,
     time::{Duration, SystemTime, UNIX_EPOCH},
     vec::Vec,
 };
+
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use blake3::Hasher;
+use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
 const FRAME_MAGIC: &[u8; 4] = b"SFGT";
@@ -551,10 +552,11 @@ fn base64_decoded_capacity(encoded_len: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::SigningKey;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
+
+    use super::*;
 
     fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[7u8; 32])

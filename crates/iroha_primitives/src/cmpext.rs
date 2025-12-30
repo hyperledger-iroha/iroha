@@ -121,9 +121,9 @@ macro_rules! impl_as_dyn_key {
 /// Property tests validate the ordering semantics for the sentinel values.
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use proptest::prelude::*;
+
+    use super::*;
     proptest! {
         // Values greater than `u64::MIN` should compare larger than `MinMaxExt::Min`.
         #[test]

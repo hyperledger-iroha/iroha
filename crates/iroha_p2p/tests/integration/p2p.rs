@@ -11,13 +11,14 @@ use std::{
     },
 };
 
-use super::next_port;
 use futures::{prelude::*, stream::FuturesUnordered, task::AtomicWaker};
-use iroha_config::parameters::actual::{
-    LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
-    SoranetPow, SoranetPrivacy, SoranetVpn,
+use iroha_config::parameters::{
+    actual::{
+        LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
+        SoranetPow, SoranetPrivacy, SoranetVpn,
+    },
+    defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL},
 };
-use iroha_config::parameters::defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL};
 use iroha_config_base::WithOrigin;
 use iroha_crypto::{
     KeyPair,
@@ -35,6 +36,8 @@ use tokio::{
     sync::{Barrier, mpsc},
     time::Duration,
 };
+
+use super::next_port;
 
 #[derive(Clone, Debug, Decode, Encode)]
 struct TestMessage(String);
@@ -497,8 +500,10 @@ async fn trust_gossip_enabled_flows_through() {
 #[cfg(feature = "p2p_ws")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ws_fallback_connects_and_handshakes() {
-    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-    use tokio::net::TcpListener;
+    use tokio::{
+        io::{AsyncRead, AsyncWrite, ReadBuf},
+        net::TcpListener,
+    };
     use tokio_tungstenite::accept_async;
 
     setup_logger();

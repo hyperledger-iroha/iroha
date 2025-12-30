@@ -2,14 +2,13 @@
 
 use executor_custom_data_model::{complex_isi::NumericQuery, permissions::CanControlDomainLives};
 use eyre::{Context, Result};
+use integration_tests::sandbox;
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_executor_data_model::permission::{Permission as _, domain::CanUnregisterDomain};
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, load_sample_ivm};
 use nonzero_ext::nonzero;
 use tokio::{runtime::Runtime, sync::oneshot};
-
-use integration_tests::sandbox;
 
 fn start_network(
     builder: NetworkBuilder,

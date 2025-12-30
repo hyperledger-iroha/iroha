@@ -1,5 +1,12 @@
 //! `PoW` ticket helpers for the `SoraNet` admission protocol.
 
+use std::{
+    collections::HashMap,
+    fmt, fs, io,
+    path::PathBuf,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
 use blake3::hash;
 use norito::{
     codec::{decode_adaptive, encode_adaptive},
@@ -7,12 +14,6 @@ use norito::{
 };
 use rand::{CryptoRng, RngCore};
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa, verify_mldsa};
-use std::{
-    collections::HashMap,
-    fmt, fs, io,
-    path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use thiserror::Error;
 
 /// Domain separator used when deriving `PoW` challenges.
@@ -1143,9 +1144,10 @@ impl fmt::Display for Parameters {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rand::SeedableRng;
     use tempfile::tempdir;
+
+    use super::*;
 
     const RELAY_A: [u8; 32] = [0xCC; 32];
     const RELAY_B: [u8; 32] = [0xDD; 32];

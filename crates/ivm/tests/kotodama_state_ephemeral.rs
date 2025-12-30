@@ -1,7 +1,6 @@
 //! Ephemeral `state` lowering tests: maps and nested struct-held maps.
 
-use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-use ivm::{CoreHost, IVM};
+use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 
 #[test]
 fn state_map_set_get_roundtrip() {

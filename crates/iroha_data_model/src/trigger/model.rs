@@ -3,11 +3,8 @@
 // If editing this file, consider updating `iroha_core/src/smartcontracts/isi/triggers/specialized.rs`
 // It mirrors structures from this file.
 
-use std::cmp;
-use std::{format, string::String, vec::Vec};
+use std::{cmp, format, string::String, vec::Vec};
 
-pub use self::model::*;
-use crate::{Identifiable, Name, Registered, metadata::Metadata, transaction::Executable};
 #[cfg(feature = "json")]
 use base64::Engine as _;
 #[cfg(feature = "json")]
@@ -20,6 +17,9 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
+
+pub use self::model::*;
+use crate::{Identifiable, Name, Registered, metadata::Metadata, transaction::Executable};
 
 #[model]
 mod model {
@@ -309,6 +309,10 @@ pub mod action {
 
     #[cfg(test)]
     mod tests {
+        use std::str::FromStr;
+
+        use iroha_crypto::KeyPair;
+
         use super::*;
         use crate::{
             account::AccountId,
@@ -317,8 +321,6 @@ pub mod action {
             transaction::{Executable, IvmBytecode},
             trigger::TriggerId,
         };
-        use iroha_crypto::KeyPair;
-        use std::str::FromStr;
 
         fn sample_executable() -> Executable {
             Executable::Ivm(IvmBytecode::from_compiled(Vec::new()))
@@ -484,8 +486,7 @@ pub mod action {
     }
 
     mod candidate {
-        use super::EnsureTriggerAuthority;
-        use super::*;
+        use super::{EnsureTriggerAuthority, *};
 
         #[derive(Encode, Decode)]
         pub(super) struct ActionCandidate {

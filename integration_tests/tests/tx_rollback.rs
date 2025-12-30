@@ -1,11 +1,10 @@
 //! Ensures invalid instructions are rolled back without side effects.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-
-use integration_tests::sandbox;
 
 #[test]
 fn client_sends_transaction_with_invalid_instruction_should_not_see_any_changes() -> Result<()> {

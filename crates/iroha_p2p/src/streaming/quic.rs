@@ -30,8 +30,10 @@ use quinn::{
         QuicClientConfig as QuinnRustlsClientConfig, QuicServerConfig as QuinnRustlsServerConfig,
     },
 };
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::{
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -821,7 +823,6 @@ impl ServerCertVerifier for NoCertificateVerification {
 
 #[cfg(all(test, feature = "quic"))]
 mod tests {
-    use super::*;
     use iroha_crypto::streaming::StreamingSession;
     use norito::streaming::{
         AudioCapability, CapabilityAck, CapabilityFlags, CapabilityReport, CapabilityRole,
@@ -830,6 +831,8 @@ mod tests {
         TransportCapabilities,
     };
     use tokio::time::{Duration as TokioDuration, sleep};
+
+    use super::*;
 
     fn hash(byte: u8) -> Hash {
         [byte; 32]

@@ -1,10 +1,13 @@
 //! Benchmarks for world state view (WSV) operations.
+use std::{convert::TryFrom, sync::Arc};
+
 use criterion::Criterion;
 use dashmap::{DashMap, DashSet};
 use iroha_crypto::KeyPair;
-use ivm::mock_wsv::{AccountId, AssetDefinitionId, DomainId, Mintable, Name};
-use ivm::parallel::{Block, Scheduler, StateAccessSet, Transaction, TxResult};
-use std::{convert::TryFrom, sync::Arc};
+use ivm::{
+    mock_wsv::{AccountId, AssetDefinitionId, DomainId, Mintable, Name},
+    parallel::{Block, Scheduler, StateAccessSet, Transaction, TxResult},
+};
 
 const TRANSFER_ROUTES: [[(usize, usize); 3]; 4] = [
     [(0, 1), (1, 3), (3, 7)],

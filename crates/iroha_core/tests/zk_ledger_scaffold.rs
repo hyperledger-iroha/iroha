@@ -1,6 +1,8 @@
 //! Scaffold tests for zk asset handlers: `RegisterZkAsset`, Shield, `ZkTransfer`, Unshield.
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 
+use std::{num::NonZeroU64, str::FromStr};
+
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
@@ -21,8 +23,6 @@ use iroha_zkp_halo2::confidential;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use norito::codec::{decode_adaptive, encode_adaptive};
-use std::num::NonZeroU64;
-use std::str::FromStr;
 
 fn derive_test_nullifier(
     nk: &[u8; 32],
@@ -1139,9 +1139,11 @@ fn shield_burns_and_unshield_mints() {
 #[test]
 fn zk_roots_are_bounded_in_world_state() {
     use iroha_config::parameters::{actual as cfg, defaults};
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_core::state::{State, World};
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use nonzero_ext::nonzero;
 
     // Create state and set a small ZK cap
@@ -1281,9 +1283,11 @@ fn zk_roots_are_bounded_in_world_state() {
 #[test]
 fn frontier_checkpoints_respect_reorg_depth_bound() {
     use iroha_config::parameters::{actual as cfg, defaults};
-    use iroha_core::kura::Kura;
-    use iroha_core::query::store::LiveQueryStore;
-    use iroha_core::state::{State, World};
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use nonzero_ext::nonzero;
 
     let kura = Kura::blank_kura_for_testing();

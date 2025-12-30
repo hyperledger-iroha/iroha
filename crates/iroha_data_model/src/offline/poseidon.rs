@@ -1,8 +1,5 @@
-use super::{
-    OFFLINE_PROOF_REQUEST_VERSION_V1, OfflinePlatformProof, OfflineProofRequestCounter,
-    OfflineProofRequestReplay, OfflineProofRequestSum, OfflineSpendReceipt,
-};
-use crate::metadata::Metadata;
+use core::{cmp::Ordering, convert::TryFrom};
+
 use fastpq_isi::poseidon::{FIELD_MODULUS, PoseidonSponge};
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Numeric;
@@ -13,7 +10,11 @@ use norito::{
 };
 use thiserror::Error;
 
-use core::{cmp::Ordering, convert::TryFrom};
+use super::{
+    OFFLINE_PROOF_REQUEST_VERSION_V1, OfflinePlatformProof, OfflineProofRequestCounter,
+    OfflineProofRequestReplay, OfflineProofRequestSum, OfflineSpendReceipt,
+};
+use crate::metadata::Metadata;
 
 const DOMAIN_TAG: &[u8] = b"iroha.offline.receipt.merkle.v1";
 const PACKED_LIMB_BYTES: usize = 7;
@@ -528,6 +529,13 @@ fn pack_bytes(bytes: &[u8]) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path, str::FromStr};
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_primitives::json::Json;
+    use norito::json::Value;
+
     use super::*;
     use crate::{
         account::AccountId,
@@ -541,11 +549,6 @@ mod tests {
             OfflineWalletCertificate, OfflineWalletPolicy,
         },
     };
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_primitives::json::Json;
-    use norito::json::Value;
-    use std::{fs, path::Path, str::FromStr};
 
     fn sample_account() -> AccountId {
         let domain: DomainId = "wonderland".parse().expect("domain");
@@ -596,6 +599,7 @@ mod tests {
             to: account.clone(),
             asset,
             amount: Numeric::new(250, 0),
+            issued_at_ms: 1,
             invoice_id: format!("invoice-{seed}"),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
                 key_id: seed.to_string(),
@@ -681,6 +685,10 @@ mod tests {
             .and_then(Value::as_str)
             .and_then(|value| Numeric::from_str(value).ok())
             .expect("receipt amount");
+        let issued_at_ms = obj
+            .get("issued_at_ms")
+            .and_then(Value::as_u64)
+            .expect("receipt issued_at_ms");
         let invoice_id = obj
             .get("invoice_id")
             .and_then(Value::as_str)
@@ -737,6 +745,7 @@ mod tests {
             to,
             asset,
             amount,
+            issued_at_ms,
             invoice_id,
             platform_proof,
             platform_snapshot: None,

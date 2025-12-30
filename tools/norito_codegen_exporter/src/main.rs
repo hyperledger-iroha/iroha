@@ -14,14 +14,15 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use iroha_data_model::prelude as dm;
-use iroha_data_model::{instruction_registry, isi::InstructionRegistry};
+use iroha_data_model::{instruction_registry, isi::InstructionRegistry, prelude as dm};
 use iroha_schema::{
     ArrayMeta, BitmapMeta, EnumMeta, IntoSchema, MapMeta, MetaMapEntry, Metadata, NamedFieldsMeta,
     ResultMeta, UnnamedFieldsMeta,
 };
-use norito::derive::JsonDeserialize;
-use norito::json::{self, Map, Number, Value};
+use norito::{
+    derive::JsonDeserialize,
+    json::{self, Map, Number, Value},
+};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -835,10 +836,12 @@ fn hex_lower(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_schema::IntoSchema;
     use std::fs;
+
+    use iroha_schema::IntoSchema;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     #[derive(IntoSchema)]
     struct Sample {

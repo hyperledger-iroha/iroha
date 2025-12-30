@@ -1,10 +1,9 @@
 //! JSON filter DSL server-side predicates test for transactions endpoint.
 
 use eyre::Result;
+use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_test_network::NetworkBuilder;
-
-use integration_tests::sandbox;
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]

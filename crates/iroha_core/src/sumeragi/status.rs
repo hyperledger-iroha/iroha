@@ -6,7 +6,10 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::{cell::Cell, sync::MutexGuard};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    sync::{Mutex, OnceLock, atomic::AtomicUsize, atomic::Ordering as StdOrdering},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering as StdOrdering},
+    },
     time::{Duration, SystemTime},
 };
 
@@ -16,8 +19,10 @@ use iroha_crypto::{
     privacy::{CommitmentScheme, LanePrivacyCommitment},
 };
 use iroha_data_model::{
-    block::consensus::ValidatorIndex,
-    block::{BlockHeader, consensus::LaneBlockCommitment},
+    block::{
+        BlockHeader,
+        consensus::{LaneBlockCommitment, ValidatorIndex},
+    },
     consensus::{
         CommitCertificate, ConsensusKeyRecord, ValidatorElectionOutcome, ValidatorSetCheckpoint,
     },
@@ -30,10 +35,10 @@ use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
 
 pub use crate::sumeragi::da::ManifestGateKind;
-use crate::sumeragi::da::{GateReason, GateSatisfaction};
 use crate::{
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::BackpressureState,
+    sumeragi::da::{GateReason, GateSatisfaction},
     telemetry::TxGossipSnapshot,
 };
 
@@ -4823,11 +4828,14 @@ pub fn settlement_status_reset_for_tests() {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AccessSetSourceSummary, BackpressureState, GateReason, LanePrivacyCommitmentSchemeSnapshot,
-        ManifestGateKind, PrecommitSignerRecord, WorkerLoopStage, WorkerQueueKind,
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        num::{NonZeroU64, NonZeroUsize},
+        str::FromStr,
+        sync::atomic::Ordering,
+        time::Duration,
     };
-    use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
+
     use iroha_config::parameters::actual::ConsensusMode;
     use iroha_crypto::{
         Hash as UntypedHash, HashOf, KeyPair,
@@ -4835,29 +4843,28 @@ mod tests {
             LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, SnarkCircuit, SnarkCircuitId,
         },
     };
-    use iroha_data_model::block::{
-        BlockHeader,
-        consensus::{LaneBlockCommitment, LaneSettlementReceipt},
+    use iroha_data_model::{
+        block::{
+            BlockHeader,
+            consensus::{LaneBlockCommitment, LaneSettlementReceipt},
+        },
+        consensus::{
+            CommitCertificate, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
+            ConsensusKeyStatus, ValidatorSetCheckpoint,
+        },
+        name::Name,
+        nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
+        peer::PeerId,
     };
-    use iroha_data_model::consensus::{
-        CommitCertificate, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
-        ConsensusKeyStatus, ValidatorSetCheckpoint,
-    };
-    use iroha_data_model::name::Name;
-    use iroha_data_model::nexus::{
-        DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility,
-    };
-    use iroha_data_model::peer::PeerId;
     use iroha_primitives::numeric::Numeric;
     use iroha_schema::Ident;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use std::sync::atomic::Ordering;
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        num::{NonZeroU64, NonZeroUsize},
-        str::FromStr,
-        time::Duration,
+
+    use super::{
+        AccessSetSourceSummary, BackpressureState, GateReason, LanePrivacyCommitmentSchemeSnapshot,
+        ManifestGateKind, PrecommitSignerRecord, WorkerLoopStage, WorkerQueueKind,
     };
+    use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
 
     #[test]
     fn locked_qc_updates_monotonically() {

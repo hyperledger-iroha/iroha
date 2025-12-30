@@ -1,5 +1,4 @@
-use ivm::kotodama::wide;
-use ivm::{IVM, VMError, encoding, instruction};
+use ivm::{IVM, VMError, encoding, instruction, kotodama::wide};
 mod common;
 use common::{assemble, assemble_zk};
 

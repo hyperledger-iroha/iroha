@@ -3,8 +3,7 @@
 
 use std::str;
 
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::{http::StatusCode, response::IntoResponse};
 use http_body_util::BodyExt;
 use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_data_model::soranet::privacy_metrics::{

@@ -1,6 +1,6 @@
+use std::{io::Write as _, path::PathBuf};
+
 use assert_cmd::cargo::cargo_bin_cmd;
-use std::io::Write as _;
-use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
 fn workspace_root() -> PathBuf {

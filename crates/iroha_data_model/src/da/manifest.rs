@@ -1,12 +1,15 @@
-use crate::da::types::{
-    BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile, ExtraMetadata,
-    RetentionPolicy, StorageTicketId, is_zero_u32,
-};
-use crate::nexus::LaneId;
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use crate::{
+    da::types::{
+        BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile, ExtraMetadata,
+        RetentionPolicy, StorageTicketId, is_zero_u32,
+    },
+    nexus::LaneId,
+};
 
 /// Role for a chunk within an erasure-coded stripe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]

@@ -5,18 +5,16 @@
 #[test]
 fn zk_ballot_rejects_when_vk_deprecated() {
     use base64::Engine;
-    use iroha_core::executor::Executor;
-    use iroha_core::tx::InstructionBox;
     use iroha_core::{
-        kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State,
+        executor::Executor, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
+        state::State, tx::InstructionBox,
     };
-    use iroha_data_model::Registrable;
-    use iroha_data_model::isi::governance::CastZkBallot;
-    use iroha_data_model::isi::zk::CreateElection;
-    use iroha_data_model::permission::Permission;
-    use iroha_data_model::prelude::{Account, Domain};
     use iroha_data_model::{
+        Registrable,
         confidential::ConfidentialStatus,
+        isi::{governance::CastZkBallot, zk::CreateElection},
+        permission::Permission,
+        prelude::{Account, Domain},
         proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::BackendTag,
     };

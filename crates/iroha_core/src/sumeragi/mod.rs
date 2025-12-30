@@ -175,29 +175,33 @@ pub(crate) fn npos_seed_for_height_from_world(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::BTreeSet,
+        num::NonZeroU64,
+        sync::{Arc, Mutex, mpsc},
+    };
+
+    use iroha_crypto::{Hash, KeyPair, SignatureOf};
+    use iroha_data_model::{
+        block::{
+            BlockHeader, BlockSignature, SignedBlock,
+            consensus::{
+                ConsensusBlockHeader, LaneBlockCommitment, Phase, Proposal, QcAggregate,
+                QcHeaderRef, RbcChunk, Vote,
+            },
+        },
+        consensus::VrfEpochRecord,
+        nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+        parameter::system::{SumeragiConsensusMode, SumeragiNposParameters},
+        peer::PeerId,
+    };
+
     use super::*;
-    use crate::sumeragi::consensus::ValidatorIndex;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
-    };
-    use iroha_crypto::{Hash, KeyPair, SignatureOf};
-    use iroha_data_model::block::consensus::{
-        ConsensusBlockHeader, LaneBlockCommitment, Phase, Proposal, QcAggregate, QcHeaderRef,
-        RbcChunk, Vote,
-    };
-    use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
-    use iroha_data_model::consensus::VrfEpochRecord;
-    use iroha_data_model::nexus::{DataSpaceId, LaneId, LaneRelayEnvelope};
-    use iroha_data_model::{
-        parameter::system::{SumeragiConsensusMode, SumeragiNposParameters},
-        peer::PeerId,
-    };
-    use std::num::NonZeroU64;
-    use std::{
-        collections::BTreeSet,
-        sync::{Arc, Mutex, mpsc},
+        sumeragi::consensus::ValidatorIndex,
     };
 
     const TEST_CHANNEL_CAP: usize = 16;

@@ -12,8 +12,7 @@ use std::{
 
 use eyre::{Context, Result};
 use iroha_config::parameters::actual::LaneConfig;
-use norito::derive::JsonSerialize;
-use norito::json;
+use norito::{derive::JsonSerialize, json};
 
 #[derive(Debug, Clone)]
 pub struct LaneMaintenanceOptions {
@@ -283,10 +282,12 @@ fn byte_len(path: &Path) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId};
     use std::num::NonZeroU32;
+
+    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId};
     use tempfile::tempdir;
+
+    use super::*;
 
     fn lane_cfg() -> LaneConfig {
         let lane_count = NonZeroU32::new(3).expect("non-zero lane count");

@@ -1,40 +1,41 @@
 use core::str::FromStr;
-use std::num::NonZeroU64;
 use std::{
     any::Any,
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     io::Cursor,
+    num::NonZeroU64,
     path::PathBuf,
     sync::Arc,
 };
 
-use crate::axt::{self, AssetHandle, AxtPolicy, ProofBlob, RemoteSpendIntent, TouchManifest};
-use crate::schema_registry::SchemaRegistry;
+use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
+pub use iroha_data_model::prelude::{
+    AccountId, AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer,
+};
+use iroha_data_model::{
+    isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
+    nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId},
+    proof::{ProofAttachment, VerifyingKeyId},
+};
+use norito::{
+    codec::{Decode as NoritoDecode, Encode as NoritoEncode},
+    decode_from_bytes,
+    derive::{Decode, Encode},
+    json::{self as njson},
+};
+use sha2::{Digest as _, Sha256};
+
 use crate::{
     VMError,
+    axt::{self, AssetHandle, AxtPolicy, ProofBlob, RemoteSpendIntent, TouchManifest},
     host::IVMHost,
     ivm::IVM,
     parallel::StateUpdate,
     pointer_abi::{self, PointerType},
+    schema_registry::SchemaRegistry,
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     syscalls,
 };
-use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
-use iroha_data_model::isi::{smart_contract_code as scode, transfer::TransferAssetBatch};
-use iroha_data_model::nexus::{
-    AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId,
-};
-pub use iroha_data_model::prelude::{
-    AccountId, AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer,
-};
-use iroha_data_model::proof::{ProofAttachment, VerifyingKeyId};
-use norito::derive::{Decode, Encode};
-use norito::{
-    codec::{Decode as NoritoDecode, Encode as NoritoEncode},
-    decode_from_bytes,
-    json::{self as njson},
-};
-use sha2::{Digest as _, Sha256};
 
 /// Definition of an asset type.
 #[derive(Clone, Copy, Debug)]
@@ -1313,8 +1314,8 @@ fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
 // duplicate import caused E0252 (name defined multiple times). Remove it.
 // use crate::{error::VMError, host::IVMHost, ivm::IVM, syscalls};
 use core::str;
-use iroha_data_model::isi::InstructionBox as DMInstructionBox;
-use iroha_data_model::isi::zk as DMZk;
+
+use iroha_data_model::isi::{InstructionBox as DMInstructionBox, zk as DMZk};
 
 struct EnvelopeInstructionHandler {
     aliases: &'static [&'static str],
@@ -4813,10 +4814,13 @@ mod tests_axt_policy_snapshot {
 
 #[cfg(test)]
 mod tests_governance_elections {
+    use iroha_data_model::{
+        isi::BuiltInInstruction,
+        proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
+    };
+
     use super::*;
     use crate::Memory;
-    use iroha_data_model::isi::BuiltInInstruction;
-    use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyBox};
 
     fn dummy_ballot_proof(hash: [u8; 32]) -> ProofAttachment {
         let mut attachment = ProofAttachment::new_inline(
@@ -5267,9 +5271,11 @@ mod tests_zk_asset_bindings {
 
 #[cfg(test)]
 mod tests_nft_decode {
-    use super::*;
-    use norito::codec::Encode as NoritoEncode;
     use std::collections::HashMap;
+
+    use norito::codec::Encode as NoritoEncode;
+
+    use super::*;
 
     #[test]
     fn decode_nft_payload_accepts_norito_encoded_bytes() {

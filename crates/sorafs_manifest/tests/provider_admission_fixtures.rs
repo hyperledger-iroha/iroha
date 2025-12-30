@@ -1,6 +1,7 @@
+use std::{env, fs};
+
 use assert_cmd::Command;
 use norito::json::Value;
-use std::{env, fs};
 use tempfile::tempdir;
 
 #[test]

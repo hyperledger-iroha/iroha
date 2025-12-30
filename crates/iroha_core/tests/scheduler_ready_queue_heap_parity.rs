@@ -1,10 +1,13 @@
 //! Ensure scheduler ready-queue heap vs per-wave sort produce identical outcomes.
 
-use iroha_core::block::{BlockBuilder, ValidBlock};
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use std::borrow::Cow;
+
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    state::{StateReadOnly, WorldReadOnly},
+};
 use iroha_data_model::prelude::*;
 use mv::storage::StorageReadOnly;
-use std::borrow::Cow;
 
 mod snapshots;
 

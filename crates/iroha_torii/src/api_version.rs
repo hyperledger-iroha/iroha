@@ -7,12 +7,13 @@
 
 use std::{fmt, str::FromStr};
 
-use crate::Error;
 use axum::http::{HeaderMap, StatusCode};
 use iroha_torii_shared::{
     API_MIN_PROOF_VERSION, API_VERSION_DEFAULT, API_VERSION_SUNSET_UNIX, API_VERSION_SUPPORTED,
     HEADER_API_VERSION,
 };
+
+use crate::Error;
 
 /// Semantic API version (major/minor).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

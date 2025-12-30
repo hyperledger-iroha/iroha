@@ -956,14 +956,16 @@ fn write_go_string_slice(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
-    use sorafs_chunker::fixtures::{FixtureProfile, FixtureVectors, to_hex};
     use std::{
         fs,
         path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
+    use sorafs_chunker::fixtures::{FixtureProfile, FixtureVectors, to_hex};
+
+    use super::*;
 
     const SIGNING_KEY_1: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
     const SIGNING_KEY_2: &str = "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f";

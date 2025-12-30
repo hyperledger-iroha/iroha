@@ -113,8 +113,9 @@ pub fn get_stream(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tokio_stream::empty;
+
+    use super::*;
 
     #[tokio::test]
     async fn collect_info_handles_empty_stream() {
@@ -124,8 +125,7 @@ mod tests {
 
     #[test]
     fn post_processed_info_handles_empty_data() {
-        use std::collections::HashMap;
-        use std::time::Duration;
+        use std::{collections::HashMap, time::Duration};
 
         let info = post_process::PostProcessedInfo::from((
             String::from("test"),

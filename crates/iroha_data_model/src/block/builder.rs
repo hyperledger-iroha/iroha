@@ -7,7 +7,7 @@ use std::{
 
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
 
-use crate::trigger::TimeTriggerEntrypoint;
+use super::{BlockHeader, BlockPayload, BlockResult, BlockSignature, SignedBlock};
 use crate::{
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
@@ -16,9 +16,8 @@ use crate::{
     transaction::signed::{
         SignedTransaction, TransactionEntrypoint, TransactionResult, TransactionResultInner,
     },
+    trigger::TimeTriggerEntrypoint,
 };
-
-use super::{BlockHeader, BlockPayload, BlockResult, BlockSignature, SignedBlock};
 
 /// Helper to incrementally assemble a block while maintaining Merkle roots.
 #[derive(Debug, Clone)]
@@ -167,8 +166,10 @@ impl BlockBuilder {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Hash, Signature};
+    use nonzero_ext::nonzero;
+
     use super::*;
-    use crate::transaction::signed::TransactionBuilder;
     use crate::{
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
@@ -178,9 +179,8 @@ mod tests {
         nexus::LaneId,
         prelude::*,
         sorafs::pin_registry::ManifestDigest,
+        transaction::signed::TransactionBuilder,
     };
-    use iroha_crypto::{Hash, Signature};
-    use nonzero_ext::nonzero;
 
     #[test]
     fn builder_roots_match_manual_construction() {

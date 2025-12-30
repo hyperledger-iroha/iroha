@@ -1,5 +1,4 @@
-use norito::columnar::AosEnumRef;
-use norito::columnar::*;
+use norito::columnar::{AosEnumRef, *};
 
 #[test]
 fn aos_view_str_bool() {

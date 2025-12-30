@@ -1,7 +1,8 @@
+use std::io::Write;
+
 use byteorder::{ByteOrder, LittleEndian};
 use iroha_schema::IntoSchema;
 use norito::core::*;
-use std::io::Write;
 
 fn crc64_test(data: &[u8]) -> u64 {
     let mut digest = crc64fast::Digest::new();

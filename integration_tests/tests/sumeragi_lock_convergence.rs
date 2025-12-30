@@ -6,13 +6,12 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, ensure, eyre};
+use integration_tests::sandbox;
 use iroha::client::{Client, Status};
 use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
 use norito::json::Value;
 use tokio::{task, time::sleep};
 use toml::Table;
-
-use integration_tests::sandbox;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_view_change_lock_convergence() -> Result<()> {

@@ -1,19 +1,22 @@
-use std::any::Any;
-use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::{
+    any::Any,
+    collections::HashMap,
+    ffi::OsStr,
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use ivm::{
     IVM, KotodamaCompiler, VMError,
+    host::IVMHost,
     kotodama::compiler::CompilerOptions,
     mock_wsv::{
         AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId,
         PermissionToken, WsvHost,
     },
+    syscalls,
 };
-use ivm::{host::IVMHost, syscalls};
 
 fn repository_root() -> PathBuf {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));

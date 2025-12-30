@@ -24,12 +24,15 @@
 //! // ... attach host, load programs, run, etc.
 //! ```
 
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
+
 pub use crate::ivm::{
     AccelerationPolicy, HardwareCapabilities, IvmBuilder, IvmConfig, IvmConfigBuilder,
 };
 use crate::{VMError, host::IVMHost, ivm::IVM, metadata::ProgramMetadata, syscalls};
-use std::any::Any;
-use std::sync::{Arc, Mutex};
 
 /// Runtime operations exposed by the VM core.
 pub trait VmEngine {

@@ -18,6 +18,14 @@ use iroha_version::codec::DecodeVersioned;
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use sha2::{Digest, Sha256};
 
+use super::{
+    Actor, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome, LaneAllocation, PipelinePhase,
+    RBC_MAX_TOTAL_CHUNKS, RbcSession,
+    pending_rbc::{
+        PENDING_RBC_STASH_LIMIT, PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages,
+    },
+    proposals::block_payload_bytes,
+};
 use crate::{
     queue::{Queue, RoutingDecision},
     sumeragi::{
@@ -31,15 +39,6 @@ use crate::{
         status,
     },
     tx::AcceptedTransaction,
-};
-
-use super::pending_rbc::{
-    PENDING_RBC_STASH_LIMIT, PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages,
-};
-use super::proposals::block_payload_bytes;
-use super::{
-    Actor, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome, LaneAllocation, PipelinePhase,
-    RBC_MAX_TOTAL_CHUNKS, RbcSession,
 };
 
 #[derive(Clone, Debug)]

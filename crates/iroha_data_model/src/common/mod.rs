@@ -1,5 +1,6 @@
-use crate::error::ParseError;
 use norito::core::{Archived, Error as NoritoCodecError};
+
+use crate::error::ParseError;
 
 /// Split a string into two non-empty parts separated by `delimiter`.
 ///

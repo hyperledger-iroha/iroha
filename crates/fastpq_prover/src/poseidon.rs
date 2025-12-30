@@ -7,12 +7,13 @@
 //! GPU support automatically fall back to the CPU path while keeping the API
 //! stable.
 
-use fastpq_isi::poseidon::{self as cpu, PoseidonSponge as CpuPoseidonSponge};
 use std::sync::OnceLock;
 
+/// Goldilocks field modulus (2^64 - 2^32 + 1).
+pub use cpu::FIELD_MODULUS;
+use fastpq_isi::poseidon::{self as cpu, PoseidonSponge as CpuPoseidonSponge};
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::{RATE, STATE_WIDTH};
-
 #[cfg(feature = "fastpq-gpu")]
 use {
     crate::backend::{self, GpuBackend},
@@ -26,9 +27,6 @@ use {
 
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 use crate::metal;
-
-/// Goldilocks field modulus (2^64 - 2^32 + 1).
-pub use cpu::FIELD_MODULUS;
 
 /// Trait describing a Poseidon backend.
 pub trait PoseidonBackend: Send + Sync {

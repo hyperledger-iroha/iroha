@@ -400,8 +400,9 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     fn temp_path() -> PathBuf {
         NamedTempFile::new().unwrap().into_temp_path().to_path_buf()

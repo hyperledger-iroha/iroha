@@ -2,11 +2,12 @@
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 //! ZK lane reporting: background verification emits a non-forking pipeline warning.
 
+use std::{num::NonZeroU64, sync::Arc};
+
 use iroha_core::pipeline::zk_lane;
 use iroha_crypto::streaming::TransportCapabilityResolutionSnapshot;
 use iroha_data_model::events::pipeline::PipelineEventBox;
 use norito::streaming::{CapabilityFlags, HpkeSuite, PrivacyBucketGranularity};
-use std::{num::NonZeroU64, sync::Arc};
 
 #[tokio::test]
 async fn zk_lane_emits_warning_on_rejected_trace() {
