@@ -78,7 +78,7 @@ SoraFS の CLI/SDK クレートはすべて SemVer を使用します:
 - `PATCH`: バグ修正、ドキュメントのみのリリース、観測可能な挙動を変えない
   依存関係更新。
 
-` sorafs_car`、`sorafs_manifest`、`sorafs_chunker` は常に同じバージョンに揃え、
+`sorafs_car`、`sorafs_manifest`、`sorafs_chunker` は常に同じバージョンに揃え、
 下流 SDK 利用者が単一のバージョン文字列に依存できるようにします。
 バージョンを上げる際は:
 
@@ -107,7 +107,7 @@ changelog を公開する必要があります。`docs/examples/sorafs_release_n
 
 ## 4. リリースフックの実行
 
-` scripts/release_sorafs_cli.sh` を実行し、各リリースに同梱する署名バンドルと
+`scripts/release_sorafs_cli.sh` を実行し、各リリースに同梱する署名バンドルと
 検証サマリーを生成します。ラッパーは必要に応じて CLI をビルドし、
 `sorafs_cli manifest sign` を呼び出し、すぐに `manifest verify-signature` を
 再実行してタグ付け前に失敗を顕在化させます。例:

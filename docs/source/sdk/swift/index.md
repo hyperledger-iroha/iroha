@@ -241,8 +241,9 @@ surface aligned with the OA11 roadmap guarantees.
 
 `OfflineReceiptChallenge.encode(chainId, ...)` reuses the shared native helper to emit the canonical
 Norito payload plus the chain-bound `irohaHash`/`clientDataHash` pair that Apple App Attest and
-Android KeyMint expect. Call it before generating platform proofs so every device feeds the exact
-same bytes into the attestation chain.【IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift:1】【IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift:1】
+Android KeyMint expect. Receipt `amount` strings must use scale 0 (integers only) to match the
+ledger verifier. Call it before generating platform proofs so every device feeds the exact same
+bytes into the attestation chain.【IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift:1】【IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift:1】
 
 ### Offline receipt builders
 

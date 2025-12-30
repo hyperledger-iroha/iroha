@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Translated the SoraFS release process across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS deployment notes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Enforced scale-0 amounts for offline receipts and policy limits (core + Swift tests), clarified offline-only finality in offline docs, and zeroized offline proof generation in the Norito bridge.
 - Translated the SoraFS CLI cookbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).

@@ -10,8 +10,29 @@ public final class OfflineReceiptChallengeTest {
   private OfflineReceiptChallengeTest() {}
 
   public static void main(final String[] args) throws Exception {
+    computeRejectsFractionalAmount();
     computeProducesClientHash();
     System.out.println("[IrohaAndroid] OfflineReceiptChallengeTest passed.");
+  }
+
+  private static void computeRejectsFractionalAmount() {
+    try {
+      OfflineReceiptChallenge.compute(
+          "testnet",
+          "inv-frac",
+          "bob@wonderland",
+          "usd#wonderland#treasury@wonderland",
+          "12.5",
+          1_700_000_000_000L,
+          "ABCDEF1234");
+    } catch (final IllegalArgumentException expected) {
+      if (expected.getMessage() == null
+          || !expected.getMessage().contains("amount must use scale 0")) {
+        throw new AssertionError("Unexpected error message: " + expected.getMessage());
+      }
+      return;
+    }
+    throw new AssertionError("Expected fractional amount to be rejected");
   }
 
   private static void computeProducesClientHash() throws NoSuchAlgorithmException {

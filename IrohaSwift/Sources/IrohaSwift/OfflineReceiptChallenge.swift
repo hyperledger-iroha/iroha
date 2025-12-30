@@ -26,6 +26,7 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         if chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw Error.invalidInput("chainId must not be empty")
         }
+        try validateAmount(amount)
         do {
             guard let native = try NoritoNativeBridge.shared.offlineReceiptChallenge(
                 chainId: chainId,
@@ -102,6 +103,20 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         } catch {
             let message = status.map { "\(error.localizedDescription) (bridge code \($0))" } ?? error.localizedDescription
             throw Error.invalidInput(message)
+        }
+    }
+
+    private static func validateAmount(_ value: String) throws {
+        do {
+            _ = try OfflineNorito.encodeNumeric(value)
+            let parsed = try OfflineDecimal.parse(value)
+            if parsed.scale != 0 {
+                throw Error.invalidInput("amount must use scale 0: \(value)")
+            }
+        } catch let error as OfflineNoritoError {
+            throw Error.invalidInput(error.localizedDescription)
+        } catch {
+            throw Error.invalidInput("amount must be numeric: \(value)")
         }
     }
 }
