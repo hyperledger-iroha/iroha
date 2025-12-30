@@ -409,6 +409,11 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         height: u64,
     ) -> Vec<PeerId> {
+        let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let active = self.effective_commit_topology();
+        if height <= committed_height.saturating_add(1) && !active.is_empty() {
+            return active;
+        }
         if let Some(selection) =
             super::persisted_roster_for_block(self.state.as_ref(), &self.kura, height, block_hash)
                 .or_else(|| super::block_sync_history_roster_for_block(block_hash, height))

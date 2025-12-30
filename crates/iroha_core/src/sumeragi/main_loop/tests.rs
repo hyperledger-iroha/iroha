@@ -14373,9 +14373,16 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
         .unwrap_or(now);
     actor.phase_tracker.start_new_round(tracked_height, start);
 
+    let pending_block = sample_block(tracked_height, view as u32, Some(block1.hash()));
+    let payload_bytes = super::proposals::block_payload_bytes(&pending_block);
+    let payload_hash = Hash::new(&payload_bytes);
+    actor.pending.pending_blocks.insert(
+        pending_block.hash(),
+        PendingBlock::new(pending_block.clone(), payload_hash, tracked_height, view),
+    );
+
     let epoch = actor.current_epoch();
-    let vote_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]));
+    let vote_hash = pending_block.hash();
     actor.vote_log.insert(
         (Phase::Precommit, tracked_height, view, epoch, sender_a),
         crate::sumeragi::consensus::Vote {
@@ -14406,6 +14413,89 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
             .get_proposal(tracked_height, view)
             .is_none(),
         "proposal should not be assembled when precommit votes exist"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let block1 = sample_block(1, 0, None);
+    actor.kura.store_block(block1.clone()).expect("store block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let highest_qc = actor.latest_committed_qc().expect("latest committed qc");
+    let topology_len =
+        u32::try_from(actor.effective_commit_topology().len()).expect("topology len fits u32");
+    let local_idx = actor
+        .local_validator_index(&actor.state.view())
+        .expect("local validator index");
+    let view = u64::from(local_idx);
+    let sender_a = ValidatorIndex::try_from((local_idx + 1) % topology_len).expect("sender index");
+    let sender_b = ValidatorIndex::try_from((local_idx + 2) % topology_len).expect("sender index");
+
+    actor
+        .propose
+        .new_view_tracker
+        .record(tracked_height, view, sender_a, highest_qc);
+    actor
+        .propose
+        .new_view_tracker
+        .record(tracked_height, view, sender_b, highest_qc);
+
+    let offline_grace = actor.commit_quorum_timeout();
+    let now = Instant::now();
+    let start = now
+        .checked_sub(offline_grace + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.phase_tracker.start_new_round(tracked_height, start);
+
+    let epoch = actor.current_epoch();
+    let vote_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x45; Hash::LENGTH]));
+    actor.vote_log.insert(
+        (Phase::Precommit, tracked_height, view, epoch, sender_a),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Precommit,
+            block_hash: vote_hash,
+            height: tracked_height,
+            view,
+            epoch,
+            signer: sender_a,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        },
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "pacemaker should ignore precommit votes for unknown block"
+    );
+    assert!(
+        actor
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_some(),
+        "proposal should be assembled when only unknown precommit votes exist"
     );
 
     harness.shutdown.send();
@@ -16337,12 +16427,10 @@ fn qc_validation_remaps_signers_across_block_and_qc_views() {
     )
     .expect("qc validation should succeed after remapping signers");
 
-    let expected_signers = super::normalize_signer_indices_to_canonical(
-        &block_signers,
-        usize::try_from(block.header().view_change_index()).expect("view"),
-        topology.as_ref().len(),
-        super::PERMISSIONED_TAG,
-    );
+    let expected_signers =
+        super::qc_signer_indices(&qc, topology.as_ref().len(), topology.as_ref().len())
+            .expect("bitmap parses")
+            .voting;
     assert_eq!(voting_signers, expected_signers);
     assert_eq!(present, 3);
 }
@@ -16651,6 +16739,45 @@ fn tally_qc_against_block_signers_accepts_without_votes() {
 
     assert_eq!(tally.voting_len(), 2);
     assert_eq!(tally.present_signers, 2);
+}
+
+#[test]
+fn tally_qc_against_block_signers_preserves_bitmap_indices() {
+    let chain: ChainId = "qc-tally-bitmap".parse().expect("chain id parses");
+    let (keypairs, topology) = sample_bls_topology(4);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x78; Hash::LENGTH]));
+    let qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        4,
+        1,
+        0,
+        vec![0b0000_0111],
+        crate::sumeragi::consensus::Phase::Precommit,
+        &topology,
+        &keypairs,
+    );
+    let block_signers: BTreeSet<_> = [0_u32, 1_u32, 2_u32, 3_u32].into_iter().collect();
+
+    let tally = super::tally_qc_against_block_signers(
+        &qc,
+        &topology,
+        &block_signers,
+        0,
+        &chain,
+        super::PERMISSIONED_TAG,
+        None,
+    )
+    .expect("block-signers tally should preserve QC bitmap indices");
+
+    assert!(tally.voting_signers.contains(
+        &ValidatorIndex::try_from(0u32).expect("validator index parses")
+    ));
+    assert!(!tally.voting_signers.contains(
+        &ValidatorIndex::try_from(3u32).expect("validator index parses")
+    ));
+    assert_eq!(tally.present_signers, 3);
 }
 
 #[test]

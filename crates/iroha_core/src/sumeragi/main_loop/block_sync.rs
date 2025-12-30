@@ -572,7 +572,7 @@ impl Actor {
                     return Ok(());
                 }
                 let qc_signers = qc_signer_count(&qc);
-                match validate_block_sync_qc(
+                match tally_qc_against_block_signers(
                     &qc,
                     &topology,
                     &block_signers,
@@ -581,14 +581,14 @@ impl Actor {
                     self.mode_tag(),
                     prf_seed,
                 ) {
-                    Ok((signer_set, present_signers)) => {
+                    Ok(tally) => {
                         crate::sumeragi::status::record_precommit_signers(
                             crate::sumeragi::status::PrecommitSignerRecord {
                                 block_hash,
                                 height: qc.height,
                                 view: qc.view,
                                 epoch: qc.epoch,
-                                signers: signer_set.clone(),
+                                signers: tally.voting_signers.clone(),
                                 bls_aggregate_signature: qc
                                     .aggregate
                                     .bls_aggregate_signature
@@ -596,13 +596,7 @@ impl Actor {
                                 roster_len: topology.as_ref().len(),
                             },
                         );
-                        self.note_validated_qc_tally(
-                            &qc,
-                            QcSignerTally {
-                                voting_signers: signer_set.clone(),
-                                present_signers,
-                            },
-                        );
+                        self.note_validated_qc_tally(&qc, tally.clone());
                         if !self.process_precommit_qc(&qc, true, allow_nonextending_qc) {
                             info!(
                                 incoming_hash = %block_hash,
@@ -641,13 +635,13 @@ impl Actor {
                         if let Some(telemetry) = self.telemetry_handle() {
                             telemetry.note_qc_signer_counts(
                                 "precommit",
-                                present_signers,
-                                signer_set.len(),
+                                tally.present_signers,
+                                tally.voting_signers.len(),
                             );
                         }
                         debug!(
                             incoming_hash = %block_hash,
-                            signers = signer_set.len(),
+                            signers = tally.voting_signers.len(),
                             qc_signers,
                             "applied block sync QC after validation"
                         );
