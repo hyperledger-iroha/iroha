@@ -49,7 +49,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Re-run `training_script_2` (20x) after the precommit vote lock + proposal deferral to confirm no forked commits, no long stalls, and ~1s block cadence across runs (20/20 succeeded; height10 8-9s; no long stalls).
    - [x] Re-run `training_script_2` with the fast localnet pipeline defaults, DA availability timeout tuning, and redundant-send fanout to confirm tx status timeouts and rare >40s gaps are gone (20/20 succeeded; no tx status timeouts or >40s gaps; ~0.95s cadence).【crates/iroha_kagami/src/localnet.rs】【crates/iroha_core/src/sumeragi/main_loop.rs】
    - [x] Re-run localnet after the availability-vote emission fixes (including deferred-validation votes) to confirm missing-availability QC warnings and DAG fingerprint mismatch warnings are gone (0 missing-availability warnings; 0 DAG fingerprint mismatches).
-   - [ ] Re-run the seven-peer DA consistency test after restoring the DA quorum timeout multiplier to confirm view-change stalls no longer stretch commits.【crates/iroha_core/src/sumeragi/main_loop.rs】
+   - [x] Re-run the seven-peer DA consistency test after restoring the DA quorum timeout multiplier to confirm view-change stalls no longer stretch commits (pass: `cargo test -p integration_tests --test mod seven_peer_cross_peer_consistency_basic`).【crates/iroha_core/src/sumeragi/main_loop.rs】
    - [x] Eliminate remaining tx status timeouts (approve/propose/register) and rare >40s block gaps observed during the 20-run localnet sweep.【crates/iroha/src/client.rs】【crates/iroha_kagami/src/localnet.rs】【crates/iroha_kagami/README.md】
 
 5. **INTEGRATION-TEST-STABILITY — Replace transient skips with deterministic readiness** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈴 Completed, target TBD)
@@ -135,7 +135,11 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraFS capacity simulation runbook translations completed across all locales in `docs/portal/docs`, `docs/portal/i18n`, and `docs/source/sorafs/runbooks`.
    - [x] Portal SoraFS runbooks index translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS manifest pipeline translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
-   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond quickstart/runbooks index/capacity simulation/manifest pipeline, then fill remaining portal stubs per locale.
+   - [x] Portal SoraFS orchestrator ops runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS orchestrator tuning guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS multi-source rollout runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS orchestrator configuration guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond quickstart/runbooks index/capacity simulation/manifest pipeline/orchestrator ops/orchestrator tuning/multi-source rollout/orchestrator config, then fill remaining portal stubs per locale.
     - [x] Ensure Akkadian translations are semantic and written in cuneiform (no transliteration).
     - [x] Extend CLI i18n coverage (remaining messages and clap help output).
     - [x] Fill governance schedule placeholders in scripts/templates that currently say TBD.
