@@ -123,7 +123,7 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
     // Assuming Alice already has the CanUpgradeExecutor permission
     let builder = NetworkBuilder::new()
         .with_ivm_fuel(iroha_test_network::IvmFuelConfig::Auto)
-        .with_peers(1);
+        .with_min_peers(4);
     let Some(network) =
         sandbox::start_network_async_or_skip(builder, stringify!(can_upgrade_executor)).await?
     else {

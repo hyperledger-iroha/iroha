@@ -75,6 +75,7 @@ final class OfflineAuditLoggerTests: XCTestCase {
             to: certificate.controller,
             assetId: certificate.allowance.assetId,
             amount: "25",
+            issuedAtMs: certificate.issuedAtMs + 1000,
             invoiceId: "inv-audit",
             platformProof: proof,
             platformSnapshot: nil,

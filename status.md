@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- Resolved merge conflicts in Torii test utilities, roles integration tests, and the status list.
+- Enforced a 4-peer minimum for integration-test networks and updated peer-start paths that bypass the sandbox to avoid DA single-peer stalls.
+- Aligned `iroha_torii::test_utils` with current Torii behavior (chain_id validation + full-bytecode contract hashing) and added focused unit tests.
+- Restored `iroha_torii::test_utils` helpers for Torii integration tests, including queue-apply utilities and JSON request builders.
 - Translated the SoraFS chunker conformance guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS chunker registry charter across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS chunker registry across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).

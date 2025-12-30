@@ -2500,6 +2500,17 @@ impl NetworkBuilder {
         self
     }
 
+    /// Ensure the network has at least `min_peers` peers.
+    ///
+    /// If the current peer count is below `min_peers`, it is raised to that value.
+    pub fn with_min_peers(mut self, min_peers: usize) -> Self {
+        assert_ne!(min_peers, 0);
+        if self.n_peers < min_peers {
+            self.n_peers = min_peers;
+        }
+        self
+    }
+
     /// Set the total consensus pipeline time (block production + commit).
     ///
     /// The value is interpreted with millisecond precision. Internally we split it into
@@ -5534,6 +5545,21 @@ mod tests {
             let _body =
                 norito::literal::parse("addr", addr_literal).expect("parse trusted peer literal");
         }
+    }
+
+    #[test]
+    fn with_min_peers_clamps_builder() {
+        let network = NetworkBuilder::new()
+            .with_peers(2)
+            .with_min_peers(4)
+            .build();
+        assert_eq!(network.peers().len(), 4);
+
+        let network = NetworkBuilder::new()
+            .with_peers(5)
+            .with_min_peers(4)
+            .build();
+        assert_eq!(network.peers().len(), 5);
     }
 
     #[test]

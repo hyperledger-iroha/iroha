@@ -129,6 +129,7 @@ final class OfflineJournalTests: XCTestCase {
             to: certificate.controller,
             assetId: certificate.allowance.assetId,
             amount: certificate.allowance.amount,
+            issuedAtMs: certificate.issuedAtMs + 1000,
             invoiceId: "inv-1",
             platformProof: proof,
             platformSnapshot: nil,

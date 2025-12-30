@@ -13,12 +13,14 @@ final class OfflineSpendReceiptTests: XCTestCase {
                                 assertion: Data([1, 2, 3]),
                                 challengeHash: challengeHash)
         )
+        let issuedAtMs = certificate.issuedAtMs + 1000
         let base = OfflineSpendReceipt(
             txId: txId,
             from: certificate.controller,
             to: certificate.controller,
             assetId: certificate.allowance.assetId,
             amount: certificate.allowance.amount,
+            issuedAtMs: issuedAtMs,
             invoiceId: "inv-001",
             platformProof: proof,
             platformSnapshot: nil,
@@ -31,6 +33,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
             to: certificate.controller,
             assetId: certificate.allowance.assetId,
             amount: certificate.allowance.amount,
+            issuedAtMs: issuedAtMs,
             invoiceId: "inv-001",
             platformProof: proof,
             platformSnapshot: nil,
@@ -45,6 +48,7 @@ final class OfflineSpendReceiptTests: XCTestCase {
             to: certificate.controller,
             assetId: certificate.allowance.assetId,
             amount: certificate.allowance.amount,
+            issuedAtMs: issuedAtMs,
             invoiceId: "inv-001",
             platformProof: proof,
             platformSnapshot: snapshot,
