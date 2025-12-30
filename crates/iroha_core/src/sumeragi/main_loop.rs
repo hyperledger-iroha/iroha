@@ -1037,7 +1037,7 @@ pub(crate) fn validate_block_sync_qc(
         roster_len,
         mode_tag,
     );
-    let normalized_present = normalize_signer_indices_to_canonical(
+    let _normalized_present = normalize_signer_indices_to_canonical(
         &parsed_signers.present,
         signature_topology.view_change_index(),
         roster_len,
@@ -1058,7 +1058,8 @@ pub(crate) fn validate_block_sync_qc(
             return Err(QcValidationError::SignerMissingFromBlock { signer: missing });
         }
     }
-    Ok((normalized_voting, normalized_present.len()))
+    // Return the raw bitmap indices so cached signers reproduce the QC bitmap correctly.
+    Ok((parsed_signers.voting, parsed_signers.present.len()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1182,7 +1183,7 @@ fn tally_qc_against_block_signers(
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> Result<QcSignerTally, QcValidationError> {
-    validate_block_sync_qc(
+    let _ = validate_block_sync_qc(
         qc,
         topology,
         block_signers,
@@ -1190,10 +1191,13 @@ fn tally_qc_against_block_signers(
         chain_id,
         mode_tag,
         prf_seed,
-    )
-    .map(|(voting_signers, present_signers)| QcSignerTally {
-        voting_signers,
-        present_signers,
+    )?;
+    // Keep bitmap indices as-is so cached signers reproduce the QC bitmap correctly.
+    let roster_len = topology.as_ref().len();
+    let parsed = qc_signer_indices(qc, roster_len, roster_len)?;
+    Ok(QcSignerTally {
+        voting_signers: parsed.voting,
+        present_signers: parsed.present.len(),
     })
 }
 
