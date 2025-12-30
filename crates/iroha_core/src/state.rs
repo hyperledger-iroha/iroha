@@ -24511,14 +24511,12 @@ mod tests {
         let signed_block: SignedBlock = block.into();
         let mut state_block = state.block(signed_block.header());
 
-        state_block
-            .world
-            .peers_mut_for_testing()
-            .mutate_vec(|peers| {
-                peers.clear();
-                peers.extend(base_topology.clone());
-                peers.push(new_peer.clone());
-            });
+        {
+            let peers = state_block.world.peers_mut_for_testing().get_mut();
+            peers.clear();
+            peers.extend(base_topology.clone());
+            let _ = peers.push(new_peer.clone());
+        }
 
         let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});

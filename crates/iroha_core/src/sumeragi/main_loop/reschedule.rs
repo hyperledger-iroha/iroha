@@ -283,24 +283,23 @@ impl Actor {
             })
             .count();
         let has_precommit_votes = raw_vote_count > 0;
-        let (requeued, failures, _duplicate_failures, _gossip_hashes) = if has_precommit_votes {
-            // Keep the block's transactions out of the queue once precommit votes exist so new
-            // proposals cannot conflict with the precommitted subject.
-            (0, 0, 0, Vec::new())
-        } else {
-            let txs: Vec<SignedTransaction> = pending.block.transactions_vec().clone();
-            requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs)
-        };
         let already_rescheduled = pending.last_quorum_reschedule.is_some();
         let last_reschedule_ms = pending
             .last_quorum_reschedule
             .map(|ts| now.saturating_duration_since(ts).as_millis());
-        pending.mark_quorum_reschedule(now);
         let has_availability_qc = pending.availability_qc_view.is_some();
-        let drop_pending = !has_precommit_votes
-            && has_availability_qc
-            && already_rescheduled
-            && raw_vote_count < min_votes_for_commit;
+        let drop_pending =
+            has_availability_qc && already_rescheduled && raw_vote_count < min_votes_for_commit;
+        let (requeued, failures, _duplicate_failures, _gossip_hashes) =
+            if !has_precommit_votes || drop_pending {
+                // Avoid conflicting proposals once precommit votes exist, unless we've already
+                // retried with availability evidence and need to unblock proposal assembly.
+                let txs: Vec<SignedTransaction> = pending.block.transactions_vec().clone();
+                requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs)
+            } else {
+                (0, 0, 0, Vec::new())
+            };
+        pending.mark_quorum_reschedule(now);
         let topology_peers = self.effective_commit_topology();
         let local_peer_id = self.common_config.peer.id().clone();
         let rebroadcast = self.rebroadcast_pending_block_updates(
