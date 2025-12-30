@@ -42,6 +42,7 @@ public final class OfflineReceiptChallenge {
     if (chainId == null || chainId.trim().isEmpty()) {
       throw new IllegalArgumentException("chainId must not be empty");
     }
+    requireScaleZeroAmount(amount);
     if (!NATIVE_AVAILABLE) {
       throw new IllegalStateException("connect_norito_bridge is not available in this runtime");
     }
@@ -86,4 +87,43 @@ public final class OfflineReceiptChallenge {
       String nonceHex,
       byte[] irohaHashOut,
       byte[] clientHashOut);
+
+  private static void requireScaleZeroAmount(final String amount) {
+    if (amount == null) {
+      throw new IllegalArgumentException("amount must not be null");
+    }
+    final String trimmed = amount.trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException("amount must not be empty");
+    }
+    boolean seenDot = false;
+    int scale = 0;
+    int index = 0;
+    final char first = trimmed.charAt(0);
+    if (first == '+' || first == '-') {
+      index = 1;
+    }
+    if (index >= trimmed.length()) {
+      throw new IllegalArgumentException("amount must be numeric: " + amount);
+    }
+    for (int i = index; i < trimmed.length(); i++) {
+      final char ch = trimmed.charAt(i);
+      if (ch == '.') {
+        if (seenDot) {
+          throw new IllegalArgumentException("amount must be numeric: " + amount);
+        }
+        seenDot = true;
+        continue;
+      }
+      if (ch < '0' || ch > '9') {
+        throw new IllegalArgumentException("amount must be numeric: " + amount);
+      }
+      if (seenDot) {
+        scale++;
+      }
+    }
+    if (scale != 0) {
+      throw new IllegalArgumentException("amount must use scale 0: " + amount);
+    }
+  }
 }

@@ -845,6 +845,7 @@ fn compute_offline_receipt_challenge(
     let receiver = AccountId::from_str(&receiver_raw).map_err(|_| BridgeError::OfflineReceiver)?;
     let asset = AssetId::from_str(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
+    ensure_integer_scale(&amount)?;
     let nonce = Hash::from_str(&nonce_raw).map_err(|_| BridgeError::OfflineNonce)?;
     let preimage = OfflineReceiptChallengePreimage {
         invoice_id,
@@ -868,6 +869,7 @@ fn aggregate_receipt_amounts(amounts: &[Numeric]) -> BridgeResult<Numeric> {
     }
     let mut total = Numeric::zero();
     for amount in amounts {
+        ensure_integer_scale(amount)?;
         total = total
             .checked_add(amount.clone())
             .ok_or(BridgeError::Quantity)?;
@@ -8237,6 +8239,14 @@ mod offline_fastpq_proof_tests {
         proof
     }
 
+    #[test]
+    fn sum_proof_rejects_fractional_receipts() {
+        let mut request = sample_sum_request();
+        request.receipt_amounts = vec![Numeric::new(10, 1), Numeric::new(15, 0)];
+        let result = generate_offline_fastpq_sum_proof(&request);
+        assert!(matches!(result, Err(BridgeError::Quantity)));
+    }
+
     fn call_proof_counter(json_bytes: &[u8]) -> Vec<u8> {
         let mut out_ptr: *mut u8 = ptr::null_mut();
         let mut out_len: c_ulong = 0;
@@ -9622,6 +9632,21 @@ mod offline_receipt_challenge_tests {
             nonce,
         );
         assert!(matches!(result, Err(BridgeError::ChainId)));
+    }
+
+    #[test]
+    fn receipt_challenge_rejects_fractional_amount() {
+        let nonce = Hash::new(b"receipt-nonce").to_string();
+        let result = compute_offline_receipt_challenge(
+            "test-chain".to_string(),
+            "inv-1".to_string(),
+            "alice@wonderland".to_string(),
+            "xor#alice@wonderland".to_string(),
+            "1.5".to_string(),
+            0,
+            nonce,
+        );
+        assert!(matches!(result, Err(BridgeError::Quantity)));
     }
 }
 
