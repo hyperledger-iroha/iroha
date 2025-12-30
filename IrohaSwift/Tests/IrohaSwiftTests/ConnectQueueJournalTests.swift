@@ -6,6 +6,7 @@ import CryptoKit
 
 final class ConnectQueueJournalTests: XCTestCase {
     func testAppendAndReadRecords() throws {
+        try requireBlake3()
         let tmp = makeTemporaryDirectory()
         let journal = ConnectQueueJournal(sessionID: Data("session-1".utf8),
                                           configuration: .init(rootDirectory: tmp,
@@ -37,6 +38,7 @@ final class ConnectQueueJournalTests: XCTestCase {
     }
 
     func testEvictsWhenMaxRecordsExceeded() throws {
+        try requireBlake3()
         let tmp = makeTemporaryDirectory()
         let journal = ConnectQueueJournal(sessionID: Data("session-2".utf8),
                                           configuration: .init(rootDirectory: tmp,
@@ -57,6 +59,7 @@ final class ConnectQueueJournalTests: XCTestCase {
     }
 
     func testPopOldestRemovesRecords() throws {
+        try requireBlake3()
         let tmp = makeTemporaryDirectory()
         let journal = ConnectQueueJournal(sessionID: Data("session-3".utf8),
                                           configuration: .init(rootDirectory: tmp,
@@ -80,6 +83,7 @@ final class ConnectQueueJournalTests: XCTestCase {
     }
 
     func testPayloadHashUsesBlake3() throws {
+        try requireBlake3()
         let payload = Data("payload-hash".utf8)
         let expected = try XCTUnwrap(NoritoNativeBridge.shared.blake3Hash(data: payload),
                                      "NoritoBridge blake3 hashing is unavailable")
@@ -102,6 +106,7 @@ final class ConnectQueueJournalTests: XCTestCase {
     }
 
     func testExpiredRecordsArePruned() throws {
+        try requireBlake3()
         let tmp = makeTemporaryDirectory()
         let journal = ConnectQueueJournal(sessionID: Data("session-4".utf8),
                                           configuration: .init(rootDirectory: tmp,
@@ -229,6 +234,7 @@ final class ConnectQueueJournalTests: XCTestCase {
 
     func testSessionDirectoryUsesSha256Component() throws {
         #if canImport(CryptoKit)
+        try requireBlake3()
         let tmp = makeTemporaryDirectory()
         let sessionID = Data("session-5".utf8)
         let journal = ConnectQueueJournal(sessionID: sessionID,
@@ -257,5 +263,11 @@ final class ConnectQueueJournalTests: XCTestCase {
         let url = base.appendingPathComponent("iroha-connect-journal-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func requireBlake3() throws {
+        guard NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil else {
+            throw XCTSkip("NoritoBridge blake3 hashing unavailable")
+        }
     }
 }

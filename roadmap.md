@@ -30,7 +30,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 2. **OFFLINE-SECURITY-HARDENING — Close remaining offline receipt threat gaps** (Core/SDK, Line: Shared, Owner: Offline WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Bind receipt challenges to `chain_id` across core, SDKs, and FFI helpers.
    - [x] Enforce `policy.max_tx_value` during settlement and surface `max_tx_value_exceeded` rejections.
-   - [x] Require scale-0 amounts across receipts, policy limits, and balance proofs in core + SDK validators.
+   - [x] Require allowance-scale consistency across receipts, policy limits, and balance proofs in core + SDK validators.
    - [x] Add range-proof verification for `resulting_commitment` (non-negative/bounded balance) and update docs/tests.
    - [x] Document operational guardrails for front-running/rollback risk and rooted-device privacy exposure.
    - [x] Add receipt timestamps + `max_receipt_age_ms` guardrails to reduce front-running and replay risk; update SDK UX and docs.
@@ -150,6 +150,19 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraFS multi-source rollout runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS orchestrator configuration guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS node operations runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS node storage design translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS node implementation plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS provider admission policy translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS multi-source provider advert translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS reserve ledger digest translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS migration ledger translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS migration roadmap translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS pin registry implementation plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS pin registry operations runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS pin registry validation plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS portal publish plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS signing ceremony translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS storage capacity marketplace translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS dispute & revocation runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS capacity reconciliation runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS gateway & DNS kickoff runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
@@ -169,7 +182,10 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraFS developer CLI cookbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS deployment notes translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS release process translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
-   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond quickstart/runbooks index/capacity simulation/manifest pipeline/orchestrator ops/orchestrator tuning/multi-source rollout/orchestrator config/node operations/dispute revocation runbook/capacity reconciliation/gateway & DNS kickoff runbook/taikai anchor runbook/operations playbook/observability plan/node-client protocol/staging manifest playbook/chunker registry rollout checklist/chunker registry/chunker registry charter/chunker conformance/chunker profile authoring/deal engine/developer index/developer ci/developer cli/developer deployment/developer releases, then fill remaining portal stubs per locale.
+   - [x] Portal SoraFS direct-mode fallback pack translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS SDK index translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS Rust SDK snippets translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond the completed SoraFS docs set (quickstart, runbooks, pipeline/orchestrator guides, node plan/storage, node operations, provider admission policy, multi-source provider advert, reserve ledger digest, migration ledger, migration roadmap, pin registry plan, pin registry ops, pin registry validation plan, portal publish plan, signing ceremony, storage capacity marketplace, chunker docs, developer docs, SDK docs), then fill remaining portal stubs per locale.
     - [x] Ensure Akkadian translations are semantic and written in cuneiform (no transliteration).
     - [x] Extend CLI i18n coverage (remaining messages and clap help output).
     - [x] Fill governance schedule placeholders in scripts/templates that currently say TBD.

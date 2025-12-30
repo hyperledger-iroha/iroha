@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: be3b8a2a4eaec95f5d4390ef7d143cd25681cce8ca3b5c4733f8036487daac24
 source_last_modified: "2025-11-15T11:19:21.711876+00:00"
-translation_last_reviewed: 2025-12-29
+translation_last_reviewed: 2025-12-30
 ---
 
 ---
@@ -161,9 +161,7 @@ pub async fn fetch_payload(
 Defina `transport_policy` como `Some(TransportPolicy::SoranetStrict)` quando uploads
 precisarem recusar relays classicos, ou `Some(TransportPolicy::DirectOnly)` quando
 SoraNet precisar ser totalmente bypassada. Aponte `scoreboard.persist_path` para o
-
-diretorio
- de artefatos de release, opcionalmente fixe `scoreboard.now_unix_secs` e preencha
+diretorio de artefatos de release, opcionalmente fixe `scoreboard.now_unix_secs` e preencha
 `scoreboard.metadata` com contexto de captura (labels de fixtures, alvo Torii, etc.)
 para que `cargo xtask sorafs-adoption-check` consuma JSON deterministico entre SDKs
 com o blob de provenance que SF-6c espera.

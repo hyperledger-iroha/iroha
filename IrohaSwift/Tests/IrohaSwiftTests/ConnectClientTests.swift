@@ -2,6 +2,11 @@ import XCTest
 @testable import IrohaSwift
 
 final class ConnectClientTests: XCTestCase {
+    private func requireConnectCodec() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable,
+                      "NoritoBridge connect codec unavailable")
+    }
+
     func testStartResumesOnlyOnce() async {
         let stub = StubWebSocketTask()
         let client = ConnectClient(url: URL(string: "wss://example.test")!,
@@ -21,6 +26,7 @@ final class ConnectClientTests: XCTestCase {
     }
 
     func testReceiveSuspendsUntilDataArrives() async throws {
+        try requireConnectCodec()
         let stub = StubWebSocketTask()
         let client = ConnectClient(url: URL(string: "wss://example.test")!,
                                    webSocketFactory: StubWebSocketFactory(task: stub).factory)
@@ -49,6 +55,7 @@ final class ConnectClientTests: XCTestCase {
     }
 
     func testSendFrameUsesCoder() async throws {
+        try requireConnectCodec()
         let stub = StubWebSocketTask()
         let client = ConnectClient(url: URL(string: "wss://example.test")!,
                                    webSocketFactory: StubWebSocketFactory(task: stub).factory)

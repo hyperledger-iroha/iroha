@@ -269,13 +269,14 @@ to disable the age gate in private deployments.
   checks `s_G·G + s_H·H == R + c·U`.【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:70】
 - The range proof is a per-bit OR proof: each bit commitment is proven to be either `0·G` or `1·G`,
   and the sum of the bit commitments is shown to match `C_res - C_init - Δ·G`.
-- `claimed_delta` and the committed values must use scale-0 `Numeric` values; fractional scales are
-  rejected in proof generation and verification. Receipt amounts and policy limits
-  (`max_balance`, `max_tx_value`, allowance `amount`) must also use scale 0; fractional values are
-  rejected during registration and bundle admission.
+- `claimed_delta` and the committed values must use the allowance's canonical `Numeric` scale;
+  scale mismatches are rejected in proof generation and verification. Receipt amounts and policy
+  limits (`max_balance`, `max_tx_value`, allowance `amount`) must use the same scale; mismatches
+  are rejected during registration and bundle admission. The canonical scale is the asset
+  definition scale when specified; otherwise the allowance amount's scale is used.
 - No verifying key is required: the transcript label and generator derivation are hard-coded, so
   nodes do not fetch or rotate any VK material. Proofs are rejected when commitments are not 32-byte
-  Ristretto encodings or when `claimed_delta` uses a fractional scale.【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:318】
+  Ristretto encodings or when `claimed_delta` uses the wrong scale.【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:318】
 - SDK helpers: the Swift SDK exposes `OfflineBalanceProofBuilder` (update commitment + generate
   proof), and the Android SDK exposes `OfflineBalanceProof`. Wallets pass the chain id, claimed
   delta, resulting value, and the current/randomized blinding seeds to obtain both the next
@@ -448,7 +449,8 @@ resource envelopes defined in OA14.1; SDKs call the host through the FFI/bridge 
 Ledger invariants enforced during `SubmitOfflineToOnlineTransfer`:
 
 1. All receipts share the same sender certificate, asset definition, receiver, and controller.
-2. Every receipt amount is positive, uses scale 0, and stays within `policy.max_tx_value`.
+2. Every receipt amount is positive, uses the allowance scale, and stays within
+   `policy.max_tx_value`.
 3. Aggregate amount equals `balance_proof.claimed_delta`.
 4. `record.current_commitment == balance_proof.initial_commitment`.
 5. `record.remaining_amount >= claimed_delta`; remaining balance is decremented on success.

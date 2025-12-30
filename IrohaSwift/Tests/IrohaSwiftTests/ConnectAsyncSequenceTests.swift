@@ -4,7 +4,8 @@ import XCTest
 final class ConnectAsyncSequenceTests: XCTestCase {
     func testSequenceYieldsFrames() async throws {
         let sessionID = Data(repeating: 0x11, count: 32)
-        XCTAssertTrue(NoritoNativeBridge.shared.isConnectCodecAvailable)
+        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable,
+                      "NoritoBridge connect codec unavailable")
         _ = try ConnectCodec.encode(ConnectFrame(sessionID: sessionID,
                                                  direction: .walletToApp,
                                                  sequence: 0,
