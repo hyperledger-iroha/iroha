@@ -22,7 +22,7 @@ async fn emits_block_rejected_event() -> Result<()> {
     }
     // Start a small network
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_peers(2),
+        NetworkBuilder::new().with_min_peers(4),
         stringify!(emits_block_rejected_event),
     )
     .await?

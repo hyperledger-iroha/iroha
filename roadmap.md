@@ -191,6 +191,11 @@ Unless stated otherwise, roadmap items call out which release line they affect.
     - [x] Refactor `account_admission.rs`, `settlement.rs` error payloads, and multisig ownership/borrowing to remove lint suppressions.【crates/iroha_core/src/smartcontracts/isi/account_admission.rs:1】【crates/iroha_core/src/smartcontracts/isi/settlement.rs:1】【crates/iroha_core/src/smartcontracts/isi/multisig.rs:1】
     - [x] Consolidate boolean policy knobs in `state.rs` into enums/bitflags and split large validation helpers.
 
+34. **EVENTS-PIPELINE-HANG — Unblock mod.rs integration event tests** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈺 In Progress, target TBD)
+   - [x] Reproduce `cargo test -p integration_tests --test mod` hangs and confirm DA-enabled single-peer networks stall on post-genesis commits.
+   - [x] Enforce a 4-peer minimum in the integration-test harness and update direct peer-start paths to avoid single-peer stalls.
+   - [ ] Re-run the full `cargo test -p integration_tests --test mod` suite to confirm stability.
+
 ## Archived
 
 33. **TRYBUILD-REL-PATHS — Normalize trybuild manifest paths** (Tooling/Tests, Line: Shared, Owner: Tooling WG, Priority: Low, Status: 🈴 Completed, target TBD)
