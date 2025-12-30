@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Enforced scale-0 validation for offline receipt challenge amounts in the bridge + Swift/Android SDKs, with new tests and docs updates.
 - Translated the SoraFS release process across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS deployment notes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Enforced scale-0 amounts for offline receipts and policy limits (core + Swift tests), clarified offline-only finality in offline docs, and zeroized offline proof generation in the Norito bridge.
