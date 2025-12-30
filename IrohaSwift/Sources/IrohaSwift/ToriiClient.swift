@@ -1967,6 +1967,17 @@ extension ToriiJSONValue {
         }
     }
 
+    public var numberValue: Double? {
+        switch self {
+        case .number(let number):
+            return number.isFinite ? number : nil
+        case .string(let string):
+            return Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
+    }
+
     public var normalizedUInt64: UInt64? {
         switch self {
         case .number(let number):

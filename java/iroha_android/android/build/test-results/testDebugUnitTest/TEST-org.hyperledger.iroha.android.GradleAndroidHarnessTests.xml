@@ -1,18 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="org.hyperledger.iroha.android.GradleAndroidHarnessTests" tests="5" skipped="0" failures="0" errors="0" timestamp="2025-12-08T12:31:43.647Z" hostname="takemiyacStudio.lan" time="0.03">
+<testsuite name="org.hyperledger.iroha.android.GradleAndroidHarnessTests" tests="5" skipped="0" failures="0" errors="0" timestamp="2025-12-30T16:28:53.544Z" hostname="takemiyacStudio.lan" time="0.327">
   <properties/>
-  <testcase name="runHarnessMain[org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutorFactoryTests]" classname="org.hyperledger.iroha.android.GradleAndroidHarnessTests" time="0.006"/>
-  <testcase name="runHarnessMain[org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnectorTests]" classname="org.hyperledger.iroha.android.GradleAndroidHarnessTests" time="0.005"/>
-  <testcase name="runHarnessMain[org.hyperledger.iroha.android.client.transport.OkHttpTransportExecutorTests]" classname="org.hyperledger.iroha.android.GradleAndroidHarnessTests" time="0.003"/>
-  <testcase name="runHarnessMain[org.hyperledger.iroha.android.telemetry.OkHttpTelemetryIntegrationTests]" classname="org.hyperledger.iroha.android.GradleAndroidHarnessTests" time="0.012"/>
-  <testcase name="runHarnessMain[org.hyperledger.iroha.android.offline.HttpSafetyDetectOkHttpTests]" classname="org.hyperledger.iroha.android.GradleAndroidHarnessTests" time="0.004"/>
+  <testcase name="runHarnessMain[org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutorFactoryTests]" classname="org.hyperledger.iroha.android.GradleAndroidHarnessTests" time="0.151"/>
+  <testcase name="runHarnessMain[org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnectorTests]" classname="org.hyperledger.iroha.android.GradleAndroidHarnessTests" time="0.009"/>
+  <testcase name="runHarnessMain[org.hyperledger.iroha.android.client.transport.OkHttpTransportExecutorTests]" classname="org.hyperledger.iroha.android.GradleAndroidHarnessTests" time="0.004"/>
+  <testcase name="runHarnessMain[org.hyperledger.iroha.android.telemetry.OkHttpTelemetryIntegrationTests]" classname="org.hyperledger.iroha.android.GradleAndroidHarnessTests" time="0.154"/>
+  <testcase name="runHarnessMain[org.hyperledger.iroha.android.offline.HttpSafetyDetectOkHttpTests]" classname="org.hyperledger.iroha.android.GradleAndroidHarnessTests" time="0.008"/>
   <system-out><![CDATA[[IrohaAndroid] OkHttpTransportExecutorFactory tests passed.
 [IrohaAndroid] OkHttpWebSocketConnectorTests passed.
 [IrohaAndroid] OkHttpTransportExecutor transport tests passed.
 [IrohaAndroid] OkHttpTelemetryIntegrationTests passed.
 [IrohaAndroid] HttpSafetyDetectOkHttpTests passed.
 ]]></system-out>
-  <system-err><![CDATA[12月 08, 2025 4:31:43 午後 okhttp3.internal.platform.Platform log
-警告: A connection to http://localhost:60654/ was leaked. Did you forget to close a response body? To see where this was allocated, set the OkHttpClient logger level to FINE: Logger.getLogger(OkHttpClient.class.getName()).setLevel(Level.FINE);
-]]></system-err>
+  <system-err><![CDATA[]]></system-err>
 </testsuite>

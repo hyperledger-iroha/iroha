@@ -34,6 +34,7 @@ const H_GENERATOR_LABEL: &[u8] = b"iroha.offline.balance.generator.H.v1";
 pub(super) struct VerificationInputs<'a> {
     pub balance_proof: &'a OfflineBalanceProof,
     pub chain_id: &'a ChainId,
+    pub expected_scale: u32,
 }
 
 pub(super) fn verify_balance_proof(
@@ -59,7 +60,8 @@ pub(super) fn verify_balance_proof(
 
     let c_init = decode_commitment(&inputs.balance_proof.initial_commitment.commitment)?;
     let c_res = decode_commitment(&inputs.balance_proof.resulting_commitment)?;
-    let delta_bytes = numeric_delta_bytes(&inputs.balance_proof.claimed_delta)?;
+    let delta_bytes =
+        numeric_delta_bytes(&inputs.balance_proof.claimed_delta, inputs.expected_scale)?;
     let delta_proof = &proof_bytes[1..1 + DELTA_PROOF_BYTES];
     let range_proof = &proof_bytes[1 + DELTA_PROOF_BYTES..];
     let (r_point, s_g, s_h) = parse_delta_proof(delta_proof)?;
@@ -83,6 +85,9 @@ pub(super) fn verify_balance_proof(
 
 /// Build a balance proof blob for an offline bundle.
 ///
+/// `expected_scale` defines the canonical scale for numeric values; both
+/// `claimed_delta` and `resulting_value` must use it.
+///
 /// # Errors
 ///
 /// Returns an error when commitments or scalars are malformed, or when the
@@ -90,6 +95,7 @@ pub(super) fn verify_balance_proof(
 #[allow(clippy::too_many_arguments)]
 pub fn build_balance_proof(
     chain_id: &ChainId,
+    expected_scale: u32,
     claimed_delta: &Numeric,
     resulting_value: &Numeric,
     initial_commitment: &[u8],
@@ -99,9 +105,9 @@ pub fn build_balance_proof(
 ) -> Result<Vec<u8>, InstructionExecutionError> {
     let c_init = decode_commitment(initial_commitment)?;
     let c_res = decode_commitment(resulting_commitment)?;
-    let delta_scalar = numeric_to_scalar_delta(claimed_delta)?;
-    let delta_bytes = numeric_delta_bytes(claimed_delta)?;
-    let resulting_value_u64 = numeric_to_u64(resulting_value)?;
+    let delta_scalar = numeric_to_scalar_delta(claimed_delta, expected_scale)?;
+    let delta_bytes = numeric_delta_bytes(claimed_delta, expected_scale)?;
+    let resulting_value_u64 = numeric_to_u64(resulting_value, expected_scale)?;
     let blind_init = decode_scalar(initial_blinding)?;
     let blind_res = decode_scalar(resulting_blinding)?;
     let blind_delta = blind_res - blind_init;
@@ -134,14 +140,17 @@ pub fn build_balance_proof(
 
 /// Compute a Pedersen commitment for the provided value and blinding scalar.
 ///
+/// `expected_scale` defines the canonical scale for `value`.
+///
 /// # Errors
 ///
 /// Returns an error when the value or blinding is out of range or malformed.
 pub fn compute_commitment(
     value: &Numeric,
+    expected_scale: u32,
     blinding: &[u8],
 ) -> Result<Vec<u8>, InstructionExecutionError> {
-    let value_scalar = numeric_to_scalar_value(value)?;
+    let value_scalar = numeric_to_scalar_value(value, expected_scale)?;
     let blind = decode_scalar(blinding)?;
     let commitment = RISTRETTO_BASEPOINT_POINT * value_scalar + pedersen_generator_h() * blind;
     Ok(commitment.compress().as_bytes().to_vec())
@@ -167,10 +176,10 @@ enum BalanceProofError {
     ProofPointEncoding,
     #[error("scalar encoding is not canonical")]
     NonCanonicalScalar,
-    #[error("claimed delta must use scale 0")]
-    DeltaFractional,
-    #[error("value must use scale 0")]
-    ValueFractional,
+    #[error("claimed delta must use scale {expected} (got {actual})")]
+    DeltaScaleMismatch { expected: u32, actual: u32 },
+    #[error("value must use scale {expected} (got {actual})")]
+    ValueScaleMismatch { expected: u32, actual: u32 },
     #[error("claimed delta exceeds supported range")]
     DeltaOutOfRange,
     #[error("resulting value exceeds supported range")]
@@ -231,8 +240,18 @@ fn parse_delta_proof(bytes: &[u8]) -> Result<(RistrettoPoint, Scalar, Scalar), B
     Ok((r_point, s_g, s_h))
 }
 
-fn numeric_delta_bytes(value: &Numeric) -> Result<[u8; 16], BalanceProofError> {
-    ensure_integer_scale(value, BalanceProofError::DeltaFractional)?;
+fn numeric_delta_bytes(
+    value: &Numeric,
+    expected_scale: u32,
+) -> Result<[u8; 16], BalanceProofError> {
+    ensure_expected_scale(
+        value,
+        expected_scale,
+        BalanceProofError::DeltaScaleMismatch {
+            expected: expected_scale,
+            actual: value.scale(),
+        },
+    )?;
     let mantissa = value
         .try_mantissa_u128()
         .ok_or(BalanceProofError::DeltaOutOfRange)?;
@@ -240,8 +259,18 @@ fn numeric_delta_bytes(value: &Numeric) -> Result<[u8; 16], BalanceProofError> {
     Ok(delta_i128.to_le_bytes())
 }
 
-fn numeric_to_scalar_delta(value: &Numeric) -> Result<Scalar, BalanceProofError> {
-    ensure_integer_scale(value, BalanceProofError::DeltaFractional)?;
+fn numeric_to_scalar_delta(
+    value: &Numeric,
+    expected_scale: u32,
+) -> Result<Scalar, BalanceProofError> {
+    ensure_expected_scale(
+        value,
+        expected_scale,
+        BalanceProofError::DeltaScaleMismatch {
+            expected: expected_scale,
+            actual: value.scale(),
+        },
+    )?;
     let mantissa = value
         .try_mantissa_u128()
         .ok_or(BalanceProofError::DeltaOutOfRange)?;
@@ -250,8 +279,18 @@ fn numeric_to_scalar_delta(value: &Numeric) -> Result<Scalar, BalanceProofError>
     Ok(Scalar::from_bytes_mod_order(bytes))
 }
 
-fn numeric_to_scalar_value(value: &Numeric) -> Result<Scalar, BalanceProofError> {
-    ensure_integer_scale(value, BalanceProofError::ValueFractional)?;
+fn numeric_to_scalar_value(
+    value: &Numeric,
+    expected_scale: u32,
+) -> Result<Scalar, BalanceProofError> {
+    ensure_expected_scale(
+        value,
+        expected_scale,
+        BalanceProofError::ValueScaleMismatch {
+            expected: expected_scale,
+            actual: value.scale(),
+        },
+    )?;
     let mantissa = value
         .try_mantissa_u128()
         .ok_or(BalanceProofError::ResultingValueOutOfRange)?;
@@ -260,16 +299,27 @@ fn numeric_to_scalar_value(value: &Numeric) -> Result<Scalar, BalanceProofError>
     Ok(Scalar::from_bytes_mod_order(bytes))
 }
 
-fn numeric_to_u64(value: &Numeric) -> Result<u64, BalanceProofError> {
-    ensure_integer_scale(value, BalanceProofError::ValueFractional)?;
+fn numeric_to_u64(value: &Numeric, expected_scale: u32) -> Result<u64, BalanceProofError> {
+    ensure_expected_scale(
+        value,
+        expected_scale,
+        BalanceProofError::ValueScaleMismatch {
+            expected: expected_scale,
+            actual: value.scale(),
+        },
+    )?;
     let mantissa = value
         .try_mantissa_u128()
         .ok_or(BalanceProofError::ResultingValueOutOfRange)?;
     u64::try_from(mantissa).map_err(|_| BalanceProofError::ResultingValueOutOfRange)
 }
 
-fn ensure_integer_scale(value: &Numeric, err: BalanceProofError) -> Result<(), BalanceProofError> {
-    if value.scale() != 0 {
+fn ensure_expected_scale(
+    value: &Numeric,
+    expected_scale: u32,
+    err: BalanceProofError,
+) -> Result<(), BalanceProofError> {
+    if value.scale() != expected_scale {
         return Err(err);
     }
     Ok(())
@@ -587,6 +637,7 @@ mod tests {
     fn verify_accepts_valid_proof() {
         let value = 42;
         let delta = 10;
+        let expected_scale = 0;
         let blind_start = Scalar::from(5u64);
         let blind_delta = Scalar::from(3u64);
         let c_init = pedersen_commit(value, blind_start);
@@ -609,6 +660,7 @@ mod tests {
         let inputs = VerificationInputs {
             balance_proof: &balance_proof,
             chain_id: &chain_id,
+            expected_scale,
         };
         assert!(verify_balance_proof(&inputs).is_ok());
     }
@@ -618,6 +670,7 @@ mod tests {
         let initial_value = 25u64;
         let delta = 7u64;
         let resulting_value = initial_value + delta;
+        let expected_scale = 2;
         let initial_blind = Scalar::from(5u64);
         let resulting_blind = Scalar::from(11u64);
         let initial_commitment = pedersen_commit(initial_value, initial_blind)
@@ -629,13 +682,14 @@ mod tests {
             .as_bytes()
             .to_vec();
         let chain_id: ChainId = "testnet".parse().unwrap();
-        let claimed_delta = Numeric::new(u128::from(delta), 0);
-        let resulting_value_numeric = Numeric::new(u128::from(resulting_value), 0);
+        let claimed_delta = Numeric::new(u128::from(delta), expected_scale);
+        let resulting_value_numeric = Numeric::new(u128::from(resulting_value), expected_scale);
         let initial_blinding = initial_blind.to_bytes();
         let resulting_blinding = resulting_blind.to_bytes();
 
         let proof = build_balance_proof(
             &chain_id,
+            expected_scale,
             &claimed_delta,
             &resulting_value_numeric,
             &initial_commitment,
@@ -648,7 +702,7 @@ mod tests {
         let balance_proof = OfflineBalanceProof {
             initial_commitment: OfflineAllowanceCommitment {
                 asset: sample_asset(),
-                amount: Numeric::new(u128::from(initial_value), 0),
+                amount: Numeric::new(u128::from(initial_value), expected_scale),
                 commitment: initial_commitment,
             },
             resulting_commitment,
@@ -658,6 +712,7 @@ mod tests {
         let inputs = VerificationInputs {
             balance_proof: &balance_proof,
             chain_id: &chain_id,
+            expected_scale,
         };
         assert!(verify_balance_proof(&inputs).is_ok());
     }
@@ -666,6 +721,7 @@ mod tests {
     fn build_balance_proof_rejects_fractional_delta() {
         let chain_id: ChainId = "testnet".parse().unwrap();
         let initial_value = 10u64;
+        let expected_scale = 0;
         let delta = Numeric::new(15, 1);
         let resulting_value = Numeric::new(25, 0);
         let initial_blind = Scalar::from(5u64);
@@ -683,6 +739,7 @@ mod tests {
 
         let err = build_balance_proof(
             &chain_id,
+            expected_scale,
             &delta,
             &resulting_value,
             &initial_commitment,
@@ -701,6 +758,7 @@ mod tests {
     fn build_balance_proof_rejects_fractional_value() {
         let chain_id: ChainId = "testnet".parse().unwrap();
         let initial_value = 10u64;
+        let expected_scale = 0;
         let delta = Numeric::new(5, 0);
         let resulting_value = Numeric::new(125, 1);
         let initial_blind = Scalar::from(5u64);
@@ -718,6 +776,7 @@ mod tests {
 
         let err = build_balance_proof(
             &chain_id,
+            expected_scale,
             &delta,
             &resulting_value,
             &initial_commitment,
@@ -736,6 +795,7 @@ mod tests {
     fn verify_rejects_fractional_delta() {
         let value = 42;
         let delta = 10;
+        let expected_scale = 0;
         let blind_start = Scalar::from(5u64);
         let blind_delta = Scalar::from(3u64);
         let c_init = pedersen_commit(value, blind_start);
@@ -757,6 +817,7 @@ mod tests {
         let inputs = VerificationInputs {
             balance_proof: &balance_proof,
             chain_id: &chain_id,
+            expected_scale,
         };
         let err = verify_balance_proof(&inputs).expect_err("fractional delta should be rejected");
         assert!(
@@ -785,6 +846,7 @@ mod tests {
         let inputs = VerificationInputs {
             balance_proof: &balance_proof,
             chain_id: &chain_id,
+            expected_scale: 0,
         };
         assert!(verify_balance_proof(&inputs).is_err());
     }
@@ -805,12 +867,14 @@ mod tests {
         let inputs = VerificationInputs {
             balance_proof: &balance_proof,
             chain_id: &chain_id,
+            expected_scale: 0,
         };
         assert!(verify_balance_proof(&inputs).is_err());
         balance_proof.zk_proof = Some(vec![0u8; BALANCE_PROOF_BYTES + 1]);
         let inputs = VerificationInputs {
             balance_proof: &balance_proof,
             chain_id: &chain_id,
+            expected_scale: 0,
         };
         assert!(verify_balance_proof(&inputs).is_err());
     }
@@ -831,6 +895,7 @@ mod tests {
         let inputs = VerificationInputs {
             balance_proof: &balance_proof,
             chain_id: &chain_id,
+            expected_scale: 0,
         };
         assert!(verify_balance_proof(&inputs).is_err());
     }
@@ -867,6 +932,7 @@ mod tests {
         let inputs = VerificationInputs {
             balance_proof: &balance_proof,
             chain_id: &chain_id,
+            expected_scale: 0,
         };
         assert!(verify_balance_proof(&inputs).is_err());
     }

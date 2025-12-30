@@ -353,7 +353,7 @@ public final class IrohaKeyManagerTests {
     }
 
     @Override
-    public Optional<KeyPair> load(final String alias) {
+    public Optional<KeyPair> load(final String alias) throws KeyManagementException {
       return delegate.load(alias);
     }
 

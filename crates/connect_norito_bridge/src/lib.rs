@@ -591,7 +591,6 @@ fn decode_scalar_bytes(bytes: &[u8]) -> BridgeResult<Scalar> {
 }
 
 fn numeric_to_scalar(value: &Numeric) -> BridgeResult<Scalar> {
-    ensure_integer_scale(value)?;
     let mantissa = value.try_mantissa_u128().ok_or(BridgeError::Quantity)?;
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(&mantissa.to_le_bytes());
@@ -599,23 +598,14 @@ fn numeric_to_scalar(value: &Numeric) -> BridgeResult<Scalar> {
 }
 
 fn numeric_to_le_bytes(value: &Numeric) -> BridgeResult<[u8; 16]> {
-    ensure_integer_scale(value)?;
     let mantissa = value.try_mantissa_u128().ok_or(BridgeError::Quantity)?;
     let signed = i128::try_from(mantissa).map_err(|_| BridgeError::Quantity)?;
     Ok(signed.to_le_bytes())
 }
 
 fn numeric_to_u64(value: &Numeric) -> BridgeResult<u64> {
-    ensure_integer_scale(value)?;
     let mantissa = value.try_mantissa_u128().ok_or(BridgeError::Quantity)?;
     u64::try_from(mantissa).map_err(|_| BridgeError::Quantity)
-}
-
-fn ensure_integer_scale(value: &Numeric) -> BridgeResult<()> {
-    if value.scale() != 0 {
-        return Err(BridgeError::Quantity);
-    }
-    Ok(())
 }
 
 fn transcript_context(chain_id: &ChainId) -> [u8; 32] {
@@ -754,6 +744,9 @@ fn generate_offline_balance_proof(
     initial_blinding: &[u8],
     resulting_blinding: &[u8],
 ) -> BridgeResult<Vec<u8>> {
+    if claimed_delta.scale() != resulting_value.scale() {
+        return Err(BridgeError::Quantity);
+    }
     let c_init = decode_commitment_point(initial_commitment)?;
     let c_res = decode_commitment_point(resulting_commitment)?;
     let mut delta_scalar = numeric_to_scalar(claimed_delta)?;
@@ -845,7 +838,6 @@ fn compute_offline_receipt_challenge(
     let receiver = AccountId::from_str(&receiver_raw).map_err(|_| BridgeError::OfflineReceiver)?;
     let asset = AssetId::from_str(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
-    ensure_integer_scale(&amount)?;
     let nonce = Hash::from_str(&nonce_raw).map_err(|_| BridgeError::OfflineNonce)?;
     let preimage = OfflineReceiptChallengePreimage {
         invoice_id,
@@ -867,9 +859,12 @@ fn aggregate_receipt_amounts(amounts: &[Numeric]) -> BridgeResult<Numeric> {
     if amounts.is_empty() {
         return Err(BridgeError::Quantity);
     }
+    let expected_scale = amounts[0].scale();
     let mut total = Numeric::zero();
     for amount in amounts {
-        ensure_integer_scale(amount)?;
+        if amount.scale() != expected_scale {
+            return Err(BridgeError::Quantity);
+        }
         total = total
             .checked_add(amount.clone())
             .ok_or(BridgeError::Quantity)?;
@@ -8240,7 +8235,7 @@ mod offline_fastpq_proof_tests {
     }
 
     #[test]
-    fn sum_proof_rejects_fractional_receipts() {
+    fn sum_proof_rejects_mismatched_scales() {
         let mut request = sample_sum_request();
         request.receipt_amounts = vec![Numeric::new(10, 1), Numeric::new(15, 0)];
         let result = generate_offline_fastpq_sum_proof(&request);
@@ -9618,15 +9613,34 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
 #[cfg(test)]
 mod offline_receipt_challenge_tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        asset::{AssetDefinitionId, AssetId},
+        domain::DomainId,
+    };
+
+    fn sample_account_id() -> AccountId {
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+        AccountId::new(domain, keypair.public_key().clone())
+    }
+
+    fn sample_asset_id(account: &AccountId) -> AssetId {
+        let definition: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition");
+        AssetId::new(definition, account.clone())
+    }
 
     #[test]
     fn receipt_challenge_rejects_empty_chain_id() {
+        let receiver = sample_account_id();
+        let asset = sample_asset_id(&receiver);
         let nonce = Hash::new(b"receipt-nonce").to_string();
         let result = compute_offline_receipt_challenge(
             "".to_string(),
             "inv-1".to_string(),
-            "alice@wonderland".to_string(),
-            "xor#alice@wonderland".to_string(),
+            receiver.to_string(),
+            asset.to_string(),
             "1".to_string(),
             0,
             nonce,
@@ -9635,18 +9649,20 @@ mod offline_receipt_challenge_tests {
     }
 
     #[test]
-    fn receipt_challenge_rejects_fractional_amount() {
+    fn receipt_challenge_accepts_scaled_amount() {
+        let receiver = sample_account_id();
+        let asset = sample_asset_id(&receiver);
         let nonce = Hash::new(b"receipt-nonce").to_string();
         let result = compute_offline_receipt_challenge(
             "test-chain".to_string(),
             "inv-1".to_string(),
-            "alice@wonderland".to_string(),
-            "xor#alice@wonderland".to_string(),
+            receiver.to_string(),
+            asset.to_string(),
             "1.5".to_string(),
             0,
             nonce,
         );
-        assert!(matches!(result, Err(BridgeError::Quantity)));
+        assert!(result.is_ok());
     }
 }
 
@@ -9769,8 +9785,8 @@ mod offline_balance_proof_tests {
     #[test]
     fn commitment_update_and_proof_roundtrip() {
         let chain_id = ChainId::from("iroha-sdk-tests");
-        let initial_amount = Numeric::new(50, 0);
-        let delta = Numeric::new(7, 0);
+        let initial_amount = Numeric::new(50, 2);
+        let delta = Numeric::new(7, 2);
         let updated_amount = initial_amount
             .clone()
             .checked_add(delta.clone())
@@ -9807,23 +9823,26 @@ mod offline_balance_proof_tests {
     }
 
     #[test]
-    fn commitment_update_rejects_fractional_delta() {
-        let initial_amount = Numeric::new(50, 0);
+    fn commitment_update_accepts_scaled_delta() {
+        let initial_amount = Numeric::new(50, 1);
         let delta = Numeric::new(5, 1);
+        let updated_amount = Numeric::new(55, 1);
         let blind_init = Scalar::from(5u64);
         let blind_res = Scalar::from(11u64);
         let c_init = pedersen_commit(&initial_amount, blind_init);
+        let c_res_expected = pedersen_commit(&updated_amount, blind_res);
         let init_bytes = c_init.compress().as_bytes().to_vec();
         let blind_init_bytes = scalar_bytes(blind_init).to_vec();
         let blind_res_bytes = scalar_bytes(blind_res).to_vec();
 
-        let result =
-            update_offline_commitment(&init_bytes, &delta, &blind_init_bytes, &blind_res_bytes);
-        assert!(matches!(result, Err(BridgeError::Quantity)));
+        let updated =
+            update_offline_commitment(&init_bytes, &delta, &blind_init_bytes, &blind_res_bytes)
+                .expect("commitment update");
+        assert_eq!(&updated[..], c_res_expected.compress().as_bytes());
     }
 
     #[test]
-    fn proof_rejects_fractional_value() {
+    fn proof_rejects_scale_mismatch() {
         let chain_id = ChainId::from("iroha-sdk-tests");
         let initial_amount = Numeric::new(50, 0);
         let delta = Numeric::new(7, 0);

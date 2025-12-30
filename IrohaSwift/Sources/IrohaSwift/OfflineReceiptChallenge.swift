@@ -21,12 +21,13 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         assetId: String,
         amount: String,
         issuedAtMs: UInt64,
-        nonceHex: String
+        nonceHex: String,
+        expectedScale: Int? = nil
     ) throws -> Result {
         if chainId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw Error.invalidInput("chainId must not be empty")
         }
-        try validateAmount(amount)
+        try validateAmount(amount, expectedScale: expectedScale)
         do {
             guard let native = try NoritoNativeBridge.shared.offlineReceiptChallenge(
                 chainId: chainId,
@@ -106,17 +107,49 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         }
     }
 
-    private static func validateAmount(_ value: String) throws {
+    private static func validateAmount(_ value: String, expectedScale: Int?) throws {
         do {
             _ = try OfflineNorito.encodeNumeric(value)
-            let parsed = try OfflineDecimal.parse(value)
-            if parsed.scale != 0 {
-                throw Error.invalidInput("amount must use scale 0: \(value)")
-            }
         } catch let error as OfflineNoritoError {
             throw Error.invalidInput(error.localizedDescription)
         } catch {
             throw Error.invalidInput("amount must be numeric: \(value)")
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        var index = trimmed.startIndex
+        if index < trimmed.endIndex && (trimmed[index] == "-" || trimmed[index] == "+") {
+            index = trimmed.index(after: index)
+        }
+        var seenDigit = false
+        var seenDot = false
+        var scale = 0
+        while index < trimmed.endIndex {
+            let ch = trimmed[index]
+            if ch == "." {
+                if seenDot {
+                    throw Error.invalidInput("amount must be numeric: \(value)")
+                }
+                seenDot = true
+                index = trimmed.index(after: index)
+                continue
+            }
+            guard ch.wholeNumberValue != nil else {
+                throw Error.invalidInput("amount must be numeric: \(value)")
+            }
+            seenDigit = true
+            if seenDot {
+                scale += 1
+            }
+            index = trimmed.index(after: index)
+        }
+        if !seenDigit {
+            throw Error.invalidInput("amount must be numeric: \(value)")
+        }
+        if scale > 28 {
+            throw Error.invalidInput("amount scale exceeds 28: \(value)")
+        }
+        if let expectedScale, scale != expectedScale {
+            throw Error.invalidInput("amount must use scale \(expectedScale): \(value)")
         }
     }
 }

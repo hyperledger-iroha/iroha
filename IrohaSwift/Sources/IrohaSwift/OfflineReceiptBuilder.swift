@@ -18,6 +18,7 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
     case invalidAssetId(String)
     case invalidAmount(String)
     case fractionalAmount(String)
+    case amountScaleMismatch(value: String, expected: Int, actual: Int)
     case nonPositiveAmount(String)
     case amountExceedsPolicy(amount: String, max: String)
     case invalidReceiptTimestamp(String)
@@ -81,6 +82,8 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
             return "Invalid numeric amount: \(value)."
         case let .fractionalAmount(value):
             return "Offline amounts must use scale 0: \(value)."
+        case let .amountScaleMismatch(value, expected, actual):
+            return "Offline amounts must use scale \(expected) (got \(actual)): \(value)."
         case let .nonPositiveAmount(value):
             return "Receipt amount must be positive: \(value)."
         case let .amountExceedsPolicy(amount, max):
@@ -254,13 +257,15 @@ public enum OfflineReceiptBuilder {
     }
 
     /// Aggregates receipt amounts into the claimed delta string used by balance proofs.
+    /// Receipt amounts must match the allowance scale; mismatches are rejected.
     public static func aggregateAmount(receipts: [OfflineSpendReceipt]) throws -> String {
         guard !receipts.isEmpty else {
             throw OfflineReceiptBuilderError.emptyReceipts
         }
-        var total = OfflineDecimal.zero(scale: 0)
+        let expectedScale = try expectedScale(for: receipts[0].senderCertificate)
+        var total = OfflineDecimal.zero(scale: expectedScale)
         for receipt in receipts {
-            let value = try parseAmount(receipt.amount)
+            let value = try parseAmount(receipt.amount, expectedScale: expectedScale)
             guard !value.isNegative, !value.isZero else {
                 throw OfflineReceiptBuilderError.nonPositiveAmount(receipt.amount)
             }
@@ -453,7 +458,8 @@ public enum OfflineReceiptBuilder {
         } catch {
             throw OfflineReceiptBuilderError.invalidAssetId(receipt.assetId)
         }
-        let amount = try parseAmount(receipt.amount)
+        let expectedScale = try expectedScale(for: receipt.senderCertificate)
+        let amount = try parseAmount(receipt.amount, expectedScale: expectedScale)
         guard !amount.isNegative, !amount.isZero else {
             throw OfflineReceiptBuilderError.nonPositiveAmount(receipt.amount)
         }
@@ -464,7 +470,8 @@ public enum OfflineReceiptBuilder {
         if receipt.assetId != receipt.senderCertificate.allowance.assetId {
             throw OfflineReceiptBuilderError.receiptAssetMismatch
         }
-        let policyMax = try parseAmount(receipt.senderCertificate.policy.maxTxValue)
+        let policyMax = try parseAmount(receipt.senderCertificate.policy.maxTxValue,
+                                        expectedScale: expectedScale)
         if amount.compare(to: policyMax) == .orderedDescending {
             throw OfflineReceiptBuilderError.amountExceedsPolicy(amount: receipt.amount,
                                                                 max: receipt.senderCertificate.policy.maxTxValue)
@@ -508,9 +515,12 @@ public enum OfflineReceiptBuilder {
         try validateSnapshot(transfer.platformSnapshot, metadata: first.senderCertificate.metadata)
         let expectedCertificateId = try first.senderCertificate.certificateId()
         let expectedAssetId = first.senderCertificate.allowance.assetId
-        let policyMax = try parseAmount(first.senderCertificate.policy.maxTxValue)
+        let expectedScale = try expectedScale(for: first.senderCertificate)
+        let policyMax = try parseAmount(first.senderCertificate.policy.maxTxValue,
+                                        expectedScale: expectedScale)
         let expectedSum = try aggregateAmount(receipts: transfer.receipts)
-        let claimed = try parseAmount(transfer.balanceProof.claimedDelta)
+        let claimed = try parseAmount(transfer.balanceProof.claimedDelta,
+                                      expectedScale: expectedScale)
 
         try validateCommitmentLength(transfer.balanceProof.initialCommitment.commitment)
         try validateResultingCommitmentLength(transfer.balanceProof.resultingCommitment)
@@ -529,6 +539,8 @@ public enum OfflineReceiptBuilder {
         if transfer.balanceProof.initialCommitment.assetId != expectedAssetId {
             throw OfflineReceiptBuilderError.balanceProofAssetMismatch
         }
+        _ = try parseAmount(transfer.balanceProof.initialCommitment.amount,
+                            expectedScale: expectedScale)
         guard !claimed.isNegative, !claimed.isZero else {
             throw OfflineReceiptBuilderError.nonPositiveAmount(transfer.balanceProof.claimedDelta)
         }
@@ -556,7 +568,7 @@ public enum OfflineReceiptBuilder {
             if certId != expectedCertificateId {
                 throw OfflineReceiptBuilderError.receiptCertificateMismatch
             }
-            let amount = try parseAmount(receipt.amount)
+            let amount = try parseAmount(receipt.amount, expectedScale: expectedScale)
             guard !amount.isNegative, !amount.isZero else {
                 throw OfflineReceiptBuilderError.nonPositiveAmount(receipt.amount)
             }
@@ -966,12 +978,25 @@ public enum OfflineReceiptBuilder {
         }
     }
 
-    private static func parseAmount(_ value: String) throws -> OfflineDecimal {
+    private static func expectedScale(for certificate: OfflineWalletCertificate) throws -> Int {
+        let allowance = try parseAmount(certificate.allowance.amount)
+        let expected = allowance.scale
+        _ = try parseAmount(certificate.policy.maxBalance, expectedScale: expected)
+        _ = try parseAmount(certificate.policy.maxTxValue, expectedScale: expected)
+        return expected
+    }
+
+    private static func parseAmount(_ value: String, expectedScale: Int? = nil) throws -> OfflineDecimal {
         do {
             _ = try OfflineNorito.encodeNumeric(value)
             let parsed = try OfflineDecimal.parse(value)
-            if parsed.scale != 0 {
-                throw OfflineReceiptBuilderError.fractionalAmount(value)
+            if let expectedScale, parsed.scale != expectedScale {
+                if expectedScale == 0 {
+                    throw OfflineReceiptBuilderError.fractionalAmount(value)
+                }
+                throw OfflineReceiptBuilderError.amountScaleMismatch(value: value,
+                                                                     expected: expectedScale,
+                                                                     actual: parsed.scale)
             }
             return parsed
         } catch let error as OfflineNoritoError {

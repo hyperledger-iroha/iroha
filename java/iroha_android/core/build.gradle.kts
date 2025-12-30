@@ -181,8 +181,9 @@ tasks.register("checkAndroidFixtures") {
     outputs.file(layout.buildDirectory.file("reports/android-fixtures/check.log"))
 
     doLast {
-        val script = rootProject.layout.projectDirectory.file("scripts/check_android_fixtures.py")
-        val resourcesDir = rootProject.layout.projectDirectory.dir("java/iroha_android/src/test/resources")
+        val repoRoot = rootProject.layout.projectDirectory.dir("..").dir("..")
+        val script = repoRoot.file("scripts/check_android_fixtures.py")
+        val resourcesDir = rootProject.layout.projectDirectory.dir("src/test/resources")
         val cmd =
             listOf(
                 "python3",

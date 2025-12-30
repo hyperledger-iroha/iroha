@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: be3b8a2a4eaec95f5d4390ef7d143cd25681cce8ca3b5c4733f8036487daac24
 source_last_modified: "2025-11-15T11:19:21.711876+00:00"
-translation_last_reviewed: 2025-12-29
+translation_last_reviewed: 2025-12-30
 ---
 
 ---
@@ -110,7 +110,7 @@ Otros knobs reflejan flags del CLI:
 ## Fetch vía `iroha::Client`
 
 El SDK de Rust incorpora el helper de gateway fetch; proporciona un manifest más los
- descriptores de proveedores (incluyendo stream tokens) y deja que el cliente ejecute
+descriptores de proveedores (incluyendo stream tokens) y deja que el cliente ejecute
 el fetch multi-source:
 
 ```rust

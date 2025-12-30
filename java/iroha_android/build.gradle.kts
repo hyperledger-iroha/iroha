@@ -10,6 +10,7 @@ allprojects {
     group = "org.hyperledger.iroha"
     version = sdkVersion.get()
     repositories {
+        google()
         mavenCentral()
         val repoUrlProp = providers.gradleProperty("irohaAndroidRepoUrl").orNull
         val repoDirProp = providers.gradleProperty("irohaAndroidRepoDir").orNull
