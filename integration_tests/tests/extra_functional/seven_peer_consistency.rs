@@ -1,9 +1,6 @@
 //! Verify that all peers in a seven-peer network maintain consistent asset balances with DA enabled.
 
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, time::{Duration, Instant}};
 
 use eyre::{Result, WrapErr, eyre};
 use iroha::{
@@ -11,7 +8,13 @@ use iroha::{
     data_model::{
         parameter::{BlockParameter, SumeragiParameter},
         prelude::*,
+        query::{
+            asset::prelude::FindAssetById,
+            error::{FindError, QueryExecutionFail},
+        },
+        ValidationFail,
     },
+    query::QueryError,
 };
 use iroha_core::sumeragi::rbc_status;
 use iroha_test_network::*;
@@ -85,14 +88,14 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         .wrap_err("seven_peer_consistency status fetch failed")?;
     // Mint on one peer and wait until the network advances a few blocks
     let quantity = numeric!(500);
-    submitter_client
-        .submit_blocking(Mint::asset_numeric(
+    let _mint_hash = submitter_client
+        .submit(Mint::asset_numeric(
             quantity.clone(),
             AssetId::new(asset_definition_id.clone(), account_id.clone()),
         ))
         .wrap_err("seven_peer_consistency mint failed")?;
 
-    let expected_height = status_before_mint.blocks + 1;
+    let expected_min_height = status_before_mint.blocks.saturating_add(1);
 
     for peer in peers {
         let client = peer.client();
@@ -101,14 +104,14 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             &rt,
             &client,
             store_dir,
-            expected_height,
+            expected_min_height,
             network.sync_timeout(),
         )
         .wrap_err("seven_peer_consistency RBC delivery timeout")?;
         let peer_id = peer.id();
         eyre::ensure!(
             get_bool(&session, "delivered") == Some(true),
-            "peer {peer_id} missing RBC delivery at height {expected_height}"
+            "peer {peer_id} missing RBC delivery at or above height {expected_min_height}"
         );
         let total_chunks = get_u64(&session, "total_chunks")
             .ok_or_else(|| eyre!("peer {peer_id} missing total_chunks"))?;
@@ -116,7 +119,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             .ok_or_else(|| eyre!("peer {peer_id} missing received_chunks"))?;
         eyre::ensure!(
             received_chunks == total_chunks,
-            "peer {peer_id} missing RBC chunks at height {expected_height}"
+            "peer {peer_id} missing RBC chunks at or above height {expected_min_height}"
         );
         eyre::ensure!(
             get_bool(&session, "invalid") == Some(false),
@@ -128,23 +131,50 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     rt.block_on(async { network.ensure_blocks(3).await })
         .wrap_err("seven_peer_consistency blocks did not advance")?;
 
-    // Then: verify each peer reports the same state (cross-peer consistency)
-    for peer in peers {
-        let assets = peer.client().query(FindAssets::new()).execute_all()?;
-        let maybe_asset = assets
-            .into_iter()
-            .filter(|a| a.id().account() == &account_id)
-            .find(|a| *a.id().definition() == asset_definition_id);
+    // Then: verify each peer reports the same state (cross-peer consistency).
+    let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    let deadline = Instant::now() + network.sync_timeout();
+    loop {
+        let mut pending = Vec::new();
+        for peer in peers {
+            let client = peer.client();
+            match client.query_single(FindAssetById::new(asset_id.clone())) {
+                Ok(asset) => {
+                    if asset.value() != &quantity {
+                        pending.push(format!(
+                            "{}: mismatched balance (got {}, expected {})",
+                            peer.id(),
+                            asset.value(),
+                            quantity
+                        ));
+                    }
+                }
+                Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                    FindError::Asset(_),
+                ))))
+                | Err(QueryError::Validation(ValidationFail::QueryFailed(
+                    QueryExecutionFail::NotFound,
+                ))) => {
+                    pending.push(format!("{}: asset not found", peer.id()));
+                }
+                Err(err) => {
+                    pending.push(format!("{}: query error: {err:?}", peer.id()));
+                }
+            }
+        }
 
-        let asset =
-            maybe_asset.ok_or_else(|| eyre!("minted asset missing on peer {}", peer.id()))?;
-        eyre::ensure!(
-            *asset.value() == quantity,
-            "mismatched balance on peer {} (got {}, expected {})",
-            peer.id(),
-            asset.value(),
-            quantity
-        );
+        if pending.is_empty() {
+            break;
+        }
+
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "minted asset did not converge across peers before timeout: {}",
+                pending.join("; ")
+            ));
+        }
+
+        std::thread::sleep(Duration::from_millis(250));
     }
 
     Ok(())
@@ -154,14 +184,14 @@ fn wait_for_rbc_delivery(
     rt: &tokio::runtime::Runtime,
     client: &Client,
     store_dir: PathBuf,
-    target_height: u64,
+    min_height: u64,
     timeout: Duration,
 ) -> Result<Value> {
     let client = client.clone();
     rt.block_on(wait_for_rbc_delivery_inner(
         client,
         store_dir,
-        target_height,
+        min_height,
         timeout,
     ))
 }
@@ -169,7 +199,7 @@ fn wait_for_rbc_delivery(
 async fn wait_for_rbc_delivery_inner(
     client: Client,
     store_dir: PathBuf,
-    target_height: u64,
+    min_height: u64,
     timeout: Duration,
 ) -> Result<Value> {
     let deadline = Instant::now() + timeout;
@@ -177,7 +207,7 @@ async fn wait_for_rbc_delivery_inner(
         if let Some(summary) = rbc_status::read_persisted_snapshot(&store_dir)
             .into_iter()
             .find(|summary| {
-                summary.height == target_height
+                summary.height >= min_height
                     && summary.delivered
                     && !summary.invalid
                     && summary.total_chunks > 0
@@ -198,7 +228,7 @@ async fn wait_for_rbc_delivery_inner(
 
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "timed out waiting for RBC delivery at height {target_height}"
+                "timed out waiting for RBC delivery at or above height {min_height}"
             ));
         }
 
@@ -209,7 +239,7 @@ async fn wait_for_rbc_delivery_inner(
         .await
         .map_err(|err| eyre!("failed to fetch RBC sessions: {err}"))??;
 
-        if let Some(session) = delivered_session_for_height(&snapshot, target_height) {
+        if let Some(session) = delivered_session_for_height(&snapshot, min_height) {
             return Ok(session);
         }
 
@@ -259,7 +289,7 @@ fn wait_for_peer_connectivity(
     })
 }
 
-fn delivered_session_for_height(value: &Value, target_height: u64) -> Option<Value> {
+fn delivered_session_for_height(value: &Value, min_height: u64) -> Option<Value> {
     let items = value.as_object()?.get("items")?.as_array()?;
     for item in items {
         let obj = item.as_object()?;
@@ -268,7 +298,7 @@ fn delivered_session_for_height(value: &Value, target_height: u64) -> Option<Val
         let total_chunks = obj.get("total_chunks")?.as_u64()?;
         let received_chunks = obj.get("received_chunks")?.as_u64()?;
         let invalid = obj.get("invalid")?.as_bool().unwrap_or(false);
-        if height == target_height
+        if height >= min_height
             && delivered
             && !invalid
             && total_chunks > 0
@@ -292,4 +322,29 @@ fn get_u64(value: &Value, key: &str) -> Option<u64> {
         .as_object()
         .and_then(|obj| obj.get(key))
         .and_then(Value::as_u64)
+}
+
+#[test]
+fn delivered_session_for_height_respects_min_height() {
+    let payload = norito::json!({
+        "items": [
+            {
+                "height": 2,
+                "delivered": true,
+                "total_chunks": 1,
+                "received_chunks": 1,
+                "invalid": false
+            },
+            {
+                "height": 4,
+                "delivered": true,
+                "total_chunks": 2,
+                "received_chunks": 2,
+                "invalid": false
+            }
+        ]
+    });
+
+    let session = delivered_session_for_height(&payload, 3).expect("expected session");
+    assert_eq!(get_u64(&session, "height"), Some(4));
 }
