@@ -4,15 +4,37 @@
 lang: fr
 direction: ltr
 source: docs/portal/docs/sorafs/developer-index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7df0d84bf2e17931ebbe5ee315b86aed656da8a36ccb9d77ce5c2908acd358bb
 source_last_modified: "2025-11-10T05:30:31.325664+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2025-12-29
 ---
 
-# Traduction en cours
+---
+id: developer-index
+title: Guides de developpeurs SoraFS
+description: Page d'accueil de la documentation developpeur SoraFS, des exemples et des references d'automatisation.
+sidebar_label: Apercu developpeur
+---
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+:::note Source canonique
+Cette page reflète `docs/source/sorafs/developer/index.md`. Gardez les deux versions synchronisées jusqu'à la retraite des docs legacy.
+:::
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+# Guides de developpeurs SoraFS
+
+```{toctree}
+:caption: Demarrage
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

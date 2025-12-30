@@ -21,10 +21,12 @@ final class OfflineWalletReceiptTests: XCTestCase {
         let txId = IrohaHash.hash(Data("wallet-receipt".utf8))
         let amount = "10"
         let invoiceId = "inv-wallet"
+        let issuedAtMs: UInt64 = 123
         let proof = try makeProof(txId: txId,
                                   receiver: certificate.controller,
                                   assetId: certificate.allowance.assetId,
                                   amount: amount,
+                                  issuedAtMs: issuedAtMs,
                                   invoiceId: invoiceId)
 
         let receipt = try wallet.buildSignedReceipt(
@@ -37,7 +39,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
             senderCertificate: certificate,
             signingKey: signingKey,
             journal: journal,
-            recordedAt: 123
+            recordedAt: issuedAtMs
         )
 
         let pending = journal.pendingEntries()
@@ -75,10 +77,12 @@ final class OfflineWalletReceiptTests: XCTestCase {
         let txId = IrohaHash.hash(Data("wallet-receipt-jump".utf8))
         let amount = "10"
         let invoiceId = "inv-wallet-jump"
+        let issuedAtMs: UInt64 = 456
         let proof = try makeProof(txId: txId,
                                   receiver: certificate.controller,
                                   assetId: certificate.allowance.assetId,
                                   amount: amount,
+                                  issuedAtMs: issuedAtMs,
                                   invoiceId: invoiceId,
                                   counter: 3)
         XCTAssertThrowsError(
@@ -90,7 +94,8 @@ final class OfflineWalletReceiptTests: XCTestCase {
                 invoiceId: invoiceId,
                 platformProof: proof,
                 senderCertificate: certificate,
-                signingKey: signingKey
+                signingKey: signingKey,
+                recordedAt: issuedAtMs
             )
         ) { error in
             guard case OfflineCounterError.counterJump = error else {
@@ -105,6 +110,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
                            receiver: String,
                            assetId: String,
                            amount: String,
+                           issuedAtMs: UInt64,
                            invoiceId: String,
                            counter: UInt64 = 1) throws -> OfflinePlatformProof {
         let challenge = try challengeHash(txId: txId,
@@ -112,6 +118,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
                                           receiver: receiver,
                                           assetId: assetId,
                                           amount: amount,
+                                          issuedAtMs: issuedAtMs,
                                           invoiceId: invoiceId)
         let proof = AppleAppAttestProof(keyId: "swift-tests",
                                         counter: counter,
@@ -125,12 +132,14 @@ final class OfflineWalletReceiptTests: XCTestCase {
                                receiver: String,
                                assetId: String,
                                amount: String,
+                               issuedAtMs: UInt64,
                                invoiceId: String) throws -> Data {
         let preimage = OfflineReceiptChallengePreimage(
             invoiceId: invoiceId,
             receiverAccountId: receiver,
             assetId: assetId,
             amount: amount,
+            issuedAtMs: issuedAtMs,
             nonceHex: txId.hexUppercased()
         )
         let payload = try preimage.noritoPayload()

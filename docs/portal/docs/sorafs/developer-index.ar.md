@@ -4,17 +4,37 @@
 lang: ar
 direction: rtl
 source: docs/portal/docs/sorafs/developer-index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7df0d84bf2e17931ebbe5ee315b86aed656da8a36ccb9d77ce5c2908acd358bb
 source_last_modified: "2025-11-10T05:30:31.325664+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2025-12-29
 ---
 
-# قيد الترجمة
+---
+id: developer-index
+title: أدلة مطوري SoraFS
+description: صفحة البداية لتوثيق مطوري SoraFS والعينات ومراجع الأتمتة.
+sidebar_label: نظرة عامة للمطورين
+---
 
-<div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+:::note المصدر المعتمد
+تعكس هذه الصفحة `docs/source/sorafs/developer/index.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
+:::
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
-</div>
+# أدلة مطوري SoraFS
+
+```{toctree}
+:caption: البدء
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

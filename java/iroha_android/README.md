@@ -708,6 +708,13 @@ SoftwareKeyProvider provider =
 IrohaKeyManager manager = IrohaKeyManager.fromProviders(List.of(provider));
 ```
 
+Or use the convenience helper:
+
+```java
+IrohaKeyManager manager =
+    IrohaKeyManager.withExportableSoftwareKeys(store, passphraseProvider);
+```
+
 The manager validates Ed25519 SPKI output and skips providers that return a
 different algorithm (common on emulators), falling back to the next configured
 provider.

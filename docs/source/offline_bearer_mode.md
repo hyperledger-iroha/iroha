@@ -31,13 +31,14 @@ disclosures are required, and how SDKs expose the new circulation mode toggles a
 Bearer circulation remains the exception:
 
 - **Short-lived excursions.** Use bearer mode only when connectivity or jurisdiction rules make
-  on-ledger deposits impossible for a limited time (hours or days). Long-term exposure must be
-  reconciled on-chain via `SubmitOfflineToOnlineTransfer` once network access returns.【crates/iroha_core/src/smartcontracts/isi/offline.rs:435】
+  on-ledger deposits impossible for a limited time (hours or days). Long-lived bearer deployments
+  treat receipts as final cash and do not require on-ledger reconciliation; if operators later opt
+  back into ledger-reconcilable mode, publish a transition plan and reconciliation window.
 - **Treasury caps.** Treasury owners must cap the outstanding allowance per merchant and document the
   limit so finance teams can book the exposure just like physical cash drawers.
 - **Counter telemetry stays active.** Even when deposits are deferred, wallets must keep advancing
-  their hardware counters and export digests so dupes/replays are detectable once reconciliation
-  resumes.
+  their hardware counters and export digests so dupes/replays are detectable between merchants and
+  if reconciliation is later re-enabled.
 
 ## 3. Risk & disclosure checklist (Offline-only mode)
 
@@ -125,15 +126,16 @@ settings screens.
 - Record outstanding float per controller in the treasury ledger along with the note “offline bearer
   liability”. The balance should never exceed the cap authorised during governance review.
 - Capture attestations from finance/compliance leads before enabling offline-only mode in production.
-- When the mode reverts to ledger-reconcilable, schedule an explicit reconciliation window (e.g.,
-  “all receipts must be uploaded within 72 hours”) and re-enable audit logging defaults.
+- If the mode is later switched back to ledger-reconcilable, schedule an explicit reconciliation
+  window (e.g., “all receipts must be uploaded within 72 hours”) and re-enable audit logging
+  defaults.
 - **Balance sheets:** Treat outstanding offline allowances as cash-on-hand; the exported counter
   digests prove how much of each allowance has been consumed even before the ledger learns about the
   delta.
 - **Write-offs:** If a bearer-mode deployment loses devices or detects tampering, treasury must
   decide whether to claw back the impacted allowances or write them off just like lost cash drawers.
 - **Regulator evidence:** Store the WAL + audit log exports in the same evidence bucket as Torii
-  transcripts so investigators can replay the spend history once reconciliation resumes.
+  transcripts so investigators can replay the spend history if reconciliation resumes.
 
 ## 6. UX copy recommendations
 
@@ -141,7 +143,7 @@ settings screens.
 |----------|-------------------------|
 | Mode toggle warning | “Offline-only circulation disables ledger reconciliation. Lost or stolen devices cannot be recovered through Torii.” |
 | Treasury dashboard | “Offline bearer float: <value>. Confirm risk approvals before increasing the cap.” |
-| Merchant receipt | “Redeem before <date>. Verification is manual; retain this receipt until funds are settled.” |
+| Merchant receipt | “Redeem before <date>. Verification is manual; retain this receipt as proof of payment.” |
 
 Translate copy per locale but retain the explicit “cannot be recovered via Torii” clause. Embed deep
 links to the operator’s dispute policy in both Swift and Android settings panes.
@@ -156,6 +158,8 @@ links to the operator’s dispute policy in both Swift and Android settings pane
   SDK guides so auditors can trace OA6 to live code.
 
 ## 8. Returning to ledger reconciliation
+
+If operators choose to resume ledger-reconcilable mode:
 
 1. Flip the wallet toggle back to “submit deposits online”.
 2. Export the pending WAL entries and audit logs so the reconciliation window has a deterministic
