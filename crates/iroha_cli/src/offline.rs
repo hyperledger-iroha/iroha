@@ -1438,9 +1438,11 @@ mod bundle_inspect_tests {
             .unwrap();
 
         let allowance_amount = Numeric::from_str("500").unwrap();
+        let expected_scale = allowance_amount.scale();
         let initial_blinding = scalar_bytes(1);
         let resulting_blinding = scalar_bytes(2);
-        let initial_commitment = compute_commitment(&allowance_amount, &initial_blinding)
+        let initial_commitment =
+            compute_commitment(&allowance_amount, expected_scale, &initial_blinding)
             .expect("initial commitment");
         let allowance_commitment = OfflineAllowanceCommitment {
             asset: asset.clone(),
@@ -1508,9 +1510,11 @@ mod bundle_inspect_tests {
             .checked_add(receipt_amount.clone())
             .expect("resulting value");
         let resulting_commitment =
-            compute_commitment(&resulting_value, &resulting_blinding).expect("resulting commitment");
+            compute_commitment(&resulting_value, expected_scale, &resulting_blinding)
+                .expect("resulting commitment");
         let zk_proof = build_balance_proof(
             &ChainId::from("cli-sample"),
+            expected_scale,
             &receipt_amount,
             &resulting_value,
             &initial_commitment,

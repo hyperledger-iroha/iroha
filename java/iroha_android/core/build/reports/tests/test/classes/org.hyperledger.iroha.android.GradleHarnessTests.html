@@ -1,0 +1,1490 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+<meta http-equiv="x-ua-compatible" content="IE=edge"/>
+<title>Test results - Class org.hyperledger.iroha.android.GradleHarnessTests</title>
+<link href="../css/base-style.css" rel="stylesheet" type="text/css"/>
+<link href="../css/style.css" rel="stylesheet" type="text/css"/>
+<script src="../js/report.js" type="text/javascript"></script>
+</head>
+<body>
+<div id="content">
+<h1>Class org.hyperledger.iroha.android.GradleHarnessTests</h1>
+<div class="breadcrumbs">
+<a href="../index.html">all</a> &gt; 
+<a href="../packages/org.hyperledger.iroha.android.html">org.hyperledger.iroha.android</a> &gt; GradleHarnessTests</div>
+<div id="summary">
+<table>
+<tr>
+<td>
+<div class="summaryGroup">
+<table>
+<tr>
+<td>
+<div class="infoBox" id="tests">
+<div class="counter">90</div>
+<p>tests</p>
+</div>
+</td>
+<td>
+<div class="infoBox" id="failures">
+<div class="counter">12</div>
+<p>failures</p>
+</div>
+</td>
+<td>
+<div class="infoBox" id="ignored">
+<div class="counter">0</div>
+<p>ignored</p>
+</div>
+</td>
+<td>
+<div class="infoBox" id="duration">
+<div class="counter">15.131s</div>
+<p>duration</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+</td>
+<td>
+<div class="infoBox failures" id="successRate">
+<div class="percent">86%</div>
+<p>successful</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+<div class="tab-container">
+<ul class="tabLinks">
+<li>
+<a href="#">Failed tests</a>
+</li>
+<li>
+<a href="#">Tests</a>
+</li>
+<li>
+<a href="#">Standard output</a>
+</li>
+<li>
+<a href="#">Standard error</a>
+</li>
+</ul>
+<div class="tab">
+<h2>Failed tests</h2>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.IrohaKeyManagerDeterministicExportTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.IrohaKeyManagerDeterministicExportTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.IrohaKeyManagerDeterministicExportTests]">org.hyperledger.iroha.android.KeyManagementException: Failed to persist deterministic key export
+	at app//org.hyperledger.iroha.android.crypto.SoftwareKeyProvider.persistKey(SoftwareKeyProvider.java:250)
+	at app//org.hyperledger.iroha.android.crypto.SoftwareKeyProvider.generate(SoftwareKeyProvider.java:97)
+	at app//org.hyperledger.iroha.android.IrohaKeyManager$KeyProvider.generate(IrohaKeyManager.java:577)
+	at app//org.hyperledger.iroha.android.IrohaKeyManager$KeyProvider.generateWithOutcome(IrohaKeyManager.java:590)
+	at app//org.hyperledger.iroha.android.IrohaKeyManager.generateOrLoad(IrohaKeyManager.java:161)
+	at app//org.hyperledger.iroha.android.IrohaKeyManagerDeterministicExportTests.shouldPersistExportableSoftwareKeys(IrohaKeyManagerDeterministicExportTests.java:46)
+	at app//org.hyperledger.iroha.android.IrohaKeyManagerDeterministicExportTests.main(IrohaKeyManagerDeterministicExportTests.java:15)
+	at java.base@21.0.9/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base@21.0.9/java.lang.reflect.Method.invoke(Method.java:580)
+	at app//org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at app//org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base@21.0.9/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base@21.0.9/java.lang.reflect.Method.invoke(Method.java:580)
+	at app//org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at app//org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at app//org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at app//org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at app//org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at app//org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at app//org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at app//org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at app//org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at app//org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at app//org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at app//org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at app//org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at app//org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at app//org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at app//org.junit.runners.Suite.runChild(Suite.java:128)
+	at app//org.junit.runners.Suite.runChild(Suite.java:27)
+	at app//org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at app//org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at app//org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at app//org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at app//org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at app//org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at app//org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at app//org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at app//org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base@21.0.9/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base@21.0.9/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at app//worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at app//worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+Caused by: org.hyperledger.iroha.android.crypto.export.KeyExportException: Deterministic export currently supports Ed25519 keys only
+	at app//org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporter.exportKeyPair(DeterministicKeyExporter.java:77)
+	at app//org.hyperledger.iroha.android.crypto.SoftwareKeyProvider.persistKey(SoftwareKeyProvider.java:246)
+	... 60 more
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.IrohaKeyManagerDeterministicExportTests]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigKeystoreTelemetryTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigKeystoreTelemetryTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigKeystoreTelemetryTests]">java.lang.IllegalAccessException: class org.hyperledger.iroha.android.GradleHarnessTests cannot access a member of class org.hyperledger.iroha.android.client.ClientConfigKeystoreTelemetryTests with modifiers &quot;public static&quot;
+	at java.base/jdk.internal.reflect.Reflection.newIllegalAccessException(Reflection.java:394)
+	at java.base/java.lang.reflect.AccessibleObject.checkAccess(AccessibleObject.java:714)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:571)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigKeystoreTelemetryTests]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests]">java.lang.AssertionError: Config headers must be preserved
+	at org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests$RecordingObserver.onRequest(ClientConfigNoritoRpcTests.java:125)
+	at org.hyperledger.iroha.android.client.NoritoRpcClient.notifyRequest(NoritoRpcClient.java:454)
+	at org.hyperledger.iroha.android.client.NoritoRpcClient.call(NoritoRpcClient.java:133)
+	at org.hyperledger.iroha.android.client.NoritoRpcClient.call(NoritoRpcClient.java:108)
+	at org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests.executorReuseSharesObservers(ClientConfigNoritoRpcTests.java:110)
+	at org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests.main(ClientConfigNoritoRpcTests.java:25)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests]">java.lang.AssertionError: Expected submission to fail and queue the transaction
+	at org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests.queuesFailedSubmissionAndEmitsTelemetry(HttpClientTransportPendingQueueTests.java:98)
+	at org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests.main(HttpClientTransportPendingQueueTests.java:34)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.client.NoritoRpcClientTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.client.NoritoRpcClientTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.client.NoritoRpcClientTests]">java.lang.AssertionError: Accept header should be omitted when set to null
+	at org.hyperledger.iroha.android.client.NoritoRpcClientTests.requestOverridesApplyHeadersMethodAndQuery(NoritoRpcClientTests.java:108)
+	at org.hyperledger.iroha.android.client.NoritoRpcClientTests.main(NoritoRpcClientTests.java:45)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.client.NoritoRpcClientTests]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.crypto.keystore.attestation.IrohaKeyManagerTelemetryTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.crypto.keystore.attestation.IrohaKeyManagerTelemetryTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.crypto.keystore.attestation.IrohaKeyManagerTelemetryTests]">java.lang.IllegalAccessException: class org.hyperledger.iroha.android.GradleHarnessTests cannot access a member of class org.hyperledger.iroha.android.crypto.keystore.attestation.IrohaKeyManagerTelemetryTests with modifiers &quot;public static&quot;
+	at java.base/jdk.internal.reflect.Reflection.newIllegalAccessException(Reflection.java:394)
+	at java.base/java.lang.reflect.AccessibleObject.checkAccess(AccessibleObject.java:714)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:571)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.crypto.keystore.attestation.IrohaKeyManagerTelemetryTests]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests]">java.lang.IllegalStateException: Fixture not found: /Users/mtakemiya/dev/iroha/java/iroha_android/core/fixtures/space_directory/capability/cbdc_wholesale.manifest.json
+	at org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests.loadManifestJson(SpaceDirectoryInstructionBuilderTests.java:107)
+	at org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests.main(SpaceDirectoryInstructionBuilderTests.java:24)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsRegisterPinManifestBuilderTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsRegisterPinManifestBuilderTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsRegisterPinManifestBuilderTests]">java.lang.IllegalStateException: Fixture not found: /Users/mtakemiya/dev/iroha/java/iroha_android/core/docs/source/sdk/android/generated/fixtures/sorafs_register_pin_manifest_multi_peer_parity_v1.json
+	at org.hyperledger.iroha.android.sorafs.SorafsRegisterPinManifestBuilderTests.loadFixture(SorafsRegisterPinManifestBuilderTests.java:105)
+	at org.hyperledger.iroha.android.sorafs.SorafsRegisterPinManifestBuilderTests.main(SorafsRegisterPinManifestBuilderTests.java:24)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsRegisterPinManifestBuilderTests]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.telemetry.ChaosScenarioLoggerTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.telemetry.ChaosScenarioLoggerTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.telemetry.ChaosScenarioLoggerTests]">java.lang.IllegalAccessException: class org.hyperledger.iroha.android.GradleHarnessTests cannot access a member of class org.hyperledger.iroha.android.telemetry.ChaosScenarioLoggerTests with modifiers &quot;public static&quot;
+	at java.base/jdk.internal.reflect.Reflection.newIllegalAccessException(Reflection.java:394)
+	at java.base/java.lang.reflect.AccessibleObject.checkAccess(AccessibleObject.java:714)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:571)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.telemetry.ChaosScenarioLoggerTests]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests]">java.nio.file.NoSuchFileException: src/test/resources/transaction_fixtures.manifest.json
+	at java.base/sun.nio.fs.UnixException.translateToIOException(UnixException.java:92)
+	at java.base/sun.nio.fs.UnixException.rethrowAsIOException(UnixException.java:106)
+	at java.base/sun.nio.fs.UnixException.rethrowAsIOException(UnixException.java:111)
+	at java.base/sun.nio.fs.UnixFileSystemProvider.newByteChannel(UnixFileSystemProvider.java:261)
+	at java.base/java.nio.file.Files.newByteChannel(Files.java:380)
+	at java.base/java.nio.file.Files.newByteChannel(Files.java:432)
+	at java.base/java.nio.file.Files.readAllBytes(Files.java:3281)
+	at java.base/java.nio.file.Files.readString(Files.java:3359)
+	at org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests.main(TransactionFixtureManifestTests.java:40)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.tx.TransactionPayloadFixtureExporter]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.tx.TransactionPayloadFixtureExporter]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.tx.TransactionPayloadFixtureExporter]">java.nio.file.NoSuchFileException: src/test/resources/transaction_payloads.json
+	at java.base/sun.nio.fs.UnixException.translateToIOException(UnixException.java:92)
+	at java.base/sun.nio.fs.UnixException.rethrowAsIOException(UnixException.java:106)
+	at java.base/sun.nio.fs.UnixException.rethrowAsIOException(UnixException.java:111)
+	at java.base/sun.nio.fs.UnixFileSystemProvider.newByteChannel(UnixFileSystemProvider.java:261)
+	at java.base/java.nio.file.Files.newByteChannel(Files.java:380)
+	at java.base/java.nio.file.Files.newByteChannel(Files.java:432)
+	at java.base/java.nio.file.Files.readAllBytes(Files.java:3281)
+	at java.base/java.nio.file.Files.readString(Files.java:3359)
+	at org.hyperledger.iroha.android.tx.TransactionPayloadFixtures.load(TransactionPayloadFixtures.java:27)
+	at org.hyperledger.iroha.android.tx.TransactionPayloadFixtureExporter.main(TransactionPayloadFixtureExporter.java:23)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.tx.TransactionPayloadFixtureExporter]">Copy</button>
+</span>
+</div>
+<div class="test">
+<a name="runHarnessMain[org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests]"></a>
+<h3 class="failures">runHarnessMain[org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests]</h3>
+<span class="code">
+<pre id="test-message-runHarnessMain[org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests]">java.nio.file.NoSuchFileException: src/test/resources/transaction_payloads.json
+	at java.base/sun.nio.fs.UnixException.translateToIOException(UnixException.java:92)
+	at java.base/sun.nio.fs.UnixException.rethrowAsIOException(UnixException.java:106)
+	at java.base/sun.nio.fs.UnixException.rethrowAsIOException(UnixException.java:111)
+	at java.base/sun.nio.fs.UnixFileSystemProvider.newByteChannel(UnixFileSystemProvider.java:261)
+	at java.base/java.nio.file.Files.newByteChannel(Files.java:380)
+	at java.base/java.nio.file.Files.newByteChannel(Files.java:432)
+	at java.base/java.nio.file.Files.readAllBytes(Files.java:3281)
+	at java.base/java.nio.file.Files.readString(Files.java:3359)
+	at org.hyperledger.iroha.android.tx.TransactionPayloadFixtures.load(TransactionPayloadFixtures.java:27)
+	at org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests.main(TransactionPayloadFixtureTests.java:22)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.hyperledger.iroha.android.GradleHarnessTests.invokeMain(GradleHarnessTests.java:153)
+	at org.hyperledger.iroha.android.GradleHarnessTests.runHarnessMain(GradleHarnessTests.java:127)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runners.Suite.runChild(Suite.java:128)
+	at org.junit.runners.Suite.runChild(Suite.java:27)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runRequest(JUnitTestClassExecutor.java:176)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:84)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:45)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:61)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:54)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.internal.dispatch.MethodInvocation.invokeOn(MethodInvocation.java:77)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:28)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:19)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:88)
+	at jdk.proxy1/jdk.proxy1.$Proxy4.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:177)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:126)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:103)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:63)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:122)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:72)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="test-message-runHarnessMain[org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests]">Copy</button>
+</span>
+</div>
+</div>
+<div class="tab">
+<h2>Tests</h2>
+<table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Duration</th>
+<th>Result</th>
+</tr>
+</thead>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.IrohaKeyManagerAttestationTelemetryTests]</td>
+<td class="success">0.021s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.IrohaKeyManagerDeterministicExportTests]</td>
+<td class="failures">0.433s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.IrohaKeyManagerKeyValidationTelemetryTests]</td>
+<td class="success">0.045s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.IrohaKeyManagerMetadataTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.IrohaKeyManagerTests]</td>
+<td class="success">0.022s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.address.AccountAddressTests]</td>
+<td class="success">0.024s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.CanonicalRequestSignerTests]</td>
+<td class="success">0.006s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigKeystoreTelemetryTests]</td>
+<td class="failures">0.001s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigManifestLoaderTests]</td>
+<td class="success">0.022s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests]</td>
+<td class="failures">0.045s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.ClientConfigOfflineQueueTests]</td>
+<td class="success">0.012s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.ConfigWatcherTests]</td>
+<td class="success">0.917s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.HttpClientTransportExportOptionsTests]</td>
+<td class="success">0.146s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.HttpClientTransportHarnessTests]</td>
+<td class="success">0.026s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.HttpClientTransportOfflineQueueTests]</td>
+<td class="success">0.009s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests]</td>
+<td class="failures">0.011s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.HttpClientTransportStatusTests]</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.HttpClientTransportTests]</td>
+<td class="success">0.411s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.HttpTransportExecutorFakeTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.client.NoritoRpcClientTests]</td>
+<td class="failures">0.005s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.OfflineToriiClientTests]</td>
+<td class="success">0.009s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.PipelineStatusExtractorTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.PlatformHttpTransportExecutorFallbackTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.mock.ToriiMockServerTests]</td>
+<td class="success">0.010s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.queue.DirectoryPendingTransactionQueueTests]</td>
+<td class="success">0.005s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueueTests]</td>
+<td class="success">0.003s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.queue.OfflineJournalPendingTransactionQueueTest]</td>
+<td class="success">0.038s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests]</td>
+<td class="success">0.091s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.stream.ToriiEventStreamSubscriptionTests]</td>
+<td class="success">0.098s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.websocket.ToriiWebSocketClientTests]</td>
+<td class="success">0.003s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.client.websocket.ToriiWebSocketSubscriptionTests]</td>
+<td class="success">0.101s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.connect.ConnectErrorTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.connect.ConnectQueueJournalTests]</td>
+<td class="success">0.008s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.connect.ConnectRetryPolicyTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.crypto.Blake2sTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.crypto.SoftwareKeyProviderFallbackTests]</td>
+<td class="success">0s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterGoldenVectorTests]</td>
+<td class="success">0.131s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests]</td>
+<td class="success">12.158s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.crypto.keystore.AndroidKeystoreBackendDetectionTests]</td>
+<td class="success">0s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests]</td>
+<td class="success">0.008s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifierTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.crypto.keystore.attestation.IrohaKeyManagerTelemetryTests]</td>
+<td class="failures">0.001s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.governance.GovernanceInstructionBuilderTests]</td>
+<td class="success">0.005s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.gpu.CudaAcceleratorsKotlinFacadeTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests]</td>
+<td class="success">0s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.gpu.CudaAcceleratorsTests]</td>
+<td class="success">0s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.model.instructions.InstructionKindAliasTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.model.instructions.InstructionSchemaManifestTests]</td>
+<td class="success">0.012s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests]</td>
+<td class="failures">0s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests]</td>
+<td class="success">0.030s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.AndroidProvisionedProofTest]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineAllowanceInstructionBuilderTests]</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineAuditLoggerTest]</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineBalanceProofTest]</td>
+<td class="success">0.003s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineCounterJournalTest]</td>
+<td class="success">0.005s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineJournalTest]</td>
+<td class="success">0.036s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineJsonParserTest]</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineQueryEnvelopeTest]</td>
+<td class="success">0s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineReceiptChallengeTest]</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineTransferPayloadsTest]</td>
+<td class="success">0s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineVerdictJournalTest]</td>
+<td class="success">0.005s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineWalletPlayIntegrityTests]</td>
+<td class="success">0.004s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineWalletSafetyDetectTests]</td>
+<td class="success">0.003s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.OfflineWalletTest]</td>
+<td class="success">0.006s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.offline.attestation.HttpSafetyDetectServiceTests]</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.runtime.RuntimeUpgradeInstructionTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsCapacityMarketplaceInstructionTests]</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsCapacityTelemetryInstructionTests]</td>
+<td class="success">0s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsGatewayClientTests]</td>
+<td class="success">0.003s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsGatewayFetchOptionsTests]</td>
+<td class="success">0s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsManifestInstructionBuilderTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsRegisterPinManifestBuilderTests]</td>
+<td class="failures">0s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.sorafs.SorafsReplicationInstructionBuilderTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.telemetry.AndroidNetworkContextProviderTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.telemetry.AuthorityHashTest]</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.telemetry.ChaosScenarioLoggerTests]</td>
+<td class="failures">0s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.telemetry.CrashTelemetryHandlerTests]</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.telemetry.CrashTelemetryReporterTests]</td>
+<td class="success">0s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.telemetry.TelemetryExportStatusSinkTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.telemetry.TelemetryObserverTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.telemetry.TelemetryOptionsTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.tools.AndroidKeystoreAttestationHarnessTests]</td>
+<td class="success">0.021s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.tools.PendingQueueInspectorTests]</td>
+<td class="success">0.002s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.tx.SignedTransactionHasherTests]</td>
+<td class="success">0.001s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.tx.TransactionBuilderOfflineEnvelopeTests]</td>
+<td class="success">0.133s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.tx.TransactionBuilderTests]</td>
+<td class="success">0.005s</td>
+<td class="success">passed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests]</td>
+<td class="failures">0s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.tx.TransactionPayloadFixtureExporter]</td>
+<td class="failures">0s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="failures">runHarnessMain[org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests]</td>
+<td class="failures">0.001s</td>
+<td class="failures">failed</td>
+</tr>
+<tr>
+<td class="success">runHarnessMain[org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelopeCodecTests]</td>
+<td class="success">0s</td>
+<td class="success">passed</td>
+</tr>
+</table>
+</div>
+<div class="tab">
+<h2>Standard output</h2>
+<span class="code">
+<pre id="class-stdout">[IrohaAndroid] Key manager attestation telemetry tests passed.
+[IrohaAndroid] Key manager validation telemetry tests passed.
+[IrohaAndroid] Key manager metadata tests passed.
+[IrohaAndroid] Key manager smoke tests passed.
+[IrohaAndroid] Account address tests passed.
+[IrohaAndroid] Canonical request signer tests passed.
+[IrohaAndroid] ClientConfigManifestLoaderTests passed.
+[IrohaAndroid] ClientConfigOfflineQueueTests passed.
+[IrohaAndroid] ConfigWatcherTests passed.
+[IrohaAndroid] Http client export options tests passed.
+[IrohaAndroid] HTTP client harness tests passed.
+[IrohaAndroid] HttpClientTransportOfflineQueueTests passed.
+[IrohaAndroid] HTTP client status tests passed.
+[IrohaAndroid] HTTP client transport tests passed.
+[IrohaAndroid] FakeHttpTransportExecutor tests passed.
+[IrohaAndroid] PlatformHttpTransportExecutorFallbackTests passed.
+[IrohaAndroid] OfflineToriiClientTests passed.
+[IrohaAndroid] Pipeline status extractor tests passed.
+[IrohaAndroid] Torii mock server tests passed.
+[IrohaAndroid] Directory pending queue tests passed.
+[IrohaAndroid] Pending transaction queue tests passed.
+[IrohaAndroid] OfflineJournalPendingTransactionQueueTest passed.
+[IrohaAndroid] Torii SSE client tests passed.
+[IrohaAndroid] ToriiEventStreamSubscriptionTests passed.
+[IrohaAndroid] ToriiWebSocketClientTests passed.
+[IrohaAndroid] ToriiWebSocketSubscriptionTests passed.
+[IrohaAndroid] Connect queue journal tests passed.
+[IrohaAndroid] Blake2s tests passed.
+[IrohaAndroid] Software key provider fallback tests passed.
+[IrohaAndroid] Deterministic key exporter golden vector tests passed.
+[IrohaAndroid] Deterministic key exporter tests passed.
+[IrohaAndroid] Android keystore detection tests passed.
+[IrohaAndroid] Keystore provider scaffolding tests passed.
+[IrohaAndroid] Attestation verifier tests passed.
+[IrohaAndroid] GovernanceInstructionBuilderTests passed.
+[CudaAcceleratorsNativeSmokeTests] skipping (IROHA_CUDA_SELFTEST not set)
+[IrohaAndroid] InstructionKindAliasTests passed.
+[IrohaAndroid] InstructionSchemaManifestTests passed.
+[Fixture] transfer_nft_demo.payload_base64=TlJUMAAAbtjiR6ibs/Ru2OJHqJuz9ADlAAAAAAAAAPMg1nUshR1aAAgAAAAAAAAAMDAwMDAwMjAQAAAAAAAAAGFsaWNlQHdvbmRlcmxhbmSgYEH2kwEAAAABAAAAAAAAAAcEAAAAAAAAAAYAAAAAAAAAYWN0aW9uCwAAAAAAAABUcmFuc2Zlck5mdAYAAAAAAAAAc291cmNlEAAAAAAAAABhbGljZUB3b25kZXJsYW5kAwAAAAAAAABuZnQWAAAAAAAAAHJhcmVfY2FyZCRjb2xsZWN0aWJsZXMLAAAAAAAAAGRlc3RpbmF0aW9uDgAAAAAAAABib2JAd29uZGVybGFuZAAAAAAAAAAAAAA=
+[Fixture] transfer_nft_demo.payload_hash=6589e2fb52b864e62137c9c0afef896d6c9df31f1a2dbeee5d7feae428afe7a0
+[Fixture] transfer_nft_demo.signed_base64=TlJUMAAAw4SPWHV/mAzDhI9YdX+YDAAuAQAAAAAAAIHwPEuaq+4NAEAAAAAAAAAAqtqh2Y3bE3Exx+Eo7/0n6Obz+Uy3vmDaT09H5mlFCdpRHAlwdxWxuK+4KvQNpW7908vS4zpyDTMQVUfa0dFjAggAAAAAAAAAMDAwMDAwMjAQAAAAAAAAAGFsaWNlQHdvbmRlcmxhbmSgYEH2kwEAAAABAAAAAAAAAAcEAAAAAAAAAAYAAAAAAAAAYWN0aW9uCwAAAAAAAABUcmFuc2Zlck5mdAYAAAAAAAAAc291cmNlEAAAAAAAAABhbGljZUB3b25kZXJsYW5kAwAAAAAAAABuZnQWAAAAAAAAAHJhcmVfY2FyZCRjb2xsZWN0aWJsZXMLAAAAAAAAAGRlc3RpbmF0aW9uDgAAAAAAAABib2JAd29uZGVybGFuZAAAAAAAAAAAAAAA
+[Fixture] transfer_nft_demo.signed_hash=d676f1516279066b527d04bff0ec8f2978d513045818eb19aea580ab4429e8af
+[Fixture] transfer_nft_demo.signed_len=342
+[Fixture] trigger_repetitions_demo.payload_base64=TlJUMAAAbtjiR6ibs/Ru2OJHqJuz9AArAQAAAAAAAP1XheCgnZadAAgAAAAAAAAAMDAwMDAwMUMQAAAAAAAAAGFsaWNlQHdvbmRlcmxhbmQgRjv2kwEAAAACAAAAAAAAAAUDAAAAAAAAAAYAAAAAAAAAYWN0aW9uFgAAAAAAAABNaW50VHJpZ2dlclJlcGV0aXRpb25zBwAAAAAAAAB0cmlnZ2VyDAAAAAAAAABkYWlseS1yZXBvcnQLAAAAAAAAAHJlcGV0aXRpb25zAQAAAAAAAAA1BgMAAAAAAAAABgAAAAAAAABhY3Rpb24WAAAAAAAAAEJ1cm5UcmlnZ2VyUmVwZXRpdGlvbnMHAAAAAAAAAHRyaWdnZXIMAAAAAAAAAGRhaWx5LXJlcG9ydAsAAAAAAAAAcmVwZXRpdGlvbnMBAAAAAAAAADIAAAAAAAAAAAAA
+[Fixture] trigger_repetitions_demo.payload_hash=31f0a589cbcbeb8acfb2664096b2e445881f280e306aa0d55a6f1c3ecdf1a4ad
+[Fixture] trigger_repetitions_demo.signed_base64=TlJUMAAAw4SPWHV/mAzDhI9YdX+YDAB0AQAAAAAAAHlCuHoBaDDCAEAAAAAAAAAALh/N10nL5d+gH/KBSQ0l5ITB0s+97UB0Hk2Gmm3R2GBr0NafJ96HpW3bl1/mr+gcWS2u2/jfEPVROxFPSKXxDwgAAAAAAAAAMDAwMDAwMUMQAAAAAAAAAGFsaWNlQHdvbmRlcmxhbmQgRjv2kwEAAAACAAAAAAAAAAUDAAAAAAAAAAYAAAAAAAAAYWN0aW9uFgAAAAAAAABNaW50VHJpZ2dlclJlcGV0aXRpb25zBwAAAAAAAAB0cmlnZ2VyDAAAAAAAAABkYWlseS1yZXBvcnQLAAAAAAAAAHJlcGV0aXRpb25zAQAAAAAAAAA1BgMAAAAAAAAABgAAAAAAAABhY3Rpb24WAAAAAAAAAEJ1cm5UcmlnZ2VyUmVwZXRpdGlvbnMHAAAAAAAAAHRyaWdnZXIMAAAAAAAAAGRhaWx5LXJlcG9ydAsAAAAAAAAAcmVwZXRpdGlvbnMBAAAAAAAAADIAAAAAAAAAAAAAAA==
+[Fixture] trigger_repetitions_demo.signed_hash=2e2d6fa5337d2fc6c9e9a4b6121769041d334827f5e73ae61b9cbe7bcb840f31
+[Fixture] trigger_repetitions_demo.signed_len=412
+[Fixture] register_nft_demo.payload_base64=TlJUMAAAbtjiR6ibs/Ru2OJHqJuz9ADhAAAAAAAAAG2QBhQ8PE3mAAgAAAAAAAAAMDAwMDAwMUIQAAAAAAAAAGFsaWNlQHdvbmRlcmxhbmSAvzn2kwEAAAABAAAAAAAAAAMEAAAAAAAAAAYAAAAAAAAAYWN0aW9uCwAAAAAAAABSZWdpc3Rlck5mdAMAAAAAAAAAbmZ0FAAAAAAAAAByYXJlX2NhcmQkd29uZGVybGFuZBEAAAAAAAAAbWV0YWRhdGEuY2F0ZWdvcnkLAAAAAAAAAGNvbGxlY3RpYmxlEAAAAAAAAABtZXRhZGF0YS5lZGl0aW9uAQAAAAAAAAAxAAAAAAAAAAAAAA==
+[Fixture] register_nft_demo.payload_hash=a1d0d633c65e258d4540c90fddf3d2353af2b776075e69c5aeaf19e809471fd9
+[Fixture] register_nft_demo.signed_base64=TlJUMAAAw4SPWHV/mAzDhI9YdX+YDAAqAQAAAAAAAAs44XAn46ERAEAAAAAAAAAACtk13c24OBMglVxODbkEnQoRguXqJkVEh6iv5kHh+2XyzhiWbb13VWF8Uw+MUx9SdMWviPsXMn/ox5mnpKVsAwgAAAAAAAAAMDAwMDAwMUIQAAAAAAAAAGFsaWNlQHdvbmRlcmxhbmSAvzn2kwEAAAABAAAAAAAAAAMEAAAAAAAAAAYAAAAAAAAAYWN0aW9uCwAAAAAAAABSZWdpc3Rlck5mdAMAAAAAAAAAbmZ0FAAAAAAAAAByYXJlX2NhcmQkd29uZGVybGFuZBEAAAAAAAAAbWV0YWRhdGEuY2F0ZWdvcnkLAAAAAAAAAGNvbGxlY3RpYmxlEAAAAAAAAABtZXRhZGF0YS5lZGl0aW9uAQAAAAAAAAAxAAAAAAAAAAAAAAA=
+[Fixture] register_nft_demo.signed_hash=a55c0c27790be580fa229ce010d7c120e55c9fd48c482a65075d1da853b3248f
+[Fixture] register_nft_demo.signed_len=338
+[Fixture] register_time_trigger_demo.payload_base64=TlJUMAAAbtjiR6ibs/Ru2OJHqJuz9AAOAgAAAAAAAApXqUiXhr66AAgAAAAAAAAAMDAwMDAwMUMQAAAAAAAAAGFsaWNlQHdvbmRlcmxhbmTAzDz2kwEAAAABAAAAAAAAAAMLAAAAAAAAAAYAAAAAAAAAYWN0aW9uEwAAAAAAAABSZWdpc3RlclRpbWVUcmlnZ2VyBwAAAAAAAAB0cmlnZ2VyDAAAAAAAAABkYWlseV9yZXBvcnQJAAAAAAAAAGF1dGhvcml0eRAAAAAAAAAAYWxpY2VAd29uZGVybGFuZAgAAAAAAAAAc3RhcnRfbXMNAAAAAAAAADE3MzUwMDAwMDAwMDAJAAAAAAAAAHBlcmlvZF9tcwUAAAAAAAAANjAwMDAHAAAAAAAAAHJlcGVhdHMBAAAAAAAAADMSAAAAAAAAAGluc3RydWN0aW9uLjAua2luZAQAAAAAAAAATWludBgAAAAAAAAAaW5zdHJ1Y3Rpb24uMC5hcmcuYWN0aW9uCQAAAAAAAABNaW50QXNzZXQXAAAAAAAAAGluc3RydWN0aW9uLjAuYXJnLmFzc2V0IwAAAAAAAAByb3NlI3dvbmRlcmxhbmQjdHJlYXN1cnlAd29uZGVybGFuZBoAAAAAAAAAaW5zdHJ1Y3Rpb24uMC5hcmcucXVhbnRpdHkBAAAAAAAAADUOAAAAAAAAAG1ldGFkYXRhLmxhYmVsCAAAAAAAAABwZXJpb2RpYwAAAAAAAAAAAAA=
+[Fixture] register_time_trigger_demo.payload_hash=83906682588f031a94aa310ba061a91b5b45f09de48d4c79fd1e3b96cfd81ae9
+[Fixture] register_time_trigger_demo.signed_base64=TlJUMAAAw4SPWHV/mAzDhI9YdX+YDABXAgAAAAAAAADdGjv1rfoHAEAAAAAAAAAAqVb6RzM3rNPrLRtUTj06rPSyOakfAVPa6zbp6H+L6Bp5QYVopfDLnjLVBXoP0ZIKD/gPJWgNWVkpERS7PYhvDQgAAAAAAAAAMDAwMDAwMUMQAAAAAAAAAGFsaWNlQHdvbmRlcmxhbmTAzDz2kwEAAAABAAAAAAAAAAMLAAAAAAAAAAYAAAAAAAAAYWN0aW9uEwAAAAAAAABSZWdpc3RlclRpbWVUcmlnZ2VyBwAAAAAAAAB0cmlnZ2VyDAAAAAAAAABkYWlseV9yZXBvcnQJAAAAAAAAAGF1dGhvcml0eRAAAAAAAAAAYWxpY2VAd29uZGVybGFuZAgAAAAAAAAAc3RhcnRfbXMNAAAAAAAAADE3MzUwMDAwMDAwMDAJAAAAAAAAAHBlcmlvZF9tcwUAAAAAAAAANjAwMDAHAAAAAAAAAHJlcGVhdHMBAAAAAAAAADMSAAAAAAAAAGluc3RydWN0aW9uLjAua2luZAQAAAAAAAAATWludBgAAAAAAAAAaW5zdHJ1Y3Rpb24uMC5hcmcuYWN0aW9uCQAAAAAAAABNaW50QXNzZXQXAAAAAAAAAGluc3RydWN0aW9uLjAuYXJnLmFzc2V0IwAAAAAAAAByb3NlI3dvbmRlcmxhbmQjdHJlYXN1cnlAd29uZGVybGFuZBoAAAAAAAAAaW5zdHJ1Y3Rpb24uMC5hcmcucXVhbnRpdHkBAAAAAAAAADUOAAAAAAAAAG1ldGFkYXRhLmxhYmVsCAAAAAAAAABwZXJpb2RpYwAAAAAAAAAAAAAA
+[Fixture] register_time_trigger_demo.signed_hash=1e9f0bc9c3addb60cdce817dcdb0715ac205ef0f986fea611e835e6d21e9d307
+[Fixture] register_time_trigger_demo.signed_len=639
+[Fixture] register_pipeline_trigger_demo.payload_base64=TlJUMAAAbtjiR6ibs/Ru2OJHqJuz9ADOAgAAAAAAAOM18r/egnRFAAgAAAAAAAAAMDAwMDAwMUUSAAAAAAAAAG1vbml0b3JAd29uZGVybGFuZADaP/aTAQAAAAEAAAAAAAAAAw0AAAAAAAAABgAAAAAAAABhY3Rpb24XAAAAAAAAAFJlZ2lzdGVyUGlwZWxpbmVUcmlnZ2VyBwAAAAAAAAB0cmlnZ2VyCgAAAAAAAAB0eF9tb25pdG9yCQAAAAAAAABhdXRob3JpdHkSAAAAAAAAAG1vbml0b3JAd29uZGVybGFuZAcAAAAAAAAAcmVwZWF0cwEAAAAAAAAANQsAAAAAAAAAZmlsdGVyLmtpbmQLAAAAAAAAAFRyYW5zYWN0aW9uFwAAAAAAAABmaWx0ZXIudHJhbnNhY3Rpb24uaGFzaEAAAAAAAAAAYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYR8AAAAAAAAAZmlsdGVyLnRyYW5zYWN0aW9uLmJsb2NrX2hlaWdodAIAAAAAAAAANDIZAAAAAAAAAGZpbHRlci50cmFuc2FjdGlvbi5zdGF0dXMIAAAAAAAAAEFwcHJvdmVkEgAAAAAAAABpbnN0cnVjdGlvbi4wLmtpbmQFAAAAAAAAAEdyYW50GAAAAAAAAABpbnN0cnVjdGlvbi4wLmFyZy5hY3Rpb24PAAAAAAAAAEdyYW50UGVybWlzc2lvbh0AAAAAAAAAaW5zdHJ1Y3Rpb24uMC5hcmcuZGVzdGluYXRpb24OAAAAAAAAAGJvYkB3b25kZXJsYW5kHAAAAAAAAABpbnN0cnVjdGlvbi4wLmFyZy5wZXJtaXNzaW9uFQAAAAAAAABDYW5TdWJtaXRUcmFuc2FjdGlvbnMOAAAAAAAAAG1ldGFkYXRhLmxhYmVsCAAAAAAAAABwaXBlbGluZQAAAAAAAAAAAAA=
+[Fixture] register_pipeline_trigger_demo.payload_hash=a9434321d9e1799d4cb0c4653f14e2195b36ca9ba737de7f92566df745fa33f3
+[Fixture] register_pipeline_trigger_demo.signed_base64=TlJUMAAAw4SPWHV/mAzDhI9YdX+YDAAXAwAAAAAAAFOCnXKLHUiTAEAAAAAAAAAAzxGFmHaSDN91L4S8msiMlEuszVT0AsjOgDS829lKRegI3X9+X5fHa8YgP3qJUoHR1b5uneJ6862ycrUOgNKbBAgAAAAAAAAAMDAwMDAwMUUSAAAAAAAAAG1vbml0b3JAd29uZGVybGFuZADaP/aTAQAAAAEAAAAAAAAAAw0AAAAAAAAABgAAAAAAAABhY3Rpb24XAAAAAAAAAFJlZ2lzdGVyUGlwZWxpbmVUcmlnZ2VyBwAAAAAAAAB0cmlnZ2VyCgAAAAAAAAB0eF9tb25pdG9yCQAAAAAAAABhdXRob3JpdHkSAAAAAAAAAG1vbml0b3JAd29uZGVybGFuZAcAAAAAAAAAcmVwZWF0cwEAAAAAAAAANQsAAAAAAAAAZmlsdGVyLmtpbmQLAAAAAAAAAFRyYW5zYWN0aW9uFwAAAAAAAABmaWx0ZXIudHJhbnNhY3Rpb24uaGFzaEAAAAAAAAAAYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYR8AAAAAAAAAZmlsdGVyLnRyYW5zYWN0aW9uLmJsb2NrX2hlaWdodAIAAAAAAAAANDIZAAAAAAAAAGZpbHRlci50cmFuc2FjdGlvbi5zdGF0dXMIAAAAAAAAAEFwcHJvdmVkEgAAAAAAAABpbnN0cnVjdGlvbi4wLmtpbmQFAAAAAAAAAEdyYW50GAAAAAAAAABpbnN0cnVjdGlvbi4wLmFyZy5hY3Rpb24PAAAAAAAAAEdyYW50UGVybWlzc2lvbh0AAAAAAAAAaW5zdHJ1Y3Rpb24uMC5hcmcuZGVzdGluYXRpb24OAAAAAAAAAGJvYkB3b25kZXJsYW5kHAAAAAAAAABpbnN0cnVjdGlvbi4wLmFyZy5wZXJtaXNzaW9uFQAAAAAAAABDYW5TdWJtaXRUcmFuc2FjdGlvbnMOAAAAAAAAAG1ldGFkYXRhLmxhYmVsCAAAAAAAAABwaXBlbGluZQAAAAAAAAAAAAAA
+[Fixture] register_pipeline_trigger_demo.signed_hash=2264a3408faabd19a827920c038133cac7e9cd25350528817a08301e6f312757
+[Fixture] register_pipeline_trigger_demo.signed_len=831
+[Fixture] register_precommit_trigger_demo.payload_base64=TlJUMAAAbtjiR6ibs/Ru2OJHqJuz9ADiAQAAAAAAAFhPvHG9XDzOAAgAAAAAAAAAMDAwMDAwMUQQAAAAAAAAAGNhcm9sQHdvbmRlcmxhbmRgUz72kwEAAAABAAAAAAAAAAMJAAAAAAAAAAYAAAAAAAAAYWN0aW9uGAAAAAAAAABSZWdpc3RlclByZWNvbW1pdFRyaWdnZXIHAAAAAAAAAHRyaWdnZXIIAAAAAAAAAHBjX2d1YXJkCQAAAAAAAABhdXRob3JpdHkQAAAAAAAAAGNhcm9sQHdvbmRlcmxhbmQHAAAAAAAAAHJlcGVhdHMKAAAAAAAAAGluZGVmaW5pdGUSAAAAAAAAAGluc3RydWN0aW9uLjAua2luZAUAAAAAAAAAR3JhbnQYAAAAAAAAAGluc3RydWN0aW9uLjAuYXJnLmFjdGlvbg8AAAAAAAAAR3JhbnRQZXJtaXNzaW9uHQAAAAAAAABpbnN0cnVjdGlvbi4wLmFyZy5kZXN0aW5hdGlvbg4AAAAAAAAAYm9iQHdvbmRlcmxhbmQcAAAAAAAAAGluc3RydWN0aW9uLjAuYXJnLnBlcm1pc3Npb24VAAAAAAAAAENhblN1Ym1pdFRyYW5zYWN0aW9ucxAAAAAAAAAAbWV0YWRhdGEucHVycG9zZQUAAAAAAAAAZ3VhcmQAAAAAAAAAAAAA
+[Fixture] register_precommit_trigger_demo.payload_hash=01e750272c177963d01bf613c61648de73993e814301329d2ee29cafa7d3a20d
+[Fixture] register_precommit_trigger_demo.signed_base64=TlJUMAAAw4SPWHV/mAzDhI9YdX+YDAArAgAAAAAAAGJ/f2aiA4wnAEAAAAAAAAAAdu0y2p5FLloJM7JRkyhS26s04cRAHXUstfUM9q57XxcIsZorLz1IAF3maxkobe64Bwqgb72zE15YT1YK9OeHBQgAAAAAAAAAMDAwMDAwMUQQAAAAAAAAAGNhcm9sQHdvbmRlcmxhbmRgUz72kwEAAAABAAAAAAAAAAMJAAAAAAAAAAYAAAAAAAAAYWN0aW9uGAAAAAAAAABSZWdpc3RlclByZWNvbW1pdFRyaWdnZXIHAAAAAAAAAHRyaWdnZXIIAAAAAAAAAHBjX2d1YXJkCQAAAAAAAABhdXRob3JpdHkQAAAAAAAAAGNhcm9sQHdvbmRlcmxhbmQHAAAAAAAAAHJlcGVhdHMKAAAAAAAAAGluZGVmaW5pdGUSAAAAAAAAAGluc3RydWN0aW9uLjAua2luZAUAAAAAAAAAR3JhbnQYAAAAAAAAAGluc3RydWN0aW9uLjAuYXJnLmFjdGlvbg8AAAAAAAAAR3JhbnRQZXJtaXNzaW9uHQAAAAAAAABpbnN0cnVjdGlvbi4wLmFyZy5kZXN0aW5hdGlvbg4AAAAAAAAAYm9iQHdvbmRlcmxhbmQcAAAAAAAAAGluc3RydWN0aW9uLjAuYXJnLnBlcm1pc3Npb24VAAAAAAAAAENhblN1Ym1pdFRyYW5zYWN0aW9ucxAAAAAAAAAAbWV0YWRhdGEucHVycG9zZQUAAAAAAAAAZ3VhcmQAAAAAAAAAAAAAAA==
+[Fixture] register_precommit_trigger_demo.signed_hash=a35a1e9082689369cd0273fc37b91417a527f323a9100f46ec72912900116eeb
+[Fixture] register_precommit_trigger_demo.signed_len=595
+[IrohaAndroid] Norito codec scaffolding tests passed.
+[IrohaAndroid] AndroidProvisionedProofTest passed.
+[IrohaAndroid] OfflineAllowanceInstructionBuilderTests passed.
+[IrohaAndroid] OfflineAuditLoggerTest passed.
+[IrohaAndroid] OfflineBalanceProofTest skipped (native bridge unavailable).
+[IrohaAndroid] OfflineBalanceProofTest passed.
+[IrohaAndroid] OfflineCounterJournalTest passed.
+[IrohaAndroid] OfflineJournalTest passed.
+[IrohaAndroid] OfflineJsonParserTest passed.
+[IrohaAndroid] OfflineQueryEnvelopeTest passed.
+[IrohaAndroid] OfflineReceiptChallengeTest skipped (native bridge unavailable).
+[IrohaAndroid] OfflineReceiptChallengeTest skipped (native bridge unavailable).
+[IrohaAndroid] OfflineReceiptChallengeTest passed.
+[IrohaAndroid] OfflineTransferPayloadsTest passed.
+[IrohaAndroid] OfflineVerdictJournalTest passed.
+[IrohaAndroid] OfflineWalletPlayIntegrityTests passed.
+[IrohaAndroid] OfflineWalletSafetyDetectTests passed.
+[IrohaAndroid] OfflineWalletTest passed.
+[IrohaAndroid] HttpSafetyDetectServiceTests passed.
+[IrohaAndroid] RuntimeUpgradeInstructionTests passed.
+[IrohaAndroid] SorafsCapacityMarketplaceInstructionTests passed (declaration/dispute/pricing/credit).
+[IrohaAndroid] SorafsCapacityTelemetryInstructionTests passed (telemetry).
+[IrohaAndroid] SoraFS gateway client tests passed.
+[IrohaAndroid] SoraFS gateway option tests passed.
+[IrohaAndroid] SorafsManifestInstructionBuilderTests passed.
+[IrohaAndroid] SorafsReplicationInstructionBuilderTests passed (issue/complete/receipt).
+[IrohaAndroid] Authority hash tests passed.
+[IrohaAndroid] Crash telemetry handler tests passed.
+[IrohaAndroid] Crash telemetry reporter tests passed.
+[IrohaAndroid] Telemetry export status sink tests passed.
+[IrohaAndroid] Telemetry observer tests passed.
+[IrohaAndroid] Telemetry options tests passed.
+[IrohaAndroid] AndroidKeystoreAttestationHarnessTests passed
+[IrohaAndroid] Pending queue inspector tests passed.
+[IrohaAndroid] Signed transaction hasher tests passed.
+[IrohaAndroid] Transaction builder offline envelope tests passed.
+[IrohaAndroid] Transaction builder tests passed.
+[IrohaAndroid] Offline signing envelope codec tests passed.
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="class-stdout">Copy</button>
+</span>
+</div>
+<div class="tab">
+<h2>Standard error</h2>
+<span class="code">
+<pre id="class-stderr">12月 30, 2025 9:34:39 午後 sun.net.httpserver.ExchangeImpl sendResponseHeaders
+警告: sendResponseHeaders: rCode = 204: forcing contentLen = -1
+[CudaAccelerators] Native CUDA backend disabled (set iroha.cuda.enableNative=true to enable).
+[CudaAccelerators] Native CUDA backend disabled (set iroha.cuda.enableNative=true to enable).
+</pre>
+<button class="clipboard-copy-btn" aria-label="Copy to clipboard" data-copy-element-id="class-stderr">Copy</button>
+</span>
+</div>
+</div>
+<div id="footer">
+<p>
+<div>
+<label class="hidden" id="label-for-line-wrapping-toggle" for="line-wrapping-toggle">Wrap lines
+<input id="line-wrapping-toggle" type="checkbox" autocomplete="off"/>
+</label>
+</div>Generated by 
+<a href="https://www.gradle.org">Gradle 9.2.1</a> at 2025/12/30 21:34:52</p>
+</div>
+</div>
+</body>
+</html>

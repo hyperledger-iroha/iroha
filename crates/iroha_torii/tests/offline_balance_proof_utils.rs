@@ -20,17 +20,21 @@ pub(crate) fn build_balance_proof_for_allowance(
     initial_blinding: [u8; 32],
     resulting_blinding: [u8; 32],
 ) -> OfflineBalanceProof {
+    let expected_scale = allowance.amount.scale();
     let initial_commitment =
-        compute_commitment(&allowance.amount, &initial_blinding).expect("initial commitment");
+        compute_commitment(&allowance.amount, expected_scale, &initial_blinding)
+            .expect("initial commitment");
     let resulting_value = allowance
         .amount
         .clone()
         .checked_add(claimed_delta.clone())
         .expect("resulting value");
     let resulting_commitment =
-        compute_commitment(&resulting_value, &resulting_blinding).expect("resulting commitment");
+        compute_commitment(&resulting_value, expected_scale, &resulting_blinding)
+            .expect("resulting commitment");
     let zk_proof = build_balance_proof(
         chain_id,
+        expected_scale,
         claimed_delta,
         &resulting_value,
         &initial_commitment,

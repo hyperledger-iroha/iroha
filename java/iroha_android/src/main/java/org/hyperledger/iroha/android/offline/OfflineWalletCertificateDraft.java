@@ -87,7 +87,7 @@ public final class OfflineWalletCertificateDraft {
     return refreshAtMs;
   }
 
-  Map<String, Object> toJsonMap() {
+  public Map<String, Object> toJsonMap() {
     final Map<String, Object> map = new LinkedHashMap<>();
     map.put("controller", controller);
     map.put("allowance", allowance.toJsonMap());

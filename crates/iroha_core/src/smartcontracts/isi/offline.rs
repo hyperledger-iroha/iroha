@@ -176,6 +176,7 @@ fn map_platform_err<T>(
 
 fn ensure_certificate_policy(
     certificate: &OfflineWalletCertificate,
+    expected_scale: u32,
 ) -> Result<(), InstructionExecutionError> {
     if certificate.issued_at_ms >= certificate.expires_at_ms {
         return Err(InstructionExecutionError::InvariantViolation(
@@ -197,21 +198,21 @@ fn ensure_certificate_policy(
             "policy max transaction value must be positive".into(),
         ));
     }
-    if certificate.policy.max_balance.scale() != 0 {
-        return Err(InstructionExecutionError::InvariantViolation(
-            "policy max balance must use scale 0".into(),
-        ));
-    }
-    if certificate.policy.max_tx_value.scale() != 0 {
-        return Err(InstructionExecutionError::InvariantViolation(
-            "policy max transaction value must use scale 0".into(),
-        ));
-    }
-    if certificate.allowance.amount.scale() != 0 {
-        return Err(InstructionExecutionError::InvariantViolation(
-            "allowance amount must use scale 0".into(),
-        ));
-    }
+    ensure_expected_scale(
+        &certificate.policy.max_balance,
+        expected_scale,
+        "policy max balance",
+    )?;
+    ensure_expected_scale(
+        &certificate.policy.max_tx_value,
+        expected_scale,
+        "policy max transaction value",
+    )?;
+    ensure_expected_scale(
+        &certificate.allowance.amount,
+        expected_scale,
+        "allowance amount",
+    )?;
     if certificate.policy.max_tx_value > certificate.policy.max_balance {
         return Err(InstructionExecutionError::InvariantViolation(
             "policy max transaction value cannot exceed max balance".into(),
@@ -237,6 +238,19 @@ fn ensure_certificate_policy(
                 "refresh_at_ms must not exceed the certificate/policy expiry".into(),
             ));
         }
+    }
+    Ok(())
+}
+
+fn ensure_expected_scale(
+    value: &Numeric,
+    expected_scale: u32,
+    label: &'static str,
+) -> Result<(), InstructionExecutionError> {
+    if value.scale() != expected_scale {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("{label} must use scale {expected_scale}").into(),
+        ));
     }
     Ok(())
 }
@@ -290,14 +304,17 @@ fn ensure_uniform_asset(receipts: &[OfflineSpendReceipt]) -> Result<AssetId, Err
     Ok(AssetId::new(definition, first.asset.account().clone()))
 }
 
-fn aggregate_amount(receipts: &[OfflineSpendReceipt]) -> Result<Numeric, Error> {
+fn aggregate_amount(
+    receipts: &[OfflineSpendReceipt],
+    expected_scale: u32,
+) -> Result<Numeric, Error> {
     let mut acc = Numeric::zero();
     for receipt in receipts {
-        if receipt.amount.scale() != 0 {
+        if receipt.amount.scale() != expected_scale {
             return Err(rejection_error(
                 OfflineTransferRejectionReason::InvalidReceiptAmount,
                 OfflineTransferRejectionPlatform::General,
-                "receipt amount must use scale 0",
+                format!("receipt amount must use scale {expected_scale}"),
             ));
         }
         if receipt.amount <= Numeric::zero() {
@@ -512,6 +529,22 @@ pub mod isi {
 
     const GENESIS_HEIGHT: u64 = 1;
 
+    fn expected_scale_for_allowance(
+        certificate: &OfflineWalletCertificate,
+        spec: iroha_primitives::numeric::NumericSpec,
+    ) -> Result<u32, Error> {
+        let allowance_scale = certificate.allowance.amount.scale();
+        if let Some(spec_scale) = spec.scale() {
+            if allowance_scale != spec_scale {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("allowance amount must use scale {spec_scale}").into(),
+                ));
+            }
+            return Ok(spec_scale);
+        }
+        Ok(allowance_scale)
+    }
+
     impl Execute for RegisterOfflineAllowance {
         fn execute(
             self,
@@ -576,7 +609,12 @@ pub mod isi {
             ));
         }
 
-        ensure_certificate_policy(&certificate)?;
+        let spec = state_transaction.numeric_spec_for(certificate.allowance.asset.definition())?;
+        let expected_scale = expected_scale_for_allowance(&certificate, spec)?;
+        assert_numeric_spec_with(&certificate.allowance.amount, spec)?;
+        assert_numeric_spec_with(&certificate.policy.max_balance, spec)?;
+        assert_numeric_spec_with(&certificate.policy.max_tx_value, spec)?;
+        ensure_certificate_policy(&certificate, expected_scale)?;
         ensure_operator_signature(&certificate)?;
 
         let now_ms = state_transaction.block_unix_timestamp_ms();
@@ -664,9 +702,13 @@ pub mod isi {
 
         use iroha_crypto::Algorithm;
         use iroha_data_model::{
+            account::Account,
+            asset::AssetDefinition,
             block::BlockHeader,
+            domain::Domain,
             offline::{AppleAppAttestProof, OfflineVerdictRevocationReason},
         };
+        use iroha_primitives::numeric::NumericSpec;
         use nonzero_ext::nonzero;
 
         use super::*;
@@ -710,6 +752,25 @@ pub mod isi {
                 attestation_nonce: None,
                 refresh_at_ms: None,
             }
+        }
+
+        #[test]
+        fn expected_scale_matches_asset_spec() {
+            let mut certificate = sample_certificate();
+            certificate.allowance.amount = Numeric::new(1_000, 2);
+            let spec = NumericSpec::fractional(2);
+            assert_eq!(
+                expected_scale_for_allowance(&certificate, spec).expect("expected scale"),
+                2
+            );
+        }
+
+        #[test]
+        fn expected_scale_rejects_scale_mismatch() {
+            let mut certificate = sample_certificate();
+            certificate.allowance.amount = Numeric::new(1_000, 2);
+            let spec = NumericSpec::fractional(0);
+            assert!(expected_scale_for_allowance(&certificate, spec).is_err());
         }
 
         fn sample_transfer_record_with_policy(
@@ -916,7 +977,7 @@ pub mod isi {
                 sender_signature: Signature::from_bytes(&[0; 64]),
             };
 
-            let err = super::aggregate_amount(&[receipt])
+            let err = super::aggregate_amount(&[receipt], certificate.allowance.amount.scale())
                 .expect_err("fractional receipt should be rejected");
             let expected = format!(
                 "{OFFLINE_REJECTION_REASON_PREFIX}{}",
@@ -929,15 +990,24 @@ pub mod isi {
         fn certificate_policy_rejects_fractional_values() {
             let mut certificate = sample_certificate();
             certificate.policy.max_balance = Numeric::new(1_000, 1);
-            assert!(ensure_certificate_policy(&certificate).is_err());
+            assert!(
+                ensure_certificate_policy(&certificate, certificate.allowance.amount.scale())
+                    .is_err()
+            );
 
             let mut certificate = sample_certificate();
             certificate.policy.max_tx_value = Numeric::new(250, 1);
-            assert!(ensure_certificate_policy(&certificate).is_err());
+            assert!(
+                ensure_certificate_policy(&certificate, certificate.allowance.amount.scale())
+                    .is_err()
+            );
 
             let mut certificate = sample_certificate();
             certificate.allowance.amount = Numeric::new(1_000, 1);
-            assert!(ensure_certificate_policy(&certificate).is_err());
+            assert!(
+                ensure_certificate_policy(&certificate, certificate.allowance.amount.scale())
+                    .is_err()
+            );
         }
 
         #[test]
@@ -1165,14 +1235,20 @@ pub mod isi {
         fn refresh_before_issued_is_rejected() {
             let mut certificate = sample_certificate();
             certificate.refresh_at_ms = Some(certificate.issued_at_ms);
-            assert!(ensure_certificate_policy(&certificate).is_err());
+            assert!(
+                ensure_certificate_policy(&certificate, certificate.allowance.amount.scale())
+                    .is_err()
+            );
         }
 
         #[test]
         fn refresh_within_window_is_allowed() {
             let mut certificate = sample_certificate();
             certificate.refresh_at_ms = Some(certificate.issued_at_ms + 10_000);
-            assert!(ensure_certificate_policy(&certificate).is_ok());
+            assert!(
+                ensure_certificate_policy(&certificate, certificate.allowance.amount.scale())
+                    .is_ok()
+            );
         }
 
         #[test]
@@ -1330,6 +1406,46 @@ pub mod isi {
                 Some(AndroidIntegrityPolicy::PlayIntegrity)
             );
         }
+
+        #[test]
+        fn submit_transfer_rejects_delta_mismatch() {
+            let issued_at_ms = 1_700_000_100;
+            let (mut transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            record
+                .current_commitment
+                .clone_from(&record.certificate.allowance.commitment);
+            transfer.balance_proof.claimed_delta = Numeric::new(200, 0);
+
+            let controller = record.certificate.controller.clone();
+            let domain = Domain::new(controller.domain().clone()).build(&controller);
+            let account = Account::new(controller.clone()).build(&controller);
+            let definition_id = record.certificate.allowance.asset.definition().clone();
+            let asset_definition =
+                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
+            let mut world = World::with([domain], [account], [asset_definition]);
+            let certificate_id = record.certificate.certificate_id();
+            world.offline_allowances.insert(certificate_id, record);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new(world, Arc::clone(&kura), query);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, issued_at_ms + 100, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let authority = transfer.receiver.clone();
+            let err = submit_transfer(
+                SubmitOfflineToOnlineTransfer { transfer },
+                &authority,
+                &mut transaction,
+            )
+            .expect_err("delta mismatch should be rejected");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::DeltaMismatch.as_label()
+            );
+            assert!(err.to_string().contains(&expected));
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1366,17 +1482,9 @@ pub mod isi {
         }
 
         let asset = ensure_uniform_asset(&transfer.receipts)?;
-        let claimed_amount = aggregate_amount(&transfer.receipts)?;
-        if claimed_amount != transfer.balance_proof.claimed_delta().clone() {
-            return Err(rejection_error(
-                OfflineTransferRejectionReason::DeltaMismatch,
-                OfflineTransferRejectionPlatform::General,
-                "claimed delta does not match sum of receipt amounts",
-            ));
-        }
-
         let block_timestamp_ms = state_transaction.block_unix_timestamp_ms();
         let block_height = state_transaction.block_height();
+        let spec = state_transaction.numeric_spec_for(asset.definition())?;
         let certificate_id = transfer
             .receipts
             .first()
@@ -1410,6 +1518,15 @@ pub mod isi {
 
         enforce_certificate_window(record, block_timestamp_ms)?;
         enforce_verdict_refresh_window(record, block_timestamp_ms)?;
+        let expected_scale = expected_scale_for_allowance(&record.certificate, spec)?;
+        let claimed_amount = aggregate_amount(&transfer.receipts, expected_scale)?;
+        if claimed_amount != transfer.balance_proof.claimed_delta().clone() {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::DeltaMismatch,
+                OfflineTransferRejectionPlatform::General,
+                "claimed delta does not match sum of receipt amounts",
+            ));
+        }
         let integrity_metadata = android_integrity_metadata(&record.certificate.metadata).ok();
         let submitted_platform_snapshot = validate_platform_snapshot(
             transfer.platform_snapshot.as_ref(),
@@ -1455,6 +1572,7 @@ pub mod isi {
         verify_balance_proof(&VerificationInputs {
             balance_proof: &transfer.balance_proof,
             chain_id: &state_transaction.chain_id,
+            expected_scale,
         })
         .map_err(|err| {
             rejection_error(

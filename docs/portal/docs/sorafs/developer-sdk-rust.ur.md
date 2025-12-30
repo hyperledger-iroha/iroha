@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: be3b8a2a4eaec95f5d4390ef7d143cd25681cce8ca3b5c4733f8036487daac24
 source_last_modified: "2025-11-15T11:19:21.711876+00:00"
-translation_last_reviewed: 2025-12-29
+translation_last_reviewed: 2025-12-30
 ---
 
 ---
@@ -72,7 +72,7 @@ observability backends یا CI assertions feed کرنا آسان ہوتا ہے
 ## Multi-source fetch scoring
 
 `sorafs_car::multi_fetch` module وہ async fetch scheduler expose کرتا ہے جو CLI استعمال کرتا ہے۔
-` s orafs_car::multi_fetch::ScorePolicy` implement کریں اور `FetchOptions::score_policy` کے ذریعے pass کریں
+`sorafs_car::multi_fetch::ScorePolicy` implement کریں اور `FetchOptions::score_policy` کے ذریعے pass کریں
 تاکہ provider ordering tune ہو سکے۔ Unit test `multi_fetch::tests::score_policy_can_filter_providers`
 custom preferences enforce کرنے کا طریقہ دکھاتا ہے۔
 

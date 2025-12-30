@@ -282,7 +282,10 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
   KeyMint proofs expect without touching the codec directly. Pass the receipt’s
   `issued_at_ms` (unix ms) into the helper so the platform challenge stays
   aligned with the ledger freshness checks. Receipt `amount` values must use
-  scale 0 (integers only) to match ledger verification rules.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallenge.java:1】【java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallengeTest.java:1】
+  the allowance's canonical scale (asset definition scale when specified;
+  otherwise the allowance amount scale) to match ledger verification
+  rules. Use the overload that accepts `expectedScale` to enforce the scale
+  locally.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallenge.java:1】【java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallengeTest.java:1】
 - `OfflineBalanceProof.advanceCommitment(...)` generates the new commitment and
   the required v1 proof blob (12,385 bytes: version + delta proof + range proof)
   for offline-to-online settlement. Provide the claimed delta, resulting value,

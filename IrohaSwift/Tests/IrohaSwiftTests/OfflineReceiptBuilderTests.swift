@@ -67,6 +67,42 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         }
     }
 
+    func testAggregateAmountAcceptsScaledAmounts() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x03, count: 32))
+        let base = try makeCertificate(signingKey: signingKey)
+        let allowance = OfflineAllowanceCommitment(
+            assetId: base.allowance.assetId,
+            amount: "250.00",
+            commitment: base.allowance.commitment
+        )
+        let policy = OfflineWalletPolicy(
+            maxBalance: "500.00",
+            maxTxValue: "125.00",
+            expiresAtMs: base.policy.expiresAtMs
+        )
+        let certificate = OfflineWalletCertificate(
+            controller: base.controller,
+            allowance: allowance,
+            spendPublicKey: base.spendPublicKey,
+            attestationReport: base.attestationReport,
+            issuedAtMs: base.issuedAtMs,
+            expiresAtMs: base.expiresAtMs,
+            policy: policy,
+            operatorSignature: base.operatorSignature,
+            metadata: base.metadata,
+            verdictId: base.verdictId,
+            attestationNonce: base.attestationNonce,
+            refreshAtMs: base.refreshAtMs
+        )
+        let receipt = try makeReceipt(certificate: certificate,
+                                      signingKey: signingKey,
+                                      amount: "1.00",
+                                      invoiceId: "inv-scale",
+                                      seed: "scale")
+        let total = try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt])
+        XCTAssertEqual(total, "1.00")
+    }
+
     func testGeneratedIdsAreHashCompatible() {
         let receiptId = OfflineReceiptBuilder.generateReceiptId()
         XCTAssertEqual(receiptId.count, 32)
@@ -346,8 +382,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
 
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildTransfer(
-                receiver: certificate.controller,
                 chainId: chainId,
+                receiver: certificate.controller,
                 depositAccount: certificate.controller,
                 receipts: [receipt],
                 balanceProof: balanceProof
@@ -375,8 +411,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
 
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildTransfer(
-                receiver: certificate.controller,
                 chainId: chainId,
+                receiver: certificate.controller,
                 depositAccount: certificate.controller,
                 receipts: [receipt],
                 balanceProof: balanceProof
@@ -442,8 +478,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         )
 
         XCTAssertThrowsError(
-            try OfflineReceiptBuilder.buildTransfer(receiver: certificate.controller,
-                                                    chainId: chainId,
+            try OfflineReceiptBuilder.buildTransfer(chainId: chainId,
+                                                    receiver: certificate.controller,
                                                     depositAccount: certificate.controller,
                                                     receipts: [receiptA, receiptB],
                                                     balanceProof: balanceProof)
@@ -507,8 +543,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         )
 
         let transfer = try OfflineReceiptBuilder.buildTransfer(
-            receiver: certificate.controller,
             chainId: chainId,
+            receiver: certificate.controller,
             depositAccount: certificate.controller,
             receipts: [receiptHigh, receiptLow],
             balanceProof: balanceProof,
@@ -537,8 +573,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let root = try OfflineReceiptBuilder.computeReceiptsRoot(receipts: [receipt])
         let envelope = OfflineAggregateProofEnvelope(version: 1, receiptsRoot: root)
         let transfer = try OfflineReceiptBuilder.buildTransfer(
-            receiver: certificate.controller,
             chainId: chainId,
+            receiver: certificate.controller,
             depositAccount: certificate.controller,
             receipts: [receipt],
             balanceProof: balanceProof,
@@ -552,8 +588,8 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         )
         XCTAssertThrowsError(
             try OfflineReceiptBuilder.buildTransfer(
-                receiver: certificate.controller,
                 chainId: chainId,
+                receiver: certificate.controller,
                 depositAccount: certificate.controller,
                 receipts: [receipt],
                 balanceProof: balanceProof,
