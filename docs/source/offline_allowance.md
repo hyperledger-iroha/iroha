@@ -175,6 +175,7 @@ struct OfflineReceiptChallengePreimage {
     receiver: AccountId,
     asset: AssetId,
     amount: Numeric,
+    issued_at_ms: u64,
     nonce: Hash,    // derived from the receipt's tx_id
 }
 ```
@@ -202,7 +203,8 @@ canonical Norito encoding described above.
 ## 4. Receipts, Balance Proofs, and Bundles
 
 - `OfflineSpendReceipt` includes the sender/receiver accounts, asset/amount, invoice identifier,
-  platform proof, sender certificate, the sender’s spend-key signature, and
+  issuance timestamp (`issued_at_ms`), platform proof, sender certificate, the sender’s
+  spend-key signature, and
   optional receipt-scoped `platform_snapshot` metadata when wallets attach a Play
   Integrity or HMS Safety Detect token for that specific spend.
 - `OfflineBalanceProof` carries `{ initial_commitment, resulting_commitment, claimed_delta, zk_proof }`.
@@ -215,6 +217,22 @@ canonical Norito encoding described above.
   snapshot or cached certificate token otherwise.
 - `OfflineAllowanceRecord` is the on-ledger mirror stored after registration; it tracks the latest
   commitment, `remaining_amount`, and the most recent counter checkpoints.
+
+### 4.0 Receipt timestamp guardrails
+
+Every receipt includes `issued_at_ms` (unix ms). Torii enforces the following ordering when
+admitting bundles:
+
+- `issued_at_ms` must be >= the certificate issuance time.
+- `issued_at_ms` must be >= the allowance registration time.
+- `issued_at_ms` must be <= the certificate/policy expiry bound.
+- `issued_at_ms` must be <= the block timestamp (no future receipts).
+- If `settlement.offline.max_receipt_age_ms` is non-zero, receipts older than that window are
+  rejected.
+
+Violations map to the `receipt_timestamp_invalid` or `receipt_expired` rejection codes so SDKs can
+surface deterministic UX. The default `max_receipt_age_ms` is 86,400,000 (24 hours); set it to `0`
+to disable the age gate in private deployments.
 
 ### 4.1 Balance-proof proofs (Pedersen representation)
 
@@ -251,6 +269,10 @@ canonical Norito encoding described above.
   checks `s_G·G + s_H·H == R + c·U`.【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:70】
 - The range proof is a per-bit OR proof: each bit commitment is proven to be either `0·G` or `1·G`,
   and the sum of the bit commitments is shown to match `C_res - C_init - Δ·G`.
+- `claimed_delta` and the committed values must use scale-0 `Numeric` values; fractional scales are
+  rejected in proof generation and verification. Receipt amounts and policy limits
+  (`max_balance`, `max_tx_value`, allowance `amount`) must also use scale 0; fractional values are
+  rejected during registration and bundle admission.
 - No verifying key is required: the transcript label and generator derivation are hard-coded, so
   nodes do not fetch or rotate any VK material. Proofs are rejected when commitments are not 32-byte
   Ristretto encodings or when `claimed_delta` uses a fractional scale.【crates/iroha_core/src/smartcontracts/isi/offline/balance_proof.rs:318】
@@ -261,15 +283,17 @@ canonical Norito encoding described above.
 
 #### Operational guardrails
 
-- Offline receipts are probabilistic until settled: the on-ledger commitment can move between
-  receipt issuance and settlement, so merchants should reconcile quickly and surface pending
-  status until Torii confirms.
+- Ledger-reconcilable receipts are probabilistic until settled: the on-ledger commitment can move
+  between receipt issuance and settlement, so merchants should reconcile quickly and surface
+  pending status until Torii confirms. In offline-only circulation, receipts are final between
+  participants and are not settled on-ledger.
 - Shorten receipt windows by setting `refresh_at_ms` and attestation token TTLs (`max_token_age_ms`);
   bundles submitted after the refresh deadline are rejected.
 - Hardware counters are enforced for attested paths; prefer rollback-resistant StrongBox/TEE keys
   for offline allowances and do not export offline spend keys across devices.
-- Proof generation occurs in software, so compromised devices can leak balance/blinding material;
-  treat rooted devices as privacy-compromised and rotate allowances accordingly.
+- Proof generation occurs in software; SDKs zeroize blinding buffers after proof generation, but
+  compromised devices can still leak balance/blinding material. Treat rooted devices as
+  privacy-compromised and rotate allowances accordingly.
 
 ### 4.2 Poseidon receipt tree & aggregate proofs *(OA13/OA14)*
 
@@ -424,7 +448,7 @@ resource envelopes defined in OA14.1; SDKs call the host through the FFI/bridge 
 Ledger invariants enforced during `SubmitOfflineToOnlineTransfer`:
 
 1. All receipts share the same sender certificate, asset definition, receiver, and controller.
-2. Every receipt amount is positive and within `policy.max_tx_value`.
+2. Every receipt amount is positive, uses scale 0, and stays within `policy.max_tx_value`.
 3. Aggregate amount equals `balance_proof.claimed_delta`.
 4. `record.current_commitment == balance_proof.initial_commitment`.
 5. `record.remaining_amount >= claimed_delta`; remaining balance is decremented on success.
@@ -435,10 +459,12 @@ Ledger invariants enforced during `SubmitOfflineToOnlineTransfer`:
    cached attestation report. Receipt-local snapshots take precedence so POS importers can attach
    distinct proofs per spend.
 
-Offline receipts remain probabilistic until settlement: device rollbacks, cloned keys, or a
-sender racing an online refresh can still invalidate an otherwise well-formed receipt. Merchants
-should settle quickly, consume counter summaries, and surface UX warnings for offline acceptance
-flows; hardware counters mitigate but do not eliminate state-fork risk.
+Ledger-reconcilable receipts remain probabilistic until settlement: device rollbacks, cloned keys,
+or a sender racing an online refresh can still invalidate an otherwise well-formed receipt.
+Merchants should settle quickly, consume counter summaries, and surface UX warnings for offline
+acceptance flows; hardware counters mitigate but do not eliminate state-fork risk. In offline-only
+circulation, receipts are final between participants and counter summaries are the primary defense
+against duplicate `(certificate_id, counter)` claims.
 
 ## 5. Ledger Instructions
 
@@ -1151,7 +1177,7 @@ recording the attempt in their journals.【IrohaSwift/Sources/IrohaSwift/Offline
   and optionally enforces marker-key signatures so marker series + counters remain bound to the
   certificate metadata.【crates/iroha_core/src/smartcontracts/isi/offline.rs:1068】
 - **Canonical challenge + metadata binding.** `derive_receipt_challenge` hashes
-  `Hash(chain_id) || {invoice, receiver, asset, amount, tx_id}` and both verifiers compare their
+  `Hash(chain_id) || {invoice, receiver, asset, amount, issued_at_ms, tx_id}` and both verifiers compare their
   inputs against the metadata recorded in `OfflineWalletCertificate`, ensuring servers recompute the
   exact chain-bound challenge described in the spec.【crates/iroha_core/src/smartcontracts/isi/offline.rs:562】
 - **Telemetry.** `iroha_core` records settlement/archival metrics via `iroha_telemetry::metrics`
@@ -1172,8 +1198,9 @@ depositing them back on-ledger. `docs/source/offline_bearer_mode.md` captures th
 guidance for that posture: risk disclosures, treasury accounting implications, how wallet settings
 should label the "skip reconciliation" toggle, and how to communicate the missing commitment delta
 on user interfaces.【docs/source/offline_bearer_mode.md:1】 Wallets still record the
-hardware counters/WAL entries so they can reconcile later, but the doc spells out the scenarios when
-skipping ledger reconciliation is acceptable and how to re-enable deposits without losing state.
+hardware counters/WAL entries so they can share counter summaries with receivers or reconcile later
+if operators opt back into ledger-reconcilable mode. The doc spells out when skipping ledger
+reconciliation is acceptable and how to re-enable deposits without losing state.
 
 ## 17. Next Steps
 

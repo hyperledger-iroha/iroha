@@ -1148,7 +1148,7 @@ mod tests {
         let state = Arc::new(State::new_for_testing(World::default(), kura, query));
         let chain_id: ChainId = "chain".parse().expect("chain id");
 
-        assert_ne!(state.chain_id(), &chain_id);
+        assert_ne!(&state.chain_id, &chain_id);
 
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
         let queue = Arc::new(Queue::from_config(

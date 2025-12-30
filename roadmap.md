@@ -27,13 +27,14 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Kagami alignment: auto-pass `--profile`/lane args to Kagami generation/verify and track the resulting chain id/fingerprint in rendered configs.
    - [x] Docs/samples: expand sample-config and bundle README with new presets, lane/DA switches, and usage recipes for 1/3/4/5-node and Nexus lane runs.
 
-2. **OFFLINE-SECURITY-HARDENING — Close remaining offline receipt threat gaps** (Core/SDK, Line: Shared, Owner: Offline WG, Priority: High, Status: 🈺 In Progress, target TBD)
+2. **OFFLINE-SECURITY-HARDENING — Close remaining offline receipt threat gaps** (Core/SDK, Line: Shared, Owner: Offline WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Bind receipt challenges to `chain_id` across core, SDKs, and FFI helpers.
    - [x] Enforce `policy.max_tx_value` during settlement and surface `max_tx_value_exceeded` rejections.
+   - [x] Require scale-0 amounts across receipts, policy limits, and balance proofs in core + SDK validators.
    - [x] Add range-proof verification for `resulting_commitment` (non-negative/bounded balance) and update docs/tests.
    - [x] Document operational guardrails for front-running/rollback risk and rooted-device privacy exposure.
-   - [ ] Add receipt age/refresh guardrails to reduce front-running and replay risk; update SDK UX and docs.
-   - [ ] Mitigate memory exposure for commitment witness material (zeroization and optional hardware paths).
+   - [x] Add receipt timestamps + `max_receipt_age_ms` guardrails to reduce front-running and replay risk; update SDK UX and docs.
+   - [x] Mitigate memory exposure for commitment witness material (zeroization in the Norito bridge).
 
 4. **LOCALNET-DEMO-FLOW — Verify training-script localnet bootstrap** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Align consensus rebroadcast cooldowns (RBC/pending/precommit) to on-chain `block_time` with a 200ms floor and 2x base multiplier, keeping payload replays at an additional 2x to avoid queue saturation on 1s targets.
@@ -161,7 +162,13 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraFS chunker registry translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS chunker registry charter translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS chunker conformance translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
-   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond quickstart/runbooks index/capacity simulation/manifest pipeline/orchestrator ops/orchestrator tuning/multi-source rollout/orchestrator config/node operations/dispute revocation runbook/capacity reconciliation/gateway & DNS kickoff runbook/taikai anchor runbook/operations playbook/observability plan/node-client protocol/staging manifest playbook/chunker registry rollout checklist/chunker registry/chunker registry charter/chunker conformance, then fill remaining portal stubs per locale.
+   - [x] Portal SoraFS chunker profile authoring translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS deal engine translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS developer index translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS developer CI recipes translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS developer CLI cookbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS deployment notes translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond quickstart/runbooks index/capacity simulation/manifest pipeline/orchestrator ops/orchestrator tuning/multi-source rollout/orchestrator config/node operations/dispute revocation runbook/capacity reconciliation/gateway & DNS kickoff runbook/taikai anchor runbook/operations playbook/observability plan/node-client protocol/staging manifest playbook/chunker registry rollout checklist/chunker registry/chunker registry charter/chunker conformance/chunker profile authoring/deal engine/developer index/developer ci/developer cli/developer deployment, then fill remaining portal stubs per locale.
     - [x] Ensure Akkadian translations are semantic and written in cuneiform (no transliteration).
     - [x] Extend CLI i18n coverage (remaining messages and clap help output).
     - [x] Fill governance schedule placeholders in scripts/templates that currently say TBD.
@@ -191,11 +198,11 @@ Unless stated otherwise, roadmap items call out which release line they affect.
     - [x] Refactor `account_admission.rs`, `settlement.rs` error payloads, and multisig ownership/borrowing to remove lint suppressions.【crates/iroha_core/src/smartcontracts/isi/account_admission.rs:1】【crates/iroha_core/src/smartcontracts/isi/settlement.rs:1】【crates/iroha_core/src/smartcontracts/isi/multisig.rs:1】
     - [x] Consolidate boolean policy knobs in `state.rs` into enums/bitflags and split large validation helpers.
 
-34. **EVENTS-PIPELINE-HANG — Unblock mod.rs integration event tests** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈺 In Progress, target TBD)
+34. **EVENTS-PIPELINE-HANG — Unblock mod.rs integration event tests** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Reproduce `cargo test -p integration_tests --test mod` hangs and confirm DA-enabled single-peer networks stall on post-genesis commits.
    - [x] Enforce a 4-peer minimum in the integration-test harness and update direct peer-start paths to avoid single-peer stalls.
    - [x] Allow pending-block quorum reschedules to drop/requeue after a retry even with partial precommit votes; add unit test coverage.
-   - [ ] Re-run the full `cargo test -p integration_tests --test mod` suite to confirm stability.
+   - [x] Re-run the full `cargo test -p integration_tests --test mod` suite to confirm stability.
 
 ## Archived
 

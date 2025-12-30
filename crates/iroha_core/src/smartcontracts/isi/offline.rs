@@ -197,6 +197,21 @@ fn ensure_certificate_policy(
             "policy max transaction value must be positive".into(),
         ));
     }
+    if certificate.policy.max_balance.scale() != 0 {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "policy max balance must use scale 0".into(),
+        ));
+    }
+    if certificate.policy.max_tx_value.scale() != 0 {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "policy max transaction value must use scale 0".into(),
+        ));
+    }
+    if certificate.allowance.amount.scale() != 0 {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "allowance amount must use scale 0".into(),
+        ));
+    }
     if certificate.policy.max_tx_value > certificate.policy.max_balance {
         return Err(InstructionExecutionError::InvariantViolation(
             "policy max transaction value cannot exceed max balance".into(),
@@ -278,6 +293,13 @@ fn ensure_uniform_asset(receipts: &[OfflineSpendReceipt]) -> Result<AssetId, Err
 fn aggregate_amount(receipts: &[OfflineSpendReceipt]) -> Result<Numeric, Error> {
     let mut acc = Numeric::zero();
     for receipt in receipts {
+        if receipt.amount.scale() != 0 {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::InvalidReceiptAmount,
+                OfflineTransferRejectionPlatform::General,
+                "receipt amount must use scale 0",
+            ));
+        }
         if receipt.amount <= Numeric::zero() {
             return Err(rejection_error(
                 OfflineTransferRejectionReason::InvalidReceiptAmount,
@@ -638,7 +660,7 @@ pub mod isi {
 
     #[cfg(test)]
     mod register_tests {
-        use std::{str::FromStr, sync::Arc};
+        use std::{str::FromStr, sync::Arc, time::Duration};
 
         use iroha_crypto::Algorithm;
         use iroha_data_model::{
@@ -761,6 +783,57 @@ pub mod isi {
             }
         }
 
+        fn sample_transfer_with_receipt_timestamp(
+            issued_at_ms: u64,
+        ) -> (OfflineToOnlineTransfer, OfflineAllowanceRecord) {
+            let certificate = sample_certificate();
+            let controller = certificate.controller.clone();
+            let receipt = OfflineSpendReceipt {
+                tx_id: Hash::new(b"receipt-ts"),
+                from: controller.clone(),
+                to: controller.clone(),
+                asset: certificate.allowance.asset.clone(),
+                amount: Numeric::new(100, 0),
+                issued_at_ms,
+                invoice_id: "INV-TS".into(),
+                platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
+                    key_id: "apple".into(),
+                    counter: 1,
+                    assertion: vec![],
+                    challenge_hash: Hash::new(b"challenge"),
+                }),
+                platform_snapshot: None,
+                sender_certificate: certificate.clone(),
+                sender_signature: Signature::from_bytes(&[0; 64]),
+            };
+            let transfer = OfflineToOnlineTransfer {
+                bundle_id: Hash::new(b"bundle-ts"),
+                receiver: controller.clone(),
+                deposit_account: controller.clone(),
+                receipts: vec![receipt],
+                balance_proof: OfflineBalanceProof {
+                    initial_commitment: certificate.allowance.clone(),
+                    resulting_commitment: vec![0; 32],
+                    claimed_delta: Numeric::new(100, 0),
+                    zk_proof: None,
+                },
+                aggregate_proof: None,
+                attachments: None,
+                platform_snapshot: None,
+            };
+            let record = OfflineAllowanceRecord {
+                certificate,
+                current_commitment: vec![0; 32],
+                registered_at_ms: 1_700_000_010,
+                remaining_amount: Numeric::new(1_000, 0),
+                counter_state: OfflineCounterState::default(),
+                verdict_id: None,
+                attestation_nonce: None,
+                refresh_at_ms: None,
+            };
+            (transfer, record)
+        }
+
         #[test]
         fn receipt_amount_exceeds_policy_max_is_rejected() {
             let mut certificate = sample_certificate();
@@ -816,6 +889,94 @@ pub mod isi {
             let expected = format!(
                 "{OFFLINE_REJECTION_REASON_PREFIX}{}",
                 OfflineTransferRejectionReason::MaxTxValueExceeded.as_label()
+            );
+            assert!(err.to_string().contains(&expected));
+        }
+
+        #[test]
+        fn receipt_amount_fractional_is_rejected() {
+            let certificate = sample_certificate();
+            let receiver = sample_account(0x02, "offline");
+            let receipt = OfflineSpendReceipt {
+                tx_id: Hash::new(b"receipt-frac"),
+                from: certificate.controller.clone(),
+                to: receiver,
+                asset: certificate.allowance.asset.clone(),
+                amount: Numeric::new(5, 1),
+                issued_at_ms: 1_700_000_100,
+                invoice_id: "INV-FRAC".into(),
+                platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
+                    key_id: "apple".into(),
+                    counter: 1,
+                    assertion: vec![],
+                    challenge_hash: Hash::new(b"challenge"),
+                }),
+                platform_snapshot: None,
+                sender_certificate: certificate.clone(),
+                sender_signature: Signature::from_bytes(&[0; 64]),
+            };
+
+            let err = super::aggregate_amount(&[receipt])
+                .expect_err("fractional receipt should be rejected");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::InvalidReceiptAmount.as_label()
+            );
+            assert!(err.to_string().contains(&expected));
+        }
+
+        #[test]
+        fn certificate_policy_rejects_fractional_values() {
+            let mut certificate = sample_certificate();
+            certificate.policy.max_balance = Numeric::new(1_000, 1);
+            assert!(ensure_certificate_policy(&certificate).is_err());
+
+            let mut certificate = sample_certificate();
+            certificate.policy.max_tx_value = Numeric::new(250, 1);
+            assert!(ensure_certificate_policy(&certificate).is_err());
+
+            let mut certificate = sample_certificate();
+            certificate.allowance.amount = Numeric::new(1_000, 1);
+            assert!(ensure_certificate_policy(&certificate).is_err());
+        }
+
+        #[test]
+        fn receipt_timestamp_accepts_valid_window() {
+            let issued_at_ms = 1_700_000_100;
+            let (transfer, record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            let block_timestamp_ms = record.certificate.issued_at_ms + 1_000;
+            let cfg = actual::Offline::default();
+            ensure_receipt_timestamps(&transfer, &record, block_timestamp_ms, &cfg)
+                .expect("receipt timestamp should be valid");
+        }
+
+        #[test]
+        fn receipt_timestamp_rejects_before_certificate() {
+            let issued_at_ms = 1_699_999_999;
+            let (transfer, record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            let block_timestamp_ms = record.certificate.issued_at_ms + 1_000;
+            let cfg = actual::Offline::default();
+            let err = ensure_receipt_timestamps(&transfer, &record, block_timestamp_ms, &cfg)
+                .expect_err("receipt timestamp should be rejected");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::ReceiptTimestampInvalid.as_label()
+            );
+            assert!(err.to_string().contains(&expected));
+        }
+
+        #[test]
+        fn receipt_timestamp_rejects_expired() {
+            let issued_at_ms = 1_700_000_100;
+            let (transfer, record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
+            let block_timestamp_ms = issued_at_ms + 100;
+            let mut cfg = actual::Offline::default();
+            cfg.max_receipt_age = Duration::from_millis(50);
+            let err = ensure_receipt_timestamps(&transfer, &record, block_timestamp_ms, &cfg)
+                .expect_err("receipt should be expired");
+            let expected = format!(
+                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
+                OfflineTransferRejectionReason::ReceiptExpired.as_label()
             );
             assert!(err.to_string().contains(&expected));
         }

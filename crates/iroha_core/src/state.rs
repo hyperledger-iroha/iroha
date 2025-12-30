@@ -24512,10 +24512,11 @@ mod tests {
         let mut state_block = state.block(signed_block.header());
 
         {
-            let peers = state_block.world.peers_mut_for_testing().get_mut();
+            let mut peers = state_block.world.peers_mut_for_testing().transaction();
             peers.clear();
             peers.extend(base_topology.clone());
-            let _ = peers.push(new_peer.clone());
+            peers.push(new_peer.clone());
+            peers.apply();
         }
 
         let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});

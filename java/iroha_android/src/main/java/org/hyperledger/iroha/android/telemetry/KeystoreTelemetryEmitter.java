@@ -103,6 +103,44 @@ public final class KeystoreTelemetryEmitter {
             "device_brand_bucket", deviceBrandBucket()));
   }
 
+  /**
+   * Records a failure to validate Ed25519 SPKI outputs from a key provider.
+   */
+  public void recordKeyValidationFailure(
+      final String alias,
+      final IrohaKeyManager.KeySecurityPreference preference,
+      final KeyProviderMetadata metadata,
+      final String phase,
+      final String reason,
+      final int spkiLength,
+      final int expectedLength,
+      final String spkiPrefixHex) {
+    if (sink == null || redaction == null) {
+      return;
+    }
+    final Optional<String> aliasLabel = aliasLabel(alias);
+    if (aliasLabel.isEmpty()) {
+      return;
+    }
+    final String preferenceLabel =
+        preference == null ? "unknown" : preference.name().toLowerCase(Locale.ROOT);
+    final String phaseLabel = phase == null || phase.isBlank() ? "unknown" : phase;
+    final String failureReason = reason == null || reason.isBlank() ? "unknown" : reason;
+    final String prefix = spkiPrefixHex == null || spkiPrefixHex.isBlank() ? "unknown" : spkiPrefixHex;
+    sink.emitSignal(
+        "android.keystore.key_validation.failure",
+        Map.of(
+            "alias_label", aliasLabel.get(),
+            "preference", preferenceLabel,
+            "provider", metadata == null ? "unknown" : metadata.name(),
+            "phase", phaseLabel,
+            "reason", failureReason,
+            "spki_length", spkiLength,
+            "expected_spki_length", expectedLength,
+            "spki_prefix", prefix,
+            "device_brand_bucket", deviceBrandBucket()));
+  }
+
   /** Records an attestation failure surfaced by {@link AttestationVerificationException}. */
   public void recordFailure(
       final String alias, final KeyProviderMetadata metadata, final String reason) {

@@ -105,6 +105,7 @@ struct ChallengeSpec {
     receiver: String,
     asset: String,
     amount: String,
+    issued_at_ms: Option<u64>,
     nonce_hex: String,
 }
 
@@ -286,12 +287,16 @@ fn load_challenge(spec: &ProofSpec, base_dir: &Path) -> Result<OfflineReceiptCha
         .wrap_err_with(|| format!("invalid amount in proof `{}`", spec.label))?;
     let nonce = parse_hash_hex("nonce_hex", &source.nonce_hex)
         .wrap_err_with(|| format!("invalid nonce in proof `{}`", spec.label))?;
+    let issued_at_ms = source
+        .issued_at_ms
+        .unwrap_or(spec.manifest_issued_at_ms);
 
     Ok(OfflineReceiptChallengePreimage {
         invoice_id: source.invoice_id,
         receiver,
         asset,
         amount,
+        issued_at_ms,
         nonce,
     })
 }
@@ -304,4 +309,55 @@ fn path_name(path: &Path, root: &Path) -> String {
     path.strip_prefix(root)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| path.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RECEIVER: &str =
+        "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland";
+    const ASSET: &str =
+        "xor#sora#ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E@sora";
+    const NONCE_HEX: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    fn sample_challenge(issued_at_ms: Option<u64>) -> ChallengeSpec {
+        ChallengeSpec {
+            invoice_id: "INV-TEST".to_string(),
+            receiver: RECEIVER.to_string(),
+            asset: ASSET.to_string(),
+            amount: "25.00".to_string(),
+            issued_at_ms,
+            nonce_hex: NONCE_HEX.to_string(),
+        }
+    }
+
+    fn sample_spec(manifest_issued_at_ms: u64, challenge: ChallengeSpec) -> ProofSpec {
+        ProofSpec {
+            label: "sample".to_string(),
+            manifest_issued_at_ms,
+            counter: 1,
+            manifest_schema: None,
+            manifest_version: None,
+            inspector_key: None,
+            device_manifest: None,
+            device_manifest_file: None,
+            challenge: Some(challenge),
+            challenge_file: None,
+        }
+    }
+
+    #[test]
+    fn load_challenge_defaults_to_manifest_timestamp() {
+        let spec = sample_spec(1_700_000_000, sample_challenge(None));
+        let challenge = load_challenge(&spec, Path::new(".")).expect("load challenge");
+        assert_eq!(challenge.issued_at_ms, spec.manifest_issued_at_ms);
+    }
+
+    #[test]
+    fn load_challenge_prefers_explicit_timestamp() {
+        let spec = sample_spec(1_700_000_000, sample_challenge(Some(1_800_000_000)));
+        let challenge = load_challenge(&spec, Path::new(".")).expect("load challenge");
+        assert_eq!(challenge.issued_at_ms, 1_800_000_000);
+    }
 }

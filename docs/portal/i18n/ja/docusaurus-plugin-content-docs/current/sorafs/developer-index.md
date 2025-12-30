@@ -5,12 +5,28 @@ id: developer-index
 lang: ja
 direction: ltr
 source: docs/portal/docs/sorafs/developer-index.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# 翻訳作業中
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+:::note 正規ソース
+このページは `docs/source/sorafs/developer/index.md` を反映しています。レガシー docs が退役するまで両方の版を同期してください。
+:::
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+# SoraFS 開発者ガイド
+
+```{toctree}
+:caption: はじめに
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

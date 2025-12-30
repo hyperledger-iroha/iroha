@@ -91,6 +91,33 @@ KeyExportBundle bundle =
 manager.importDeterministicKey(bundle, "passphrase".toCharArray());
 ```
 
+Hardware-backed Keystore aliases are **non-exportable**. For user-scoped accounts
+that must recover on new devices, prefer software keys and explicitly require an
+exportable Ed25519 provider (Bouncy Castle) so the deterministic bundle contains
+the private key material:
+
+```java
+SoftwareKeyProvider provider =
+    new SoftwareKeyProvider(SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED,
+        exportStore,
+        passphraseProvider);
+IrohaKeyManager manager = IrohaKeyManager.fromProviders(List.of(provider));
+```
+
+Or use the convenience helper:
+
+```java
+IrohaKeyManager manager =
+    IrohaKeyManager.withExportableSoftwareKeys(exportStore, passphraseProvider);
+```
+
+`IrohaKeyManager` validates that generated keys are Ed25519 by checking the
+SPKI prefix; emulators or misconfigured devices that downgrade to a different
+algorithm raise `KeyManagementException` and emit
+`android.keystore.key_validation.failure` telemetry (fields include
+`spki_length`, `expected_spki_length`, `spki_prefix`, and `phase`). Surface that
+error or fall back to `SOFTWARE_ONLY` when the policy allows it.
+
 The bundle embeds HKDF-derived salts and AES-GCM metadata so the import helper
 can detect tampering or passphrase mismatches deterministically. Store bundles
 alongside operator runbooks and rotate the passphrase whenever an alias is

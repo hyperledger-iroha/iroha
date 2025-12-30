@@ -1,3 +1,5 @@
+//! Offline balance proof test utilities.
+
 use iroha_core::smartcontracts::isi::offline::{build_balance_proof, compute_commitment};
 use iroha_data_model::{
     ChainId,

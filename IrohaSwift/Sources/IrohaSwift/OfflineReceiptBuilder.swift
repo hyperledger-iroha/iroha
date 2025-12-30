@@ -17,6 +17,7 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
     case duplicateInvoiceId(String)
     case invalidAssetId(String)
     case invalidAmount(String)
+    case fractionalAmount(String)
     case nonPositiveAmount(String)
     case amountExceedsPolicy(amount: String, max: String)
     case invalidReceiptTimestamp(String)
@@ -78,6 +79,8 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
             return "Invalid asset id: \(value)."
         case let .invalidAmount(value):
             return "Invalid numeric amount: \(value)."
+        case let .fractionalAmount(value):
+            return "Offline amounts must use scale 0: \(value)."
         case let .nonPositiveAmount(value):
             return "Receipt amount must be positive: \(value)."
         case let .amountExceedsPolicy(amount, max):
@@ -966,7 +969,11 @@ public enum OfflineReceiptBuilder {
     private static func parseAmount(_ value: String) throws -> OfflineDecimal {
         do {
             _ = try OfflineNorito.encodeNumeric(value)
-            return try OfflineDecimal.parse(value)
+            let parsed = try OfflineDecimal.parse(value)
+            if parsed.scale != 0 {
+                throw OfflineReceiptBuilderError.fractionalAmount(value)
+            }
+            return parsed
         } catch let error as OfflineNoritoError {
             switch error {
             case .numericOverflow:
