@@ -12,6 +12,7 @@ use std::{
 
 use attestation::verify_platform_proof;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use iroha_config::parameters::actual;
 use iroha_config::parameters::actual::OfflineProofMode;
 use iroha_crypto::Hash;
 #[cfg(test)]

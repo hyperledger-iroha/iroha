@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Allow quorum reschedule to drop/requeue pending blocks after a retry even with partial precommit votes; add unit coverage.
 - Resolved merge conflicts in Torii test utilities, roles integration tests, and the status list.
 - Enforced a 4-peer minimum for integration-test networks and updated peer-start paths that bypass the sandbox to avoid DA single-peer stalls.
 - Aligned `iroha_torii::test_utils` with current Torii behavior (chain_id validation + full-bytecode contract hashing) and added focused unit tests.
