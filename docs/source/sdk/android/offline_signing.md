@@ -262,9 +262,11 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
 - `/v1/offline/spend-receipts` accepts raw receipts and returns the canonical
   Poseidon `receipts_root` (`OfflineSpendReceiptsSubmitResponse`) so wallets can
   cross-check their local hashing (and surface structured failures) before
-  attempting settlement.
+  attempting ledger reconciliation.
 - `/v1/offline/settlements` submits an offline-to-online bundle for ledger
-  admission (submits `SubmitOfflineToOnlineTransfer`). When rejection occurs,
+  admission (submits `SubmitOfflineToOnlineTransfer`). Use this endpoint only
+  when operating in ledger-reconcilable mode; offline-only circulation treats
+  receipts as final and does not require settlement. When rejection occurs,
   Torii surfaces a stable reason code in the `x-iroha-reject-code` response
   header (for example `certificate_expired`, `counter_conflict`,
   `max_tx_value_exceeded`, `allowance_exceeded`, `invoice_duplicate`) so apps can map failures to
@@ -277,7 +279,9 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
 - `OfflineReceiptChallenge.compute(chainId, ...)` wraps the shared native helper
   (`connect_norito_offline_receipt_challenge`) so Android apps can derive the
   canonical Norito payload plus the chain-bound BLAKE2b/SHA-256 hashes that
-  KeyMint proofs expect without touching the codec directly.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallenge.java:1】【java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallengeTest.java:1】
+  KeyMint proofs expect without touching the codec directly. Pass the receipt’s
+  `issued_at_ms` (unix ms) into the helper so the platform challenge stays
+  aligned with the ledger freshness checks.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallenge.java:1】【java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallengeTest.java:1】
 - `OfflineBalanceProof.advanceCommitment(...)` generates the new commitment and
   the required v1 proof blob (12,385 bytes: version + delta proof + range proof)
   for offline-to-online settlement. Provide the claimed delta, resulting value,
@@ -465,6 +469,7 @@ value:
         "tx_id_hex": "00ff...",
         "from": "merchant@offline",
         "to": "merchant@offline",
+        "issued_at_ms": 1730314876000,
         "platform_proof": { "...": "..." },
         "platform_snapshot": {
           "policy": "play_integrity",

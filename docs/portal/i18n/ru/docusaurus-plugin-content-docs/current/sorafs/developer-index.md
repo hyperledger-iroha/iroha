@@ -5,12 +5,28 @@ id: developer-index
 lang: ru
 direction: ltr
 source: docs/portal/docs/sorafs/developer-index.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Перевод в процессе
 
-Этот файл является заготовкой для русскоязычного перевода английского документа. После завершения перевода обновите поле `status` в метаданных выше.
+:::note Канонический источник
+Эта страница отражает `docs/source/sorafs/developer/index.md`. Держите обе версии синхронизированными, пока legacy docs не будут выведены из эксплуатации.
+:::
 
-Этот черновик ожидает перевода. Замените этот текст готовым переводом и установите значение `status` в `complete` после завершения. Убедитесь, что поле `translation_last_reviewed` отражает дату последней проверки с английским оригиналом.
+# Руководства для разработчиков SoraFS
+
+```{toctree}
+:caption: Начало работы
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

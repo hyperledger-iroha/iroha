@@ -1,6 +1,18 @@
 # Status
 
 ## Latest Updates
+- Translated the SoraFS deployment notes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Enforced scale-0 amounts for offline receipts and policy limits (core + Swift tests), clarified offline-only finality in offline docs, and zeroized offline proof generation in the Norito bridge.
+- Translated the SoraFS CLI cookbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS CI recipes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS developer index across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS deal engine overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Enforced scale-0 amounts in offline balance proofs (core + bridge) with new tests; updated offline allowance docs.
+- Added Android key validation telemetry for non-Ed25519 SPKI outputs plus `withExportableSoftwareKeys` helper/tests; docs/README updated.
+- Added `issued_at_ms` to offline spend receipts + receipt challenge preimages, enforced receipt timestamp validity and max age (`settlement.offline.max_receipt_age_ms`), and updated SDKs/FFI/tests/fixtures/docs.
+- Documented exportable software key flows (Bouncy Castle policy) and clarified Ed25519 fallback detection for Android key management.
+- Translated the SoraFS chunker profile authoring guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Re-ran `cargo test -p integration_tests --test mod`, added CBDC rollout fixture compliance/governance placeholders, and fixed a missing offline settlement config import.
 - Resolved merge conflicts in Torii test utilities, roles integration tests, and the status list.
 - Enforced a 4-peer minimum for integration-test networks and updated peer-start paths that bypass the sandbox to avoid DA single-peer stalls.
 - Aligned `iroha_torii::test_utils` with current Torii behavior (chain_id validation + full-bytecode contract hashing) and added focused unit tests.

@@ -170,7 +170,7 @@ fn genesis_norito_bytes_roundtrip_network() -> Result<()> {
             load_raw_genesis_transaction()
                 .into_builder()
                 .next_transaction()
-                .set_topology(topology)
+                .set_topology(topology.to_vec())
                 .set_topology_pop(topology_pop)
                 .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
                 .expect("build genesis block")

@@ -21,9 +21,10 @@ public enum OfflineWalletCirculationMode: String, Codable, CaseIterable {
         case .offlineOnly:
             return OfflineWalletCirculationNotice(
                 headline: "Pure offline circulation",
-                details: "Allowances in this mode behave as bearer instruments and will not be re-entered on-ledger. " +
-                         "Operators must accept treasury risk, warn users that recovery depends on the local journal, " +
-                         "and disclose that lost devices cannot be reconciled via Torii.")
+                details: "Allowances in this mode behave as bearer instruments; receipts are final between participants " +
+                         "and will not be re-entered on-ledger. Operators must accept treasury risk, warn users that " +
+                         "recovery depends on the local journal, and disclose that lost devices cannot be reconciled " +
+                         "via Torii.")
         }
     }
 }

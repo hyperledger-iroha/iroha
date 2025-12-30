@@ -39,9 +39,10 @@ public final class OfflineWallet {
     OFFLINE_ONLY(
         new CirculationNotice(
             "Pure offline circulation",
-            "Allowances stay off-ledger and behave like bearer instruments. "
-                + "Operators assume treasury liability and users must acknowledge that recovery "
-                + "relies on their local journal and cannot be replayed through Torii."));
+            "Allowances stay off-ledger and behave like bearer instruments; receipts are final "
+                + "between participants. Operators assume treasury liability and users must "
+                + "acknowledge that recovery relies on their local journal and cannot be replayed "
+                + "through Torii."));
 
     private final CirculationNotice notice;
 

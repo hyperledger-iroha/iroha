@@ -37,23 +37,34 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         XCTAssertEqual(receipt.assetId, certificate.allowance.assetId)
     }
 
-    func testAggregateAmountUsesMaxScale() throws {
+    func testAggregateAmountRejectsFractionalAmounts() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x02, count: 32))
         let certificate = try makeCertificate(signingKey: signingKey)
-        let receiptA = try makeReceipt(certificate: certificate,
-                                       signingKey: signingKey,
-                                       amount: "1.0",
-                                       invoiceId: "inv-a",
-                                       seed: "tx-a")
-        let receiptB = try makeReceipt(certificate: certificate,
-                                       signingKey: signingKey,
-                                       amount: "1.00",
-                                       invoiceId: "inv-b",
-                                       seed: "tx-b")
+        let txId = IrohaHash.hash(Data("tx-frac".utf8))
+        let proof = try makeProof(txId: txId,
+                                  receiver: certificate.controller,
+                                  assetId: certificate.allowance.assetId,
+                                  amount: "1.0",
+                                  invoiceId: "inv-frac")
+        let receipt = OfflineSpendReceipt(
+            txId: txId,
+            from: certificate.controller,
+            to: certificate.controller,
+            assetId: certificate.allowance.assetId,
+            amount: "1.0",
+            issuedAtMs: certificate.issuedAtMs + 1_000,
+            invoiceId: "inv-frac",
+            platformProof: proof,
+            platformSnapshot: nil,
+            senderCertificate: certificate,
+            senderSignature: Data(repeating: 0xAB, count: 64)
+        )
 
-        let total = try OfflineReceiptBuilder.aggregateAmount(receipts: [receiptA, receiptB])
-
-        XCTAssertEqual(total, "2.00")
+        XCTAssertThrowsError(
+            try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt])
+        ) { error in
+            XCTAssertEqual(error as? OfflineReceiptBuilderError, .fractionalAmount("1.0"))
+        }
     }
 
     func testGeneratedIdsAreHashCompatible() {
@@ -380,18 +391,18 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let certificate = try makeCertificate(signingKey: signingKey)
         let receiptA = try makeReceipt(certificate: certificate,
                                        signingKey: signingKey,
-                                       amount: "1.0",
+                                       amount: "1",
                                        invoiceId: "inv-a",
                                        seed: "tx-a")
         let receiptB = try makeReceipt(certificate: certificate,
                                        signingKey: signingKey,
-                                       amount: "1.00",
+                                       amount: "2",
                                        invoiceId: "inv-b",
                                        seed: "tx-b")
         let balanceProof = OfflineBalanceProof(
             initialCommitment: certificate.allowance,
             resultingCommitment: Data(repeating: 0x11, count: 32),
-            claimedDelta: "2.0",
+            claimedDelta: "4",
             zkProof: validZkProof()
         )
         let bundleId = IrohaHash.hash(Data("bundle-id".utf8))
@@ -405,7 +416,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
                                                     balanceProof: balanceProof)
         ) { error in
             XCTAssertEqual(error as? OfflineReceiptBuilderError,
-                           .claimedDeltaMismatch(expected: "2.00", actual: "2.0"))
+                           .claimedDeltaMismatch(expected: "3", actual: "4"))
         }
     }
 

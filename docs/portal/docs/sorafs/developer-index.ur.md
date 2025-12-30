@@ -4,17 +4,37 @@
 lang: ur
 direction: rtl
 source: docs/portal/docs/sorafs/developer-index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7df0d84bf2e17931ebbe5ee315b86aed656da8a36ccb9d77ce5c2908acd358bb
 source_last_modified: "2025-11-10T05:30:31.325664+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2025-12-29
 ---
 
-# ترجمہ جاری ہے
+---
+id: developer-index
+title: SoraFS developer guides
+description: SoraFS developer documentation, samples اور automation references کے لیے landing page۔
+sidebar_label: Developer overview
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+:::note مستند ماخذ
+یہ صفحہ `docs/source/sorafs/developer/index.md` کی عکاسی کرتا ہے۔ جب تک legacy docs ریٹائر نہ ہوں دونوں ورژنز کو ہم آہنگ رکھیں۔
+:::
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+# SoraFS developer guides
+
+```{toctree}
+:caption: Getting started
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```
