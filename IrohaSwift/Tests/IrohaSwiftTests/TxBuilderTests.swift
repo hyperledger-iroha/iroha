@@ -244,6 +244,11 @@ final class TxBuilderTests: XCTestCase {
         data.map { String(format: "%02x", $0) }.joined()
     }
 
+    private func requireEd25519Encoder() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+                      "Native transaction encoder unavailable")
+    }
+
     private func makeRegisterZkAssetRequest(authority: String,
                                             ttlMs: UInt64? = 30) throws -> RegisterZkAssetRequest {
         let transferVk = try VerifyingKeyIdReference(backend: "halo2/ipa", name: "vk_transfer")
@@ -261,6 +266,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testBuildSignedTransferProducesEnvelope() throws {
+        try requireEd25519Encoder()
         let keypair = try Keypair.generate()
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
@@ -368,6 +374,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testSubmitUsesInjectedPipelineClient() throws {
+        try requireEd25519Encoder()
         let stub = StubPipelineClient()
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
@@ -419,6 +426,7 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testSubmitPropagatesError() throws {
+        try requireEd25519Encoder()
         enum StubError: Error { case failure }
         let stub = StubPipelineClient()
         stub.result = .failure(StubError.failure)
@@ -446,6 +454,7 @@ final class TxBuilderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitEnvelopeAsync() async throws {
+        try requireEd25519Encoder()
         let stub = StubPipelineClient()
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
@@ -464,6 +473,7 @@ final class TxBuilderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitEnvelopeAsyncPropagatesError() async throws {
+        try requireEd25519Encoder()
         enum StubError: Error { case failure }
         let stub = StubPipelineClient()
         stub.result = .failure(StubError.failure)
@@ -1117,6 +1127,7 @@ final class TxBuilderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitAndWaitAsyncSucceeds() async throws {
+        try requireEd25519Encoder()
         PipelineURLProtocol.reset()
         PipelineURLProtocol.configure(statuses: ["Queued", "Approved"])
         let sdk = try makePipelineSDK()
@@ -1134,6 +1145,7 @@ final class TxBuilderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitAndWaitAsyncFailureThrows() async throws {
+        try requireEd25519Encoder()
         PipelineURLProtocol.reset()
         PipelineURLProtocol.configure(statuses: ["Rejected"])
         let sdk = try makePipelineSDK()
@@ -1162,6 +1174,7 @@ final class TxBuilderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitAndWaitCompletionDeliversStatus() async throws {
+        try requireEd25519Encoder()
         PipelineURLProtocol.reset()
         PipelineURLProtocol.configure(statuses: ["Approved"])
         let sdk = try makePipelineSDK()
@@ -1189,6 +1202,7 @@ final class TxBuilderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitAndWaitUsesDefaultPollOptionsWhenAbsent() async throws {
+        try requireEd25519Encoder()
         PipelineURLProtocol.reset()
         PipelineURLProtocol.configure(statuses: [])
         let sdk = try makePipelineSDK()
@@ -1217,6 +1231,7 @@ final class TxBuilderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitAndWaitCustomSuccessStates() async throws {
+        try requireEd25519Encoder()
         PipelineURLProtocol.reset()
         PipelineURLProtocol.configure(statuses: ["Queued"])
         let sdk = try makePipelineSDK()
@@ -1235,6 +1250,7 @@ final class TxBuilderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitAddsDeterministicIdempotencyKeyAcrossRetries() async throws {
+        try requireEd25519Encoder()
         PipelineURLProtocol.reset()
         PipelineURLProtocol.configureSubmissions(responses: [(503, nil), (202, nil)])
         let sdk = try makePipelineSDK()
@@ -1259,6 +1275,7 @@ final class TxBuilderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitRetriesOnTransportErrorAsync() async throws {
+        try requireEd25519Encoder()
         let stub = StubPipelineClient()
         stub.queuedResults = [
             .failure(ToriiClientError.transport(StubTransportError())),
@@ -1283,6 +1300,7 @@ final class TxBuilderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitRetriesExhaustAndThrow() async throws {
+        try requireEd25519Encoder()
         let stub = StubPipelineClient()
         stub.queuedResults = [
             .failure(ToriiClientError.transport(StubTransportError())),

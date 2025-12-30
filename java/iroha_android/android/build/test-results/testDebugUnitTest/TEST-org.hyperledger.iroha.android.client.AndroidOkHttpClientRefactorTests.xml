@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="org.hyperledger.iroha.android.client.AndroidOkHttpClientRefactorTests" tests="4" skipped="0" failures="0" errors="0" timestamp="2025-12-08T12:31:43.699Z" hostname="takemiyacStudio.lan" time="0.02">
+<testsuite name="org.hyperledger.iroha.android.client.AndroidOkHttpClientRefactorTests" tests="4" skipped="0" failures="0" errors="0" timestamp="2025-12-30T16:28:53.910Z" hostname="takemiyacStudio.lan" time="0.033">
   <properties/>
-  <testcase name="safetyDetectFlowUsesPlatformDefaults" classname="org.hyperledger.iroha.android.client.AndroidOkHttpClientRefactorTests" time="0.005"/>
-  <testcase name="sorafsGatewayFlowUsesPlatformDefaults" classname="org.hyperledger.iroha.android.client.AndroidOkHttpClientRefactorTests" time="0.003"/>
-  <testcase name="defaultFactoriesPreferOkHttpTransports" classname="org.hyperledger.iroha.android.client.AndroidOkHttpClientRefactorTests" time="0.001"/>
-  <testcase name="telemetryParityAcrossOkHttpAndJdkTransports" classname="org.hyperledger.iroha.android.client.AndroidOkHttpClientRefactorTests" time="0.01"/>
+  <testcase name="safetyDetectFlowUsesPlatformDefaults" classname="org.hyperledger.iroha.android.client.AndroidOkHttpClientRefactorTests" time="0.01"/>
+  <testcase name="sorafsGatewayFlowUsesPlatformDefaults" classname="org.hyperledger.iroha.android.client.AndroidOkHttpClientRefactorTests" time="0.004"/>
+  <testcase name="defaultFactoriesPreferOkHttpTransports" classname="org.hyperledger.iroha.android.client.AndroidOkHttpClientRefactorTests" time="0.003"/>
+  <testcase name="telemetryParityAcrossOkHttpAndJdkTransports" classname="org.hyperledger.iroha.android.client.AndroidOkHttpClientRefactorTests" time="0.015"/>
   <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
+  <system-err><![CDATA[12月 30, 2025 8:28:53 午後 okhttp3.internal.platform.Platform log
+警告: A connection to http://localhost:65020/ was leaked. Did you forget to close a response body? To see where this was allocated, set the OkHttpClient logger level to FINE: Logger.getLogger(OkHttpClient.class.getName()).setLevel(Level.FINE);
+]]></system-err>
 </testsuite>

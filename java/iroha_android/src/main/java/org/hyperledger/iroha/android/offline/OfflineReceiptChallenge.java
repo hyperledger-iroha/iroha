@@ -42,7 +42,55 @@ public final class OfflineReceiptChallenge {
     if (chainId == null || chainId.trim().isEmpty()) {
       throw new IllegalArgumentException("chainId must not be empty");
     }
-    requireScaleZeroAmount(amount);
+    requireNumericAmount(amount);
+    return computeInternal(
+        chainId,
+        invoiceId,
+        receiverAccountId,
+        assetId,
+        amount,
+        issuedAtMs,
+        nonceHex);
+  }
+
+  public static OfflineReceiptChallenge compute(
+      final String chainId,
+      final String invoiceId,
+      final String receiverAccountId,
+      final String assetId,
+      final String amount,
+      final long issuedAtMs,
+      final String nonceHex,
+      final int expectedScale) {
+    if (chainId == null || chainId.trim().isEmpty()) {
+      throw new IllegalArgumentException("chainId must not be empty");
+    }
+    if (expectedScale < 0) {
+      throw new IllegalArgumentException("expectedScale must be non-negative");
+    }
+    final int scale = requireNumericAmount(amount);
+    if (scale != expectedScale) {
+      throw new IllegalArgumentException(
+          "amount must use scale " + expectedScale + ": " + amount);
+    }
+    return computeInternal(
+        chainId,
+        invoiceId,
+        receiverAccountId,
+        assetId,
+        amount,
+        issuedAtMs,
+        nonceHex);
+  }
+
+  private static OfflineReceiptChallenge computeInternal(
+      final String chainId,
+      final String invoiceId,
+      final String receiverAccountId,
+      final String assetId,
+      final String amount,
+      final long issuedAtMs,
+      final String nonceHex) {
     if (!NATIVE_AVAILABLE) {
       throw new IllegalStateException("connect_norito_bridge is not available in this runtime");
     }
@@ -88,7 +136,7 @@ public final class OfflineReceiptChallenge {
       byte[] irohaHashOut,
       byte[] clientHashOut);
 
-  private static void requireScaleZeroAmount(final String amount) {
+  private static int requireNumericAmount(final String amount) {
     if (amount == null) {
       throw new IllegalArgumentException("amount must not be null");
     }
@@ -106,6 +154,7 @@ public final class OfflineReceiptChallenge {
     if (index >= trimmed.length()) {
       throw new IllegalArgumentException("amount must be numeric: " + amount);
     }
+    boolean seenDigit = false;
     for (int i = index; i < trimmed.length(); i++) {
       final char ch = trimmed.charAt(i);
       if (ch == '.') {
@@ -118,12 +167,17 @@ public final class OfflineReceiptChallenge {
       if (ch < '0' || ch > '9') {
         throw new IllegalArgumentException("amount must be numeric: " + amount);
       }
+      seenDigit = true;
       if (seenDot) {
         scale++;
       }
     }
-    if (scale != 0) {
-      throw new IllegalArgumentException("amount must use scale 0: " + amount);
+    if (!seenDigit) {
+      throw new IllegalArgumentException("amount must be numeric: " + amount);
     }
+    if (scale > 28) {
+      throw new IllegalArgumentException("amount scale exceeds 28: " + amount);
+    }
+    return scale;
   }
 }

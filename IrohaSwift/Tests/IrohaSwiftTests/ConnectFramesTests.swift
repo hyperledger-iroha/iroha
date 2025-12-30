@@ -2,7 +2,13 @@ import XCTest
 @testable import IrohaSwift
 
 final class ConnectFramesTests: XCTestCase {
+    private func requireConnectCodec() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable,
+                      "NoritoBridge connect codec unavailable")
+    }
+
     func testFrameRoundTrip() throws {
+        try requireConnectCodec()
         let frame = ConnectFrame(sessionID: Data(repeating: 0x01, count: 32),
                                  direction: .appToWallet,
                                  sequence: 42,
@@ -38,6 +44,7 @@ final class ConnectFramesTests: XCTestCase {
     }
 
     func testRejectFrameRoundTrip() throws {
+        try requireConnectCodec()
         let frame = ConnectFrame(sessionID: Data(repeating: 0xAA, count: 32),
                                  direction: .walletToApp,
                                  sequence: 7,
@@ -50,6 +57,7 @@ final class ConnectFramesTests: XCTestCase {
     }
 
     func testCloseFrameRoundTrip() throws {
+        try requireConnectCodec()
         let close = ConnectClose(role: .app, code: 1000, reason: "done", retryable: false)
         let frame = ConnectFrame(sessionID: Data(repeating: 0xBB, count: 32),
                                  direction: .appToWallet,
@@ -61,6 +69,7 @@ final class ConnectFramesTests: XCTestCase {
     }
 
     func testPingPongRoundTrip() throws {
+        try requireConnectCodec()
         let ping = ConnectFrame(sessionID: Data(repeating: 0xCC, count: 32),
                                 direction: .appToWallet,
                                 sequence: 11,
@@ -99,6 +108,8 @@ final class ConnectCodecBridgeAvailabilityTests: XCTestCase {
     }
 
     func testDecodeFailsOnInvalidBytes() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable,
+                      "NoritoBridge connect codec unavailable")
         let sessionID = Data(repeating: 0x22, count: 32)
         let frame = ConnectFrame(sessionID: sessionID,
                                  direction: .appToWallet,

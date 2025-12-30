@@ -3,16 +3,32 @@
 ## Latest Updates
 - Block sync QC tally now preserves QC bitmap indices when caching precommit signer sets, preventing mismatched QC propagation; added unit coverage.
 - Pacemaker now ignores precommit votes for unknown blocks to avoid proposal stalls; updated and added unit tests.
+- Translated the SoraFS storage capacity marketplace across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS node implementation plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS node storage design across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS provider admission policy across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS multi-source provider advert across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS reserve ledger digest across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS migration ledger across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS migration roadmap across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS pin registry implementation plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS pin registry operations runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS pin registry validation plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS portal publish plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS signing ceremony across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS direct-mode fallback pack across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS SDK index across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS Rust SDK snippets across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Allow quorum reschedule to drop/requeue pending blocks after a retry even with partial precommit votes; add unit coverage.
-- Enforced scale-0 validation for offline receipt challenge amounts in the bridge + Swift/Android SDKs, with new tests and docs updates.
+- Updated offline receipt challenge validation to allow non-zero scales while enforcing per-allowance scale consistency in core/SDKs; tests/docs updated.
 - Translated the SoraFS release process across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS deployment notes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
-- Enforced scale-0 amounts for offline receipts and policy limits (core + Swift tests), clarified offline-only finality in offline docs, and zeroized offline proof generation in the Norito bridge.
+- Enforced per-allowance scale consistency for offline receipts and policy limits (core + Swift tests), clarified offline-only finality in offline docs, and zeroized offline proof generation in the Norito bridge.
 - Translated the SoraFS CLI cookbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS CI recipes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS developer index across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS deal engine overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
-- Enforced scale-0 amounts in offline balance proofs (core + bridge) with new tests; updated offline allowance docs.
+- Enforced expected-scale consistency for offline balance proofs (core + bridge) with new tests; updated offline allowance docs.
 - Added Android key validation telemetry for non-Ed25519 SPKI outputs plus `withExportableSoftwareKeys` helper/tests; docs/README updated.
 - Added `issued_at_ms` to offline spend receipts + receipt challenge preimages, enforced receipt timestamp validity and max age (`settlement.offline.max_receipt_age_ms`), and updated SDKs/FFI/tests/fixtures/docs.
 - Documented exportable software key flows (Bouncy Castle policy) and clarified Ed25519 fallback detection for Android key management.
