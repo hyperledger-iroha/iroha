@@ -129,6 +129,7 @@ translator: manual
 ### ExecQC וראיות
 - ExecQC מספק חתימות SBV-AM על שורש המצב לאחר ההרצה. כאשר `require_execution_qc` מופעל, קומיט תלוי הן ב-PrecommitQC והן ב-ExecQC.
 - `require_wsv_exec_qc` מבטיח שה-WSV שומר את ה-ExecQC לפני הקומיט, אחרת הקומיט מושהה.
+- כאשר שער ה-ExecQC נדרש, הודעות ExecutionQC מ-view ישן עדיין מתקבלות; אם ה-payload חסר הן מפעילות בקשת בלוק חסר כדי למנוע תקיעה במוד קפדני.
 
 ### הגדרת `proof_policy`
 - `proof_policy = "precommit_qc"` (ברירת מחדל): דרישה ל-PrecommitQC בלבד.

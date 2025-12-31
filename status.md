@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Fixed QC roster selection to prefer persisted snapshots for committed heights after peer removal, avoiding signer-out-of-bounds validation failures; added unit coverage.
 - Forced Sora profile detection merges to override streaming identity keys with deterministic Ed25519 values (even when config layers supply BLS) and added unit coverage to prevent parse warnings.
 - Raised the localnet test-network pipeline time to DA-safe defaults to avoid consensus stalls and hanging event tests.
 - Sanitized `irohad` child environments in `iroha_test_network` to prevent config env overrides from hijacking test peer ports; added unit coverage for the env key list/stripping.

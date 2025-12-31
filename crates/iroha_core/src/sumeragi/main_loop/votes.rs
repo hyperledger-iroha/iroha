@@ -423,6 +423,13 @@ impl Actor {
                     return selection.roster;
                 }
             }
+            if height == committed_height {
+                let view = self.state.view();
+                let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+                if !prev.is_empty() {
+                    return prev;
+                }
+            }
         }
         let active = self.effective_commit_topology();
         if height <= committed_height.saturating_add(1) && !active.is_empty() {

@@ -9289,6 +9289,50 @@ async fn handle_execution_qc_accepts_stale_view_when_block_known() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_execution_qc_accepts_stale_view_when_required_and_block_missing() {
+    let mut config = test_sumeragi_config();
+    config.consensus_mode = ConsensusMode::Permissioned;
+    config.require_execution_qc = true;
+    config.require_wsv_exec_qc = true;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+
+    let height = 2u64;
+    let view = 0u64;
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
+    assert!(!actor.block_known_locally(block_hash));
+
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view + 1, now);
+
+    let chain_id = actor.common_config.chain.clone();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = exec_qc_with_bitmap(
+        &chain_id,
+        block_hash,
+        Hash::prehashed([0xB5; 32]),
+        Hash::prehashed([0xC5; 32]),
+        height,
+        view,
+        0,
+        vec![0b0000_0111],
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.handle_execution_qc(qc).expect("handle execution qc");
+
+    assert!(actor.execution_qc_cache.contains_key(&block_hash));
+    let view = actor.state.view();
+    assert!(view.world().exec_qcs().get(&block_hash).is_some());
+    drop(view);
+    assert!(actor.pending.missing_block_requests.contains_key(&block_hash));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_execution_qc_rejects_invalid_aggregate() {
     let mut config = test_sumeragi_config();
     config.consensus_mode = ConsensusMode::Permissioned;
@@ -13379,6 +13423,51 @@ async fn roster_for_vote_prefers_snapshot_for_committed_height() {
     assert_eq!(
         qc_roster, roster,
         "committed height should use the persisted roster snapshot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roster_for_vote_falls_back_to_prev_commit_topology_without_snapshot() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 2u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC2; Hash::LENGTH]));
+
+    let roster = actor.effective_commit_topology();
+    let local_peer_id = actor.common_config.peer.id();
+    let removed_peer = roster
+        .iter()
+        .find(|peer| *peer != local_peer_id)
+        .cloned()
+        .expect("non-local roster entry");
+
+    let mut roster_new = roster.clone();
+    roster_new.retain(|peer| peer != &removed_peer);
+    {
+        let mut prev_block = actor.state.prev_commit_topology.block();
+        prev_block.mutate_vec(|vec| *vec = roster.clone());
+        prev_block.commit();
+    }
+    {
+        let mut topo_block = actor.state.commit_topology.block();
+        topo_block.mutate_vec(|vec| *vec = roster_new);
+        topo_block.commit();
+    }
+    {
+        let mut hashes = actor.state.block_hashes.block();
+        hashes.push(HashOf::from_untyped_unchecked(Hash::prehashed([0xC1; Hash::LENGTH])));
+        hashes.push(block_hash);
+        hashes.commit_for_tests();
+    }
+
+    let qc_roster = actor.roster_for_vote(block_hash, height);
+    assert_eq!(
+        qc_roster, roster,
+        "committed height should fall back to the previous commit topology"
     );
 
     harness.shutdown.send();
@@ -19485,6 +19574,7 @@ fn dispatch_background_request_full_returns_false_without_blocking() {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
+            membership: None,
         }),
         enqueued_at: Instant::now(),
     })
@@ -19495,6 +19585,7 @@ fn dispatch_background_request_full_returns_false_without_blocking() {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
+            membership: None,
         }),
     };
 

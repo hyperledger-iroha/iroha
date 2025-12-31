@@ -143,6 +143,7 @@ translator: manual
 - ExecQC は実行結果を証明する QC で、SBV-AM シグネチャを含みます。
 - `require_execution_qc` を true にすると、Precommit QC に加えて ExecQC がなければコミットできません。
 - `require_wsv_exec_qc` を有効にすると、WSV に ExecQC が永続化されたことを確認してからコミットします。
+- ExecQC ゲートが必要な場合でも、古いビューの ExecutionQC は受理されます。ペイロードが欠けている場合は欠落ブロック取得を起動し、厳格モードの停滞を避けます。
 
 ### `proof_policy` の設定
 - `proof_policy = "precommit_qc"`（既定）: Precommit QC のみ要求。
