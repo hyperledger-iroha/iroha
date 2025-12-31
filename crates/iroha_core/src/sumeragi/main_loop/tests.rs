@@ -14699,7 +14699,7 @@ async fn pacemaker_prunes_new_view_entries_at_committed_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_rejects_newer_view_after_conflict() {
+async fn precommit_vote_allows_newer_view_after_conflict() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -14717,8 +14717,8 @@ async fn precommit_vote_rejects_newer_view_after_conflict() {
         "first precommit vote should be accepted"
     );
     assert!(
-        !actor.emit_precommit_vote(block_b, height, 1, epoch, &topology, None),
-        "newer view precommit should be rejected after conflicting vote"
+        actor.emit_precommit_vote(block_b, height, 1, epoch, &topology, None),
+        "newer view precommit should be accepted after conflicting vote"
     );
 
     let votes: Vec<_> = actor
@@ -14728,11 +14728,7 @@ async fn precommit_vote_rejects_newer_view_after_conflict() {
             vote.phase == crate::sumeragi::consensus::Phase::Precommit && vote.height == height
         })
         .collect();
-    assert_eq!(
-        votes.len(),
-        1,
-        "only the first precommit vote should be recorded"
-    );
+    assert_eq!(votes.len(), 2, "both precommit votes should be recorded");
     assert!(
         votes
             .iter()
@@ -14742,8 +14738,8 @@ async fn precommit_vote_rejects_newer_view_after_conflict() {
     assert!(
         votes
             .iter()
-            .all(|vote| vote.block_hash != block_b || vote.view != 1),
-        "conflicting precommit vote should not be recorded"
+            .any(|vote| vote.block_hash == block_b && vote.view == 1),
+        "precommit vote for view 1 should be recorded"
     );
 
     harness.shutdown.send();
@@ -16771,12 +16767,16 @@ fn tally_qc_against_block_signers_preserves_bitmap_indices() {
     )
     .expect("block-signers tally should preserve QC bitmap indices");
 
-    assert!(tally.voting_signers.contains(
-        &ValidatorIndex::try_from(0u32).expect("validator index parses")
-    ));
-    assert!(!tally.voting_signers.contains(
-        &ValidatorIndex::try_from(3u32).expect("validator index parses")
-    ));
+    assert!(
+        tally
+            .voting_signers
+            .contains(&ValidatorIndex::try_from(0u32).expect("validator index parses"))
+    );
+    assert!(
+        !tally
+            .voting_signers
+            .contains(&ValidatorIndex::try_from(3u32).expect("validator index parses"))
+    );
     assert_eq!(tally.present_signers, 3);
 }
 

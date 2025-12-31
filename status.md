@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Prioritized Sumeragi worker loop drains so block payload/RBC traffic runs ahead of block sync, preventing READY quorum stalls; updated unit priority-order coverage.
 - Block sync QC tally now preserves QC bitmap indices when caching precommit signer sets, preventing mismatched QC propagation; added unit coverage.
 - Pacemaker now ignores precommit votes for unknown blocks to avoid proposal stalls; updated and added unit tests.
 - Translated the SoraFS storage capacity marketplace across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
