@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Routed RBC READY/DELIVER through the vote queue and drained RBC chunks ahead of payloads in the Sumeragi worker loop to prevent consensus stalls under heavy payloads; updated unit coverage and confirmed `sumeragi_rbc_da_large_payload_four_peers`.
 - Fixed QC roster selection to prefer persisted snapshots for committed heights after peer removal, avoiding signer-out-of-bounds validation failures; added unit coverage.
 - Forced Sora profile detection merges to override streaming identity keys with deterministic Ed25519 values (even when config layers supply BLS) and added unit coverage to prevent parse warnings.
 - Raised the localnet test-network pipeline time to DA-safe defaults to avoid consensus stalls and hanging event tests.

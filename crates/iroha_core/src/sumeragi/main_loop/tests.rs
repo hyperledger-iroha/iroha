@@ -9327,7 +9327,12 @@ async fn handle_execution_qc_accepts_stale_view_when_required_and_block_missing(
     let view = actor.state.view();
     assert!(view.world().exec_qcs().get(&block_hash).is_some());
     drop(view);
-    assert!(actor.pending.missing_block_requests.contains_key(&block_hash));
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash)
+    );
 
     harness.shutdown.send();
 }
@@ -13459,7 +13464,9 @@ async fn roster_for_vote_falls_back_to_prev_commit_topology_without_snapshot() {
     }
     {
         let mut hashes = actor.state.block_hashes.block();
-        hashes.push(HashOf::from_untyped_unchecked(Hash::prehashed([0xC1; Hash::LENGTH])));
+        hashes.push(HashOf::from_untyped_unchecked(Hash::prehashed(
+            [0xC1; Hash::LENGTH],
+        )));
         hashes.push(block_hash);
         hashes.commit_for_tests();
     }
