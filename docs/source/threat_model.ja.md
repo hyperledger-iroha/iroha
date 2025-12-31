@@ -79,10 +79,10 @@ _最終レビュー: 2025-11-07 — 次回予定: 2026-02-05_
 - 受理時の `abi_hash`／`code_hash` 照合（`runtime_upgrade_admission` テストで検証）。
 - ガバナンス承認を経たロールアウトと決定論的ロールバック。
 - `iroha_config` による ABI バージョンピン留め。
+- SBOM/SLSA 証跡と信頼署名しきい値を受理時に強制し、拒否テレメトリを記録。
 
 **未対応ギャップ**
 - リリース署名鍵がバリデータ運用環境と同居（**残余リスク: Release-signing key separation**）。
-- SBOM/SLSA 証跡は CI 限定で、ランタイム受理では未強制（**残余リスク: Upgrade SBOM provenance gap**）。
 
 ### Sumeragi コンセンサス
 
@@ -95,7 +95,7 @@ _最終レビュー: 2025-11-07 — 次回予定: 2026-02-05_
 
 | リスク | 状況 | 対策計画 | 担当 | 目標 |
 | --- | --- | --- | --- | --- |
-| Upgrade SBOM provenance gap | 未解決 | 受理時に SLSA L3 証跡を強制 (`SEC-147`) | Security WG | 2025-11-30 |
+| Upgrade SBOM provenance gap | 解決済み | 受理時に SBOM/SLSA 証跡と信頼署名しきい値を強制（`docs/source/runtime_upgrades.md` 参照）。 | Security WG | 2025-11-30 |
 | Aggregator fairness audit | 未解決 | サードパーティ監査を Milestone 2 GA 前に実施 (`SUM-203`) | Consensus WG | 2025-12-15 |
 | Torii operator auth hardening | 解決済み | WebAuthn/mTLS のオペレーター認証を提供し、資格情報の永続化・セッション・テレメトリを実装。 | Torii WG | 2025-11-15 |
 | Hardware-accelerated hashing | 未解決 | 決定論的フォールバック付きマルチバージョンハッシュを実装 (`RNT-092`) | Runtime WG | 2025-12-01 |
@@ -124,7 +124,7 @@ _最終レビュー: 2025-11-07 — 次回予定: 2026-02-05_
 | --- | --- | --- | --- |
 | Security WG | security@iroha | 未 | 2025-10-05 までに確認・チケット紐付け |
 | Core WG | core@iroha | 未 | pre-auth DoS 計画と churn テレメトリ確認 |
-| Runtime WG | runtime@iroha | 未 | 添付サニタイズと SBOM ゲート確認 |
+| Runtime WG | runtime@iroha | 未 | 添付サニタイズのフォローアップ確認 |
 | Torii WG | torii@iroha | 未 | 認証強化 (`TOR-118`) の検証と接続ゲート計画 |
 | Consensus WG | consensus@iroha | 未 | 公平性監査とメンバーシップテレメトリ |
 | Data Model WG | data-model@iroha | 未 | Norito/Kotodama カバレッジとファズコーパス |

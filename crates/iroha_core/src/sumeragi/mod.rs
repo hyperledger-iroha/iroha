@@ -533,6 +533,34 @@ mod tests {
     }
 
     #[test]
+    fn non_vote_budget_reserve_leaves_headroom() {
+        assert_eq!(
+            non_vote_budget_reserve(Duration::from_millis(1_000)),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            non_vote_budget_reserve(Duration::from_millis(200)),
+            Duration::from_millis(50)
+        );
+        assert_eq!(
+            non_vote_budget_reserve(Duration::from_millis(1)),
+            Duration::from_millis(0)
+        );
+    }
+
+    #[test]
+    fn effective_vote_budget_respects_reserve() {
+        assert_eq!(
+            effective_vote_budget(Duration::from_millis(1_000), Duration::from_millis(2_000)),
+            Duration::from_millis(750)
+        );
+        assert_eq!(
+            effective_vote_budget(Duration::from_millis(1_000), Duration::from_millis(100)),
+            Duration::from_millis(100)
+        );
+    }
+
+    #[test]
     fn worker_time_budget_clamps_to_floor_for_small_quorum_timeout() {
         let budget = worker_time_budget(
             Duration::from_millis(10),
@@ -939,13 +967,17 @@ mod tests {
         handle.incoming_block_message(msg.clone());
         handle.incoming_block_message(msg);
 
-        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         assert!(
             received
                 .iter()
                 .all(|msg| matches!(msg, BlockMessage::RbcReady(_)))
         );
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -954,7 +986,6 @@ mod tests {
             block_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
-        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     }
 
     #[test]
@@ -962,7 +993,7 @@ mod tests {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (vote_tx, _vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -996,13 +1027,17 @@ mod tests {
         handle.incoming_block_message(BlockMessage::RbcReady(base_ready));
         handle.incoming_block_message(BlockMessage::RbcReady(alt_ready));
 
-        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 2);
         assert!(
             received
                 .iter()
                 .all(|msg| matches!(msg, BlockMessage::RbcReady(_)))
         );
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
     }
 
     #[test]
@@ -1042,13 +1077,17 @@ mod tests {
         handle.incoming_block_message(msg.clone());
         handle.incoming_block_message(msg);
 
-        let received: Vec<_> = block_payload_rx.try_iter().collect();
+        let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         assert!(
             received
                 .iter()
                 .all(|msg| matches!(msg, BlockMessage::RbcDeliver(_)))
         );
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -1057,7 +1096,6 @@ mod tests {
             block_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
-        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     }
 
     #[test]
@@ -1479,7 +1517,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_routes_rbc_ready_via_payload_queue() {
+    fn incoming_block_message_routes_rbc_ready_via_vote_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -1514,10 +1552,14 @@ mod tests {
 
         handle.incoming_block_message(msg);
 
-        let received = block_payload_rx
+        let received = vote_rx
             .try_recv()
-            .expect("RbcReady should be enqueued to block-payload channel");
+            .expect("RbcReady should be enqueued to vote channel");
         assert!(matches!(received, BlockMessage::RbcReady(_)));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -1526,7 +1568,6 @@ mod tests {
             block_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
-        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     }
 
     #[test]
@@ -2121,7 +2162,7 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.events, vec!["vote", "payload", "rbc", "block"]);
+        assert_eq!(actor.events, vec!["vote", "rbc", "payload", "block"]);
         assert_eq!(stats.votes_handled, 1);
         assert_eq!(stats.rbc_chunks_handled, 1);
         assert_eq!(stats.block_payloads_handled, 1);
@@ -2249,7 +2290,7 @@ mod tests {
 
         assert_eq!(
             actor.events,
-            vec!["vote", "payload", "rbc", "block", "tick"]
+            vec!["vote", "rbc", "payload", "block", "tick"]
         );
         assert_eq!(actor.tick_calls, 1);
     }
@@ -3397,13 +3438,13 @@ impl SumeragiHandle {
                     );
                     return;
                 }
-                // Route READY/DELIVER through the block-payload queue so they bypass RBC chunk
-                // backlog while allowing vote traffic to retain priority.
+                // Route READY/DELIVER through the vote queue to ensure they are processed
+                // promptly even when block-payload traffic is saturated.
                 enqueue_blocking(
-                    &self.block_payload,
+                    &self.votes,
                     BlockMessage::RbcReady(ready),
                     "RbcReady",
-                    status::WorkerQueueKind::BlockPayload,
+                    status::WorkerQueueKind::Votes,
                 );
             }
             BlockMessage::RbcDeliver(deliver) => {
@@ -3425,10 +3466,10 @@ impl SumeragiHandle {
                     return;
                 }
                 enqueue_blocking(
-                    &self.block_payload,
+                    &self.votes,
                     BlockMessage::RbcDeliver(deliver),
                     "RbcDeliver",
-                    status::WorkerQueueKind::BlockPayload,
+                    status::WorkerQueueKind::Votes,
                 );
             }
             BlockMessage::PrecommitQC(qc) => {
@@ -4045,6 +4086,23 @@ fn cap_rbc_drain_budget(raw: Duration, floor: Duration) -> Duration {
         .max(floor)
 }
 
+fn non_vote_budget_reserve(time_budget: Duration) -> Duration {
+    let quarter = time_budget
+        .checked_div(4)
+        .unwrap_or_else(|| Duration::from_millis(1));
+    let reserve = quarter.max(Duration::from_millis(1));
+    let max_reserve = time_budget.saturating_sub(Duration::from_millis(1));
+    reserve.min(max_reserve)
+}
+
+fn effective_vote_budget(time_budget: Duration, requested: Duration) -> Duration {
+    let reserve = non_vote_budget_reserve(time_budget);
+    let cap = time_budget
+        .saturating_sub(reserve)
+        .max(Duration::from_millis(1));
+    requested.min(cap)
+}
+
 trait WorkerActor {
     fn on_block_message(&mut self, msg: BlockMessage) -> Result<()>;
     fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()>;
@@ -4166,7 +4224,7 @@ fn run_worker_iteration<A: WorkerActor>(
     let mut remaining_budget = cfg.time_budget;
 
     let non_vote_drain_cap = cfg.tick_max_gap.max(Duration::from_millis(1));
-    let vote_drain_budget = cfg.vote_rx_drain_budget;
+    let vote_drain_budget = effective_vote_budget(cfg.time_budget, cfg.vote_rx_drain_budget);
     let block_rx_drain_budget = cfg.block_rx_drain_budget.min(non_vote_drain_cap);
     let rbc_chunk_drain_budget = cfg.rbc_chunk_rx_drain_budget.min(non_vote_drain_cap);
     let block_payload_drain_budget = cfg.block_payload_rx_drain_budget.min(non_vote_drain_cap);
@@ -4245,40 +4303,6 @@ fn run_worker_iteration<A: WorkerActor>(
     let report =
         if !stats.budget_exceeded && remaining_budget > Duration::ZERO && should_drain_non_vote {
             non_vote_drain_attempted = true;
-            status::set_worker_stage(status::WorkerLoopStage::DrainBlockPayloads);
-            let drain_start = Instant::now();
-            let report = drain_receiver_with_budget(
-                block_payload_rx,
-                |msg| {
-                    if let Err(err) = actor.on_block_message(msg) {
-                        iroha_logger::error!(?err, "Sumeragi block-payload handler failed");
-                    }
-                    stats.progress = true;
-                },
-                cfg.block_payload_rx_drain_max_messages,
-                block_payload_drain_budget.min(remaining_budget),
-            );
-            let drain_elapsed = drain_start.elapsed();
-            remaining_budget = remaining_budget.saturating_sub(drain_elapsed);
-            if remaining_budget == Duration::ZERO {
-                stats.budget_exceeded = true;
-            }
-            report
-        } else {
-            DrainBudgetReport {
-                handled: 0,
-                budget_exhausted: false,
-            }
-        };
-    stats.block_payloads_handled = stats.block_payloads_handled.saturating_add(report.handled);
-    status::record_worker_queue_drain(status::WorkerQueueKind::BlockPayload, report.handled);
-    let post_payload_depths = status::worker_queue_depth_snapshot();
-    stats.block_payload_rx_budget_exhausted =
-        report.budget_exhausted && post_payload_depths.block_payload_rx > 0;
-
-    let report =
-        if !stats.budget_exceeded && remaining_budget > Duration::ZERO && should_drain_non_vote {
-            non_vote_drain_attempted = true;
             status::set_worker_stage(status::WorkerLoopStage::DrainRbcChunks);
             let drain_start = Instant::now();
             let report = drain_receiver_with_budget(
@@ -4309,6 +4333,40 @@ fn run_worker_iteration<A: WorkerActor>(
     let post_rbc_depths = status::worker_queue_depth_snapshot();
     stats.rbc_chunk_rx_budget_exhausted =
         report.budget_exhausted && post_rbc_depths.rbc_chunk_rx > 0;
+
+    let report =
+        if !stats.budget_exceeded && remaining_budget > Duration::ZERO && should_drain_non_vote {
+            non_vote_drain_attempted = true;
+            status::set_worker_stage(status::WorkerLoopStage::DrainBlockPayloads);
+            let drain_start = Instant::now();
+            let report = drain_receiver_with_budget(
+                block_payload_rx,
+                |msg| {
+                    if let Err(err) = actor.on_block_message(msg) {
+                        iroha_logger::error!(?err, "Sumeragi block-payload handler failed");
+                    }
+                    stats.progress = true;
+                },
+                cfg.block_payload_rx_drain_max_messages,
+                block_payload_drain_budget.min(remaining_budget),
+            );
+            let drain_elapsed = drain_start.elapsed();
+            remaining_budget = remaining_budget.saturating_sub(drain_elapsed);
+            if remaining_budget == Duration::ZERO {
+                stats.budget_exceeded = true;
+            }
+            report
+        } else {
+            DrainBudgetReport {
+                handled: 0,
+                budget_exhausted: false,
+            }
+        };
+    stats.block_payloads_handled = stats.block_payloads_handled.saturating_add(report.handled);
+    status::record_worker_queue_drain(status::WorkerQueueKind::BlockPayload, report.handled);
+    let post_payload_depths = status::worker_queue_depth_snapshot();
+    stats.block_payload_rx_budget_exhausted =
+        report.budget_exhausted && post_payload_depths.block_payload_rx > 0;
     if non_vote_drain_attempted {
         loop_state.last_non_vote_drain = Instant::now();
     }
@@ -4441,6 +4499,35 @@ fn run_worker_iteration<A: WorkerActor>(
         if should_post_tick_non_vote && remaining_budget > Duration::ZERO {
             let mut post_tick_handled = 0usize;
             if remaining_budget > Duration::ZERO {
+                status::set_worker_stage(status::WorkerLoopStage::DrainRbcChunks);
+                let drain_start = Instant::now();
+                let report = drain_receiver_with_budget(
+                    rbc_chunk_rx,
+                    |msg| {
+                        if let Err(err) = actor.on_block_message(msg) {
+                            iroha_logger::error!(?err, "Sumeragi RBC-chunk handler failed");
+                        }
+                        stats.progress = true;
+                    },
+                    cfg.rbc_chunk_rx_drain_max_messages,
+                    rbc_chunk_drain_budget.min(remaining_budget),
+                );
+                let drain_elapsed = drain_start.elapsed();
+                remaining_budget = remaining_budget.saturating_sub(drain_elapsed);
+                if remaining_budget == Duration::ZERO {
+                    stats.budget_exceeded = true;
+                }
+                stats.rbc_chunks_handled = stats.rbc_chunks_handled.saturating_add(report.handled);
+                let post_rbc_depths = status::worker_queue_depth_snapshot();
+                stats.rbc_chunk_rx_budget_exhausted |=
+                    report.budget_exhausted && post_rbc_depths.rbc_chunk_rx > 0;
+                post_tick_handled = post_tick_handled.saturating_add(report.handled);
+                status::record_worker_queue_drain(
+                    status::WorkerQueueKind::RbcChunks,
+                    report.handled,
+                );
+            }
+            if !stats.budget_exceeded && remaining_budget > Duration::ZERO {
                 status::set_worker_stage(status::WorkerLoopStage::DrainBlockPayloads);
                 let drain_start = Instant::now();
                 let report = drain_receiver_with_budget(
@@ -4467,35 +4554,6 @@ fn run_worker_iteration<A: WorkerActor>(
                 post_tick_handled = post_tick_handled.saturating_add(report.handled);
                 status::record_worker_queue_drain(
                     status::WorkerQueueKind::BlockPayload,
-                    report.handled,
-                );
-            }
-            if !stats.budget_exceeded && remaining_budget > Duration::ZERO {
-                status::set_worker_stage(status::WorkerLoopStage::DrainRbcChunks);
-                let drain_start = Instant::now();
-                let report = drain_receiver_with_budget(
-                    rbc_chunk_rx,
-                    |msg| {
-                        if let Err(err) = actor.on_block_message(msg) {
-                            iroha_logger::error!(?err, "Sumeragi RBC-chunk handler failed");
-                        }
-                        stats.progress = true;
-                    },
-                    cfg.rbc_chunk_rx_drain_max_messages,
-                    rbc_chunk_drain_budget.min(remaining_budget),
-                );
-                let drain_elapsed = drain_start.elapsed();
-                remaining_budget = remaining_budget.saturating_sub(drain_elapsed);
-                if remaining_budget == Duration::ZERO {
-                    stats.budget_exceeded = true;
-                }
-                stats.rbc_chunks_handled = stats.rbc_chunks_handled.saturating_add(report.handled);
-                let post_rbc_depths = status::worker_queue_depth_snapshot();
-                stats.rbc_chunk_rx_budget_exhausted |=
-                    report.budget_exhausted && post_rbc_depths.rbc_chunk_rx > 0;
-                post_tick_handled = post_tick_handled.saturating_add(report.handled);
-                status::record_worker_queue_drain(
-                    status::WorkerQueueKind::RbcChunks,
                     report.handled,
                 );
             }

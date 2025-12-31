@@ -22,7 +22,7 @@ use ciborium::{de::from_reader, value::Value as CborValue};
 use dashmap::DashMap;
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _, VerifyingKey as Ed25519Key};
 use p256::ecdsa::{signature::Verifier as _, Signature as P256Signature, VerifyingKey as P256Key};
-use rand::RngCore as _;
+use rand::rand_core::TryRngCore as _;
 use sha2::{Digest as _, Sha256};
 use url::Url;
 
@@ -32,7 +32,7 @@ use iroha_config::parameters::actual::{
 };
 
 use crate::{
-    JsonBody, NoritoJson, SharedAppState, json_entry, json_object, json_value,
+    JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value,
     limits,
     routing::MaybeTelemetry,
 };
@@ -302,6 +302,7 @@ impl std::fmt::Display for OperatorAuthInitError {
     }
 }
 
+#[derive(Clone)]
 struct WebAuthnPolicy {
     rp_id: String,
     rp_name: String,
@@ -377,6 +378,7 @@ struct ChallengeEntry {
     bytes: Vec<u8>,
 }
 
+#[derive(Clone)]
 struct LockoutTracker {
     config: OperatorAuthLockout,
     entries: DashMap<String, FailureEntry>,
@@ -770,7 +772,7 @@ impl OperatorAuth {
                 err
             },
         )?;
-        let challenge_entry =
+        let _challenge_entry =
             self.take_challenge(&client.challenge, ChallengeKind::Registration)
                 .map_err(|err| {
                     self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
@@ -890,7 +892,7 @@ impl OperatorAuth {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
             err
         })?;
-        let challenge_entry = self
+        let _challenge_entry = self
             .take_challenge(&client.challenge, ChallengeKind::Authentication)
             .map_err(|err| {
                 self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
@@ -1191,7 +1193,8 @@ fn now_ms() -> u64 {
 fn random_bytes(len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
     let mut rng = rand::rngs::OsRng;
-    rng.fill_bytes(&mut buf);
+    rng.try_fill_bytes(&mut buf)
+        .expect("operating-system RNG should be available");
     buf
 }
 
@@ -1488,7 +1491,7 @@ fn parse_auth_data_registration(
             "authenticatorData is too short",
         ));
     }
-    let rp_id_hash = auth_data[0..32].try_into().expect("slice length verified");
+    let rp_id_hash: [u8; 32] = auth_data[0..32].try_into().expect("slice length verified");
     if rp_id_hash != policy.rp_id_hash {
         return Err(OperatorAuthError::rp_id_mismatch());
     }
@@ -1543,7 +1546,7 @@ fn parse_auth_data_assertion(
             "authenticatorData is too short",
         ));
     }
-    let rp_id_hash = auth_data[0..32].try_into().expect("slice length verified");
+    let rp_id_hash: [u8; 32] = auth_data[0..32].try_into().expect("slice length verified");
     if rp_id_hash != policy.rp_id_hash {
         return Err(OperatorAuthError::rp_id_mismatch());
     }
@@ -1717,7 +1720,7 @@ pub(crate) async fn handle_operator_register_options(
 pub(crate) async fn handle_operator_register_verify(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
-    NoritoJson(payload): NoritoJson<norito::json::Value>,
+    JsonOnly(payload): JsonOnly<norito::json::Value>,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
     let ctx = app
         .operator_auth
@@ -1747,7 +1750,7 @@ pub(crate) async fn handle_operator_login_options(
 pub(crate) async fn handle_operator_login_verify(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
-    NoritoJson(payload): NoritoJson<norito::json::Value>,
+    JsonOnly(payload): JsonOnly<norito::json::Value>,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
     let ctx = app
         .operator_auth

@@ -6642,7 +6642,8 @@ fn operator_auth_registration_options_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Issues WebAuthn registration options. Requires operator bootstrap auth.",
+            "Issues WebAuthn registration options. Requires operator bootstrap auth."
+                .to_string(),
         ),
     );
     operation.insert(

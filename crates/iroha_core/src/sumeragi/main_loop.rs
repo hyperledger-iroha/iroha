@@ -6466,7 +6466,6 @@ fn drain_rbc_state_for_block(
     for key in &keys {
         pending_rbc.remove(key);
         rbc_session_rosters.remove(key);
-        rbc_status_handle.remove(key);
         if let Some(store) = chunk_store {
             if let Err(err) = store.remove(key) {
                 warn!(
@@ -6485,6 +6484,24 @@ fn drain_rbc_state_for_block(
 
     for key in keys {
         if let Some(session) = rbc_sessions.remove(&key) {
+            let ready_count = u64::try_from(session.ready_signatures.len()).unwrap_or(u64::MAX);
+            rbc_status_handle.update(
+                rbc_status::Summary {
+                    block_hash: key.0,
+                    height: key.1,
+                    view: key.2,
+                    total_chunks: session.total_chunks(),
+                    received_chunks: session.received_chunks(),
+                    ready_count,
+                    delivered: session.delivered,
+                    payload_hash: session.payload_hash(),
+                    recovered_from_disk: session.recovered_from_disk(),
+                    invalid: session.is_invalid(),
+                    lane_backlog: session.lane_backlog_entries(),
+                    dataspace_backlog: session.dataspace_backlog_entries(),
+                },
+                SystemTime::now(),
+            );
             for alloc in session.lane_allocations {
                 let entry = lane_totals.entry(alloc.lane_id).or_insert((0, 0, 0, 0));
                 entry.0 = entry.0.saturating_add(alloc.tx_count);

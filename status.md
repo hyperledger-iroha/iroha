@@ -5,6 +5,8 @@
 - Tests: not run (not requested).
 - Completed SEC-UPGRADE-PROVENANCE: runtime upgrade manifests now carry SBOM/SLSA provenance and signer metadata, governance config enforces trusted signer thresholds, admission rejects missing/invalid provenance with telemetry/error codes, and docs/tests refreshed.
 - Tests: `cargo test -p iroha pipeline_status_404_falls_back_to_committed_query` (passes; existing unused-variable warnings in `crates/iroha_core/src/state.rs`).
+- Routed RBC READY/DELIVER through the vote queue and drained RBC chunks ahead of payloads in the Sumeragi worker loop to prevent consensus stalls under heavy payloads; updated unit coverage and confirmed `sumeragi_rbc_da_large_payload_four_peers`.
+- Fixed QC roster selection to prefer persisted snapshots for committed heights after peer removal, avoiding signer-out-of-bounds validation failures; added unit coverage.
 - Forced Sora profile detection merges to override streaming identity keys with deterministic Ed25519 values (even when config layers supply BLS) and added unit coverage to prevent parse warnings.
 - Raised the localnet test-network pipeline time to DA-safe defaults to avoid consensus stalls and hanging event tests.
 - Sanitized `irohad` child environments in `iroha_test_network` to prevent config env overrides from hijacking test peer ports; added unit coverage for the env key list/stripping.
@@ -59,6 +61,7 @@
 - Translated the Norito transfer-asset example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Norito NFT flow example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Sora Nexus overview and portal reference index translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus operations runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus settlement FAQ across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus default lane quickstart across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
