@@ -42,7 +42,7 @@ async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre:
         .with_default_pipeline_time()
         .with_peers(n_peers)
         .build();
-    let mut network = sandbox::SerializedNetwork::new(network, guard);
+    let network = sandbox::SerializedNetwork::new(network, guard);
     let start_result = network
         .start_with_genesis_submitters(0..n_genesis_peers.min(n_peers))
         .await;

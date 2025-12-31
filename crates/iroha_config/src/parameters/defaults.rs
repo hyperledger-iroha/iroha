@@ -1534,6 +1534,22 @@ pub mod nexus {
     /// Default lane index used when routing policy omits an explicit value.
     pub const DEFAULT_ROUTING_LANE_INDEX: u32 = 0;
 
+    /// Dataspace consensus defaults.
+    pub mod dataspace {
+        /// Default fault tolerance value (f) used to size per-dataspace committees (3f + 1).
+        pub const FAULT_TOLERANCE: u32 = 1;
+    }
+
+    /// Lane-relay emergency override defaults.
+    pub mod lane_relay_emergency {
+        /// Emergency override disabled by default.
+        pub const ENABLED: bool = false;
+        /// Default multisig threshold required to authorize overrides.
+        pub const MULTISIG_THRESHOLD: u16 = 3;
+        /// Default multisig member count required to authorize overrides.
+        pub const MULTISIG_MEMBERS: u16 = 5;
+    }
+
     /// Lane registry defaults.
     pub mod registry {
         use std::time::Duration;
@@ -1754,6 +1770,18 @@ pub mod telemetry {
     pub const PROFILE: &str = "operator";
     /// Panic on duplicate metric registration (developer diagnostics only).
     pub const PANIC_ON_DUPLICATE_METRICS: bool = false;
+
+    /// Telemetry redaction defaults.
+    pub mod redaction {
+        /// Default redaction mode for telemetry fields.
+        pub const MODE: &str = "strict";
+    }
+
+    /// Telemetry integrity defaults.
+    pub mod integrity {
+        /// Enable hash-chained telemetry exports by default.
+        pub const ENABLED: bool = true;
+    }
 }
 
 /// Network Time Service (NTS) defaults.
@@ -1776,6 +1804,14 @@ pub mod time {
     pub const NTS_SMOOTHING_ALPHA: f64 = 0.2;
     /// Maximum allowed adjustment per minute (ms) when smoothing.
     pub const NTS_MAX_ADJUST_MS_PER_MIN: u64 = 50;
+    /// Minimum number of peer samples required for healthy NTS.
+    pub const NTS_MIN_SAMPLES: usize = 3;
+    /// Maximum absolute offset (ms) permitted before NTS is considered unhealthy (0 disables).
+    pub const NTS_MAX_OFFSET_MS: u64 = 1_000;
+    /// Maximum confidence (MAD) in ms permitted before NTS is considered unhealthy (0 disables).
+    pub const NTS_MAX_CONFIDENCE_MS: u64 = 500;
+    /// Enforcement mode for unhealthy NTS ("warn" or "reject").
+    pub const NTS_ENFORCEMENT_MODE: &str = "warn";
 }
 
 /// Execution pipeline defaults (scheduler, overlay, batching).
@@ -2067,6 +2103,10 @@ pub mod sumeragi {
     /// Default number of missing-block fetch attempts before falling back to the full topology.
     /// A value of 0 disables signer preference.
     pub const MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: u32 = 1;
+    /// Consecutive membership mismatches required before alerting.
+    pub const MEMBERSHIP_MISMATCH_ALERT_THRESHOLD: u32 = 1;
+    /// Whether to drop consensus messages from peers with repeated membership mismatches.
+    pub const MEMBERSHIP_MISMATCH_FAIL_CLOSED: bool = false;
     /// Default: real BLS signing/verification enabled.
     pub const ENABLE_BLS: bool = true;
     /// Default RBC chunk maximum bytes per chunk.

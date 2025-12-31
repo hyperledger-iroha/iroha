@@ -694,26 +694,26 @@ fn generate_range_proof(
             RISTRETTO_BASEPOINT_POINT * bit_scalar + pedersen_generator_h() * blindings[bit_index];
         let (a0, a1, mut e0, mut s0, mut s1) = if bit {
             let mut alpha = random_scalar(&mut rng);
-            let mut e0 = random_scalar(&mut rng);
-            let mut s0 = random_scalar(&mut rng);
+            let e0 = random_scalar(&mut rng);
+            let s0 = random_scalar(&mut rng);
             let a0 = pedersen_generator_h() * s0 - commitment * e0;
             let a1 = pedersen_generator_h() * alpha;
             let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
             let mut e1 = challenge - e0;
-            let mut s1 = alpha + e1 * blindings[bit_index];
+            let s1 = alpha + e1 * blindings[bit_index];
             alpha.zeroize();
             e1.zeroize();
             (a0, a1, e0, s0, s1)
         } else {
             let mut alpha = random_scalar(&mut rng);
             let mut e1 = random_scalar(&mut rng);
-            let mut s1 = random_scalar(&mut rng);
+            let s1 = random_scalar(&mut rng);
             let a0 = pedersen_generator_h() * alpha;
             let commitment_minus_g = commitment - RISTRETTO_BASEPOINT_POINT;
             let a1 = pedersen_generator_h() * s1 - commitment_minus_g * e1;
             let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
-            let mut e0 = challenge - e1;
-            let mut s0 = alpha + e0 * blindings[bit_index];
+            let e0 = challenge - e1;
+            let s0 = alpha + e0 * blindings[bit_index];
             alpha.zeroize();
             e1.zeroize();
             (a0, a1, e0, s0, s1)

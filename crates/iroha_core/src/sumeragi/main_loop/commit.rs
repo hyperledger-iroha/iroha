@@ -744,6 +744,7 @@ impl Actor {
                                     if let Err(err) =
                                         self.persist_execution_qc_record(ExecutionQcRecord {
                                             subject_block_hash: block_hash,
+                                            parent_state_root,
                                             post_state_root,
                                             height: pending_height,
                                             view: pending_view,

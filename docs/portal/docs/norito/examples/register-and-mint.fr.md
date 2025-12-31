@@ -4,15 +4,51 @@
 lang: fr
 direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c30c710be94cd99f3c7a0484040155bf63ff4dc0d464d76237bddc8bf589ef26
 source_last_modified: "2025-11-07T11:59:47.168250+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2025-12-30
 ---
 
-# Traduction en cours
+---
+slug: /norito/examples/register-and-mint
+title: Enregistrer un domaine et frapper des actifs
+description: Démontre la création de domaines avec autorisations, l'enregistrement d'actifs et la frappe déterministe.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
+---
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+Démontre la création de domaines avec autorisations, l'enregistrement d'actifs et la frappe déterministe.
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+## Parcours du registre
+
+- Assurez-vous que le compte de destination (par exemple `alice@wonderland`) existe, en reflétant la phase de mise en place dans chaque quickstart SDK.
+- Invoquez le point d'entrée `register_and_mint` pour créer la définition d'actif ROSE et frapper 250 unités pour Alice en une seule transaction.
+- Vérifiez les soldes via `client.request(FindAccountAssets)` ou `iroha_cli assets list --account alice@wonderland` pour confirmer que la frappe a réussi.
+
+## Guides SDK associés
+
+- [Quickstart SDK Rust](/sdks/rust)
+- [Quickstart SDK Python](/sdks/python)
+- [Quickstart SDK JavaScript](/sdks/javascript)
+
+[Télécharger la source Kotodama](/norito-snippets/register-and-mint.ko)
+
+```text
+// Register a new asset and mint some to the specified account.
+seiyaku RegisterAndMint {
+  kotoage fn register_and_mint() permission(AssetManager) {
+    // name, symbol, quantity (precision or supply depending on host), mintable flag
+    let name = "rose";
+    let symbol = "ROSE";
+    let qty = 1000;      // interpretation depends on data model (example only)
+    let mintable = 1;    // 1 = mintable, 0 = fixed
+    register_asset(name, symbol, qty, mintable);
+
+    // Mint 250 ROSE to Alice
+    let to = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let asset = asset_definition!("rose#wonderland");
+    mint_asset(to, asset, 250);
+  }
+}
+```

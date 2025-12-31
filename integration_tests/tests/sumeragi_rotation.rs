@@ -9,7 +9,7 @@ use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{block::SignedBlock, prelude::*, query::block::prelude::FindBlocks};
 use iroha_primitives::unique_vec::UniqueVec;
-use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
+use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use tokio::runtime::Runtime;
 
 fn start_network(

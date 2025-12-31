@@ -4,14 +4,40 @@
 lang: he
 direction: rtl
 source: docs/portal/docs/norito/examples/call-transfer-asset.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/call-transfer-asset
+title: הפעלת העברה מהמארח מתוך Kotodama
+description: מדגים כיצד נקודת כניסה של Kotodama יכולה לקרוא להוראת המארח `transfer_asset` עם אימות מטא-דאטה מקוון.
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-# בתהליך תרגום
+מדגים כיצד נקודת כניסה של Kotodama יכולה לקרוא להוראת המארח `transfer_asset` עם אימות מטא-דאטה מקוון.
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+## סיור בספר החשבונות
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+- ממן את סמכות החוזה (למשל `contract@wonderland`) בנכס שהיא תעביר והעניקו לסמכות את תפקיד `CanTransfer` או הרשאה שקולה.
+- קראו לנקודת הכניסה `call_transfer_asset` כדי להעביר 5 יחידות מחשבון החוזה אל `bob@wonderland`, באופן שמשקף כיצד אוטומציה על השרשרת יכולה לעטוף קריאות מארח.
+- אמתו יתרות דרך `FindAccountAssets` או `iroha_cli assets list --account bob@wonderland` ובדקו אירועים כדי לאשר ששומר המטא-דאטה רשם את הקשר ההעברה.
+
+## מדריכי SDK קשורים
+
+- [Quickstart של Rust SDK](/sdks/rust)
+- [Quickstart של Python SDK](/sdks/python)
+- [Quickstart של JavaScript SDK](/sdks/javascript)
+
+[הורדת מקור Kotodama](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
+      account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

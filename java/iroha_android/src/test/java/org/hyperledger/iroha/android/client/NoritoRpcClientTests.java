@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Optional;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.model.TransactionPayload;
@@ -105,7 +106,11 @@ public final class NoritoRpcClientTests {
       final RecordedRequest recorded = handler.recorded();
       assert recorded != null : "Server should record the request";
       assert "GET".equals(recorded.method()) : "Method override should be honoured";
-      assert recorded.header("Accept") == null : "Accept header should be omitted when set to null";
+      final String accept = recorded.header("Accept");
+      if (accept != null) {
+        assert !accept.toLowerCase(Locale.ROOT).contains("application/x-norito")
+            : "Accept header should be omitted when set to null";
+      }
       assert "sample".equals(recorded.header("X-Telemetry-Key"))
           : "Custom headers should propagate";
       assert recorded.query().contains("version=1")

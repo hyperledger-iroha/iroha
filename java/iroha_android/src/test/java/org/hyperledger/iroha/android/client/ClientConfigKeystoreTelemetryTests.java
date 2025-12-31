@@ -29,7 +29,7 @@ import org.hyperledger.iroha.android.telemetry.TelemetryRecord;
 import org.hyperledger.iroha.android.telemetry.TelemetrySink;
 
 /** Verifies ClientConfig wires keystore telemetry into export options. */
-final class ClientConfigKeystoreTelemetryTests {
+public final class ClientConfigKeystoreTelemetryTests {
 
   public static void main(final String[] args) throws Exception {
     exportOptionsKeyManagerEmitsTelemetry();

@@ -2543,7 +2543,7 @@ mod tests {
             AssetId::new(asset_def_id.clone(), escrow.clone()),
             Numeric::from(0u32),
         );
-        let mut world = World::with_assets(
+        let world = World::with_assets(
             [domain],
             [authority_account, escrow_account],
             [asset_def],

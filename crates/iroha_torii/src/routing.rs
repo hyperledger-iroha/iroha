@@ -313,12 +313,12 @@ use iroha_data_model::{
         SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiConsensusCapsStatus,
         SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
         SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
-        SumeragiLaneGovernance, SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
-        SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
-        SumeragiQcEntry, SumeragiQcSnapshot, SumeragiRbcEvictedSession, SumeragiRbcStoreStatus,
-        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-        SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
+        SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+        SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
+        SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiRbcEvictedSession,
+        SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus,
+        SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
     },
     domain::DomainId,
     events::{
@@ -4850,6 +4850,9 @@ async fn handle_transaction_inner(
                         );
                     }
                 }
+                if matches!(err, AcceptTransactionFail::NetworkTimeUnhealthy { .. }) {
+                    tel.inc_torii_nts_unhealthy_reject();
+                }
             });
             return Err(Error::AcceptTransaction(err));
         }
@@ -5173,6 +5176,15 @@ async fn fetch_network_time_status() -> iroha_core::time::NetworkTimeStatus {
                 now: std::time::SystemTime::now(),
                 offset_ms: 0,
                 confidence_ms: 0,
+                sample_count: 0,
+                peer_count: 0,
+                fallback: true,
+                health: iroha_core::time::NtsHealth {
+                    min_samples_ok: false,
+                    offset_ok: true,
+                    confidence_ok: true,
+                    healthy: false,
+                },
             }
         }
     }
@@ -5195,6 +5207,33 @@ pub async fn handle_time_now() -> impl IntoResponse {
         "confidence_ms".into(),
         norito::json::Value::from(s.confidence_ms),
     );
+    obj.insert(
+        "sample_count".into(),
+        norito::json::Value::from(s.sample_count as u64),
+    );
+    obj.insert(
+        "peer_count".into(),
+        norito::json::Value::from(s.peer_count as u64),
+    );
+    obj.insert("fallback".into(), norito::json::Value::from(s.fallback));
+    let mut health = norito::json::Map::new();
+    health.insert(
+        "healthy".into(),
+        norito::json::Value::from(s.health.healthy),
+    );
+    health.insert(
+        "min_samples_ok".into(),
+        norito::json::Value::from(s.health.min_samples_ok),
+    );
+    health.insert(
+        "offset_ok".into(),
+        norito::json::Value::from(s.health.offset_ok),
+    );
+    health.insert(
+        "confidence_ok".into(),
+        norito::json::Value::from(s.health.confidence_ok),
+    );
+    obj.insert("health".into(), norito::json::Value::Object(health));
     let body = norito::json::to_json_pretty(&obj).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
@@ -5207,11 +5246,48 @@ pub async fn handle_time_now() -> impl IntoResponse {
 /// Network Time Service diagnostics.
 pub async fn handle_time_status() -> impl IntoResponse {
     let mut obj = norito::json::Map::new();
+    let status = fetch_network_time_status().await;
     let snapshot = tokio::task::spawn_blocking(iroha_core::time::debug_snapshot)
         .await
         .unwrap_or_default();
-    let peers = snapshot.len() as u64;
-    obj.insert("peers".into(), norito::json::Value::from(peers));
+    obj.insert(
+        "peers".into(),
+        norito::json::Value::from(status.peer_count as u64),
+    );
+    obj.insert(
+        "samples_used".into(),
+        norito::json::Value::from(status.sample_count as u64),
+    );
+    obj.insert(
+        "offset_ms".into(),
+        norito::json::Value::from(status.offset_ms),
+    );
+    obj.insert(
+        "confidence_ms".into(),
+        norito::json::Value::from(status.confidence_ms),
+    );
+    obj.insert(
+        "fallback".into(),
+        norito::json::Value::from(status.fallback),
+    );
+    let mut health = norito::json::Map::new();
+    health.insert(
+        "healthy".into(),
+        norito::json::Value::from(status.health.healthy),
+    );
+    health.insert(
+        "min_samples_ok".into(),
+        norito::json::Value::from(status.health.min_samples_ok),
+    );
+    health.insert(
+        "offset_ok".into(),
+        norito::json::Value::from(status.health.offset_ok),
+    );
+    health.insert(
+        "confidence_ok".into(),
+        norito::json::Value::from(status.health.confidence_ok),
+    );
+    obj.insert("health".into(), norito::json::Value::Object(health));
     let samples = snapshot
         .into_iter()
         .map(|(peer, offset_ms, rtt_ms, count)| {
@@ -5280,6 +5356,10 @@ mod nts_tests {
         assert!(val.get("now").is_some(), "missing now");
         assert!(val.get("offset_ms").is_some(), "missing offset_ms");
         assert!(val.get("confidence_ms").is_some(), "missing confidence_ms");
+        assert!(val.get("sample_count").is_some(), "missing sample_count");
+        assert!(val.get("peer_count").is_some(), "missing peer_count");
+        assert!(val.get("fallback").is_some(), "missing fallback");
+        assert!(val.get("health").is_some(), "missing health");
     }
 
     #[tokio::test]
@@ -5296,6 +5376,11 @@ mod nts_tests {
         let bytes = body.collect().await.unwrap().to_bytes();
         let val: norito::json::Value = norito::json::from_slice(&bytes).expect("valid json body");
         assert!(val.get("peers").is_some(), "missing peers");
+        assert!(val.get("samples_used").is_some(), "missing samples_used");
+        assert!(val.get("offset_ms").is_some(), "missing offset_ms");
+        assert!(val.get("confidence_ms").is_some(), "missing confidence_ms");
+        assert!(val.get("fallback").is_some(), "missing fallback");
+        assert!(val.get("health").is_some(), "missing health");
         assert!(val.get("samples").is_some(), "missing samples");
         assert!(val.get("note").is_some(), "missing note");
     }
@@ -19923,6 +20008,47 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                 .unwrap_or(Value::Null),
         ),
     ]);
+    let membership_mismatch = json_object(vec![
+        json_entry(
+            "active_peers",
+            Value::Array(
+                snap.membership_mismatch
+                    .active_peers
+                    .iter()
+                    .map(|peer| Value::from(peer.to_string()))
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "last_peer",
+            snap.membership_mismatch
+                .last_peer
+                .as_ref()
+                .map(|peer| Value::from(peer.to_string()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("last_height", snap.membership_mismatch.last_height),
+        json_entry("last_view", snap.membership_mismatch.last_view),
+        json_entry("last_epoch", snap.membership_mismatch.last_epoch),
+        json_entry(
+            "last_local_hash",
+            snap.membership_mismatch
+                .last_local_hash
+                .map(|bytes| Value::from(hex::encode(bytes)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "last_remote_hash",
+            snap.membership_mismatch
+                .last_remote_hash
+                .map(|bytes| Value::from(hex::encode(bytes)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "last_timestamp_ms",
+            snap.membership_mismatch.last_timestamp_ms,
+        ),
+    ]);
     let lane_commitments = Value::Array(
         snap.lane_commitments
             .iter()
@@ -20478,6 +20604,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("kura_store", kura_store),
         json_entry("epoch", epoch),
         json_entry("membership", membership),
+        json_entry("membership_mismatch", membership_mismatch),
         json_entry("lane_commitments", lane_commitments),
         json_entry("lane_settlement_commitments", lane_settlement_commitments),
         json_entry("lane_relay_envelopes", lane_relay_envelopes),
@@ -20674,6 +20801,63 @@ mod status_tests {
                 .get("view_hash")
                 .map(Value::is_null)
                 .unwrap_or(false)
+        );
+        let membership_mismatch = payload
+            .get("membership_mismatch")
+            .and_then(Value::as_object)
+            .expect("membership_mismatch object present");
+        assert!(
+            membership_mismatch
+                .get("active_peers")
+                .and_then(Value::as_array)
+                .map(|peers| peers.is_empty())
+                .unwrap_or(false)
+        );
+        assert!(
+            membership_mismatch
+                .get("last_peer")
+                .map(Value::is_null)
+                .unwrap_or(false)
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_height")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_view")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_epoch")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            0
+        );
+        assert!(
+            membership_mismatch
+                .get("last_local_hash")
+                .map(Value::is_null)
+                .unwrap_or(false)
+        );
+        assert!(
+            membership_mismatch
+                .get("last_remote_hash")
+                .map(Value::is_null)
+                .unwrap_or(false)
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_timestamp_ms")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            0
         );
         assert!(
             payload
@@ -21250,6 +21434,7 @@ mod status_tests {
         };
         let execution_qc = ExecutionQcRecord {
             subject_block_hash: header.hash(),
+            parent_state_root: Hash::prehashed([0x32; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0x33; Hash::LENGTH]),
             height: header.height().get(),
             view: 3,
@@ -21784,6 +21969,16 @@ pub async fn handle_v1_sumeragi_status(
                 view: snap.membership_view,
                 epoch: snap.membership_epoch,
                 view_hash: snap.membership_view_hash,
+            },
+            membership_mismatch: SumeragiMembershipMismatchStatus {
+                active_peers: snap.membership_mismatch.active_peers.clone(),
+                last_peer: snap.membership_mismatch.last_peer.clone(),
+                last_height: snap.membership_mismatch.last_height,
+                last_view: snap.membership_mismatch.last_view,
+                last_epoch: snap.membership_mismatch.last_epoch,
+                last_local_hash: snap.membership_mismatch.last_local_hash,
+                last_remote_hash: snap.membership_mismatch.last_remote_hash,
+                last_timestamp_ms: snap.membership_mismatch.last_timestamp_ms,
             },
             lane_commitments: snap
                 .lane_commitments

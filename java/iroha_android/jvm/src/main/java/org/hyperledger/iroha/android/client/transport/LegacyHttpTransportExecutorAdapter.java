@@ -12,6 +12,11 @@ public final class LegacyHttpTransportExecutorAdapter implements TransportExecut
 
   private final HttpTransportExecutor legacy;
 
+  /**
+   * Creates an adapter for the legacy executor.
+   *
+   * @param legacy legacy executor instance
+   */
   public LegacyHttpTransportExecutorAdapter(final HttpTransportExecutor legacy) {
     this.legacy = Objects.requireNonNull(legacy, "legacy");
   }

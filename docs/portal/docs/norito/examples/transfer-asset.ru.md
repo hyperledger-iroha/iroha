@@ -4,15 +4,48 @@
 lang: ru
 direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: b066f95804af834930008b4a7c654778f32f6467bcecbdee47d09997cbd35122
 source_last_modified: "2025-11-09T11:46:26.108135+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2025-12-30
 ---
 
-# Перевод в процессе
+---
+slug: /norito/examples/transfer-asset
+title: Перевести актив между аккаунтами
+description: Простой сценарий перевода активов, отражающий quickstart'ы SDK и walkthrough'ы реестра.
+source: examples/transfer/transfer.ko
+---
 
-Этот файл является заготовкой для русскоязычного перевода английского документа. После завершения перевода обновите поле `status` в метаданных выше.
+Простой сценарий перевода активов, отражающий quickstart'ы SDK и walkthrough'ы реестра.
 
-Этот черновик ожидает перевода. Замените этот текст готовым переводом и установите значение `status` в `complete` после завершения. Убедитесь, что поле `translation_last_reviewed` отражает дату последней проверки с английским оригиналом.
+## Пошаговый обход реестра
+
+- Предварительно пополните Alice целевым активом (например через сниппет `register and mint` или потоки quickstart SDK).
+- Выполните точку входа `do_transfer`, чтобы перевести 10 единиц от Alice к Bob, удовлетворяя разрешению `AssetTransferRole`.
+- Проверьте балансы (`FindAccountAssets`, `iroha_cli assets list`) или подпишитесь на события pipeline, чтобы наблюдать результат перевода.
+
+## Связанные руководства SDK
+
+- [Quickstart Rust SDK](/sdks/rust)
+- [Quickstart Python SDK](/sdks/python)
+- [Quickstart JavaScript SDK](/sdks/javascript)
+
+[Скачать исходник Kotodama](/norito-snippets/transfer-asset.ko)
+
+```text
+// Transfer example: uses typed pointer constructors and transfer_asset syscall
+
+seiyaku TransferDemo {
+  // Public entrypoint to transfer 10 units of rose#wonderland from alice to bob
+  kotoage fn do_transfer() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
+      account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

@@ -36,6 +36,21 @@ final class TransactionPayloadFixtures {
     return fixtures;
   }
 
+  static Path resolveFixturePath() throws IOException {
+    final List<Path> candidates =
+        List.of(
+            Path.of("java/iroha_android/src/test/resources/transaction_payloads.json"),
+            Path.of("src/test/resources/transaction_payloads.json"),
+            Path.of("../src/test/resources/transaction_payloads.json"),
+            Path.of("../../src/test/resources/transaction_payloads.json"));
+    for (final Path candidate : candidates) {
+      if (Files.exists(candidate)) {
+        return candidate;
+      }
+    }
+    throw new IOException("transaction_payloads.json not found (tried " + candidates + ")");
+  }
+
   static final class Fixture {
     private final String name;
     private final Map<String, Object> payload;
@@ -57,7 +72,12 @@ final class TransactionPayloadFixtures {
       final Map<String, Object> payload =
           map.containsKey("payload") ? asMap(map.get("payload"), "payload", name) : null;
       final Object encoded = map.get("encoded");
-      return new Fixture(name, payload, encoded == null ? null : Objects.toString(encoded));
+      final Object payloadBase64 = map.get("payload_base64");
+      final String resolvedEncoded =
+          encoded != null
+              ? Objects.toString(encoded)
+              : payloadBase64 == null ? null : Objects.toString(payloadBase64);
+      return new Fixture(name, payload, resolvedEncoded);
     }
 
     String name() {

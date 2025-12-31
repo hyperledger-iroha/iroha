@@ -26,12 +26,13 @@ final class JavaTransportWebSocket implements TransportWebSocket, WebSocket.List
   void attach(final WebSocket webSocket) {
     delegate = Objects.requireNonNull(webSocket, "webSocket");
     ready.complete(webSocket);
+    webSocket.request(1);
     listener.onOpen(this);
   }
 
   @Override
   public void onOpen(final WebSocket webSocket) {
-    // The delegate is provided via attach; no-op here.
+    webSocket.request(1);
   }
 
   @Override

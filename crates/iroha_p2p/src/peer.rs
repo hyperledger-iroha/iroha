@@ -3778,10 +3778,13 @@ mod state {
 
     #[cfg(test)]
     mod tests {
+        #[cfg(feature = "noise_handshake")]
         use std::sync::Arc;
 
+        #[cfg(feature = "noise_handshake")]
         use iroha_crypto::{encryption::ChaCha20Poly1305, kex::X25519Sha256 as KexAlgo};
 
+        #[cfg(feature = "noise_handshake")]
         use super::*;
 
         #[cfg(feature = "noise_handshake")]

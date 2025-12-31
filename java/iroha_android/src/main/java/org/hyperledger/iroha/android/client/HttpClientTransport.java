@@ -340,8 +340,22 @@ public final class HttpClientTransport implements IrohaClient {
                   response.message(),
                   hashHex,
                   extractRejectCode(response));
-          if (config.retryPolicy().shouldRetryResponse(attempt, clientResponse)) {
-            return scheduleRetry(transaction, hashHex, attempt, request, clientResponse, null);
+          if (clientResponse.statusCode() < 200 || clientResponse.statusCode() >= 300) {
+            if (config.retryPolicy().shouldRetryResponse(attempt, clientResponse)) {
+              return scheduleRetry(transaction, hashHex, attempt, request, clientResponse, null);
+            }
+            if (config.retryPolicy().isRetryableStatus(clientResponse.statusCode())) {
+              final RuntimeException error =
+                  new RuntimeException(
+                      "Torii request failed with status " + clientResponse.statusCode());
+              notifyFailure(request, error);
+              enqueuePending(transaction);
+              final CompletableFuture<ClientResponse> failed = new CompletableFuture<>();
+              failed.completeExceptionally(error);
+              return failed;
+            }
+            notifyResponse(request, clientResponse);
+            return CompletableFuture.completedFuture(clientResponse);
           }
           notifyResponse(request, clientResponse);
           return CompletableFuture.completedFuture(clientResponse);

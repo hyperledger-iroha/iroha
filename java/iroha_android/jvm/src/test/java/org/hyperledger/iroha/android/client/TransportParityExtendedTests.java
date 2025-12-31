@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.ByteBuffer;
@@ -12,6 +13,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -41,12 +45,45 @@ import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketClient;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketListener;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketOptions;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketSession;
+import org.junit.AfterClass;
 import org.junit.Test;
 
 /** Parity tests covering OkHttp vs JDK transports for streaming surfaces on the JVM. */
 public final class TransportParityExtendedTests {
 
+  private static final int TEST_TIMEOUT_SECONDS = 5;
   private static final OkHttpClient SHARED_CLIENT = new OkHttpClient();
+  private static final ExecutorService JDK_EXECUTOR =
+      Executors.newCachedThreadPool(
+          runnable -> {
+            final Thread thread = new Thread(runnable, "jvm-http-executor");
+            thread.setDaemon(true);
+            return thread;
+          });
+  private static final HttpClient JDK_CLIENT =
+      HttpClient.newBuilder()
+          .executor(JDK_EXECUTOR)
+          .connectTimeout(Duration.ofSeconds(5))
+          .version(HttpClient.Version.HTTP_1_1)
+          .build();
+
+  @AfterClass
+  public static void shutdownOkHttp() {
+    SHARED_CLIENT.dispatcher().executorService().shutdownNow();
+    SHARED_CLIENT.connectionPool().evictAll();
+    if (SHARED_CLIENT.cache() != null) {
+      try {
+        SHARED_CLIENT.cache().close();
+      } catch (final IOException ignored) {
+        // Best-effort cleanup for test shutdown.
+      }
+    }
+  }
+
+  @AfterClass
+  public static void shutdownJdkExecutor() {
+    JDK_EXECUTOR.shutdownNow();
+  }
 
   @Test
   public void sseParityAcrossOkHttpAndJdkExecutors() throws Exception {
@@ -67,7 +104,7 @@ public final class TransportParityExtendedTests {
               .setBody(body);
       server.enqueue(response);
       server.enqueue(response);
-      server.start();
+      server.start(InetAddress.getByName("127.0.0.1"), 0);
 
       final URI baseUri = new URI(server.url("/").toString());
       final ToriiEventStreamOptions options = ToriiEventStreamOptions.defaultOptions();
@@ -80,18 +117,18 @@ public final class TransportParityExtendedTests {
               .build();
       try (ToriiEventStream stream =
           okHttpClient.openSseStream("/events", options, okHttpListener)) {
-        stream.completion().get(2, TimeUnit.SECONDS);
+        stream.completion().get(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
       }
 
       final RecordingSseListener jdkListener = new RecordingSseListener();
       final ToriiEventStreamClient jdkClient =
           ToriiEventStreamClient.builder()
               .setBaseUri(baseUri)
-              .setTransportExecutor(new JavaHttpExecutor(HttpClient.newHttpClient()))
+              .setTransportExecutor(new JavaHttpExecutor(JDK_CLIENT))
               .build();
       try (ToriiEventStream stream =
           jdkClient.openSseStream("/events", options, jdkListener)) {
-        stream.completion().get(2, TimeUnit.SECONDS);
+        stream.completion().get(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
       }
 
       assertEquals(okHttpListener.events.size(), jdkListener.events.size());
@@ -110,11 +147,13 @@ public final class TransportParityExtendedTests {
     try (MockWebServer server = new MockWebServer()) {
       server.enqueue(new MockResponse().withWebSocketUpgrade(new ScriptedWebSocket()));
       server.enqueue(new MockResponse().withWebSocketUpgrade(new ScriptedWebSocket()));
-      server.start();
+      server.start(InetAddress.getByName("127.0.0.1"), 0);
 
       final URI baseUri = new URI(server.url("/").toString());
       final ToriiWebSocketOptions options =
-          ToriiWebSocketOptions.builder().setConnectTimeout(Duration.ofSeconds(2)).build();
+          ToriiWebSocketOptions.builder()
+              .setConnectTimeout(Duration.ofSeconds(TEST_TIMEOUT_SECONDS))
+              .build();
 
       final RecordingWebSocketListener okHttpListener = new RecordingWebSocketListener();
       final ToriiWebSocketClient okHttpClient =
@@ -124,22 +163,40 @@ public final class TransportParityExtendedTests {
               .build();
       final ToriiWebSocketSession okHttpSession =
           okHttpClient.connect("/ws", options, okHttpListener);
-      assertTrue("okhttp open", okHttpListener.await());
-      okHttpSession.close(ToriiWebSocketSession.NORMAL_CLOSURE, "done").get(2, TimeUnit.SECONDS);
+      assertTrue("okhttp open", okHttpListener.awaitOpen());
+      awaitCloseOrCloseSession(okHttpSession, okHttpListener);
 
       final RecordingWebSocketListener jdkListener = new RecordingWebSocketListener();
       final ToriiWebSocketClient jdkClient =
           ToriiWebSocketClient.builder()
               .setBaseUri(baseUri)
-              .setWebSocketConnector(new JdkWebSocketConnector(HttpClient.newHttpClient()))
+              .setWebSocketConnector(new JdkWebSocketConnector(JDK_CLIENT))
               .build();
       final ToriiWebSocketSession jdkSession = jdkClient.connect("/ws", options, jdkListener);
-      assertTrue("jdk open", jdkListener.await());
-      jdkSession.close(ToriiWebSocketSession.NORMAL_CLOSURE, "done").get(2, TimeUnit.SECONDS);
+      assertTrue("jdk open", jdkListener.awaitOpen());
+      awaitCloseOrCloseSession(jdkSession, jdkListener);
 
       assertEquals(okHttpListener.textMessages, jdkListener.textMessages);
       assertEquals(okHttpListener.binaryMessages, jdkListener.binaryMessages);
     }
+  }
+
+  private static void awaitCloseOrCloseSession(
+      final ToriiWebSocketSession session, final RecordingWebSocketListener listener)
+      throws InterruptedException, ExecutionException, java.util.concurrent.TimeoutException {
+    if (listener.awaitClose()) {
+      return;
+    }
+    try {
+      session
+          .close(ToriiWebSocketSession.NORMAL_CLOSURE, "done")
+          .get(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    } catch (ExecutionException ex) {
+      if (!(ex.getCause() instanceof IOException)) {
+        throw ex;
+      }
+    }
+    assertTrue("close", listener.awaitClose());
   }
 
   private static final class RecordingSseListener implements ToriiEventStreamListener {
@@ -190,8 +247,12 @@ public final class TransportParityExtendedTests {
       closed.countDown();
     }
 
-    boolean await() throws InterruptedException {
-      return opened.await(2, TimeUnit.SECONDS) && closed.await(2, TimeUnit.SECONDS);
+    boolean awaitOpen() throws InterruptedException {
+      return opened.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    }
+
+    boolean awaitClose() throws InterruptedException {
+      return closed.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
   }
 

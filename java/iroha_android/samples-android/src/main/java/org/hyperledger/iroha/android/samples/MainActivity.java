@@ -11,13 +11,22 @@ public class MainActivity extends Activity {
     super.onCreate(savedInstanceState);
 
     byte[] dummyKey = new byte[32];
-    AccountAddress address = AccountAddress.fromAccount("wonderland", dummyKey, "ed25519");
+    String message;
+    try {
+      AccountAddress address = AccountAddress.fromAccount("wonderland", dummyKey, "ed25519");
+      message =
+          "Iroha sample app linked against the AAR.\n\n"
+              + "Address (hex):\n"
+              + address.canonicalHex();
+    } catch (AccountAddress.AccountAddressException e) {
+      message =
+          "Iroha sample app linked against the AAR.\n\n"
+              + "Address error:\n"
+              + e.getMessage();
+    }
 
     TextView view = new TextView(this);
-    view.setText(
-        "Iroha sample app linked against the AAR.\n\n"
-            + "Address (hex):\n"
-            + address.canonicalHex());
+    view.setText(message);
     view.setPadding(48, 64, 48, 64);
 
     setContentView(view);

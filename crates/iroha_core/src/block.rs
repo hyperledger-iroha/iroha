@@ -4298,6 +4298,13 @@ pub(crate) mod valid {
                             "transaction expired: expires_at_ms={expires_at_ms} now_ms={now_ms}"
                         )),
                     ),
+                    AcceptTransactionFail::NetworkTimeUnhealthy { reason } => {
+                        TransactionRejectionReason::Validation(
+                            iroha_data_model::ValidationFail::NotPermitted(format!(
+                                "network time service unhealthy: {reason}"
+                            )),
+                        )
+                    }
                 }
             };
 
@@ -9391,7 +9398,8 @@ mod event {
                 | AcceptTransactionFail::UnexpectedGenesisAccountSignature
                 | AcceptTransactionFail::ChainIdMismatch(_)
                 | AcceptTransactionFail::TransactionInTheFuture
-                | AcceptTransactionFail::TransactionExpired { .. } => {
+                | AcceptTransactionFail::TransactionExpired { .. }
+                | AcceptTransactionFail::NetworkTimeUnhealthy { .. } => {
                     Reason::TransactionValidationFailed
                 }
             },
@@ -10076,6 +10084,7 @@ mod tests {
 
         let execution_qc = ExecutionQcRecord {
             subject_block_hash: block_header.hash(),
+            parent_state_root: Hash::prehashed([0xCE; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0xCD; Hash::LENGTH]),
             height: block_header.height().get(),
             view: 3,
@@ -10167,6 +10176,7 @@ mod tests {
 
         let execution_qc = ExecutionQcRecord {
             subject_block_hash: block_header.hash(),
+            parent_state_root: Hash::prehashed([0xCE; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0xCD; Hash::LENGTH]),
             height: block_header.height().get(),
             view: 3,

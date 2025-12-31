@@ -607,6 +607,7 @@ impl Queue {
         telemetry: Option<StateTelemetry>,
         governance: Arc<GovernanceCatalog>,
         registry_cfg: LaneRegistry,
+        state: Option<Arc<State>>,
     ) {
         let lane_catalog = self.lane_catalog.read().clone();
         let initial = Arc::new(LaneManifestRegistry::from_config(
@@ -615,6 +616,9 @@ impl Queue {
             &registry_cfg,
         ));
         self.install_lane_manifests(&initial);
+        if let Some(state_handle) = state.as_ref() {
+            state_handle.install_lane_manifests(&initial);
+        }
         if let Some(telemetry_handle) = telemetry.as_ref() {
             telemetry_handle.set_lane_manifest_registry(Arc::clone(&initial));
         }
@@ -634,6 +638,9 @@ impl Queue {
                 &registry_cfg,
             ));
             self.install_lane_manifests(&registry);
+            if let Some(state_handle) = state.as_ref() {
+                state_handle.install_lane_manifests(&registry);
+            }
             if let Some(telemetry_handle) = telemetry.as_ref() {
                 telemetry_handle.set_lane_manifest_registry(Arc::clone(&registry));
             }
@@ -4491,6 +4498,7 @@ pub mod tests {
             id: test_dataspace,
             alias: "dataspace3".to_string(),
             description: None,
+            fault_tolerance: 1,
         };
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(16).expect("nonzero lane count"),
@@ -4599,6 +4607,7 @@ pub mod tests {
             id: test_dataspace,
             alias: "dataspace9".to_string(),
             description: None,
+            fault_tolerance: 1,
         };
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(16).expect("nonzero lane count"),

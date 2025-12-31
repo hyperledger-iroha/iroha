@@ -73,16 +73,19 @@ metadata = {}
 alias = "global"
 id = 0
 description = "Single-lane data space"
+fault_tolerance = 1
 
 [[nexus.dataspace_catalog]]
 alias = "governance"
 id = 1
 description = "Governance proposals & manifests"
+fault_tolerance = 1
 
 [[nexus.dataspace_catalog]]
 alias = "zk"
 id = 2
 description = "Zero-knowledge proofs and attachments"
+fault_tolerance = 1
 
 [nexus.routing_policy]
 default_lane = 0
@@ -110,6 +113,11 @@ max_window_slots = 16
 
 [nexus.commit]
 window_slots = 2
+
+[nexus.lane_relay_emergency]
+enabled = false
+multisig_threshold = 3
+multisig_members = 5
 
 [nexus.da]
 q_in_slot_total = 2048

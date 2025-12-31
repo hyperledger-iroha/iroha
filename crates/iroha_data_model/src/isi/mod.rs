@@ -198,6 +198,12 @@ impl From<crate::isi::staking::ExitPublicLaneValidator> for InstructionBox {
     }
 }
 
+impl From<crate::isi::nexus::SetLaneRelayEmergencyValidators> for InstructionBox {
+    fn from(i: crate::isi::nexus::SetLaneRelayEmergencyValidators) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of runtime upgrade instructions
 impl From<crate::isi::runtime_upgrade::ProposeRuntimeUpgrade> for InstructionBox {
     fn from(i: crate::isi::runtime_upgrade::ProposeRuntimeUpgrade) -> Self {
@@ -1161,6 +1167,8 @@ pub mod content;
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
 pub mod mint_burn;
+/// Nexus lane governance instructions.
+pub mod nexus;
 /// Offline allowance settlement instructions.
 pub mod offline;
 /// Oracle feed registration and aggregation instructions.
@@ -1198,6 +1206,7 @@ pub mod zk;
 pub use confidential::*;
 pub use kaigi::*;
 pub use mint_burn::*;
+pub use nexus::*;
 pub use offline::*;
 pub use oracle::*;
 pub use register::*;
@@ -1977,6 +1986,7 @@ pub mod prelude {
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
         },
+        nexus::SetLaneRelayEmergencyValidators,
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementFailureRecord,

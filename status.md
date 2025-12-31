@@ -10,6 +10,84 @@
 - Client pipeline-status 404 responses now fall back to committed queries without warning spam; added mock HTTP coverage for the fallback.
 - Added Kagami localnet config coverage for required addr literals and keys.
 - Seeded Sora profile detection defaults with BLS consensus keys to avoid testnet parse warnings and kept default routing policy coverage.
+- Ignored Android core build output in the gitignore.
+- Fixed irohad test fixtures to generate BLS-normal consensus keys and Nexus lane metadata, refreshed the Nexus defaults hash check, and corrected the Torii timeout layer call; tests: `CARGO_TARGET_DIR=target-codex cargo test -p irohad --tests` (1 failure fixed), `CARGO_TARGET_DIR=target-codex cargo test -p irohad --bin iroha3d build_line_tests::nexus_profile_hash_matches_template`.
+- Attempted roadmap integration-test revalidation: `address_canonicalisation` ran but skipped network startup due to sandbox loopback denial; full `integration_tests` build failed in `integration_tests/tests/nexus/cross_lane.rs` (missing `parent_state_root` field).
+- Removed unchecked-generic warnings in Norito Java adapters without MethodHandle (Android minSdk-safe), refactored map/tuple/struct adapters, added a map adapter roundtrip test, and stabilized JDK WebSocket parity close handling; tests: `ci/run_android_tests.sh`, `swift test`.
+- Added streaming identity keys to Kagami Iroha3 sample configs so BLS-based profiles parse under the streaming Ed25519 requirement.
+- Completed SEC-TELEMETRY-REDACTION follow-ups: persisted telemetry integrity chain state, refreshed config fixtures and streaming env parsing, updated status JSON snapshot, and extended nexus defaults with streaming identity keys.
+- Tests: `cargo test -p iroha_telemetry`, `cargo test -p iroha_config`; `cargo test --workspace` failed in libsodium-sys build (missing `librdrand.a` under `target/codex`).
+- Completed SEC-TELEMETRY-REDACTION: strict telemetry redaction enforced in release profiles, allowlist policy guardrails, tamper-evident hash-chained exports (optional signing), new audit metrics/tests, and refreshed telemetry/threat-model docs.
+- Completed SEC-TIME-HARDENING with NTS health thresholds, admission gating for time-sensitive ISIs (repo/staking/settlement/trigger/IVM, trigger registrations, CustomInstruction default), configured fallback enforcement, Torii reject code + metric, and refreshed NTS/config/telemetry docs.
+- Implemented SEC-MEMBERSHIP-MISMATCH: membership view-hash advert, mismatch tracking with status surfaces, config knobs (threshold/fail-closed), and updated docs/tests.
+- Removed the deprecated `package` attribute from the Android sample manifest and pinned CycloneDX SBOM generation to schema 1.5 to silence schema warnings; reran Swift tests and Android SDK Gradle test suite.
+- Refined the security hardening roadmap items with detailed task breakdowns.
+- Added roadmap tasks for security hardening gaps (telemetry redaction, NTS/time bounds, upgrade provenance, operator auth, attachment sanitization, membership mismatch alerts).
+- Upgraded CycloneDX Gradle plugin to 3.1.0, re-enabled SBOM generation by default, and re-ran Swift + Android test harnesses.
+- Fixed Android SDK build/test gaps (core API exposure, Norito jar wiring for lint, core-library desugaring, locale-safe HTTP method normalization, sample AccountAddress error handling) and guarded CycloneDX on Gradle 9; reran Swift + Android test harnesses.
+- Disabled lane relay emergency overrides by default, gated them behind nexus config with a 3-of-5 multisig minimum, and updated tests/docs.
+- Added edge-case unit tests for lane relay emergency override overlap handling and telemetry gating.
+- Filled remaining lane relay emergency override test gaps (expiry boundary + telemetry metric) and cleaned related test plumbing.
+- Enforced dataspace `fault_tolerance` minimum of 1 across defaults/config/data model, refreshed docs/configs, and updated lane-relay tests for 3f+1 committees.
+- Resolved merge conflict in the status update list.
+- Stabilized Android/JVM SDK tests: fixed BouncyCastle Ed25519 test key encodings, hardened fixture loading/exporter fallbacks, filtered JDK-restricted headers, made WebSocket close idempotent, ensured JDK WebSocket request flow, and tightened transport parity fixtures.
+- Closed lane relay validation gaps by enforcing committee-backed QC signatures (including parent_state_root), adding signer-bitmap length checks, and surfacing dataspace fault_tolerance in telemetry; docs/tests updated.
+- Completed NEXUS-LANE-RELAY-RECOVERY with emergency lane relay validator overrides, telemetry, tests, and docs updates.
+- Translated the SoraNet puzzle service operations guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet privacy metrics pipeline across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal intro page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito Streaming roadmap across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal reference index across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito codec reference across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the account address compliance reference across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal publishing checklist across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the address safety & accessibility reference across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Torii app API parity audit across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito getting started guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito quickstart across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito streaming guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito ledger walkthrough across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito examples index across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito Hajimari entrypoint example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito call-transfer-asset example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito register-and-mint example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito transfer-asset example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito NFT flow example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus operations runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus settlement FAQ across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus default lane quickstart across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus elastic lane provisioning guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus technical specification across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus fee model updates across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus telemetry remediation plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the confidential gas calibration ledger across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus routed-trace audit report (2026 Q1) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus data-space operator onboarding guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus bootstrap & observability plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus ledger refactor plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito Try-It console across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet PQ rollout plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet PQ ratchet runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet testnet rollout (SNNet-10) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet transport overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet constant-rate profiles across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the GAR operator onboarding brief across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet PQ primitives overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the GAR jurisdictional review (SNNet-9) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS capacity marketplace validation report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Implemented per-dataspace lane relay committee selection (3f+1 from dataspace fault_tolerance), wired lane manifest registry into state for relay validation, and updated nexus docs/examples.
+- Translated the AI moderation calibration report (2026-02) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SF-2c capacity accrual soak report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Added MOCHI CLI/UI support for custom profile overrides (inline TOML tables) and cleaned duplicate Torii sample-config entries.
+- Translated the SoraFS Orchestrator GA parity report across portal docs and portal i18n locales (ar/he/ja/pt/ur).
+- Translated the SoraFS SF1 determinism dry-run report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SF-6 security review report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Completed MOCHI-TOPOLOGY-PROFILES supervisor topology presets (profile config surface, Nexus/DA plumbing, snapshot import/export, Kagami alignment, docs/samples).
+- Translated the Taikai monitoring dashboards across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS priority snapshot (2025-03) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS provider advert rollout across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Prioritized Sumeragi worker loop drains so block payload/RBC traffic runs ahead of block sync, preventing READY quorum stalls; updated unit priority-order coverage.
 - Block sync QC tally now preserves QC bitmap indices when caching precommit signer sets, preventing mismatched QC propagation; added unit coverage.
 - Pacemaker now ignores precommit votes for unknown blocks to avoid proposal stalls; updated and added unit tests.

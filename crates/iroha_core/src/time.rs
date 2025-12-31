@@ -11,10 +11,11 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    sync::OnceLock,
+    sync::{OnceLock, RwLock},
     time::Instant,
 };
 
+use iroha_config::parameters::actual::NtsEnforcementMode;
 use iroha_data_model::peer::Peer;
 use norito::codec::{Decode, Encode};
 use tokio::sync::watch;
@@ -50,6 +51,69 @@ pub struct NetworkTimeStatus {
     pub offset_ms: i64,
     /// Robust dispersion estimate in milliseconds (median absolute deviation).
     pub confidence_ms: u64,
+    /// Number of peer samples used in the current aggregation (post-filter).
+    pub sample_count: usize,
+    /// Number of peers with at least one recent sample (pre-filter).
+    pub peer_count: usize,
+    /// Whether NTS fell back to local time due to missing/invalid samples.
+    pub fallback: bool,
+    /// Health evaluation flags for the current status snapshot.
+    pub health: NtsHealth,
+}
+
+/// Health evaluation flags for the current NTS snapshot.
+#[derive(Clone, Copy, Debug)]
+pub struct NtsHealth {
+    /// Whether the minimum sample threshold has been met.
+    pub min_samples_ok: bool,
+    /// Whether the absolute offset is within configured bounds.
+    pub offset_ok: bool,
+    /// Whether the confidence (MAD) is within configured bounds.
+    pub confidence_ok: bool,
+    /// Overall health status (true only when all checks pass and no fallback).
+    pub healthy: bool,
+}
+
+/// Health policy thresholds for evaluating NTS snapshots.
+#[derive(Debug, Clone, Copy)]
+pub struct NtsHealthPolicy {
+    /// Minimum number of peer samples required before NTS is considered healthy.
+    pub min_samples: usize,
+    /// Maximum absolute offset (ms) permitted before NTS is considered unhealthy (0 disables).
+    pub max_offset_ms: u64,
+    /// Maximum confidence (MAD) in ms permitted before NTS is considered unhealthy (0 disables).
+    pub max_confidence_ms: u64,
+}
+
+impl NtsHealthPolicy {
+    fn evaluate(
+        self,
+        sample_count: usize,
+        offset_ms: i64,
+        confidence_ms: u64,
+        fallback: bool,
+    ) -> NtsHealth {
+        let min_samples_ok = sample_count >= self.min_samples;
+        let offset_ok = self.max_offset_ms == 0 || offset_ms.unsigned_abs() <= self.max_offset_ms;
+        let confidence_ok = self.max_confidence_ms == 0 || confidence_ms <= self.max_confidence_ms;
+        let healthy = !fallback && min_samples_ok && offset_ok && confidence_ok;
+        NtsHealth {
+            min_samples_ok,
+            offset_ok,
+            confidence_ok,
+            healthy,
+        }
+    }
+}
+
+impl Default for NtsHealthPolicy {
+    fn default() -> Self {
+        Self {
+            min_samples: iroha_config::parameters::defaults::time::NTS_MIN_SAMPLES,
+            max_offset_ms: iroha_config::parameters::defaults::time::NTS_MAX_OFFSET_MS,
+            max_confidence_ms: iroha_config::parameters::defaults::time::NTS_MAX_CONFIDENCE_MS,
+        }
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -77,6 +141,10 @@ pub struct Params {
     pub smoothing_alpha: f64,
     /// Maximum allowed adjustment per minute (ms) when smoothing.
     pub max_adjust_ms_per_min: u64,
+    /// Health policy thresholds for NTS status evaluation.
+    pub health_policy: NtsHealthPolicy,
+    /// Enforcement mode for unhealthy NTS during admission.
+    pub enforcement_mode: NtsEnforcementMode,
 }
 
 impl Default for Params {
@@ -90,6 +158,8 @@ impl Default for Params {
             smoothing_enabled: false,
             smoothing_alpha: 0.2,
             max_adjust_ms_per_min: 50,
+            health_policy: NtsHealthPolicy::default(),
+            enforcement_mode: NtsEnforcementMode::Warn,
         }
     }
 }
@@ -105,6 +175,12 @@ impl From<&iroha_config::parameters::actual::Nts> for Params {
             smoothing_enabled: x.smoothing_enabled,
             smoothing_alpha: x.smoothing_alpha,
             max_adjust_ms_per_min: x.max_adjust_ms_per_min,
+            health_policy: NtsHealthPolicy {
+                min_samples: x.min_samples,
+                max_offset_ms: x.max_offset_ms,
+                max_confidence_ms: x.max_confidence_ms,
+            },
+            enforcement_mode: x.enforcement_mode,
         }
     }
 }
@@ -126,6 +202,40 @@ struct Service {
 }
 
 static SERVICE: OnceLock<tokio::sync::Mutex<Service>> = OnceLock::new();
+static PARAMS_SNAPSHOT: OnceLock<RwLock<ParamsSnapshot>> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug)]
+struct ParamsSnapshot {
+    enforcement_mode: NtsEnforcementMode,
+    health_policy: NtsHealthPolicy,
+}
+
+fn params_snapshot_store() -> &'static RwLock<ParamsSnapshot> {
+    PARAMS_SNAPSHOT.get_or_init(|| {
+        RwLock::new(ParamsSnapshot {
+            enforcement_mode: NtsEnforcementMode::Warn,
+            health_policy: NtsHealthPolicy::default(),
+        })
+    })
+}
+
+fn params_snapshot() -> ParamsSnapshot {
+    params_snapshot_store()
+        .read()
+        .map(|guard| *guard)
+        .unwrap_or_else(|err| *err.into_inner())
+}
+
+/// Configure the NTS admission policy snapshot used before the service starts.
+pub fn configure(params: Params) {
+    let snapshot = ParamsSnapshot {
+        enforcement_mode: params.enforcement_mode,
+        health_policy: params.health_policy,
+    };
+    if let Ok(mut guard) = params_snapshot_store().write() {
+        *guard = snapshot;
+    }
+}
 
 fn lock_service(mutex: &tokio::sync::Mutex<Service>) -> tokio::sync::MutexGuard<'_, Service> {
     if tokio::runtime::Handle::try_current().is_ok() {
@@ -151,6 +261,7 @@ pub fn start_with_params(
     _peers_rx: watch::Receiver<BTreeSet<Peer>>,
     params: Params,
 ) {
+    configure(params);
     let guard = SERVICE.get_or_init(|| {
         tokio::sync::Mutex::new(Service {
             outstanding: BTreeMap::new(),
@@ -273,14 +384,21 @@ pub fn now() -> NetworkTimeStatus {
     use std::time::{Duration, SystemTime};
     let svc_opt = SERVICE.get();
     if svc_opt.is_none() {
+        let policy = params_snapshot().health_policy;
+        let fallback = true;
         return NetworkTimeStatus {
             now: SystemTime::now(),
             offset_ms: 0,
             confidence_ms: 0,
+            sample_count: 0,
+            peer_count: 0,
+            fallback,
+            health: policy.evaluate(0, 0, 0, fallback),
         };
     }
     let svc_lock = svc_opt.unwrap();
     let mut svc = lock_service(svc_lock);
+    let peer_count = svc.per_peer.len();
     // Collect latest sample per peer with RTT filter
     let mut offsets: Vec<i64> = Vec::new();
     for buf in svc.per_peer.values() {
@@ -290,11 +408,20 @@ pub fn now() -> NetworkTimeStatus {
             }
         }
     }
+    let sample_count = offsets.len();
     if offsets.is_empty() {
+        let fallback = true;
         return NetworkTimeStatus {
             now: SystemTime::now(),
             offset_ms: 0,
             confidence_ms: 0,
+            sample_count,
+            peer_count,
+            fallback,
+            health: svc
+                .params
+                .health_policy
+                .evaluate(sample_count, 0, 0, fallback),
         };
     }
     let (median, mad) = trimmed_median_and_mad(&mut offsets, svc.params.trim_percent);
@@ -327,10 +454,18 @@ pub fn now() -> NetworkTimeStatus {
     } else {
         SystemTime::now() - Duration::from_millis(offset.unsigned_abs())
     };
+    let fallback = false;
     NetworkTimeStatus {
         now: adjusted_now,
         offset_ms: offset,
         confidence_ms: mad,
+        sample_count,
+        peer_count,
+        fallback,
+        health: svc
+            .params
+            .health_policy
+            .evaluate(sample_count, offset, mad, fallback),
     }
 }
 
@@ -405,6 +540,15 @@ pub fn rtt_ms_count() -> u64 {
     0
 }
 
+/// Current NTS enforcement mode for time-sensitive admission.
+pub fn enforcement_mode() -> NtsEnforcementMode {
+    if let Some(lock) = SERVICE.get() {
+        let svc = lock_service(lock);
+        return svc.params.enforcement_mode;
+    }
+    params_snapshot().enforcement_mode
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +573,48 @@ mod tests {
         // Confidence is 0 when no samples; offset 0
         assert_eq!(s.offset_ms, 0);
         assert_eq!(s.confidence_ms, 0);
+        assert_eq!(s.sample_count, 0);
+        assert_eq!(s.peer_count, 0);
+        assert!(s.fallback);
+        assert!(!s.health.healthy);
+    }
+
+    #[test]
+    fn enforcement_mode_uses_configured_params_without_service() {
+        configure(Params {
+            enforcement_mode: NtsEnforcementMode::Reject,
+            ..Params::default()
+        });
+        assert_eq!(enforcement_mode(), NtsEnforcementMode::Reject);
+        configure(Params::default());
+    }
+
+    #[test]
+    fn nts_health_policy_evaluates_thresholds() {
+        let policy = NtsHealthPolicy {
+            min_samples: 2,
+            max_offset_ms: 100,
+            max_confidence_ms: 50,
+        };
+        let ok = policy.evaluate(2, 10, 20, false);
+        assert!(ok.min_samples_ok);
+        assert!(ok.offset_ok);
+        assert!(ok.confidence_ok);
+        assert!(ok.healthy);
+
+        let offset_bad = policy.evaluate(2, 250, 20, false);
+        assert!(offset_bad.min_samples_ok);
+        assert!(!offset_bad.offset_ok);
+        assert!(offset_bad.confidence_ok);
+        assert!(!offset_bad.healthy);
+
+        let samples_bad = policy.evaluate(1, 10, 20, false);
+        assert!(!samples_bad.min_samples_ok);
+        assert!(samples_bad.offset_ok);
+        assert!(samples_bad.confidence_ok);
+        assert!(!samples_bad.healthy);
+
+        let fallback = policy.evaluate(2, 10, 20, true);
+        assert!(!fallback.healthy);
     }
 }

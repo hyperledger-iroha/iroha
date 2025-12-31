@@ -5,6 +5,7 @@ import XCTest
 
 final class ConnectReplayRecorderTests: XCTestCase {
     func testRecordsCiphertextFramesAndUpdatesDiagnostics() throws {
+        try requireBlake3()
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
@@ -76,5 +77,11 @@ final class ConnectReplayRecorderTests: XCTestCase {
         XCTAssertEqual(sample.appToWalletDepth, 0)
         XCTAssertEqual(sample.walletToAppDepth, 0)
         XCTAssertEqual(sample.state, .healthy)
+    }
+
+    private func requireBlake3() throws {
+        guard NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil else {
+            throw XCTSkip("NoritoBridge blake3 hashing unavailable")
+        }
     }
 }

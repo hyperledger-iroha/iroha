@@ -19,9 +19,9 @@ use iroha_data_model::{
             Reconfig, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
             SumeragiConsensusCapsStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
             SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
-            SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipStatus,
-            SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
-            SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+            SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
+            SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
+            SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
             SumeragiRbcEvictedSession, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
             SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
             SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
@@ -669,6 +669,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         vrf_penalties_applied_total: rng.next_u64(),
         vrf_penalties_pending: rng.next_u64(),
         membership: rng_sumeragi_membership_status(rng),
+        membership_mismatch: rng_sumeragi_membership_mismatch_status(rng),
         lane_commitments: vec![rng_lane_commitment(rng)],
         dataspace_commitments: vec![rng_dataspace_commitment(rng)],
         lane_settlement_commitments: Vec::new(),
@@ -691,6 +692,27 @@ fn rng_sumeragi_membership_status(rng: &mut DeterministicRng) -> SumeragiMembers
         } else {
             None
         },
+    }
+}
+
+fn rng_sumeragi_membership_mismatch_status(
+    rng: &mut DeterministicRng,
+) -> SumeragiMembershipMismatchStatus {
+    let active_len = (rng.next_u32() % 3) as usize;
+    let active_peers = (0..active_len)
+        .map(|_| PeerId::from(KeyPair::random().public_key().clone()))
+        .collect();
+    SumeragiMembershipMismatchStatus {
+        active_peers,
+        last_peer: rng
+            .next_bool()
+            .then(|| PeerId::from(KeyPair::random().public_key().clone())),
+        last_height: rng.next_u64(),
+        last_view: rng.next_u64(),
+        last_epoch: rng.next_u64(),
+        last_local_hash: rng.next_bool().then(|| rng.array32()),
+        last_remote_hash: rng.next_bool().then(|| rng.array32()),
+        last_timestamp_ms: rng.next_u64(),
     }
 }
 
@@ -751,6 +773,7 @@ fn rng_lane_relay_envelope(rng: &mut DeterministicRng) -> LaneRelayEnvelope {
     let execution_qc = if rng.next_bool() {
         Some(ExecutionQcRecord {
             subject_block_hash: header.hash(),
+            parent_state_root: rng_hash(rng),
             post_state_root: rng_hash(rng),
             height: header.height().get(),
             view: rng.next_u64(),
@@ -1203,6 +1226,16 @@ fn sumeragi_wire_status_roundtrip() {
             view: 6,
             epoch: 4,
             view_hash: Some([0xAB; 32]),
+        },
+        membership_mismatch: SumeragiMembershipMismatchStatus {
+            active_peers: vec![PeerId::from(KeyPair::random().public_key().clone())],
+            last_peer: Some(PeerId::from(KeyPair::random().public_key().clone())),
+            last_height: 14,
+            last_view: 5,
+            last_epoch: 4,
+            last_local_hash: Some([0x10; 32]),
+            last_remote_hash: Some([0x20; 32]),
+            last_timestamp_ms: 1_700_000_000_000,
         },
         lane_commitments: vec![SumeragiLaneCommitment {
             block_height: 15,

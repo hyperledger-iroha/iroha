@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="org.hyperledger.iroha.android.client.PlatformHttpTransportExecutorAndroidTests" tests="1" skipped="0" failures="0" errors="0" timestamp="2025-12-30T16:28:53.997Z" hostname="takemiyacStudio.lan" time="0.0">
+<testsuite name="org.hyperledger.iroha.android.client.PlatformHttpTransportExecutorAndroidTests" tests="1" skipped="0" failures="0" errors="0" timestamp="2025-12-31T14:11:48.063Z" hostname="takemiyacStudio.lan" time="0.0">
   <properties/>
   <testcase name="prefersOkHttpWhenAvailable" classname="org.hyperledger.iroha.android.client.PlatformHttpTransportExecutorAndroidTests" time="0.0"/>
   <system-out><![CDATA[]]></system-out>

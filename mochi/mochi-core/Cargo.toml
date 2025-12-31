@@ -14,6 +14,9 @@ default = ["governance", "bridge", "fast_dsl"]
 governance = []
 bridge = []
 fast_dsl = ["iroha_data_model/fast_dsl"]
+schema-structural = []
+compact-len = []
+packed-struct = []
 
 [dependencies]
 iroha_crypto = { workspace = true, features = ["std", "rand"] }

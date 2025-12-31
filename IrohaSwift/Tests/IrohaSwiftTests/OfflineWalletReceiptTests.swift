@@ -21,7 +21,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
         let txId = IrohaHash.hash(Data("wallet-receipt".utf8))
         let amount = "10"
         let invoiceId = "inv-wallet"
-        let issuedAtMs: UInt64 = 123
+        let issuedAtMs = validIssuedAtMs(for: certificate)
         let proof = try makeProof(txId: txId,
                                   receiver: certificate.controller,
                                   assetId: certificate.allowance.assetId,
@@ -48,7 +48,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
 
         let entry = try XCTUnwrap(waitForAuditEntries({ wallet.exportAuditEntries() }, expected: 1).first)
         XCTAssertEqual(entry.txId, receipt.txId.hexUppercased())
-        XCTAssertEqual(entry.timestampMs, 123)
+        XCTAssertEqual(entry.timestampMs, issuedAtMs)
 
         let checkpoint = try XCTUnwrap(counterJournal.checkpoint(for: try certificate.certificateIdHex()))
         XCTAssertEqual(checkpoint.appleKeyCounters["swift-tests"], 1)
@@ -77,7 +77,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
         let txId = IrohaHash.hash(Data("wallet-receipt-jump".utf8))
         let amount = "10"
         let invoiceId = "inv-wallet-jump"
-        let issuedAtMs: UInt64 = 456
+        let issuedAtMs = validIssuedAtMs(for: certificate, offset: 2_000)
         let proof = try makeProof(txId: txId,
                                   receiver: certificate.controller,
                                   assetId: certificate.allowance.assetId,
@@ -178,6 +178,13 @@ final class OfflineWalletReceiptTests: XCTestCase {
             attestationNonce: base.attestationNonce,
             refreshAtMs: base.refreshAtMs
         )
+    }
+
+    private func validIssuedAtMs(for certificate: OfflineWalletCertificate,
+                                 offset: UInt64 = 1_000) -> UInt64 {
+        let expiryBound = min(certificate.expiresAtMs, certificate.policy.expiresAtMs)
+        let candidate = certificate.issuedAtMs &+ offset
+        return candidate > expiryBound ? expiryBound : candidate
     }
 
     private func waitForAuditEntries(_ fetch: () -> [OfflineAuditEntry],

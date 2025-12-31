@@ -242,6 +242,7 @@ impl Actor {
             self.state.as_ref(),
             ExecutionQcRecord {
                 subject_block_hash: qc.subject_block_hash,
+                parent_state_root: qc.parent_state_root,
                 post_state_root: qc.post_state_root,
                 height: qc.height,
                 view: qc.view,
@@ -280,6 +281,7 @@ mod tests {
         let post_state_root = Hash::prehashed([0x22; 32]);
         let record = ExecutionQcRecord {
             subject_block_hash: subject,
+            parent_state_root: Hash::prehashed([0x33; 32]),
             post_state_root,
             height: 1,
             view: 0,

@@ -50,6 +50,13 @@ Iroha חושפת מדדים תואמי Prometheus ותמצית סטטוס בפו
 | `extended` | כן        | כן         | לא                                     | צמתי הפעלה / QA הזקוקים גם למדדים |
 | `developer`| כן        | כן         | כן                                     | סביבת פיתוח או בדיקות |
 
+## אנונימיזציה ושלמות טלמטריה
+
+- `telemetry_redaction.mode` הוא `strict|allowlist|disabled`; בפרופילים `operator`/`extended`/`full` חייבים `strict`.
+- סיווג שדות רגישים נקבע לפי רשימות Prefix ו-Keyword; הרשימות המלאות נמצאות ב-`docs/source/telemetry.md`.
+- `telemetry_integrity.enabled` מוסיף `chain { seq, prev_hash, hash, signature?, key_id? }`. כאשר `telemetry_integrity.signing_key_hex` מוגדר, נוסף keyed Blake3.
+- כדי לשמור על רציפות בין אתחולים הגדירו `telemetry_integrity.state_dir`.
+
 ## פרופילי טלמטריה ייעודיים
 
 ### Android SDK (AND7)
