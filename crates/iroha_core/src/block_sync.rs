@@ -1770,7 +1770,7 @@ pub mod message {
             block::BlockSignature,
             consensus::{
                 ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
-                ValidatorSetCheckpoint, VALIDATOR_SET_HASH_VERSION_V1,
+                VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
             },
             parameter::Parameters,
             peer::PeerId,
