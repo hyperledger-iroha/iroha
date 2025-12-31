@@ -35,6 +35,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Mitigate memory exposure for commitment witness material (zeroization in the Norito bridge).
 
 3. **INTEGRATION-TEST-REVALIDATION — Re-run integration tests after Sumeragi drain-order fix** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈺 In Progress, target TBD)
+   - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_four_peers -- --nocapture` to confirm DA large-payload RBC flow completes after READY/DELIVER queue routing.
    - [ ] Re-run `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` to confirm the suite completes without timeouts (blocked in sandbox: loopback binds denied; rerun outside sandbox).
    - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly (currently fails to compile: missing `parent_state_root` in `integration_tests/tests/nexus/cross_lane.rs`).
    - [ ] Re-run `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` to confirm localnet tx-status fallbacks no longer emit WARN noise.
