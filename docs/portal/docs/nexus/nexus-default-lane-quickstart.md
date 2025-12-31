@@ -55,16 +55,19 @@ description = "Zero-knowledge attachments"
 alias = "global"
 id = 0
 description = "Single-lane data space"
+fault_tolerance = 0
 
 [[nexus.dataspace_catalog]]
 alias = "governance"
 id = 1
 description = "Governance proposals & manifests"
+fault_tolerance = 0
 
 [[nexus.dataspace_catalog]]
 alias = "zk"
 id = 2
 description = "Zero-knowledge proofs and attachments"
+fault_tolerance = 0
 ```
 
 Each `index` must be unique and contiguous. Dataspace ids are 64-bit values;

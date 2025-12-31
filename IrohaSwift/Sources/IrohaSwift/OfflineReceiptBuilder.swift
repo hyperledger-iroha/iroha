@@ -987,28 +987,26 @@ public enum OfflineReceiptBuilder {
     }
 
     private static func parseAmount(_ value: String, expectedScale: Int? = nil) throws -> OfflineDecimal {
+        let parsed: OfflineDecimal
         do {
-            _ = try OfflineNorito.encodeNumeric(value)
-            let parsed = try OfflineDecimal.parse(value)
-            if let expectedScale, parsed.scale != expectedScale {
-                if expectedScale == 0 {
-                    throw OfflineReceiptBuilderError.fractionalAmount(value)
-                }
-                throw OfflineReceiptBuilderError.amountScaleMismatch(value: value,
-                                                                     expected: expectedScale,
-                                                                     actual: parsed.scale)
-            }
-            return parsed
-        } catch let error as OfflineNoritoError {
-            switch error {
-            case .numericOverflow:
-                throw OfflineReceiptBuilderError.invalidAmount(value)
-            default:
-                throw OfflineReceiptBuilderError.invalidAmount(value)
-            }
+            parsed = try OfflineDecimal.parse(value)
         } catch {
             throw OfflineReceiptBuilderError.invalidAmount(value)
         }
+        if let expectedScale, parsed.scale != expectedScale {
+            if expectedScale == 0 {
+                throw OfflineReceiptBuilderError.fractionalAmount(value)
+            }
+            throw OfflineReceiptBuilderError.amountScaleMismatch(value: value,
+                                                                 expected: expectedScale,
+                                                                 actual: parsed.scale)
+        }
+        do {
+            _ = try OfflineNorito.encodeNumeric(value)
+        } catch {
+            throw OfflineReceiptBuilderError.invalidAmount(value)
+        }
+        return parsed
     }
 
     private static func receiptSort(_ lhs: OfflineSpendReceipt, _ rhs: OfflineSpendReceipt) -> Bool {

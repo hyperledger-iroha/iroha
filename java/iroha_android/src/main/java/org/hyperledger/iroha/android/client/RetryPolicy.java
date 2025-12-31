@@ -62,6 +62,23 @@ public final class RetryPolicy {
     return additionalStatusCodes.contains(status);
   }
 
+  /**
+   * Returns true if {@code status} is eligible for retrying regardless of remaining attempts.
+   *
+   * <p>This mirrors the status-code selection logic used by {@link #shouldRetryResponse(int, ClientResponse)}
+   * without the attempt check so callers can distinguish transient server failures from permanent
+   * rejections when deciding whether to queue a submission.
+   */
+  public boolean isRetryableStatus(final int status) {
+    if (retryOnServerError && status >= 500) {
+      return true;
+    }
+    if (retryOnTooManyRequests && status == 429) {
+      return true;
+    }
+    return additionalStatusCodes.contains(status);
+  }
+
   /** Returns true if the policy should retry the provided failure. */
   public boolean shouldRetryError(final int attempt) {
     return allowsRetry(attempt) && retryOnNetworkError;

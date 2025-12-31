@@ -23,6 +23,8 @@ use crate::prelude::*;
 pub struct ExecutionQcRecord {
     /// Parent block hash certified by the `ExecutionQC`.
     pub subject_block_hash: HashOf<crate::block::BlockHeader>,
+    /// Parent state root bound into the execution vote preimage.
+    pub parent_state_root: iroha_crypto::Hash,
     /// Certified post-state root for the parent block.
     pub post_state_root: iroha_crypto::Hash,
     /// Parent block height.

@@ -44,8 +44,9 @@ Each lane block `B_i` finalised by its committee produces:
 in the block.
 - `merge_hint_root_i`: rolling candidate for the merge ledger (`tag =
 "iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: aggregated signatures from the lane committee over the block
-header.
+- `lane_qc_i`: aggregated signatures from the lane committee over the
+  execution-vote preimage (block hash, `parent_state_root`,
+  `post_state_root`, height/view/epoch, chain_id, and mode tag).
 
 Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
 all lanes `i ∈ [0, K)`.
@@ -129,12 +130,21 @@ operational visibility.
 1. Transactions are scheduled per lane in deterministic slots.
 2. The executor applies overlays into `StateBlock`, producing deltas and
 artifacts.
-3. Upon validation, the lane committee signs the block header (including
-`merge_hint_root`). The tuple `(block_hash, lane_qc_i, merge_hint_root_i)` is
-considered lane-final.
+3. Upon validation, the lane committee signs the execution-vote preimage that
+   binds the block hash, state roots, and height/view/epoch. The tuple
+   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
 4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
 must record the associated `merge_hint_root` to reconcile with the merge ledger
 later.
+
+Lane committees are per-dataspace and do not replace the global commit
+topology. Committee size is fixed at `3f+1`, where `f` comes from the
+dataspace catalog (`fault_tolerance`). The validator pool is the dataspace's
+validators (lane governance manifests for admin-managed lanes, or public-lane
+staking records for stake-elected lanes). Committee membership is
+deterministically sampled once per epoch using the VRF epoch seed bound with
+`dataspace_id` and `lane_id`. If the pool is smaller than `3f+1`, lane finality
+pauses until quorum is restored (emergency recovery is handled separately).
 
 ### 3.2 Merge-Ledger Finality
 

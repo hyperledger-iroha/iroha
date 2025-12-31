@@ -21250,6 +21250,7 @@ mod status_tests {
         };
         let execution_qc = ExecutionQcRecord {
             subject_block_hash: header.hash(),
+            parent_state_root: Hash::prehashed([0x32; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0x33; Hash::LENGTH]),
             height: header.height().get(),
             view: 3,

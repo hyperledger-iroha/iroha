@@ -3,7 +3,12 @@ package org.hyperledger.iroha.android.crypto.export;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
+import java.security.Provider;
+import java.security.Security;
 import java.util.Arrays;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
@@ -20,8 +25,10 @@ public final class DeterministicKeyExporterTests {
   public static void main(final String[] args) throws Exception {
     exportIsRandomized();
     importRecoversOriginalKey();
+    exportSupportsBouncyCastleKeys();
     wrongPassphraseFails();
     corruptedBundleFails();
+    rejectsNonEd25519Keys();
     tamperedSaltFails();
     tamperedNonceFails();
     saltLengthTamperFails();
@@ -64,6 +71,27 @@ public final class DeterministicKeyExporterTests {
     Arrays.fill(passphrase, '\0');
   }
 
+  private static void exportSupportsBouncyCastleKeys() throws Exception {
+    if (!ensureBouncyCastleProvider()) {
+      System.out.println(
+          "[IrohaAndroid] Skipping BouncyCastle export test (provider unavailable).");
+      return;
+    }
+    final KeyPairGenerator generator = bouncyCastleEd25519Generator();
+    final KeyPair keyPair = generator.generateKeyPair();
+    final char[] passphrase = "bouncy-castle-passphrase".toCharArray();
+    final KeyExportBundle bundle =
+        DeterministicKeyExporter.exportKeyPair(
+            keyPair.getPrivate(), keyPair.getPublic(), "alias", passphrase);
+    final DeterministicKeyExporter.KeyPairData imported =
+        DeterministicKeyExporter.importKeyPair(bundle, passphrase);
+    assert Arrays.equals(keyPair.getPrivate().getEncoded(), imported.privateKey().getEncoded())
+        : "BouncyCastle private key should round-trip";
+    assert Arrays.equals(keyPair.getPublic().getEncoded(), imported.publicKey().getEncoded())
+        : "BouncyCastle public key should round-trip";
+    Arrays.fill(passphrase, '\0');
+  }
+
   private static void wrongPassphraseFails() throws Exception {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     provider.generate("alias");
@@ -76,6 +104,23 @@ public final class DeterministicKeyExporterTests {
       threw = true;
     }
     assert threw : "Import must fail when passphrase is incorrect";
+  }
+
+  private static void rejectsNonEd25519Keys() throws Exception {
+    final KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+    generator.initialize(2048);
+    final KeyPair keyPair = generator.generateKeyPair();
+    boolean threw = false;
+    final char[] passphrase = "non-ed25519-passphrase".toCharArray();
+    try {
+      DeterministicKeyExporter.exportKeyPair(
+          keyPair.getPrivate(), keyPair.getPublic(), "alias", passphrase);
+    } catch (final KeyExportException expected) {
+      threw = true;
+    } finally {
+      Arrays.fill(passphrase, '\0');
+    }
+    assert threw : "Non-Ed25519 keys must be rejected";
   }
 
   private static void corruptedBundleFails() throws Exception {
@@ -216,6 +261,29 @@ public final class DeterministicKeyExporterTests {
 
   private static int readU16(final byte[] raw, final int offset) {
     return ((raw[offset] & 0xFF) << 8) | (raw[offset + 1] & 0xFF);
+  }
+
+  private static boolean ensureBouncyCastleProvider() {
+    try {
+      final Class<?> providerClass =
+          Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider");
+      final Provider provider =
+          (Provider) providerClass.getDeclaredConstructor().newInstance();
+      if (Security.getProvider(provider.getName()) == null) {
+        Security.addProvider(provider);
+      }
+      return true;
+    } catch (final ReflectiveOperationException | ClassCastException ignored) {
+      return false;
+    }
+  }
+
+  private static KeyPairGenerator bouncyCastleEd25519Generator() throws Exception {
+    try {
+      return KeyPairGenerator.getInstance("Ed25519", "BC");
+    } catch (final NoSuchAlgorithmException | NoSuchProviderException ex) {
+      return KeyPairGenerator.getInstance("EdDSA", "BC");
+    }
   }
 
   private static void legacyBundleRemainsDecodable() throws Exception {

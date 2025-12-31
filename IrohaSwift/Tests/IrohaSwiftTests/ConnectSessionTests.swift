@@ -7,6 +7,11 @@ final class ConnectSessionTests: XCTestCase {
                       "NoritoBridge connect codec unavailable")
     }
 
+    private func requireConnectCrypto() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
+                      "NoritoBridge connect crypto unavailable")
+    }
+
     func testSendOpenSendsControlFrame() async throws {
         try requireConnectCodec()
         let stub = StubWebSocketTask()
@@ -72,7 +77,7 @@ final class ConnectSessionTests: XCTestCase {
     }
 
     func testNextControlFrameDecryptsCiphertextControl() async throws {
-        XCTAssertTrue(NoritoNativeBridge.shared.isConnectCryptoAvailable)
+        try requireConnectCrypto()
 
         let key = Data(repeating: 0xEF, count: 32)
         let appKey = Data(repeating: 0xAA, count: 32)
@@ -111,7 +116,7 @@ final class ConnectSessionTests: XCTestCase {
     }
 
     func testNextEnvelopeDecryptsCiphertextFrame() async throws {
-        XCTAssertTrue(NoritoNativeBridge.shared.isConnectCryptoAvailable)
+        try requireConnectCrypto()
 
         let key = Data(repeating: 0x11, count: 32)
         let sessionID = Data(repeating: 0x33, count: 32)
@@ -149,7 +154,7 @@ final class ConnectSessionTests: XCTestCase {
     }
 
     func testNextEnvelopeThrowsWithoutKeys() async throws {
-        XCTAssertTrue(NoritoNativeBridge.shared.isConnectCryptoAvailable)
+        try requireConnectCrypto()
 
         let key = Data(repeating: 0x22, count: 32)
         let sessionID = Data(repeating: 0x55, count: 32)

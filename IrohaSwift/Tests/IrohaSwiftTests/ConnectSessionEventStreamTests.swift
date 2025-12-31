@@ -4,8 +4,10 @@ import XCTest
 @available(iOS 15.0, macOS 12.0, *)
 final class ConnectSessionEventStreamTests: XCTestCase {
     func testEventStreamYieldsCiphertextEnvelope() async throws {
-        XCTAssertTrue(NoritoNativeBridge.shared.isConnectCryptoAvailable)
-        XCTAssertTrue(NoritoNativeBridge.shared.isConnectCodecAvailable)
+        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
+                      "NoritoBridge connect crypto unavailable")
+        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable,
+                      "NoritoBridge connect codec unavailable")
 
         let stub = StubWebSocketTask()
         let client = ConnectClient(url: URL(string: "wss://example.test")!,

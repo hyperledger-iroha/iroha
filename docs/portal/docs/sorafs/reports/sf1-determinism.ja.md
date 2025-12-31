@@ -4,15 +4,52 @@
 lang: ja
 direction: ltr
 source: docs/portal/docs/sorafs/reports/sf1-determinism.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cfb6075f6dcbfcbb6ad91da1157b8f1b8929c26e1fa5c322a427d0a385265181
-source_last_modified: "2025-11-18T05:53:43.293602+00:00"
-translation_last_reviewed: null
+source_hash: 4cd9ef613d7c825bd562d2708ed0027f3866ddf031655592820a46aeadad3256
+source_last_modified: "2025-11-13T08:10:42.118544+00:00"
+translation_last_reviewed: 2025-12-30
 ---
 
-# 翻訳作業中
+---
+title: SoraFS SF1 Determinism Dry-Run
+summary: 正規 chunker プロファイル `sorafs.sf1@1.0.0` を検証するためのチェックリストと期待 digests。
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+# SoraFS SF1 Determinism Dry-Run
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+このレポートは正規 chunker プロファイル `sorafs.sf1@1.0.0` のベースライン
+ドライランを記録する。Tooling WG は fixtures の refresh や新しい consumer
+パイプラインを検証する際に、以下の checklist を再実行すること。各コマンドの
+結果を表に記録し、監査可能なトレイルを維持する。
+
+## Checklist
+
+| ステップ | コマンド | 期待結果 | メモ |
+|------|---------|------------------|-------|
+| 1 | `cargo test -p sorafs_chunker` | すべてのテストが通過し、`vectors` parity test が成功する。 | 正規 fixtures がコンパイルされ、Rust 実装と一致することを確認。 |
+| 2 | `ci/check_sorafs_fixtures.sh` | スクリプトが 0 で終了し、下記の manifest digests を報告する。 | Fixtures がクリーンに再生成され、署名が付与されたままであることを確認。 |
+| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | `sorafs.sf1@1.0.0` のエントリが registry descriptor (`profile_id=1`) と一致。 | Registry metadata が同期されていることを保証。 |
+| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | `--allow-unsigned` なしで再生成に成功し、manifest と signature ファイルは不変。 | Chunk 境界と manifests の determinism を示す証明。 |
+| 5 | `node scripts/check_sf1_vectors.mjs` | TypeScript fixtures と Rust JSON の diff がないと報告。 | オプションの helper。runtimes 間の parity を確認 (script は Tooling WG が維持)。 |
+
+## 期待 digests
+
+- Chunk digest (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
+- `manifest_blake3.json`: `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`
+- `sf1_profile_v1.json`: `23a14fe4bf06a44bc2cc84ad0f287659f62a3ff99e4147e9e7730988d9eb01be`
+- `sf1_profile_v1.ts`: `2bc35d45a9a1e539c4b0e3571817dc57d5a938e954882537379d7abba7b751a1`
+- `sf1_profile_v1.go`: `dcca46978768cca5fdbc5174a35036d5e168cc5e584bba33056b76f316590666`
+- `sf1_profile_v1.rs`: `181f0595284dcbb862db997d1c18564832c157f9e1eaf804f0bf88c846f73d65`
+
+## Sign-Off Log
+
+| 日付 | Engineer | Checklist 結果 | メモ |
+|------|----------|------------------|-------|
+| 2026-02-12 | Tooling (LLM) | ❌ Failed | ステップ 1: `cargo test -p sorafs_chunker` が `vectors` suite で失敗。fixtures が legacy handle `sorafs-sf1` を公開し続け、profile aliases/digests を欠いている (`fixtures/sorafs_chunker/sf1_profile_v1.*`)。ステップ 2: `ci/check_sorafs_fixtures.sh` が中断 — `manifest_signatures.json` が repo 状態に存在しない (working tree で削除)。ステップ 4: manifest ファイルが無い間は `export_vectors` が署名検証できない。推奨: 署名済み fixtures を復元 (または council key を提供) し、canonical handle + aliases 配列をテスト要件通り埋め込むよう bindings を再生成する。 |
+| 2026-02-12 | Tooling (LLM) | ✅ Passed | `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f` で fixtures を再生成し、canonical handle + alias lists と新しい manifest digest `2084f98010fd59b630fede19fa85d448e066694f77fa41a03c62b867eb5a9e55` を生成。`cargo test -p sorafs_chunker` と `ci/check_sorafs_fixtures.sh` のクリーン実行で検証 (fixtures をチェック用にステージ)。ステップ 5 は Node parity helper の到着待ち。 |
+| 2026-02-20 | Storage Tooling CI | ✅ Passed | Parliament envelope (`fixtures/sorafs_chunker/manifest_signatures.json`) を `ci/check_sorafs_fixtures.sh` で取得。スクリプトが fixtures を再生成し、manifest digest `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21` を確認し、Rust harness を再実行 (Go/Node ステップは利用可能時に実行) して diff なし。 |
+
+Tooling WG は checklist 実行後に日付付き行を追加すること。いずれかの
+ステップが失敗した場合は、ここにリンクされた issue を作成し、
+remediation 詳細を記載してから fixtures やプロファイルを承認する。

@@ -69,7 +69,26 @@ These structs already derive `NoritoSerialize`/`NoritoDeserialize`, so they can 
 `LaneBlockCommitment`, and the per-lane RBC byte count. The envelope stores a Norito-derived
 `settlement_hash` (via `compute_settlement_hash`) so receivers can validate the settlement payload
 before forwarding it to the merge ledger. Callers should reject envelopes when `verify` fails (QC
-subject mismatch, DA hash mismatch, or settlement hash mismatch).
+subject mismatch, DA hash mismatch, or settlement hash mismatch), when `verify_with_quorum` fails
+(signer bitmap length/quorum errors), or when the aggregated QC signature cannot be verified
+against the per-dataspace committee roster. The QC preimage covers the lane block hash plus
+`parent_state_root` and `post_state_root`, so membership and state-root correctness are verified
+together.
+
+### Lane committee selection
+
+Lane relay QCs are validated against a per-dataspace committee. Committee size is `3f+1`, where
+`f` is configured in the dataspace catalog (`fault_tolerance`). The validator pool is the
+dataspace's validators: lane governance manifests for admin-managed lanes and public-lane staking
+records for stake-elected lanes. Committee membership is deterministically sampled per epoch using
+the VRF epoch seed bound with `dataspace_id` and `lane_id` (stable for the epoch). If the pool is
+smaller than `3f+1`, lane relay finality pauses until quorum is restored. Operators can extend the
+pool using the admin multisig instruction `SetLaneRelayEmergencyValidators` (requires
+`CanManagePeers`). Overrides are stored per dataspace, applied only when the pool is under quorum,
+and cleared by submitting an empty validator list. When `expires_at_height` is set, validation
+ignores the override once the lane relay envelope `block_height` exceeds the expiry height. The
+telemetry counter `lane_relay_emergency_override_total{lane,dataspace,outcome}` records whether the
+override was applied (`applied`) or missing/expired/insufficient during validation.
 
 ## Commitment Lifecycle
 
@@ -83,7 +102,10 @@ subject mismatch, DA hash mismatch, or settlement hash mismatch).
    `LaneRelayBroadcaster` now consumes the `LaneRelayEnvelope`s emitted during block sealing and gossips them as high-priority `NetworkMessage::LaneRelay` frames. Envelopes are verified, de-duplicated by `(lane_id,dataspace_id,height,settlement_hash)`, and persisted in the Sumeragi status snapshot (`/v1/sumeragi/status`) for operators and auditors. The broadcaster will continue to evolve to attach DA artefacts (RBC chunk proofs, Norito headers, SoraFS/Object manifests) and feed the merge ring without head-of-line blocking.
 
 4. **Global ordering & merge ledger.**  
-   The NPoS ring validates each relay envelope: check `lane_qc`, recompute settlement totals, verify DA proofs, then feed the lane tip into the merge ledger reduction described in `docs/source/merge_ledger.md`. When the merge entry is sealed the world-state hash (`global_state_root`) now commits to every `LaneBlockCommitment`.
+   The NPoS ring validates each relay envelope: check `lane_qc` against the per-dataspace committee,
+   recompute settlement totals, verify DA proofs, then feed the lane tip into the merge ledger
+   reduction described in `docs/source/merge_ledger.md`. When the merge entry is sealed the
+   world-state hash (`global_state_root`) now commits to every `LaneBlockCommitment`.
 
 5. **Persistence & exposure.**  
    Kura writes the lane block, merge entry, and `LaneBlockCommitment` atomically so replay can reconstruct the same reduction. `/v1/sumeragi/status` exposes:
@@ -96,7 +118,11 @@ subject mismatch, DA hash mismatch, or settlement hash mismatch).
 
 The merge ring MUST enforce the following before accepting a lane commitment:
 
-1. **Lane QC validity.** Verify the aggregated signature over the lane block header, ensuring the header height matches `LaneBlockCommitment.block_height`.
+1. **Lane QC validity.** Verify the aggregated BLS signature over the execution-vote preimage
+   (block hash, `parent_state_root`, `post_state_root`, height/view/epoch, chain_id, and mode tag)
+   against the per-dataspace committee roster; ensure the signer bitmap length matches the
+   committee, signers map to valid indices, and the header height matches
+   `LaneBlockCommitment.block_height`.
 2. **Receipt integrity.** Recompute the `total_*` aggregates from the receipt vector; reject the commitment if the sums diverge or the receipts contain duplicate `source_id`s.
 3. **Swap metadata sanity.** Confirm that `swap_metadata` (if present) matches the lane’s current settlement configuration and buffer policy.
 4. **DA attestation.** Validate that the relay-provided RBC/SoraFS proofs hash to the embedded digest and that the chunk set covers the entire block payload (`rbc_bytes_total` telemetry should mirror this).
@@ -106,7 +132,12 @@ The merge ring MUST enforce the following before accepting a lane commitment:
 ## Data Availability & Observability
 
 - **Metrics:**  
-  `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`, `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`, `lane_relay_invalid_total{error}`, and `nexus_audit_outcome_total` already exist in `crates/iroha_telemetry/src/metrics.rs`. Operators should alert on missing-availability spikes (reschedule counters are legacy and should remain zero), and `lane_relay_invalid_total` should stay at zero outside adversarial drills.
+  `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`,
+  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
+  `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, and
+  `nexus_audit_outcome_total` already exist in `crates/iroha_telemetry/src/metrics.rs`. Operators
+  should alert on missing-availability spikes (reschedule counters are legacy and should remain
+  zero), and `lane_relay_invalid_total` should stay at zero outside adversarial drills.
 - **Torii surfaces:**  
   `/v1/sumeragi/status` includes `lane_commitments`, `lane_settlement_commitments`, and dataspace snapshots. `/v1/nexus/lane-config` (planned) will publish the `LaneConfig` geometry so clients can match `lane_id` ↔ dataspace labels.
 - **Dashboards:**  

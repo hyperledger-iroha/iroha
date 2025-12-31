@@ -4,17 +4,40 @@
 lang: ur
 direction: rtl
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c11fe861e7052b113b91249eb9e39adca67a3b3cc20acf497f0785e37498504c
 source_last_modified: "2025-11-12T12:39:17.578044+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2025-12-30
 ---
 
-# ترجمہ جاری ہے
+---
+id: priority-snapshot-2025-03
+title: ترجیحات اسنیپ شاٹ — مارچ 2025 (بیٹا)
+description: Nexus 2025-03 steering snapshot کا عکس؛ عوامی rollout سے پہلے ACKs کا انتظار۔
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+> مستند ماخذ: `docs/source/sorafs/priority_snapshot_2025-03.md`
+>
+> اسٹیٹس: **بیٹا / steering ACKs کا انتظار** (Networking, Storage, Docs leads).
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+## جائزہ
+
+مارچ اسنیپ شاٹ docs/content-network کی initiatives کو SoraFS delivery tracks
+(SF-3, SF-6b, SF-9) کے ساتھ aligned رکھتا ہے۔ جیسے ہی تمام leads Nexus steering
+چینل میں snapshot کی تصدیق کر دیں، اوپر والی “Beta” نوٹ ہٹا دیں۔
+
+### فوکس تھریڈز
+
+1. **ترجیحات اسنیپ شاٹ circulate کریں** — acknowledgements جمع کریں اور انہیں
+   2025-03-05 council minutes میں لاگ کریں۔
+2. **Gateway/DNS kickoff close-out** — 2025-03-03 workshop سے پہلے نیا facilitation
+   kit (runbook کا Section 6) rehearse کریں۔
+3. **Operator runbook migration** — portal `Runbook Index` live ہے؛ reviewer
+   onboarding sign-off کے بعد beta preview URL ظاہر کریں۔
+4. **SoraFS delivery threads** — SF-3/6b/9 کا باقی کام plan/roadmap کے ساتھ align کریں:
+   - `sorafs-node` میں PoR ingestion worker + status endpoint۔
+   - Rust/JS/Swift orchestrator integrations میں CLI/SDK bindings کا polish۔
+   - PoR coordinator runtime wiring اور GovernanceLog events۔
+
+مکمل جدول، distribution checklist اور log entries کے لیے source فائل دیکھیں۔

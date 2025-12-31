@@ -118,6 +118,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::oracle::AggregateOracleFeed>,
     dispatch_instruction::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::ExitPublicLaneValidator>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators>,
     dispatch_instruction::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::BondPublicLaneStake>,
     dispatch_instruction::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>,

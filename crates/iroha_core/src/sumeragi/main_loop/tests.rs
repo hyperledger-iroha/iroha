@@ -9,6 +9,7 @@ use std::{
     fs,
     net::SocketAddr,
     num::NonZeroU64,
+    path::PathBuf,
     sync::{Arc, mpsc},
     time::{Duration, Instant, SystemTime},
 };
@@ -37,7 +38,7 @@ use iroha_data_model::{
     domain::DomainId,
     isi::InstructionBox,
     merge::MergeCommitteeSignature,
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
     peer::{Peer, PeerId},
     prelude::{AccountId, Domain, Register, TransactionBuilder},
     sorafs::pin_registry::ManifestDigest,
@@ -47,6 +48,7 @@ use iroha_primitives::time::TimeSource;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use nonzero_ext::nonzero;
 
+use crate::governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus};
 use super::{
     super::rbc_store::{SessionKey, SoftwareManifest},
     Actor, BlockMessage,
@@ -123,13 +125,63 @@ fn pending_session_key(height: u64) -> SessionKey {
     )
 }
 
-fn sample_lane_relay_envelope(height: u64, lane_id: LaneId) -> LaneRelayEnvelope {
-    sample_lane_relay_envelope_with_bitmap(height, lane_id, 0b0000_0001)
+fn execution_qc_with_signers(
+    chain_id: &ChainId,
+    header: &BlockHeader,
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    signers: &[&KeyPair],
+    signers_bitmap: Vec<u8>,
+) -> ExecutionQcRecord {
+    let vote = crate::sumeragi::consensus::ExecVote {
+        block_hash: header.hash(),
+        parent_state_root,
+        post_state_root,
+        height: header.height().get(),
+        view: 0,
+        epoch: 0,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = crate::sumeragi::consensus::bls_preimage::exec_vote(
+        chain_id,
+        crate::sumeragi::consensus::PERMISSIONED_TAG,
+        &vote,
+    );
+    let signatures: Vec<Vec<u8>> = signers
+        .iter()
+        .map(|keypair| Signature::new(keypair.private_key(), &preimage).payload().to_vec())
+        .collect();
+    let sig_refs: Vec<&[u8]> = signatures.iter().map(|sig| sig.as_slice()).collect();
+    let aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
+            .expect("aggregate execution QC signatures");
+    ExecutionQcRecord {
+        subject_block_hash: header.hash(),
+        parent_state_root,
+        post_state_root,
+        height: header.height().get(),
+        view: 0,
+        epoch: 0,
+        signers_bitmap,
+        bls_aggregate_signature: aggregate_signature,
+    }
+}
+
+fn sample_lane_relay_envelope(
+    height: u64,
+    lane_id: LaneId,
+    chain_id: &ChainId,
+    signer: &KeyPair,
+) -> LaneRelayEnvelope {
+    sample_lane_relay_envelope_with_bitmap(height, lane_id, chain_id, &[signer], 0b0000_0001)
 }
 
 fn sample_lane_relay_envelope_with_bitmap(
     height: u64,
     lane_id: LaneId,
+    chain_id: &ChainId,
+    signers: &[&KeyPair],
     signers_bitmap: u8,
 ) -> LaneRelayEnvelope {
     let header = BlockHeader::new(
@@ -140,15 +192,14 @@ fn sample_lane_relay_envelope_with_bitmap(
         1_700_000_000_000,
         0,
     );
-    let qc = ExecutionQcRecord {
-        subject_block_hash: header.hash(),
-        post_state_root: Hash::new([0xAB; 4]),
-        height,
-        view: 0,
-        epoch: 0,
-        signers_bitmap: vec![signers_bitmap],
-        bls_aggregate_signature: vec![0x11; 48],
-    };
+    let qc = execution_qc_with_signers(
+        chain_id,
+        &header,
+        Hash::new([0xBC; 4]),
+        Hash::new([0xAB; 4]),
+        signers,
+        vec![signers_bitmap],
+    );
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id,
@@ -169,6 +220,38 @@ fn sample_lane_relay_envelope_with_bitmap(
         }],
     };
     LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope")
+}
+
+fn account_id_for_keypair(domain: &str, keypair: &KeyPair) -> AccountId {
+    let domain_id: DomainId = domain.parse().expect("domain id");
+    AccountId::new(domain_id, keypair.public_key().clone())
+}
+
+fn install_lane_manifest_registry(
+    state: &State,
+    lanes: &[(LaneId, DataSpaceId, Vec<AccountId>)],
+) {
+    let mut statuses = BTreeMap::new();
+    for (lane_id, dataspace_id, validators) in lanes {
+        let rules = GovernanceRules {
+            validators: validators.clone(),
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: *lane_id,
+            alias: format!("lane-{}", lane_id.as_u32()),
+            dataspace: *dataspace_id,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_string()),
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(*lane_id, status);
+    }
+    let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+    state.install_lane_manifests(&registry);
 }
 
 fn seed_npos_epochs(
@@ -1269,12 +1352,22 @@ async fn merge_committee_signatures_commit_merge_entry() {
     let actor = &mut harness.actor;
 
     actor.state.nexus.write().enabled = true;
+    let lane_validator = account_id_for_keypair("validators", &harness.key_pairs[0]);
+    install_lane_manifest_registry(
+        &actor.state,
+        &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![lane_validator])],
+    );
     let mut topo = actor.state.commit_topology.block();
     topo.clear();
     topo.push(actor.common_config.peer.id().clone());
     topo.commit();
 
-    let envelope = sample_lane_relay_envelope(1, LaneId::new(0));
+    let envelope = sample_lane_relay_envelope(
+        1,
+        LaneId::new(0),
+        &actor.chain_id,
+        &harness.key_pairs[0],
+    );
     actor
         .on_lane_relay_message(super::LaneRelayMessage::Envelope(envelope.clone()))
         .expect("lane relay handled");
@@ -1305,13 +1398,23 @@ async fn merge_committee_accepts_remote_signature() {
     let actor = &mut harness.actor;
 
     actor.state.nexus.write().enabled = true;
+    let lane_validator = account_id_for_keypair("validators", &harness.key_pairs[0]);
+    install_lane_manifest_registry(
+        &actor.state,
+        &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![lane_validator])],
+    );
     let mut topo = actor.state.commit_topology.block();
     topo.clear();
     topo.push(actor.common_config.peer.id().clone());
     topo.push(PeerId::new(harness.key_pairs[1].public_key().clone()));
     topo.commit();
 
-    let envelope = sample_lane_relay_envelope_with_bitmap(1, LaneId::new(0), 0b0000_0011);
+    let envelope = sample_lane_relay_envelope(
+        1,
+        LaneId::new(0),
+        &actor.chain_id,
+        &harness.key_pairs[0],
+    );
     actor
         .on_lane_relay_message(super::LaneRelayMessage::Envelope(envelope))
         .expect("lane relay handled");
@@ -8648,6 +8751,7 @@ fn persist_execution_qc_record_in_wsv_inserts_exec_root_and_qc() {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
     let record = ExecutionQcRecord {
         subject_block_hash: subject,
+        parent_state_root: Hash::prehashed([0x10; 32]),
         post_state_root: Hash::prehashed([0x11; 32]),
         height: 7,
         view: 2,
@@ -8685,6 +8789,7 @@ fn persist_execution_qc_record_in_wsv_overwrites_mismatched_exec_root() {
 
     let record = ExecutionQcRecord {
         subject_block_hash: subject,
+        parent_state_root: Hash::prehashed([0x20; 32]),
         post_state_root: Hash::prehashed([0x22; 32]),
         height: 8,
         view: 1,
@@ -8711,6 +8816,7 @@ fn persist_execution_qc_record_in_wsv_rejects_empty_signatures() {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; 32]));
     let record = ExecutionQcRecord {
         subject_block_hash: subject,
+        parent_state_root: Hash::prehashed([0x21; 32]),
         post_state_root: Hash::prehashed([0x22; 32]),
         height: 4,
         view: 1,
@@ -8734,6 +8840,7 @@ fn persist_execution_qc_record_in_wsv_replaces_placeholder_record() {
         subject,
         ExecutionQcRecord {
             subject_block_hash: subject,
+            parent_state_root: Hash::prehashed([0x00; 32]),
             post_state_root: placeholder_root,
             height: 1,
             view: 0,
@@ -8746,6 +8853,7 @@ fn persist_execution_qc_record_in_wsv_replaces_placeholder_record() {
 
     let updated = ExecutionQcRecord {
         subject_block_hash: subject,
+        parent_state_root: Hash::prehashed([0x54; 32]),
         post_state_root: Hash::prehashed([0x55; 32]),
         height: 1,
         view: 2,

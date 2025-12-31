@@ -8,8 +8,6 @@ import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.interfaces.EdECPrivateKey;
-import java.security.interfaces.EdECPublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayDeque;
@@ -43,6 +41,12 @@ public final class DeterministicKeyExporter {
   private static final String PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA256";
   private static final String AES_TRANSFORMATION = "AES/GCM/NoPadding";
   private static final int GCM_TAG_BITS = 128;
+  private static final byte[] ED25519_SPKI_PREFIX =
+      new byte[] {
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
+      };
+  private static final int ED25519_SPKI_SIZE = 44;
+  private static final byte[] ED25519_OID = new byte[] {0x2b, 0x65, 0x70};
   static final int KDF_KIND_PBKDF2_HMAC_SHA256 = 1;
   static final int KDF_KIND_ARGON2ID = 2;
   private static final int DEFAULT_PBKDF2_ITERATIONS = 350_000;
@@ -73,9 +77,7 @@ public final class DeterministicKeyExporter {
     Objects.requireNonNull(publicKey, "publicKey");
     Objects.requireNonNull(alias, "alias");
     Objects.requireNonNull(passphrase, "passphrase");
-    if (!(privateKey instanceof EdECPrivateKey) || !(publicKey instanceof EdECPublicKey)) {
-      throw new KeyExportException("Deterministic export currently supports Ed25519 keys only");
-    }
+    ensureEd25519KeyPair(privateKey, publicKey);
     ensurePassphraseStrength(passphrase);
 
     final byte[] privateKeyBytes = privateKey.getEncoded();
@@ -111,6 +113,151 @@ public final class DeterministicKeyExporter {
       Arrays.fill(privateKeyBytes, (byte) 0);
       kdf.zero();
     }
+  }
+
+  private static void ensureEd25519KeyPair(
+      final PrivateKey privateKey, final PublicKey publicKey) throws KeyExportException {
+    if (!isEd25519PrivateKey(privateKey) || !isEd25519PublicKey(publicKey)) {
+      throw new KeyExportException("Deterministic export currently supports Ed25519 keys only");
+    }
+  }
+
+  private static boolean isEd25519PrivateKey(final PrivateKey privateKey) {
+    if (privateKey == null) {
+      return false;
+    }
+    final byte[] encoded = privateKey.getEncoded();
+    if (encoded == null || encoded.length == 0) {
+      return false;
+    }
+    return hasEd25519Algorithm(encoded);
+  }
+
+  private static boolean isEd25519PublicKey(final PublicKey publicKey) {
+    if (publicKey == null) {
+      return false;
+    }
+    final byte[] encoded = publicKey.getEncoded();
+    if (encoded == null || encoded.length == 0) {
+      return false;
+    }
+    if (encoded.length == ED25519_SPKI_SIZE) {
+      boolean matches = true;
+      for (int i = 0; i < ED25519_SPKI_PREFIX.length; i++) {
+        if (encoded[i] != ED25519_SPKI_PREFIX[i]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return true;
+      }
+    }
+    return hasEd25519Spki(encoded);
+  }
+
+  private static boolean hasEd25519Algorithm(final byte[] encoded) {
+    return hasEd25519Pkcs8(encoded);
+  }
+
+  private static boolean hasEd25519Pkcs8(final byte[] encoded) {
+    if (encoded.length < 16 || encoded[0] != 0x30) {
+      return false;
+    }
+    int offset = 1;
+    final int[] lengthBytes = new int[1];
+    final int totalLength = readDerLength(encoded, offset, lengthBytes);
+    if (totalLength < 0) {
+      return false;
+    }
+    offset += lengthBytes[0];
+    if (offset + totalLength > encoded.length) {
+      return false;
+    }
+    if (offset >= encoded.length || encoded[offset++] != 0x02) {
+      return false;
+    }
+    final int versionLength = readDerLength(encoded, offset, lengthBytes);
+    if (versionLength < 0) {
+      return false;
+    }
+    offset += lengthBytes[0];
+    if (offset + versionLength > encoded.length) {
+      return false;
+    }
+    offset += versionLength;
+    return readAlgorithmOid(encoded, offset, lengthBytes);
+  }
+
+  private static boolean hasEd25519Spki(final byte[] encoded) {
+    if (encoded.length < 12 || encoded[0] != 0x30) {
+      return false;
+    }
+    int offset = 1;
+    final int[] lengthBytes = new int[1];
+    final int totalLength = readDerLength(encoded, offset, lengthBytes);
+    if (totalLength < 0) {
+      return false;
+    }
+    offset += lengthBytes[0];
+    if (offset + totalLength > encoded.length) {
+      return false;
+    }
+    return readAlgorithmOid(encoded, offset, lengthBytes);
+  }
+
+  private static boolean readAlgorithmOid(
+      final byte[] encoded, int offset, final int[] lengthBytes) {
+    if (offset >= encoded.length || encoded[offset++] != 0x30) {
+      return false;
+    }
+    final int algLength = readDerLength(encoded, offset, lengthBytes);
+    if (algLength < 0) {
+      return false;
+    }
+    offset += lengthBytes[0];
+    if (offset + algLength > encoded.length) {
+      return false;
+    }
+    if (offset >= encoded.length || encoded[offset++] != 0x06) {
+      return false;
+    }
+    final int oidLength = readDerLength(encoded, offset, lengthBytes);
+    if (oidLength != ED25519_OID.length) {
+      return false;
+    }
+    offset += lengthBytes[0];
+    if (offset + oidLength > encoded.length) {
+      return false;
+    }
+    for (int i = 0; i < oidLength; i++) {
+      if (encoded[offset + i] != ED25519_OID[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static int readDerLength(
+      final byte[] encoded, final int offset, final int[] lengthBytes) {
+    if (offset >= encoded.length) {
+      return -1;
+    }
+    final int first = encoded[offset] & 0xFF;
+    if ((first & 0x80) == 0) {
+      lengthBytes[0] = 1;
+      return first;
+    }
+    final int count = first & 0x7F;
+    if (count == 0 || count > 4 || offset + count >= encoded.length) {
+      return -1;
+    }
+    int length = 0;
+    for (int i = 0; i < count; i++) {
+      length = (length << 8) | (encoded[offset + 1 + i] & 0xFF);
+    }
+    lengthBytes[0] = 1 + count;
+    return length;
   }
 
   /** Imports a key pair from the supplied bundle using {@code passphrase}. */

@@ -3,7 +3,8 @@ use crate::isi::governance;
 use crate::{
     isi::{
         InstructionRegistry, RegisterPeerWithPop, bridge, consensus_keys, endorsement, kaigi,
-        offline, oracle, repo, runtime_upgrade, settlement, smart_contract_code, social, sorafs,
+        nexus, offline, oracle, repo, runtime_upgrade, settlement, smart_contract_code, social,
+        sorafs,
         transparent::{RemoveAssetKeyValue, SetAssetKeyValue},
         verifying_keys, zk,
     },
@@ -77,6 +78,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<offline::RegisterOfflineVerdictRevocation>,
     InstructionRegistry::register::<crate::isi::staking::ActivatePublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::ExitPublicLaneValidator>,
+    InstructionRegistry::register::<nexus::SetLaneRelayEmergencyValidators>,
     InstructionRegistry::register::<oracle::RegisterOracleFeed>,
     InstructionRegistry::register::<oracle::SubmitOracleObservation>,
     InstructionRegistry::register::<oracle::AggregateOracleFeed>,
@@ -227,6 +229,9 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     );
     registry = registry
         .register_with_id::<endorsement::SubmitDomainEndorsement>("nexus::SubmitDomainEndorsement");
+    registry = registry.register_with_id::<nexus::SetLaneRelayEmergencyValidators>(
+        "nexus::SetLaneRelayEmergencyValidators",
+    );
     registry = registry.register_with_id::<runtime_upgrade::ProposeRuntimeUpgrade>(
         runtime_upgrade::ProposeRuntimeUpgrade::WIRE_ID,
     );

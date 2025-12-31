@@ -15088,6 +15088,7 @@ pub(crate) mod tests_runtime_handlers {
 
         ExecutionQcRecord {
             subject_block_hash: block_hash,
+            parent_state_root,
             post_state_root,
             height,
             view,

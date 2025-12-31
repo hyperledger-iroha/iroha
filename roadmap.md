@@ -20,12 +20,10 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 ## Current Open Work
 
-1. **MOCHI-TOPOLOGY-PROFILES — Expand supervisor topologies and Nexus/DA presets** (Tooling/Supervisor, Line: Shared, Owner: Tooling WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
-   - [x] Config surface: allow `profile = {peer_count, consensus_mode, genesis_profile}` with bounds/validation; keep deterministic port/trusted-peer allocation for up to 7 peers and render consistent configs/genesis per topology.
-   - [x] Nexus/DA plumbing: accept lane/dataspace catalogs and DA on/off switches in CLI/config; template lane catalogs, DA flags, and per-lane storage roots into peer configs and fail fast when `nexus.enabled`/lane counts disagree.
-   - [x] Snapshot/export/import: support multi-peer + multi-lane snapshots, wiping/reseding storage safely; tests prove shared genesis/topology, port uniqueness, and lane catalog roundtrip.
-   - [x] Kagami alignment: auto-pass `--profile`/lane args to Kagami generation/verify and track the resulting chain id/fingerprint in rendered configs.
-   - [x] Docs/samples: expand sample-config and bundle README with new presets, lane/DA switches, and usage recipes for 1/3/4/5-node and Nexus lane runs.
+1. **NEXUS-LANE-RELAY-RECOVERY — Emergency validator restore for dataspaces** (Consensus/Governance, Line: Iroha 3, Owner: Nexus Core WG, Priority: Medium, Status: 🈴 Completed, target TBD)
+   - [x] Define the emergency admin multisig message to add validators when a dataspace pool falls below `3f+1`.
+   - [x] Implement validation/admission plumbing, telemetry, and regression tests; update operator docs/runbooks.
+   - [x] Enforce lane relay QC committee membership + aggregate signature validation and expose dataspace `fault_tolerance` in telemetry/status.
 
 2. **OFFLINE-SECURITY-HARDENING — Close remaining offline receipt threat gaps** (Core/SDK, Line: Shared, Owner: Offline WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Bind receipt challenges to `chain_id` across core, SDKs, and FFI helpers.
@@ -163,6 +161,24 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraFS portal publish plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS signing ceremony translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS storage capacity marketplace translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS provider advert rollout translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS priority snapshot (2025-03) translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Taikai monitoring dashboards translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS SF-6 security review translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS SF1 determinism dry-run translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS Orchestrator GA parity report translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS SF-2c capacity accrual soak report translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal AI moderation calibration report (2026-02) translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS capacity marketplace validation report translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal GAR jurisdictional review (SNNet-9) translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraNet PQ primitives overview translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraNet constant-rate profiles translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraNet transport overview translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraNet testnet rollout (SNNet-10) translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraNet PQ ratchet runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraNet PQ rollout plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraNet puzzle service operations guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal GAR operator onboarding brief translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS dispute & revocation runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS capacity reconciliation runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS gateway & DNS kickoff runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
@@ -185,7 +201,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraFS direct-mode fallback pack translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS SDK index translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS Rust SDK snippets translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
-   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond the completed SoraFS docs set (quickstart, runbooks, pipeline/orchestrator guides, node plan/storage, node operations, provider admission policy, multi-source provider advert, reserve ledger digest, migration ledger, migration roadmap, pin registry plan, pin registry ops, pin registry validation plan, portal publish plan, signing ceremony, storage capacity marketplace, chunker docs, developer docs, SDK docs), then fill remaining portal stubs per locale.
+   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond the completed SoraFS docs set (quickstart, runbooks, pipeline/orchestrator guides, node plan/storage, node operations, provider admission policy, multi-source provider advert, provider advert rollout, priority snapshot 2025-03, taikai monitoring dashboards, sf6 security review, sf1 determinism dry-run, orchestrator GA parity report, sf2c capacity soak report, ai moderation calibration report 2026-02, capacity marketplace validation report, GAR jurisdictional review, GAR operator onboarding, pq primitives, pq ratchet runbook, pq rollout plan, puzzle service operations guide, constant-rate profiles, transport overview, testnet rollout, reserve ledger digest, migration ledger, migration roadmap, pin registry plan, pin registry ops, pin registry validation plan, portal publish plan, signing ceremony, storage capacity marketplace, chunker docs, developer docs, SDK docs), then fill remaining portal stubs per locale.
     - [x] Ensure Akkadian translations are semantic and written in cuneiform (no transliteration).
     - [x] Extend CLI i18n coverage (remaining messages and clap help output).
     - [x] Fill governance schedule placeholders in scripts/templates that currently say TBD.

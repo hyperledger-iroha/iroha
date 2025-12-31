@@ -809,6 +809,8 @@ pub struct DataSpaceMetadata {
     pub alias: String,
     /// Optional description for dashboards and docs.
     pub description: Option<String>,
+    /// Fault tolerance value (f) used to size lane relay committees (3f + 1).
+    pub fault_tolerance: u32,
 }
 
 impl Default for DataSpaceMetadata {
@@ -817,6 +819,7 @@ impl Default for DataSpaceMetadata {
             id: DataSpaceId::GLOBAL,
             alias: "global".to_string(),
             description: None,
+            fault_tolerance: 0,
         }
     }
 }
@@ -1048,6 +1051,7 @@ mod tests {
             id: DataSpaceId::new(1),
             alias: "telemetry".into(),
             description: None,
+            fault_tolerance: 0,
         }])
         .expect("valid dataspace");
         assert!(catalog.by_alias("telemetry").is_some());
@@ -1057,11 +1061,13 @@ mod tests {
                 id: DataSpaceId::new(2),
                 alias: "ops".into(),
                 description: None,
+                fault_tolerance: 0,
             },
             DataSpaceMetadata {
                 id: DataSpaceId::new(2),
                 alias: "ops".into(),
                 description: None,
+                fault_tolerance: 0,
             },
         ])
         .expect_err("duplicate dataspace");
@@ -1071,6 +1077,7 @@ mod tests {
             id: DataSpaceId::new(3),
             alias: "   ".into(),
             description: None,
+            fault_tolerance: 0,
         }])
         .expect_err("blank alias");
         assert!(matches!(empty_alias, DataSpaceCatalogError::EmptyAlias(_)));
@@ -1142,7 +1149,7 @@ pub mod prelude {
     pub use super::{
         DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata, LaneCatalog,
         LaneCatalogError, LaneConfig, LaneId, LaneIdError, LaneLifecyclePlan, LaneMetadata,
-        LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
-        ShardId,
+        LaneRelayEmergencyValidatorSet, LaneStorageProfile, LaneStorageProfileParseError,
+        LaneVisibility, LaneVisibilityParseError, ShardId,
     };
 }

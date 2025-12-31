@@ -751,6 +751,7 @@ fn rng_lane_relay_envelope(rng: &mut DeterministicRng) -> LaneRelayEnvelope {
     let execution_qc = if rng.next_bool() {
         Some(ExecutionQcRecord {
             subject_block_hash: header.hash(),
+            parent_state_root: rng_hash(rng),
             post_state_root: rng_hash(rng),
             height: header.height().get(),
             view: rng.next_u64(),

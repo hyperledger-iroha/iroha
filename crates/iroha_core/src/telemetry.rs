@@ -306,6 +306,7 @@ impl Default for LaneMetadataSnapshot {
 struct DataspaceMetadataSnapshot {
     alias: String,
     description: Option<String>,
+    fault_tolerance: u32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -719,6 +720,7 @@ impl StateTelemetry {
                     DataspaceMetadataSnapshot {
                         alias: entry.alias.clone(),
                         description: entry.description.clone(),
+                        fault_tolerance: entry.fault_tolerance,
                     },
                 )
             })
@@ -842,6 +844,7 @@ impl StateTelemetry {
                 entry.dataspace_id = *dataspace_id;
                 entry.alias.clone_from(&info.alias);
                 entry.description.clone_from(&info.description);
+                entry.fault_tolerance = info.fault_tolerance;
             }
         }
     }
@@ -1550,6 +1553,10 @@ impl StateTelemetry {
                 map.insert("id".to_string(), json_value(&entry.id.as_u64()));
                 map.insert("alias".to_string(), json_value(&entry.alias));
                 map.insert("description".to_string(), json_value(&entry.description));
+                map.insert(
+                    "fault_tolerance".to_string(),
+                    json_value(&entry.fault_tolerance),
+                );
                 norito::json::Value::Object(map)
             })
             .collect();
@@ -1562,6 +1569,10 @@ impl StateTelemetry {
                 map.insert("id".to_string(), json_value(&entry.id.as_u64()));
                 map.insert("alias".to_string(), json_value(&entry.alias));
                 map.insert("description".to_string(), json_value(&entry.description));
+                map.insert(
+                    "fault_tolerance".to_string(),
+                    json_value(&entry.fault_tolerance),
+                );
                 norito::json::Value::Object(map)
             })
             .collect();
@@ -1843,6 +1854,7 @@ impl StateTelemetry {
         let info = self.dataspace_metadata_snapshot(dataspace_id);
         entry.alias = info.alias;
         entry.description = info.description;
+        entry.fault_tolerance = info.fault_tolerance;
     }
 
     fn apply_manifest_status(&self, lane_id: LaneId, entry: &mut NexusLaneTeuStatus) {
@@ -2558,6 +2570,28 @@ impl StateTelemetry {
             entry.finality_lag_slots = lag;
             entry.rbc_bytes_total = rbc_bytes_total;
         });
+    }
+
+    /// Record use of emergency validator overrides during lane relay validation.
+    pub fn record_lane_relay_emergency_override(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        outcome: &str,
+    ) {
+        if !self.nexus_lane_metrics_enabled() {
+            return;
+        }
+        self.record_lane_with_dataspace(lane_id, dataspace_id);
+        let (lane_label, dataspace_label) = self.lane_label_values(lane_id);
+        self.metrics
+            .lane_relay_emergency_override_total
+            .with_label_values(&[
+                lane_label.as_str(),
+                dataspace_label.as_str(),
+                outcome,
+            ])
+            .inc();
     }
 
     fn with_dataspace_snapshot<F>(&self, lane_id: LaneId, dataspace_id: DataSpaceId, update: F)
@@ -8703,11 +8737,13 @@ mod tests {
                 id: DataSpaceId::new(7),
                 alias: "alpha".to_owned(),
                 description: Some("restricted alpha".to_owned()),
+                fault_tolerance: 0,
             },
             DataSpaceMetadata {
                 id: DataSpaceId::new(9),
                 alias: "beta".to_owned(),
                 description: None,
+                fault_tolerance: 0,
             },
         ])
         .expect("dataspace catalog");
@@ -9819,6 +9855,7 @@ mod tests {
             id: dataspace,
             alias: "cbdc".to_string(),
             description: Some("CBDC lane profile".to_string()),
+            fault_tolerance: 0,
         }])
         .expect("dataspace catalog");
         telemetry.set_nexus_catalogs(&LaneCatalog::default(), &dataspace_catalog);

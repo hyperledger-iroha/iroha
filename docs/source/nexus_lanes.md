@@ -17,7 +17,7 @@ This document captures the target architecture for Nexus’ multilane consensus 
 ## Concepts
 
 - **Lane:** Logical shard of the Nexus ledger with its own validator set and execution backlog. Identified by a stable `LaneId`.
-- **Data Space:** Governance bucket grouping one or more lanes that share compliance, routing, and settlement policies.
+- **Data Space:** Governance bucket grouping one or more lanes that share compliance, routing, and settlement policies. Each dataspace also declares `fault_tolerance (f)` used to size lane-relay committees (`3f+1`).
 - **Lane Manifest:** Governance-controlled metadata describing validators, DA policy, gas token, settlement rules, and routing permissions.
 - **Global Commitment:** Proof emitted by a lane summarising new state roots, settlement data, and optional cross-lane transfers. The global NPoS ring orders commitments.
 
@@ -105,6 +105,7 @@ LaneConfigEntry {
 - Lanes declare their governance module via the catalog. `LaneConfigEntry` carries the original alias and slug to keep telemetry and audit trails readable.
 - The Nexus registry distributes signed lane manifests that include the `LaneId`, dataspace binding, governance handle, settlement handle, and metadata.
 - Runtime-upgrade hooks continue to enforce governance policies (`gov_upgrade_id` by default) and log diffs via the telemetry bridge (`nexus.config.diff` events).
+- Lane manifests define the dataspace validator pool for admin-managed lanes; stake-elected lanes derive their validator pool from public-lane staking records.
 
 ## Telemetry & Status
 
@@ -118,6 +119,7 @@ LaneConfigEntry {
 - `LaneCatalog`, `LaneMetadata`, and `DataSpaceCatalog` live in `iroha_data_model::nexus` and provide Norito-compatible structures for manifests and SDKs.
 - `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived automatically from the catalog; it does not require Norito encoding because it is an internal runtime helper.
 - The user-facing configuration (`iroha_config::parameters::user::Nexus`) continues to accept declarative lane and dataspace descriptors; parsing now derives the geometry and rejects invalid aliases or duplicate lane ids.
+- `DataSpaceMetadata.fault_tolerance` controls lane-relay committee sizing; committee membership is sampled deterministically per epoch from the dataspace validator pool using the VRF epoch seed bound with `(dataspace_id, lane_id)`.
 
 ## Outstanding Work
 

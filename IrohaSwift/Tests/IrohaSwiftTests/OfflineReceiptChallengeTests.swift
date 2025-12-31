@@ -6,6 +6,7 @@ import CryptoKit
 
 final class OfflineReceiptChallengeTests: XCTestCase {
     func testEncodeRejectsEmptyChainId() {
+        let nonce = sampleNonceHex()
         XCTAssertThrowsError(
             try OfflineReceiptChallenge.encode(
                 chainId: " ",
@@ -14,7 +15,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
                 assetId: "xor##alice@wonderland",
                 amount: "1",
                 issuedAtMs: 1_700_000_000_000,
-                nonceHex: "00"
+                nonceHex: nonce
             )
         ) { error in
             guard case let OfflineReceiptChallenge.Error.invalidInput(message) = error else {
@@ -25,6 +26,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
     }
 
     func testEncodeAcceptsScaledAmount() {
+        let nonce = sampleNonceHex()
         XCTAssertNoThrow(
             try OfflineReceiptChallenge.encode(
                 chainId: "testnet",
@@ -33,12 +35,13 @@ final class OfflineReceiptChallengeTests: XCTestCase {
                 assetId: "xor##alice@wonderland",
                 amount: "1.5",
                 issuedAtMs: 1_700_000_000_000,
-                nonceHex: "00"
+                nonceHex: nonce
             )
         )
     }
 
     func testEncodeRejectsScaleMismatchWhenExpectedScaleProvided() {
+        let nonce = sampleNonceHex()
         XCTAssertThrowsError(
             try OfflineReceiptChallenge.encode(
                 chainId: "testnet",
@@ -47,7 +50,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
                 assetId: "xor##alice@wonderland",
                 amount: "1.5",
                 issuedAtMs: 1_700_000_000_000,
-                nonceHex: "00",
+                nonceHex: nonce,
                 expectedScale: 0
             )
         ) { error in
@@ -82,5 +85,9 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         #else
         throw XCTSkip("Offline receipt challenge bridge unavailable on this platform")
         #endif
+    }
+
+    private func sampleNonceHex() -> String {
+        IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
     }
 }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="org.hyperledger.iroha.android.offline.HttpSafetyDetectServiceAndroidTests" tests="1" skipped="0" failures="0" errors="0" timestamp="2025-12-30T16:28:54.223Z" hostname="takemiyacStudio.lan" time="0.005">
+<testsuite name="org.hyperledger.iroha.android.offline.HttpSafetyDetectServiceAndroidTests" tests="1" skipped="0" failures="0" errors="0" timestamp="2025-12-31T09:14:46.216Z" hostname="takemiyacStudio.lan" time="0.004">
   <properties/>
-  <testcase name="defaultExecutorFetchesAttestation" classname="org.hyperledger.iroha.android.offline.HttpSafetyDetectServiceAndroidTests" time="0.005"/>
+  <testcase name="defaultExecutorFetchesAttestation" classname="org.hyperledger.iroha.android.offline.HttpSafetyDetectServiceAndroidTests" time="0.004"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>

@@ -10076,6 +10076,7 @@ mod tests {
 
         let execution_qc = ExecutionQcRecord {
             subject_block_hash: block_header.hash(),
+            parent_state_root: Hash::prehashed([0xCE; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0xCD; Hash::LENGTH]),
             height: block_header.height().get(),
             view: 3,
@@ -10167,6 +10168,7 @@ mod tests {
 
         let execution_qc = ExecutionQcRecord {
             subject_block_hash: block_header.hash(),
+            parent_state_root: Hash::prehashed([0xCE; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0xCD; Hash::LENGTH]),
             height: block_header.height().get(),
             view: 3,

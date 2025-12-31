@@ -4,15 +4,55 @@
 lang: pt
 direction: ltr
 source: docs/portal/docs/soranet/gar-operator-onboarding.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 565d4e8bf0a043b2c83a03ec87a8c71a30da34f56d94a28cad03677963b3e69a
-source_last_modified: "2025-11-21T13:08:50.910285+00:00"
-translation_last_reviewed: null
+source_hash: 74b0ef4843c441003cd6630f35e0deac4a736adad450270047a739c1b1d0a6fc
+source_last_modified: "2025-11-21T13:08:42.404970+00:00"
+translation_last_reviewed: 2025-12-30
 ---
 
-# Tradução em andamento
+---
+title: Onboarding de operadores GAR
+sidebar_label: Onboarding GAR
+description: Checklist para ativar politicas de compliance SNNet-9 com digests de attestation e captura de evidencias.
+---
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+Use este brief para fazer o rollout da configuracao de compliance SNNet-9 com um processo repetivel e amigavel a auditoria. Combine com a revisao jurisdicional para que cada operador use os mesmos digests e o mesmo layout de evidencias.
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+## Passos
+
+1. **Montar configuracao**
+   - Importe `governance/compliance/soranet_opt_outs.json`.
+   - Mescle suas `operator_jurisdictions` com os digests de attestation publicados
+     na [revisao jurisdicional](gar-jurisdictional-review).
+2. **Validar**
+   - `cargo test -p sorafs_orchestrator -- compliance_policy_parses_from_json`
+   - `cargo test -p sorafs_orchestrator -- compliance_example_config_parses`
+   - Opcional: `cargo xtask soranet-privacy-report --max-suppression-ratio 0.2 --ndjson <privacy-log.ndjson>`
+3. **Capturar evidencias**
+   - Guarde em `artifacts/soranet/compliance/<YYYYMMDD>/`:
+     - `config.json` (bloco de compliance final)
+     - `attestations.json` (URIs + digests)
+     - logs de validacao
+     - referencias a PDFs/Norito envelopes assinados
+4. **Ativar**
+   - Marque o rollout (`gar-opt-out-<date>`), redeploy as configs de orchestrator/SDK,
+     e confirme que eventos `compliance_*` aparecem nos logs esperados.
+5. **Encerrar**
+   - Arquive o bundle de evidencias com o Governance Council.
+   - Registre a janela de ativacao e aprovadores no GAR logbook.
+   - Agende as proximas revisoes a partir da tabela de revisao jurisdicional.
+
+## Checklist rapido
+
+- [ ] `jurisdiction_opt_outs` corresponde ao catalogo canonico.
+- [ ] Digests de attestation copiados exatamente.
+- [ ] Comandos de validacao executados e arquivados.
+- [ ] Bundle de evidencias guardado em `artifacts/soranet/compliance/<date>/`.
+- [ ] Tag de rollout e GAR logbook atualizados.
+- [ ] Lembretes de proxima revisao configurados.
+
+## Veja tambem
+
+- [GAR Jurisdictional Review](gar-jurisdictional-review)
+- [GAR Compliance Playbook (source)](../../../source/soranet/gar_compliance_playbook.md)

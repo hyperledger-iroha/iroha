@@ -256,7 +256,13 @@ public final class ToriiWebSocketClient {
 
     @Override
     public CompletableFuture<Void> close(final int statusCode, final String reason) {
-      return ready.thenCompose(ws -> ws.close(statusCode, reason));
+      return ready.thenCompose(
+          ws -> {
+            if (!ws.isOpen()) {
+              return CompletableFuture.completedFuture(null);
+            }
+            return ws.close(statusCode, reason);
+          });
     }
 
     @Override

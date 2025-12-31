@@ -996,6 +996,11 @@ snapshot includes the scheduler graph counters (`tx_vertices`, `tx_edges`,
 - `quarantine_executed` — quarantine fallbacks the lane had to drain during the
   block.
 
+The sister collection `nexus_scheduler_dataspace_teu_status` mirrors the
+per-dataspace backlog view and reports `tx_served` plus the dataspace
+`fault_tolerance` (f) so operators can see the configured lane-relay committee
+sizing (`3f+1`) in the same status payload.
+
 The transaction queue now keeps these snapshots warm in between block commits.
 Routing rules can specify dataspace aliases, so `ConfigLaneRouter` resolves both
 lane and dataspace IDs before the queue updates telemetry.

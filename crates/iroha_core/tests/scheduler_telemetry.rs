@@ -220,11 +220,13 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
         id: DataSpaceId::new(7),
         alias: "alpha".to_string(),
         description: Some("Primary execution dataspace".to_string()),
+        fault_tolerance: 0,
     };
     let secondary_dataspace = DataSpaceMetadata {
         id: DataSpaceId::new(11),
         alias: "beta".to_string(),
         description: Some("Operations dataspace".to_string()),
+        fault_tolerance: 0,
     };
     let lane_catalog = LaneCatalog::new(nonzero!(4_u32), vec![lane_core.clone(), lane_ops.clone()])
         .expect("lane catalog");
@@ -639,6 +641,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
             id: DataSpaceId::new(1),
             alias: "gov".to_string(),
             description: Some("Governance dataspace".to_string()),
+            fault_tolerance: 0,
         },
     ])
     .expect("dataspace catalog");

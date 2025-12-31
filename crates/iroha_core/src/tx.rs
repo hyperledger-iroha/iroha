@@ -2628,6 +2628,7 @@ pub mod tests {
                 id: TestDataSpaceId::new(7),
                 alias: "alpha".to_string(),
                 description: None,
+                fault_tolerance: 0,
             },
         ])
         .expect("valid catalog");

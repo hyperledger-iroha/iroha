@@ -2323,6 +2323,7 @@ mod tests {
         NexusDataspaceTeuStatus {
             lane_id: 0,
             dataspace_id: 0,
+            fault_tolerance: 0,
             backlog: 1,
             age_slots: 0,
             virtual_finish: 0,
@@ -2330,6 +2331,18 @@ mod tests {
             alias: String::new(),
             description: None,
         }
+    }
+
+    #[test]
+    fn dataspace_teu_status_roundtrips_fault_tolerance() {
+        let mut status = sample_dataspace_teu_status();
+        status.fault_tolerance = 2;
+
+        let bytes = to_bytes(&status).expect("serialize status");
+        let decoded: NexusDataspaceTeuStatus =
+            from_bytes(&bytes).expect("deserialize status");
+
+        assert_eq!(decoded.fault_tolerance, status.fault_tolerance);
     }
 
     #[test]
@@ -3691,6 +3704,8 @@ pub struct NexusDataspaceTeuStatus {
     pub lane_id: u32,
     /// Numeric dataspace identifier within the lane.
     pub dataspace_id: u64,
+    /// Fault tolerance value (f) used to size lane relay committees.
+    pub fault_tolerance: u32,
     /// Pending TEU demand left after scheduling the slot envelope.
     pub backlog: u64,
     /// Slots since the dataspace was last served.
@@ -3710,6 +3725,7 @@ impl norito::core::NoritoSerialize for NexusDataspaceTeuStatus {
         let payload = (
             self.lane_id,
             self.dataspace_id,
+            self.fault_tolerance,
             self.backlog,
             self.age_slots,
             self.virtual_finish,
@@ -3726,6 +3742,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for NexusDataspaceTeuStatus {
         let (
             lane_id,
             dataspace_id,
+            fault_tolerance,
             backlog,
             age_slots,
             virtual_finish,
@@ -3736,6 +3753,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for NexusDataspaceTeuStatus {
         Self {
             lane_id,
             dataspace_id,
+            fault_tolerance,
             backlog,
             age_slots,
             virtual_finish,
@@ -3752,6 +3770,7 @@ impl<'a> DecodeFromSlice<'a> for NexusDataspaceTeuStatus {
             (
                 lane_id,
                 dataspace_id,
+                fault_tolerance,
                 backlog,
                 age_slots,
                 virtual_finish,
@@ -3760,11 +3779,12 @@ impl<'a> DecodeFromSlice<'a> for NexusDataspaceTeuStatus {
                 description,
             ),
             used,
-        ) = <(u32, u64, u64, u64, u64, u64, String, Option<String>)>::decode_from_slice(bytes)?;
+        ) = <(u32, u64, u32, u64, u64, u64, u64, String, Option<String>)>::decode_from_slice(bytes)?;
         Ok((
             Self {
                 lane_id,
                 dataspace_id,
+                fault_tolerance,
                 backlog,
                 age_slots,
                 virtual_finish,
@@ -5964,6 +5984,8 @@ pub struct Metrics {
     pub sumeragi_block_created_proposal_mismatch_total: IntCounter,
     /// Nexus: lane relay envelopes rejected during validation (grouped by error kind).
     pub lane_relay_invalid_total: IntCounterVec,
+    /// Nexus: emergency validator override usage for lane relay (grouped by outcome).
+    pub lane_relay_emergency_override_total: IntCounterVec,
     /// Sumeragi: number of collectors targeted for the current voting block (gauge)
     pub sumeragi_collectors_targeted_current: GenericGauge<AtomicU64>,
     /// Sumeragi: histogram of collectors targeted per block (observed at commit)
@@ -9558,6 +9580,19 @@ impl Default for Metrics {
             &["error"],
         )
         .expect("Infallible");
+        let lane_relay_emergency_override_total = IntCounterVec::new(
+            Opts::new(
+                "lane_relay_emergency_override_total",
+                "Lane relay emergency validator override usage (labeled by lane, dataspace, outcome)",
+            ),
+            &["lane", "dataspace", "outcome"],
+        )
+        .expect("Infallible");
+        register!(
+            registry,
+            lane_relay_invalid_total,
+            lane_relay_emergency_override_total
+        );
         let sumeragi_collectors_targeted_current = GenericGauge::new(
             "sumeragi_collectors_targeted_current",
             "Number of collectors targeted for the current voting block",
@@ -12578,6 +12613,7 @@ impl Default for Metrics {
             sumeragi_block_created_hint_mismatch_total,
             sumeragi_block_created_proposal_mismatch_total,
             lane_relay_invalid_total,
+            lane_relay_emergency_override_total,
             sumeragi_collectors_targeted_current,
             sumeragi_collectors_targeted_per_block,
             sumeragi_prf_epoch_seed_hex,
