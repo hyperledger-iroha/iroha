@@ -2800,7 +2800,7 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/sumeragi/rbc/sessions` — RBC active sessions snapshot.
+    /// GET `/v1/sumeragi/rbc/sessions` — RBC sessions snapshot.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.

@@ -10914,7 +10914,7 @@ impl Torii {
                 state.clone(),
                 operator_auth::enforce_operator_auth,
             );
-            let mut sumeragi = Router::new()
+            let sumeragi = Router::new()
                 .route(
                     "/v1/sumeragi/evidence/count",
                     get(handler_sumeragi_evidence_count),
@@ -10925,54 +10925,52 @@ impl Torii {
                 );
 
             #[cfg(feature = "telemetry")]
-            {
-                sumeragi = sumeragi
-                    .route("/v1/sumeragi/new_view/sse", get(handler_new_view_sse))
-                    .route("/v1/sumeragi/new_view/json", get(handler_new_view_json))
-                    .route("/v1/sumeragi/status", get(handler_sumeragi_status))
-                    .route("/v1/sumeragi/status/sse", get(handler_sumeragi_status_sse))
-                    .route("/v1/sumeragi/leader", get(handler_sumeragi_leader))
-                    .route("/v1/sumeragi/bls_keys", get(handler_sumeragi_bls_keys))
-                    .route("/v1/sumeragi/qc", get(handler_sumeragi_qc))
-                    .route(
-                        "/v1/sumeragi/checkpoints",
-                        get(handler_sumeragi_checkpoints),
-                    )
-                    .route(
-                        "/v1/sumeragi/commit-certificates",
-                        get(handler_sumeragi_commit_certificates),
-                    )
-                    .route(
-                        "/v1/bridge/finality/:height",
-                        get(handler_bridge_finality_proof),
-                    )
-                    .route(
-                        "/v1/bridge/finality/bundle/:height",
-                        get(handler_bridge_finality_bundle),
-                    )
-                    .route(
-                        iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SETS,
-                        get(handler_sumeragi_validator_sets),
-                    )
-                    .route(
-                        iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SET_BY_HEIGHT,
-                        get(handler_sumeragi_validator_set_by_height),
-                    )
-                    .route(
-                        "/v1/sumeragi/consensus-keys",
-                        get(handler_sumeragi_consensus_keys),
-                    )
-                    .route(
-                        "/v1/sumeragi/key-lifecycle",
-                        get(handler_sumeragi_key_lifecycle),
-                    )
-                    .route("/v1/sumeragi/telemetry", get(handler_sumeragi_telemetry))
-                    .route("/v1/sumeragi/params", get(handler_sumeragi_params))
-                    .route("/v1/sumeragi/rbc/sessions", get(handler_rbc_sessions))
-                    .route("/v1/sumeragi/exec_root/{hash}", get(handler_exec_root))
-                    .route("/v1/sumeragi/exec_qc/{hash}", get(handler_exec_qc))
-                    .route("/v1/sumeragi/collectors", get(handler_sumeragi_collectors));
-            }
+            let sumeragi = sumeragi
+                .route("/v1/sumeragi/new_view/sse", get(handler_new_view_sse))
+                .route("/v1/sumeragi/new_view/json", get(handler_new_view_json))
+                .route("/v1/sumeragi/status", get(handler_sumeragi_status))
+                .route("/v1/sumeragi/status/sse", get(handler_sumeragi_status_sse))
+                .route("/v1/sumeragi/leader", get(handler_sumeragi_leader))
+                .route("/v1/sumeragi/bls_keys", get(handler_sumeragi_bls_keys))
+                .route("/v1/sumeragi/qc", get(handler_sumeragi_qc))
+                .route(
+                    "/v1/sumeragi/checkpoints",
+                    get(handler_sumeragi_checkpoints),
+                )
+                .route(
+                    "/v1/sumeragi/commit-certificates",
+                    get(handler_sumeragi_commit_certificates),
+                )
+                .route(
+                    "/v1/bridge/finality/:height",
+                    get(handler_bridge_finality_proof),
+                )
+                .route(
+                    "/v1/bridge/finality/bundle/:height",
+                    get(handler_bridge_finality_bundle),
+                )
+                .route(
+                    iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SETS,
+                    get(handler_sumeragi_validator_sets),
+                )
+                .route(
+                    iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SET_BY_HEIGHT,
+                    get(handler_sumeragi_validator_set_by_height),
+                )
+                .route(
+                    "/v1/sumeragi/consensus-keys",
+                    get(handler_sumeragi_consensus_keys),
+                )
+                .route(
+                    "/v1/sumeragi/key-lifecycle",
+                    get(handler_sumeragi_key_lifecycle),
+                )
+                .route("/v1/sumeragi/telemetry", get(handler_sumeragi_telemetry))
+                .route("/v1/sumeragi/params", get(handler_sumeragi_params))
+                .route("/v1/sumeragi/rbc/sessions", get(handler_rbc_sessions))
+                .route("/v1/sumeragi/exec_root/{hash}", get(handler_exec_root))
+                .route("/v1/sumeragi/exec_qc/{hash}", get(handler_exec_qc))
+                .route("/v1/sumeragi/collectors", get(handler_sumeragi_collectors));
 
             let sumeragi = sumeragi
                 .route(

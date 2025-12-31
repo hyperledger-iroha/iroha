@@ -1299,7 +1299,9 @@ impl Actor {
             .pending
             .pending_blocks
             .values()
-            .filter(|pending| !pending.aborted && pending.height == height && pending.view == view_idx)
+            .filter(|pending| {
+                !pending.aborted && pending.height == height && pending.view == view_idx
+            })
             .map(|pending| (pending.age(), pending.view))
             .min_by_key(|(age, _)| *age)
         {
@@ -1322,7 +1324,9 @@ impl Actor {
             .pending
             .pending_blocks
             .iter()
-            .find(|(_, pending)| !pending.aborted && pending.height == height && pending.view == view_idx)
+            .find(|(_, pending)| {
+                !pending.aborted && pending.height == height && pending.view == view_idx
+            })
             .map(|(hash, pending)| (*hash, pending.block.header().prev_block_hash()))
         {
             let view = self.state.view();

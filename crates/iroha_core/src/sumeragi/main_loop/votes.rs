@@ -403,13 +403,34 @@ impl Actor {
         update
     }
 
-    // Prefer the roster tied to the voted block to keep signatures valid across roster changes.
+    // Prefer the roster tied to a committed block to keep signatures valid across roster changes.
     pub(super) fn roster_for_vote(
         &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
     ) -> Vec<PeerId> {
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        if height <= committed_height {
+            if let Some(selection) = super::persisted_roster_for_block(
+                self.state.as_ref(),
+                &self.kura,
+                height,
+                block_hash,
+            )
+            .or_else(|| super::block_sync_history_roster_for_block(block_hash, height))
+            {
+                if !selection.roster.is_empty() {
+                    return selection.roster;
+                }
+            }
+            if height == committed_height {
+                let view = self.state.view();
+                let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+                if !prev.is_empty() {
+                    return prev;
+                }
+            }
+        }
         let active = self.effective_commit_topology();
         if height <= committed_height.saturating_add(1) && !active.is_empty() {
             return active;
@@ -422,7 +443,7 @@ impl Actor {
                 return selection.roster;
             }
         }
-        self.effective_commit_topology()
+        active
     }
 
     pub(super) fn handle_available_vote(

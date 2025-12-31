@@ -70,7 +70,7 @@ _עודכן לאחרונה: 2025-11-07 · סקירה הבאה: 2026-02-05_
 
 ## תרחישי איום
 
-**Runtime Upgrades** – בקרות קיימות: אימות חתימות, אימות `abi_hash`/`code_hash`, ממשל. פערים: הפרדת מפתחות חתימה, enforce SBOM.
+**Runtime Upgrades** – בקרות קיימות: אימות חתימות, אימות `abi_hash`/`code_hash`, ממשל, אכיפת SBOM/SLSA בזמן קבלה. פערים: הפרדת מפתחות חתימה.
 
 **Sumeragi Consensus** – ... (כמו מקור)
 
@@ -92,7 +92,7 @@ _עודכן לאחרונה: 2025-11-07 · סקירה הבאה: 2026-02-05_
 
 | סיכון | מצב | תוכנית | בעלים | יעד |
 | --- | --- | --- | --- | --- |
-| Upgrade SBOM provenance gap | פתוח | SLSA Level 3 בזמן קבלה (`SEC-147`) | Security WG | 2025-11-30 |
+| Upgrade SBOM provenance gap | סגור | אכיפת SBOM/SLSA וחתימות בזמן קבלה (ראו `docs/source/runtime_upgrades.md`). | Security WG | 2025-11-30 |
 | Aggregator fairness audit | פתוח | ביקורת צד ג' לפני GA (`SUM-203`) | Consensus WG | 2025-12-15 |
 | Torii operator auth hardening | סגור | WebAuthn/mTLS לאופרטור, התמדה של אישורים, טוקני סשן וטלמטריה | Torii WG | 2025-11-15 |
 | Hardware-accelerated hashing | פתוח | Multi-version עם fallback (`RNT-092`) | Runtime WG | 2025-12-01 |
@@ -121,7 +121,7 @@ _עודכן לאחרונה: 2025-11-07 · סקירה הבאה: 2026-02-05_
 | --- | --- | --- | --- |
 | Security | security@iroha | בהמתנה | תגובה עד 2025-10-05 |
 | Core | core@iroha | בהמתנה | אימות DoS ו-churn |
-| Runtime | runtime@iroha | בהמתנה | Sanitisation + SBOM |
+| Runtime | runtime@iroha | בהמתנה | פעולות המשך לסניטיזציה |
 | Torii | torii@iroha | בהמתנה | אימות הקשחת auth (`TOR-118`) ותוכנית gating |
 | Consensus | consensus@iroha | בהמתנה | Audit + telemetry |
 | Data Model | data-model@iroha | בהמתנה | Norito/Kotodama |

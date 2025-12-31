@@ -6820,10 +6820,10 @@ async fn has_nonempty_pending_at_height_ignores_aborted() {
 
     let block2 = block_with_txs(height, 1, None, vec![sample_transaction()]);
     let payload_hash2 = Hash::new(super::proposals::block_payload_bytes(&block2));
-    actor
-        .pending
-        .pending_blocks
-        .insert(block2.hash(), PendingBlock::new(block2, payload_hash2, height, 1));
+    actor.pending.pending_blocks.insert(
+        block2.hash(),
+        PendingBlock::new(block2, payload_hash2, height, 1),
+    );
 
     assert!(
         actor.has_nonempty_pending_at_height(height),
@@ -9289,6 +9289,55 @@ async fn handle_execution_qc_accepts_stale_view_when_block_known() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_execution_qc_accepts_stale_view_when_required_and_block_missing() {
+    let mut config = test_sumeragi_config();
+    config.consensus_mode = ConsensusMode::Permissioned;
+    config.require_execution_qc = true;
+    config.require_wsv_exec_qc = true;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+
+    let height = 2u64;
+    let view = 0u64;
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
+    assert!(!actor.block_known_locally(block_hash));
+
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view + 1, now);
+
+    let chain_id = actor.common_config.chain.clone();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = exec_qc_with_bitmap(
+        &chain_id,
+        block_hash,
+        Hash::prehashed([0xB5; 32]),
+        Hash::prehashed([0xC5; 32]),
+        height,
+        view,
+        0,
+        vec![0b0000_0111],
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.handle_execution_qc(qc).expect("handle execution qc");
+
+    assert!(actor.execution_qc_cache.contains_key(&block_hash));
+    let view = actor.state.view();
+    assert!(view.world().exec_qcs().get(&block_hash).is_some());
+    drop(view);
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash)
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_execution_qc_rejects_invalid_aggregate() {
     let mut config = test_sumeragi_config();
     config.consensus_mode = ConsensusMode::Permissioned;
@@ -11538,10 +11587,10 @@ async fn active_pending_blocks_len_ignores_aborted() {
 
     let block2 = sample_block(2, 0, None);
     let payload_hash2 = Hash::new(super::proposals::block_payload_bytes(&block2));
-    actor
-        .pending
-        .pending_blocks
-        .insert(block2.hash(), PendingBlock::new(block2, payload_hash2, 2, 0));
+    actor.pending.pending_blocks.insert(
+        block2.hash(),
+        PendingBlock::new(block2, payload_hash2, 2, 0),
+    );
 
     assert_eq!(actor.active_pending_blocks_len(), 1);
     assert!(actor.has_active_pending_blocks());
@@ -13296,6 +13345,137 @@ async fn handle_new_view_uses_roster_snapshot_after_topology_change() {
 
     actor.handle_new_view(frame).expect("handle_new_view");
     assert_eq!(actor.propose.new_view_tracker.count(3, 1), 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roster_for_vote_prefers_snapshot_for_committed_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 2u64;
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
+
+    let roster = actor.effective_commit_topology();
+    let local_peer_id = actor.common_config.peer.id();
+    let removed_peer = roster
+        .iter()
+        .find(|peer| *peer != local_peer_id)
+        .cloned()
+        .expect("non-local roster entry");
+    let removed_idx = roster
+        .iter()
+        .position(|peer| peer == &removed_peer)
+        .expect("removed peer index");
+    let removed_idx_u64 = u64::try_from(removed_idx).expect("signer index fits u64");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == removed_peer.public_key())
+        .expect("signer keypair");
+
+    let block_signature = BlockSignature::new(
+        removed_idx_u64,
+        SignatureOf::from_hash(signer_kp.private_key(), block_hash),
+    );
+    let commit_certificate = CommitCertificate {
+        height,
+        block_hash,
+        view,
+        epoch: 0,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        signatures: vec![block_signature.clone()],
+    };
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        block_hash,
+        roster.clone(),
+        vec![block_signature],
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(commit_certificate, checkpoint);
+    }
+
+    let mut roster_new = roster.clone();
+    roster_new.retain(|peer| peer != &removed_peer);
+    {
+        let mut topo_block = actor.state.commit_topology.block();
+        {
+            let mut tx = topo_block.transaction();
+            *tx = roster_new;
+            tx.apply();
+        }
+        topo_block.commit();
+    }
+    {
+        let mut hashes = actor.state.block_hashes.block();
+        hashes.push(HashOf::from_untyped_unchecked(Hash::prehashed(
+            [0xB1; Hash::LENGTH],
+        )));
+        hashes.push(block_hash);
+        hashes.commit_for_tests();
+    }
+
+    let qc_roster = actor.roster_for_vote(block_hash, height);
+    assert_eq!(
+        qc_roster, roster,
+        "committed height should use the persisted roster snapshot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roster_for_vote_falls_back_to_prev_commit_topology_without_snapshot() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 2u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC2; Hash::LENGTH]));
+
+    let roster = actor.effective_commit_topology();
+    let local_peer_id = actor.common_config.peer.id();
+    let removed_peer = roster
+        .iter()
+        .find(|peer| *peer != local_peer_id)
+        .cloned()
+        .expect("non-local roster entry");
+
+    let mut roster_new = roster.clone();
+    roster_new.retain(|peer| peer != &removed_peer);
+    {
+        let mut prev_block = actor.state.prev_commit_topology.block();
+        prev_block.mutate_vec(|vec| *vec = roster.clone());
+        prev_block.commit();
+    }
+    {
+        let mut topo_block = actor.state.commit_topology.block();
+        topo_block.mutate_vec(|vec| *vec = roster_new);
+        topo_block.commit();
+    }
+    {
+        let mut hashes = actor.state.block_hashes.block();
+        hashes.push(HashOf::from_untyped_unchecked(Hash::prehashed(
+            [0xC1; Hash::LENGTH],
+        )));
+        hashes.push(block_hash);
+        hashes.commit_for_tests();
+    }
+
+    let qc_roster = actor.roster_for_vote(block_hash, height);
+    assert_eq!(
+        qc_roster, roster,
+        "committed height should fall back to the previous commit topology"
+    );
 
     harness.shutdown.send();
 }
@@ -19401,6 +19581,7 @@ fn dispatch_background_request_full_returns_false_without_blocking() {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
+            membership: None,
         }),
         enqueued_at: Instant::now(),
     })
@@ -19411,6 +19592,7 @@ fn dispatch_background_request_full_returns_false_without_blocking() {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
+            membership: None,
         }),
     };
 
@@ -22998,11 +23180,12 @@ async fn rbc_stale_view_accepts_when_da_enabled() {
 }
 
 #[test]
-fn drain_rbc_state_for_block_clears_pending_and_status() {
+fn drain_rbc_state_for_block_retains_status_snapshot() {
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
     let key = (block_hash, 4, 1);
     let mut sessions = BTreeMap::new();
     let mut session = RbcSession::test_new(3, Some(Hash::prehashed([0x12; 32])), None, 0);
+    session.test_set_delivered(true);
     session.lane_allocations.push(super::LaneAllocation {
         lane_id: LaneId::new(7),
         tx_count: 5,
@@ -23034,15 +23217,15 @@ fn drain_rbc_state_for_block_clears_pending_and_status() {
             block_hash,
             height: key.1,
             view: key.2,
-            total_chunks: session.total_chunks(),
-            received_chunks: session.received_chunks(),
-            ready_count: u64::try_from(session.ready_signatures.len()).unwrap_or(0),
-            delivered: session.delivered,
-            payload_hash: session.payload_hash(),
+            total_chunks: 0,
+            received_chunks: 0,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: None,
             recovered_from_disk: false,
             invalid: false,
-            lane_backlog: session.lane_backlog_entries(),
-            dataspace_backlog: session.dataspace_backlog_entries(),
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
         },
         SystemTime::now(),
     );
@@ -23059,7 +23242,12 @@ fn drain_rbc_state_for_block_clears_pending_and_status() {
     assert!(sessions.is_empty());
     assert!(pending_rbc.is_empty());
     assert!(session_rosters.is_empty());
-    assert!(status_handle.get(&key).is_none());
+    let status_after = status_handle
+        .get(&key)
+        .expect("status entry retained after drain");
+    assert!(status_after.delivered);
+    assert_eq!(status_after.lane_backlog.len(), 1);
+    assert_eq!(status_after.dataspace_backlog.len(), 1);
     assert_eq!(lane_totals.get(&LaneId::new(7)), Some(&(5, 3, 9, 11)));
     assert_eq!(
         dataspace_totals.get(&(LaneId::new(8), DataSpaceId::new(22))),
@@ -23168,7 +23356,7 @@ async fn clean_rbc_sessions_for_block_clears_rebroadcast_and_persisted_state() {
     assert!(actor.rbc.pending.contains_key(&other_key));
     assert!(!actor.rbc.session_rosters.contains_key(&key));
     assert!(actor.rbc.session_rosters.contains_key(&other_key));
-    assert!(actor.rbc.status_handle.get(&key).is_none());
+    assert!(actor.rbc.status_handle.get(&key).is_some());
     assert!(actor.rbc.status_handle.get(&other_key).is_some());
     assert!(!actor.rbc.payload_rebroadcast_last_sent.contains_key(&key));
     assert!(
