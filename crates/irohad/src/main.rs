@@ -1118,6 +1118,7 @@ impl Iroha {
                 &registry_cfg,
             ));
             queue.install_lane_manifests(&lane_manifests);
+            state.install_lane_manifests(&lane_manifests);
             state
                 .telemetry
                 .set_lane_manifest_registry(Arc::clone(&lane_manifests));
@@ -1133,12 +1134,14 @@ impl Iroha {
                 let telemetry_task = state.telemetry.clone();
                 let governance_task = Arc::clone(&governance_catalog);
                 let registry_cfg_task = registry_cfg.clone();
+                let state_task = Arc::clone(&state);
                 tokio::spawn(async move {
                     queue_task
                         .watch_lane_manifests_task(
                             Some(telemetry_task),
                             governance_task,
                             registry_cfg_task,
+                            Some(state_task),
                         )
                         .await;
                 });
@@ -1148,15 +1151,22 @@ impl Iroha {
                 let queue_task = Arc::clone(&queue);
                 let governance_task = Arc::clone(&governance_catalog);
                 let registry_cfg_task = registry_cfg.clone();
+                let state_task = Arc::clone(&state);
                 tokio::spawn(async move {
                     queue_task
-                        .watch_lane_manifests_task(None, governance_task, registry_cfg_task)
+                        .watch_lane_manifests_task(
+                            None,
+                            governance_task,
+                            registry_cfg_task,
+                            Some(state_task),
+                        )
                         .await;
                 });
             }
         } else {
             let empty_registry = Arc::new(LaneManifestRegistry::empty());
             queue.install_lane_manifests(&empty_registry);
+            state.install_lane_manifests(&empty_registry);
             state
                 .telemetry
                 .set_lane_manifest_registry(Arc::clone(&empty_registry));

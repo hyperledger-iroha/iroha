@@ -8546,6 +8546,8 @@ pub struct DataSpaceDescriptor {
     pub manifest_hash: Option<String>,
     /// Optional description for documentation and dashboards.
     pub description: Option<String>,
+    /// Fault tolerance value (f) used to size per-dataspace committees (3f + 1).
+    pub fault_tolerance: Option<u32>,
 }
 
 /// User-level configuration container for lane manifest registry.
@@ -9920,6 +9922,16 @@ impl Nexus {
                 };
 
                 let description = Self::normalize_opt(descriptor.description);
+                let fault_tolerance = descriptor
+                    .fault_tolerance
+                    .unwrap_or(defaults::nexus::dataspace::FAULT_TOLERANCE);
+                if fault_tolerance > (u32::MAX.saturating_sub(1)) / 3 {
+                    dataspace_errors = true;
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "dataspace[{idx}] fault_tolerance {fault_tolerance} overflows 3f+1 sizing"
+                    )));
+                    continue;
+                }
 
                 let id = if let Some(raw) = descriptor.id {
                     DataSpaceId::new(raw)
@@ -9972,6 +9984,7 @@ impl Nexus {
                     id,
                     alias,
                     description,
+                    fault_tolerance,
                 });
             }
         }

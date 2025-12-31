@@ -213,8 +213,10 @@ Operator access (Torii)
   can correlate scheduler data with storage/backlog metrics.
 - The sister collection `nexus_scheduler_dataspace_teu_status` gains a
   `tx_served` field indicating how many transactions targeting each dataspace
-  made it into the block. Consumers should prefer these structured snapshots
-  over the legacy single-lane gauges when building Nexus dashboards.
+  made it into the block, plus `fault_tolerance` (f) from the dataspace catalog
+  to surface lane-relay committee sizing (`3f+1`) in the status payload.
+  Consumers should prefer these structured snapshots over the legacy single-lane
+  gauges when building Nexus dashboards.
 - The same `/status` payload now includes `rbc_lane_backlog` and
   `rbc_dataspace_backlog` arrays that aggregate the RBC chunk backlog by lane
   and dataspace. Each entry reports the contributing transaction count, total

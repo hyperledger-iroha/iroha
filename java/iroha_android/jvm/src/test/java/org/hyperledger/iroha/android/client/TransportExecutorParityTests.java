@@ -1,10 +1,14 @@
 package org.hyperledger.iroha.android.client;
 
+import java.net.InetAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.io.IOException;
 import okhttp3.Call;
@@ -18,32 +22,57 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.junit.AfterClass;
 import org.junit.Test;
 
 /** Parity tests covering OkHttp vs JDK HTTP executors on the JVM. */
 public final class TransportExecutorParityTests {
 
+  private static final ExecutorService JDK_EXECUTOR =
+      Executors.newCachedThreadPool(
+          runnable -> {
+            final Thread thread = new Thread(runnable, "jvm-http-executor");
+            thread.setDaemon(true);
+            return thread;
+          });
+  private static final java.net.http.HttpClient JDK_CLIENT =
+      java.net.http.HttpClient.newBuilder()
+          .executor(JDK_EXECUTOR)
+          .connectTimeout(Duration.ofSeconds(5))
+          .version(java.net.http.HttpClient.Version.HTTP_1_1)
+          .build();
+
+  @AfterClass
+  public static void shutdownJdkExecutor() {
+    JDK_EXECUTOR.shutdownNow();
+  }
+
   @Test
   public void shouldMatchOnSimpleGet() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
-      server.enqueue(
-          new MockResponse().setResponseCode(202).setHeader("x-test", "ok").setBody("pong"));
-      server.start();
+      final MockResponse response =
+          new MockResponse().setResponseCode(202).setHeader("x-test", "ok").setBody("pong");
+      server.enqueue(response);
+      server.enqueue(response);
+      server.start(InetAddress.getByName("127.0.0.1"), 0);
 
       final URI uri = new URI(server.url("/ping").toString());
       final TransportRequest request =
           TransportRequest.builder().setMethod("GET").setUri(uri).setHeaders(Map.of()).build();
 
-      final HttpTransportExecutor okHttp = new OkHttpTestExecutor();
-      final HttpTransportExecutor jdk =
-          new JavaHttpExecutor(java.net.http.HttpClient.newHttpClient());
+      final OkHttpTestExecutor okHttp = new OkHttpTestExecutor();
+      final HttpTransportExecutor jdk = new JavaHttpExecutor(JDK_CLIENT);
 
-      final TransportResponse okHttpResponse = okHttp.execute(request).join();
-      final TransportResponse jdkResponse = jdk.execute(request).join();
+      try {
+        final TransportResponse okHttpResponse = okHttp.execute(request).get(5, TimeUnit.SECONDS);
+        final TransportResponse jdkResponse = jdk.execute(request).get(5, TimeUnit.SECONDS);
 
-      assert okHttpResponse.statusCode() == jdkResponse.statusCode() : "status codes should match";
-      assert Arrays.equals(okHttpResponse.body(), jdkResponse.body()) : "bodies should match";
-      assert "pong".equals(new String(okHttpResponse.body(), StandardCharsets.UTF_8));
+        assert okHttpResponse.statusCode() == jdkResponse.statusCode() : "status codes should match";
+        assert Arrays.equals(okHttpResponse.body(), jdkResponse.body()) : "bodies should match";
+        assert "pong".equals(new String(okHttpResponse.body(), StandardCharsets.UTF_8));
+      } finally {
+        okHttp.shutdown();
+      }
     }
   }
 
@@ -107,6 +136,18 @@ public final class TransportExecutorParityTests {
         return ("GET".equals(method) || "HEAD".equals(method)) ? null : RequestBody.create(new byte[0], null);
       }
       return RequestBody.create(payload, null);
+    }
+
+    private void shutdown() {
+      client.dispatcher().executorService().shutdownNow();
+      client.connectionPool().evictAll();
+      if (client.cache() != null) {
+        try {
+          client.cache().close();
+        } catch (final IOException ignored) {
+          // Best-effort cleanup for test shutdown.
+        }
+      }
     }
   }
 }

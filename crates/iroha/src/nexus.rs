@@ -232,6 +232,7 @@ mod tests {
         let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), da_hash);
         let qc = ExecutionQcRecord {
             subject_block_hash: header.hash(),
+            parent_state_root: Hash::new([0xBA; 4]),
             post_state_root: Hash::new([0xBB; 4]),
             height: header.height().get(),
             view: 1,
@@ -258,6 +259,7 @@ mod tests {
         let header = header_with_da_hash(NonZeroU64::new(9).expect("nonzero height"), None);
         let mut qc = ExecutionQcRecord {
             subject_block_hash: header.hash(),
+            parent_state_root: Hash::new([0x00; 4]),
             post_state_root: Hash::new([]),
             height: header.height().get(),
             view: 3,
@@ -284,6 +286,7 @@ mod tests {
         let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), None);
         let qc = ExecutionQcRecord {
             subject_block_hash: header.hash(),
+            parent_state_root: Hash::new([0x21; 4]),
             post_state_root: Hash::new([0x22; 4]),
             height: header.height().get(),
             view: 1,
@@ -310,6 +313,7 @@ mod tests {
         let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), None);
         let qc = ExecutionQcRecord {
             subject_block_hash: header.hash(),
+            parent_state_root: Hash::new([0x32; 4]),
             post_state_root: Hash::new([0x33; 4]),
             height: header.height().get(),
             view: 1,

@@ -90,9 +90,3 @@ kagami = ""
 # [torii.da_ingest]
 # replay_cache_store_dir = "./data/torii/da_replay"
 # manifest_store_dir = "./data/torii/da_manifests"
-
-[torii]
-# Optional overrides for DA ingest spool roots (applies when DA is enabled).
-# [torii.da_ingest]
-# replay_cache_store_dir = "./data/peers/peer0/storage/torii/da_replay"
-# manifest_store_dir = "./data/peers/peer0/storage/torii/da_manifests"

@@ -260,6 +260,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
             id: DataSpaceId::new(1),
             alias: "alpha".to_string(),
             description: Some("Dedicated dataspace".to_string()),
+            fault_tolerance: 0,
         },
     ])
     .expect("dataspace catalog");
@@ -489,6 +490,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
             id: DataSpaceId::new(1),
             alias: "fallback".to_string(),
             description: Some("Default dataspace".to_string()),
+            fault_tolerance: 0,
         },
     ])
     .expect("dataspace catalog");

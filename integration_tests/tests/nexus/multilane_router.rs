@@ -93,16 +93,19 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
             id: DataSpaceId::GLOBAL,
             alias: "global".to_owned(),
             description: Some("Single-lane data space".to_owned()),
+            fault_tolerance: 0,
         },
         DataSpaceMetadata {
             id: DataSpaceId::new(1),
             alias: "governance".to_owned(),
             description: Some("Governance proposals & manifests".to_owned()),
+            fault_tolerance: 0,
         },
         DataSpaceMetadata {
             id: DataSpaceId::new(2),
             alias: "zk".to_owned(),
             description: Some("Zero-knowledge proofs and attachments".to_owned()),
+            fault_tolerance: 0,
         },
     ])
     .expect("dataspace catalog");

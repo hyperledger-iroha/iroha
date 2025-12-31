@@ -31,6 +31,7 @@ fn seed_exec_state() -> (
     let exec_root = Hash::prehashed([0xB2; Hash::LENGTH]);
     let qc = ExecutionQcRecord {
         subject_block_hash: subject_hash,
+        parent_state_root: Hash::prehashed([0xB1; Hash::LENGTH]),
         post_state_root: exec_root,
         height: 7,
         view: 3,

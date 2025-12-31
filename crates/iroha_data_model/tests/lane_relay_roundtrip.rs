@@ -30,6 +30,7 @@ fn sample_block_header(da_hash: Option<HashOf<commitment::DaCommitmentBundle>>) 
 fn sample_execution_qc(block_hash: HashOf<BlockHeader>) -> ExecutionQcRecord {
     ExecutionQcRecord {
         subject_block_hash: block_hash,
+        parent_state_root: Hash::prehashed([0x22; Hash::LENGTH]),
         post_state_root: Hash::prehashed([0x11; Hash::LENGTH]),
         height: 5,
         view: 3,

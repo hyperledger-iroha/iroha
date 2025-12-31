@@ -8565,6 +8565,7 @@ mod tests {
         block_header.set_da_commitments_hash(da_hash);
         let execution_qc = iroha_data_model::consensus::ExecutionQcRecord {
             subject_block_hash: block_header.hash(),
+            parent_state_root: Hash::prehashed([0xEA; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0xEE; Hash::LENGTH]),
             height: block_header.height().get(),
             view: 5,
@@ -10593,6 +10594,7 @@ mod tests {
         block_header.set_da_commitments_hash(da_hash);
         let execution_qc = iroha_data_model::consensus::ExecutionQcRecord {
             subject_block_hash: block_header.hash(),
+            parent_state_root: Hash::prehashed([0xEA; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0xEE; Hash::LENGTH]),
             height: block_header.height().get(),
             view: 5,

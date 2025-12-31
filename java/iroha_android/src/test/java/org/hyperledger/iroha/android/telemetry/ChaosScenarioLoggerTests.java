@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-final class ChaosScenarioLoggerTests {
+public final class ChaosScenarioLoggerTests {
 
   public static void main(final String[] args) {
     recordsScenarioEvents();

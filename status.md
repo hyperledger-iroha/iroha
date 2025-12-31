@@ -1,6 +1,30 @@
 # Status
 
 ## Latest Updates
+- Stabilized Android/JVM SDK tests: fixed BouncyCastle Ed25519 test key encodings, hardened fixture loading/exporter fallbacks, filtered JDK-restricted headers, made WebSocket close idempotent, ensured JDK WebSocket request flow, and tightened transport parity fixtures.
+- Closed lane relay validation gaps by enforcing committee-backed QC signatures (including parent_state_root), adding signer-bitmap length checks, and surfacing dataspace fault_tolerance in telemetry; docs/tests updated.
+- Completed NEXUS-LANE-RELAY-RECOVERY with emergency lane relay validator overrides, telemetry, tests, and docs updates.
+- Translated the SoraNet puzzle service operations guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet PQ rollout plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet PQ ratchet runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet testnet rollout (SNNet-10) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet transport overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet constant-rate profiles across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the GAR operator onboarding brief across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet PQ primitives overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the GAR jurisdictional review (SNNet-9) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS capacity marketplace validation report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Implemented per-dataspace lane relay committee selection (3f+1 from dataspace fault_tolerance), wired lane manifest registry into state for relay validation, and updated nexus docs/examples.
+- Translated the AI moderation calibration report (2026-02) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SF-2c capacity accrual soak report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Added MOCHI CLI/UI support for custom profile overrides (inline TOML tables) and cleaned duplicate Torii sample-config entries.
+- Translated the SoraFS Orchestrator GA parity report across portal docs and portal i18n locales (ar/he/ja/pt/ur).
+- Translated the SoraFS SF1 determinism dry-run report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SF-6 security review report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Completed MOCHI-TOPOLOGY-PROFILES supervisor topology presets (profile config surface, Nexus/DA plumbing, snapshot import/export, Kagami alignment, docs/samples).
+- Translated the Taikai monitoring dashboards across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS priority snapshot (2025-03) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS provider advert rollout across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS storage capacity marketplace across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS node implementation plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS node storage design across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).

@@ -93,7 +93,13 @@ public final class SorafsRegisterPinManifestBuilderTests {
         "docs/source/sdk/android/generated/fixtures/sorafs_register_pin_manifest_multi_peer_parity_v1.json";
     Path path = null;
     final Path[] candidates =
-        new Path[] {Path.of(relative), Path.of("../" + relative), Path.of("../../" + relative)};
+        new Path[] {
+          Path.of(relative),
+          Path.of("../" + relative),
+          Path.of("../../" + relative),
+          Path.of("../../../" + relative),
+          Path.of("../../../../" + relative)
+        };
     for (final Path candidate : candidates) {
       if (Files.exists(candidate)) {
         path = candidate;

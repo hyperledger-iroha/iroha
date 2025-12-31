@@ -160,6 +160,16 @@ impl JsonKeyCodec for crate::oracle::OracleChangeId {
     }
 }
 
+impl JsonKeyCodec for crate::nexus::DataSpaceId {
+    fn encode_json_key(&self, out: &mut String) {
+        <u64 as JsonKeyCodec>::encode_json_key(&self.as_u64(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        <u64 as JsonKeyCodec>::decode_json_key(encoded).map(Self::from)
+    }
+}
+
 impl JsonKeyCodec for crate::nexus::UniversalAccountId {
     fn encode_json_key(&self, out: &mut String) {
         <Hash as JsonKeyCodec>::encode_json_key(self.as_hash(), out);

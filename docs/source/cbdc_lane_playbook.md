@@ -52,16 +52,19 @@ metadata.telemetry.contact = "ops@cb.example"
 alias = "cbdc.core"
 id = 10
 description = "CBDC issuance dataspace"
+fault_tolerance = 0
 
 [[nexus.dataspace_catalog]]
 alias = "cbdc.bank.wholesale"
 id = 11
 description = "Wholesale bank onboarding lane"
+fault_tolerance = 0
 
 [[nexus.dataspace_catalog]]
 alias = "cbdc.dapp.retail"
 id = 12
 description = "Retail wallets and programmable-money dApps"
+fault_tolerance = 0
 
 [nexus.routing_policy]
 default_lane = 0

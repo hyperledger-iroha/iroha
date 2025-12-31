@@ -21,7 +21,7 @@ use iroha_crypto::sm::Sm2PublicKey;
 #[cfg(feature = "sm-ffi-openssl")]
 use iroha_crypto::sm::{OpenSslProvider, SmIntrinsicPolicy};
 use iroha_crypto::{
-    Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey,
+    Algorithm, Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey,
     blake2::{Blake2b512, digest::Digest as _},
 };
 use iroha_data_model::{
@@ -68,9 +68,10 @@ use iroha_data_model::{
     nexus::{
         AxtEnvelopeRecord, AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry,
         AxtPolicySnapshot, AxtReplayRecord, DataSpaceId, DomainCommittee, DomainEndorsement,
-        DomainEndorsementPolicy, DomainEndorsementRecord, LaneId, LaneRelayEnvelope,
-        LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord, PublicLaneStakeShare,
-        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        DomainEndorsementPolicy, DomainEndorsementRecord, LaneId, LaneRelayEmergencyValidatorSet,
+        LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord,
+        PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+        UniversalAccountId,
     },
     nft::{NftEntry, NftValue},
     offline::{
@@ -167,6 +168,7 @@ use crate::{
     Peers,
     block::{CommittedBlock, ValidBlock},
     executor::Executor,
+    governance::manifest::{LaneManifestRegistry, LaneManifestRegistryHandle},
     kura::Kura,
     nexus::space_directory::{
         SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
@@ -381,6 +383,7 @@ macro_rules! build_world_block {
             public_lane_stake_shares: $state.public_lane_stake_shares.$method(),
             public_lane_rewards: $state.public_lane_rewards.$method(),
             public_lane_reward_claims: $state.public_lane_reward_claims.$method(),
+            lane_relay_emergency_validators: $state.lane_relay_emergency_validators.$method(),
             zk_assets: $state.zk_assets.$method(),
             elections: $state.elections.$method(),
             citizens: $state.citizens.$method(),
@@ -497,6 +500,7 @@ macro_rules! build_world_transaction {
             public_lane_stake_shares: $state.public_lane_stake_shares.transaction(),
             public_lane_rewards: $state.public_lane_rewards.transaction(),
             public_lane_reward_claims: $state.public_lane_reward_claims.transaction(),
+            lane_relay_emergency_validators: $state.lane_relay_emergency_validators.transaction(),
             zk_assets: $state.zk_assets.transaction(),
             elections: $state.elections.transaction(),
             citizens: $state.citizens.transaction(),
@@ -951,6 +955,9 @@ impl LaneRelayStore {
             .retain(|(lane_id, _, _), _| !retired.contains(lane_id));
     }
 }
+
+const LANE_RELAY_SEED_DOMAIN: &[u8] = b"iroha:lane-relay:committee-seed:v1";
+const LANE_RELAY_MEMBER_DOMAIN: &[u8] = b"iroha:lane-relay:committee-member:v1";
 
 impl MergeLedgerStore {
     /// Default number of merge entries retained in-memory.
@@ -1435,6 +1442,9 @@ pub struct World {
     /// Last claimed reward epoch per `(lane_id, account, asset_id)` tuple.
     #[norito(skip)]
     pub(crate) public_lane_reward_claims: Storage<(LaneId, AccountId, AssetId), u64>,
+    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
+    pub(crate) lane_relay_emergency_validators:
+        Storage<DataSpaceId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: Storage<AssetDefinitionId, ZkAssetState>,
     /// Anonymous elections state keyed by election id.
@@ -1701,6 +1711,9 @@ pub struct WorldBlock<'world> {
     pub(crate) public_lane_rewards: StorageBlock<'world, (LaneId, u64), PublicLaneRewardRecord>,
     /// Last claimed reward epoch per `(lane_id, account, asset_id)` tuple.
     pub(crate) public_lane_reward_claims: StorageBlock<'world, (LaneId, AccountId, AssetId), u64>,
+    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
+    pub(crate) lane_relay_emergency_validators:
+        StorageBlock<'world, DataSpaceId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageBlock<'world, AssetDefinitionId, ZkAssetState>,
     /// Anonymous elections state keyed by election id.
@@ -2036,6 +2049,9 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, (LaneId, u64), PublicLaneRewardRecord>,
     pub(crate) public_lane_reward_claims:
         StorageTransaction<'block, 'world, (LaneId, AccountId, AssetId), u64>,
+    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
+    pub(crate) lane_relay_emergency_validators:
+        StorageTransaction<'block, 'world, DataSpaceId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageTransaction<'block, 'world, AssetDefinitionId, ZkAssetState>,
     /// Elections state
@@ -2325,6 +2341,9 @@ pub struct WorldView<'world> {
         StorageView<'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
     pub(crate) public_lane_rewards: StorageView<'world, (LaneId, u64), PublicLaneRewardRecord>,
     pub(crate) public_lane_reward_claims: StorageView<'world, (LaneId, AccountId, AssetId), u64>,
+    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
+    pub(crate) lane_relay_emergency_validators:
+        StorageView<'world, DataSpaceId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageView<'world, AssetDefinitionId, ZkAssetState>,
     /// Elections state view (read-only)
@@ -4019,6 +4038,8 @@ pub struct State {
     pub da_pin_intents: parking_lot::RwLock<DaPinStore>,
     /// In-memory lane relay envelope cache used for merge/telemetry.
     pub lane_relays: parking_lot::RwLock<LaneRelayStore>,
+    /// Lane governance manifest registry snapshot used for lane-relay validation.
+    pub lane_manifests: parking_lot::RwLock<LaneManifestRegistryHandle>,
     /// Guard to ensure DA indexes are hydrated from the block log at most once.
     da_indexes_hydrated: parking_lot::RwLock<Option<Result<(), DaShardCursorError>>>,
     /// Runtime handle for the IVM to execute triggers.
@@ -7356,6 +7377,7 @@ impl World {
             public_lane_stake_shares: self.public_lane_stake_shares.view(),
             public_lane_rewards: self.public_lane_rewards.view(),
             public_lane_reward_claims: self.public_lane_reward_claims.view(),
+            lane_relay_emergency_validators: self.lane_relay_emergency_validators.view(),
             zk_assets: self.zk_assets.view(),
             elections: self.elections.view(),
             citizens: self.citizens.view(),
@@ -7592,6 +7614,10 @@ pub trait WorldReadOnly {
     /// Last claimed reward epoch keyed by `(lane_id, account, asset_id)` (read-only).
     fn public_lane_reward_claims(&self)
     -> &impl StorageReadOnly<(LaneId, AccountId, AssetId), u64>;
+    /// Emergency lane relay validator overrides keyed by dataspace (read-only).
+    fn lane_relay_emergency_validators(
+        &self,
+    ) -> &impl StorageReadOnly<DataSpaceId, LaneRelayEmergencyValidatorSet>;
     /// Capacity declarations (read-only).
     fn capacity_declarations(&self)
     -> &impl StorageReadOnly<ProviderId, CapacityDeclarationRecord>;
@@ -8265,6 +8291,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<(LaneId, AccountId, AssetId), u64> {
                 &self.public_lane_reward_claims
             }
+            fn lane_relay_emergency_validators(
+                &self,
+            ) -> &impl StorageReadOnly<DataSpaceId, LaneRelayEmergencyValidatorSet> {
+                &self.lane_relay_emergency_validators
+            }
             fn capacity_declarations(&self) -> &impl StorageReadOnly<ProviderId, CapacityDeclarationRecord> {
                 &self.capacity_declarations
             }
@@ -8571,6 +8602,7 @@ impl<'world> WorldBlock<'world> {
             public_lane_stake_shares,
             public_lane_rewards,
             public_lane_reward_claims,
+            lane_relay_emergency_validators,
             zk_assets,
             elections,
             citizens,
@@ -8644,6 +8676,7 @@ impl<'world> WorldBlock<'world> {
         public_lane_stake_shares.commit();
         public_lane_rewards.commit();
         public_lane_reward_claims.commit();
+        lane_relay_emergency_validators.commit();
         zk_assets.commit();
         elections.commit();
         citizens.commit();
@@ -9495,6 +9528,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             public_lane_stake_shares,
             public_lane_rewards,
             public_lane_reward_claims,
+            lane_relay_emergency_validators,
             repo_agreements,
             zk_assets,
             elections,
@@ -9572,6 +9606,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         public_lane_stake_shares.apply();
         public_lane_rewards.apply();
         public_lane_reward_claims.apply();
+        lane_relay_emergency_validators.apply();
         repo_agreements.apply();
         zk_assets.apply();
         elections.apply();
@@ -10943,6 +10978,7 @@ impl State {
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
+            lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
             da_indexes_hydrated: parking_lot::RwLock::new(None),
             chain_id: iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             pipeline: iroha_config::parameters::actual::Pipeline {
@@ -11976,6 +12012,203 @@ impl State {
         &self.merge_ledger
     }
 
+    /// Install the lane manifest registry snapshot used for lane-relay validation.
+    pub fn install_lane_manifests(&self, manifests: &LaneManifestRegistryHandle) {
+        let mut guard = self.lane_manifests.write();
+        *guard = Arc::clone(manifests);
+    }
+
+    fn lane_relay_committee_seed(
+        &self,
+        dataspace_id: DataSpaceId,
+        lane_id: LaneId,
+        block_height: u64,
+    ) -> [u8; 32] {
+        let world_view = self.world.view();
+        let epoch_seed = crate::sumeragi::npos_seed_for_height_from_world(
+            &world_view,
+            &self.chain_id,
+            block_height,
+        );
+        let mut buffer =
+            Vec::with_capacity(LANE_RELAY_SEED_DOMAIN.len() + epoch_seed.len() + 12);
+        buffer.extend_from_slice(LANE_RELAY_SEED_DOMAIN);
+        buffer.extend_from_slice(&epoch_seed);
+        buffer.extend_from_slice(&dataspace_id.as_u64().to_le_bytes());
+        buffer.extend_from_slice(&lane_id.as_u32().to_le_bytes());
+        Hash::new(buffer).into()
+    }
+
+    fn lane_relay_committee_from_pool(
+        pool: &[AccountId],
+        committee_size: usize,
+        seed: [u8; 32],
+    ) -> Result<Vec<AccountId>, LaneRelayError> {
+        let mut scored = Vec::with_capacity(pool.len());
+        for validator in pool {
+            let mut buffer =
+                Vec::with_capacity(LANE_RELAY_MEMBER_DOMAIN.len() + seed.len());
+            buffer.extend_from_slice(LANE_RELAY_MEMBER_DOMAIN);
+            buffer.extend_from_slice(&seed);
+            let encoded = norito::to_bytes(validator)?;
+            buffer.extend_from_slice(&encoded);
+            scored.push((Hash::new(buffer), validator.clone()));
+        }
+        scored.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
+        scored.dedup_by(|lhs, rhs| lhs.1 == rhs.1);
+        Ok(scored
+            .into_iter()
+            .take(committee_size)
+            .map(|(_, account)| account)
+            .collect())
+    }
+
+    fn lane_relay_validator_pool(
+        &self,
+        lane_id: LaneId,
+        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
+        manifest_registry: &LaneManifestRegistry,
+        nexus: &iroha_config::parameters::actual::Nexus,
+    ) -> Result<Vec<AccountId>, LaneRelayError> {
+        if let Some(mut validators) = manifest_registry.lane_validators(lane_id) {
+            validators.sort();
+            validators.dedup();
+            return Ok(validators);
+        }
+
+        if !matches!(
+            validator_mode,
+            iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+        ) {
+            return Ok(Vec::new());
+        }
+
+        let mut candidates: Vec<(AccountId, Numeric)> = self
+            .world
+            .public_lane_validators
+            .view()
+            .iter()
+            .filter(|((lane, _), record)| {
+                *lane == lane_id
+                    && matches!(record.status, PublicLaneValidatorStatus::Active)
+            })
+            .filter_map(|(_, record)| {
+                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                    &record.self_stake,
+                    nexus.staking.min_validator_stake,
+                ) else {
+                    return None;
+                };
+                if !meets_min {
+                    return None;
+                }
+                Some((record.validator.clone(), record.total_stake.clone()))
+            })
+            .collect();
+        candidates.sort_by(|lhs, rhs| {
+            rhs.1
+                .cmp(&lhs.1)
+                .then_with(|| lhs.0.cmp(&rhs.0))
+        });
+        candidates.dedup_by(|lhs, rhs| lhs.0 == rhs.0);
+
+        let max = usize::try_from(nexus.staking.max_validators.get())
+            .unwrap_or(usize::MAX)
+            .min(candidates.len());
+        Ok(candidates
+            .into_iter()
+            .take(max)
+            .map(|(account, _)| account)
+            .collect())
+    }
+
+    fn lane_relay_qc_public_keys(
+        committee: &[AccountId],
+        signers_bitmap: &[u8],
+    ) -> Result<Vec<Vec<u8>>, LaneRelayError> {
+        let expected_len = committee.len().div_ceil(8);
+        if signers_bitmap.len() != expected_len {
+            return Err(LaneRelayError::SignerBitmapLengthMismatch {
+                expected: expected_len,
+                actual: signers_bitmap.len(),
+            });
+        }
+        let validator_count = u32::try_from(committee.len()).unwrap_or(u32::MAX);
+        let mut public_keys = Vec::new();
+        for (byte_index, byte) in signers_bitmap.iter().enumerate() {
+            if *byte == 0 {
+                continue;
+            }
+            let base = byte_index * 8;
+            for bit in 0..8 {
+                if byte & (1 << bit) == 0 {
+                    continue;
+                }
+                let signer_index = base + bit;
+                if signer_index >= committee.len() {
+                    return Err(LaneRelayError::InvalidSignerIndex {
+                        signer: u32::try_from(signer_index).unwrap_or(u32::MAX),
+                        validator_count,
+                    });
+                }
+                let Some(signatory) = committee[signer_index].try_signatory() else {
+                    return Err(LaneRelayError::AggregateSignatureInvalid);
+                };
+                let (algorithm, payload) = signatory.to_bytes();
+                if algorithm != Algorithm::BlsNormal {
+                    return Err(LaneRelayError::AggregateSignatureInvalid);
+                }
+                public_keys.push(payload.to_vec());
+            }
+        }
+        Ok(public_keys)
+    }
+
+    fn verify_lane_relay_execution_qc(
+        &self,
+        envelope: &LaneRelayEnvelope,
+        committee: &[AccountId],
+    ) -> Result<(), LaneRelayError> {
+        let qc = envelope
+            .execution_qc
+            .as_ref()
+            .ok_or(LaneRelayError::MissingExecutionQc)?;
+        let public_keys = Self::lane_relay_qc_public_keys(committee, &qc.signers_bitmap)?;
+        if public_keys.is_empty() {
+            return Err(LaneRelayError::AggregateSignatureInvalid);
+        }
+        let (mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
+        let derived_mode_tag = if mode_tag.is_empty() {
+            if self.world.view().sumeragi_npos_parameters().is_some() {
+                crate::sumeragi::consensus::NPOS_TAG
+            } else {
+                crate::sumeragi::consensus::PERMISSIONED_TAG
+            }
+        } else {
+            mode_tag.as_str()
+        };
+        let vote = crate::sumeragi::consensus::ExecVote {
+            block_hash: qc.subject_block_hash,
+            parent_state_root: qc.parent_state_root,
+            post_state_root: qc.post_state_root,
+            height: qc.height,
+            view: qc.view,
+            epoch: qc.epoch,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage =
+            crate::sumeragi::consensus::bls_preimage::exec_vote(&self.chain_id, derived_mode_tag, &vote);
+        let key_refs: Vec<&[u8]> = public_keys.iter().map(|key| key.as_slice()).collect();
+        iroha_crypto::bls_normal_verify_preaggregated_same_message(
+            &preimage,
+            &qc.bls_aggregate_signature,
+            &key_refs,
+        )
+        .map_err(|_| LaneRelayError::AggregateSignatureInvalid)?;
+        Ok(())
+    }
+
     /// Record a lane relay envelope in the in-memory store after validation.
     ///
     /// # Errors
@@ -11984,17 +12217,15 @@ impl State {
         &self,
         envelope: &LaneRelayEnvelope,
     ) -> core::result::Result<LaneRelayInsert, LaneRelayError> {
-        let expected_dataspace = {
-            let nexus = self.nexus_snapshot();
-            if !nexus.enabled {
-                return Err(LaneRelayError::NexusDisabled);
-            }
-            nexus
-                .lane_config
-                .entry(envelope.lane_id)
-                .ok_or(LaneRelayError::UnknownLane(envelope.lane_id))?
-                .dataspace_id
-        };
+        let nexus = self.nexus_snapshot();
+        if !nexus.enabled {
+            return Err(LaneRelayError::NexusDisabled);
+        }
+        let expected_dataspace = nexus
+            .lane_config
+            .entry(envelope.lane_id)
+            .ok_or(LaneRelayError::UnknownLane(envelope.lane_id))?
+            .dataspace_id;
         if expected_dataspace != envelope.dataspace_id {
             return Err(LaneRelayError::DataspaceMismatch {
                 expected: expected_dataspace,
@@ -12002,20 +12233,107 @@ impl State {
             });
         }
 
-        let commit_topology = self.commit_topology.view();
-        let validator_count = u32::try_from(commit_topology.len()).map_err(|_| {
+        let fault_tolerance = nexus
+            .dataspace_catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.id == envelope.dataspace_id)
+            .map(|entry| entry.fault_tolerance)
+            .ok_or(LaneRelayError::InvalidValidatorSet {
+                validator_count: 0,
+                min_quorum: 0,
+            })?;
+        let committee_size = fault_tolerance
+            .checked_mul(3)
+            .and_then(|value| value.checked_add(1))
+            .ok_or(LaneRelayError::InvalidValidatorSet {
+                validator_count: u32::MAX,
+                min_quorum: 0,
+            })?;
+        let committee_size = usize::try_from(committee_size).map_err(|_| {
             LaneRelayError::InvalidValidatorSet {
                 validator_count: u32::MAX,
                 min_quorum: 0,
             }
         })?;
+
+        let manifest_registry = self.lane_manifests.read().clone();
+        let validator_mode =
+            nexus.staking.validator_mode(envelope.lane_id, &nexus.lane_catalog);
+        let mut validator_pool = self.lane_relay_validator_pool(
+            envelope.lane_id,
+            validator_mode,
+            manifest_registry.as_ref(),
+            &nexus,
+        )?;
         let min_quorum =
-            crate::sumeragi::network_topology::commit_quorum_from_len(commit_topology.len());
+            crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
+        if validator_pool.len() < committee_size {
+            let mut override_outcome = None;
+            if let Some(record) = self
+                .world
+                .lane_relay_emergency_validators
+                .view()
+                .get(&envelope.dataspace_id)
+                .cloned()
+            {
+                if record
+                    .expires_at_height
+                    .is_some_and(|height| envelope.block_height > height)
+                {
+                    override_outcome = Some("expired");
+                } else {
+                    validator_pool.extend(record.validators);
+                    validator_pool.sort();
+                    validator_pool.dedup();
+                    if validator_pool.len() < committee_size {
+                        override_outcome = Some("insufficient");
+                    } else {
+                        override_outcome = Some("applied");
+                    }
+                }
+            } else {
+                override_outcome = Some("missing");
+            }
+
+            #[cfg(feature = "telemetry")]
+            if let Some(outcome) = override_outcome {
+                self.telemetry.record_lane_relay_emergency_override(
+                    envelope.lane_id,
+                    envelope.dataspace_id,
+                    outcome,
+                );
+            }
+
+            if validator_pool.len() < committee_size {
+                return Err(LaneRelayError::InvalidValidatorSet {
+                    validator_count: u32::try_from(validator_pool.len()).unwrap_or(u32::MAX),
+                    min_quorum: u32::try_from(min_quorum).unwrap_or(u32::MAX),
+                });
+            }
+        }
+
+        let seed = self.lane_relay_committee_seed(
+            envelope.dataspace_id,
+            envelope.lane_id,
+            envelope.block_height,
+        );
+        let committee =
+            Self::lane_relay_committee_from_pool(&validator_pool, committee_size, seed)?;
+        let validator_count = u32::try_from(committee.len()).map_err(|_| {
+            LaneRelayError::InvalidValidatorSet {
+                validator_count: u32::MAX,
+                min_quorum: 0,
+            }
+        })?;
+        let committee_quorum =
+            crate::sumeragi::network_topology::commit_quorum_from_len(committee.len());
         let quorum = LaneRelayQuorumContext::new(
             validator_count,
-            u32::try_from(min_quorum).unwrap_or(validator_count),
+            u32::try_from(committee_quorum).unwrap_or(validator_count),
         )?;
         envelope.verify_with_quorum(quorum)?;
+        self.verify_lane_relay_execution_qc(envelope, &committee)?;
 
         let inserted = {
             let mut guard = self.lane_relays.write();
@@ -17373,6 +17691,8 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "offline_verdict_revocations")?;
         let offline_to_online_transfers =
             take_optional_default(&mut map, "offline_to_online_transfers")?;
+        let lane_relay_emergency_validators =
+            take_optional_default(&mut map, "lane_relay_emergency_validators")?;
         let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
         let replication_orders = take_optional_default(&mut map, "replication_orders")?;
         let content_bundles = take_optional_default(&mut map, "content_bundles")?;
@@ -17475,6 +17795,7 @@ pub(crate) mod deserialize {
             public_lane_stake_shares: Storage::default(),
             public_lane_rewards: Storage::default(),
             public_lane_reward_claims: Storage::default(),
+            lane_relay_emergency_validators,
             zk_assets,
             elections,
             citizens,
@@ -17557,6 +17878,7 @@ pub(crate) mod deserialize {
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
+            lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
             da_indexes_hydrated: parking_lot::RwLock::new(None),
             ivm,
             kura,
@@ -18029,8 +18351,10 @@ mod tests {
             AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot,
             AxtProofFragment, AxtRejectReason, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog,
             DataSpaceId, DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog,
-            LaneConfig as LaneMetadata, LaneId, LaneRelayEnvelope, LaneRelayError,
-            LaneStorageProfile, ManifestVersion, ProofBlob, RemoteSpendIntent, SpendOp,
+            LaneConfig as LaneMetadata, LaneId, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
+            LaneRelayError,
+            LaneStorageProfile, LaneVisibility, ManifestVersion, ProofBlob, RemoteSpendIntent,
+            SpendOp,
             TouchManifest,
         },
         peer::PeerId,
@@ -18053,6 +18377,7 @@ mod tests {
     use crate::{
         block::{BlockBuilder, BlockValidationError, ValidBlock, valid::validate_axt_envelopes},
         da::DaShardCursorJournal,
+        governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus},
         kura::Kura,
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         query::store::LiveQueryStore,
@@ -18086,6 +18411,7 @@ mod tests {
                 id,
                 alias: format!("dataspace_{}", id.as_u64()),
                 description: None,
+                fault_tolerance: 0,
             })
             .collect();
         DataSpaceCatalog::new(entries).expect("dataspace catalog")
@@ -18566,6 +18892,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
+        let (_, validator_keypair) = bls_account_in("validators");
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: vec![LaneMetadata {
@@ -18582,10 +18909,10 @@ mod tests {
         {
             let mut relays = state.lane_relays.write();
             let _ = relays
-                .insert(sample_lane_relay_envelope(1, LaneId::new(0)))
+                .insert(sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair))
                 .expect("lane0 relay stored");
             let _ = relays
-                .insert(sample_lane_relay_envelope(2, LaneId::new(1)))
+                .insert(sample_lane_relay_envelope(2, LaneId::new(1), &validator_keypair))
                 .expect("lane1 relay stored");
         }
         {
@@ -18696,7 +19023,98 @@ mod tests {
         assert!(matches!(err, LaneLifecycleError::NexusDisabled));
     }
 
-    fn sample_lane_relay_envelope(height: u64, lane_id: LaneId) -> LaneRelayEnvelope {
+    fn install_lane_manifest_registry(
+        state: &State,
+        lanes: &[(LaneId, DataSpaceId, Vec<AccountId>)],
+    ) {
+        let mut statuses = BTreeMap::new();
+        for (lane_id, dataspace_id, validators) in lanes {
+            let rules = GovernanceRules {
+                validators: validators.clone(),
+                ..GovernanceRules::default()
+            };
+            let status = LaneManifestStatus {
+                lane: *lane_id,
+                alias: format!("lane-{}", lane_id.as_u32()),
+                dataspace: *dataspace_id,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("parliament".to_string()),
+                manifest_path: Some(std::path::PathBuf::from("/tmp/manifest.json")),
+                governance_rules: Some(rules),
+                privacy_commitments: Vec::new(),
+            };
+            statuses.insert(*lane_id, status);
+        }
+        let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&registry);
+    }
+
+    fn bls_account_in(domain: &str) -> (AccountId, KeyPair) {
+        let domain_id: DomainId = domain.parse().expect("domain id");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_id = AccountId::new(domain_id, keypair.public_key().clone());
+        (account_id, keypair)
+    }
+
+    fn execution_qc_with_signers(
+        header: &BlockHeader,
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        signers: &[&KeyPair],
+        signers_bitmap: Vec<u8>,
+    ) -> ExecutionQcRecord {
+        let vote = crate::sumeragi::consensus::ExecVote {
+            block_hash: header.hash(),
+            parent_state_root,
+            post_state_root,
+            height: header.height().get(),
+            view: 0,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = crate::sumeragi::consensus::bls_preimage::exec_vote(
+            &*super::DEFAULT_TEST_CHAIN_ID,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            &vote,
+        );
+        let signatures: Vec<Vec<u8>> = signers
+            .iter()
+            .map(|keypair| Signature::new(keypair.private_key(), &preimage).payload().to_vec())
+            .collect();
+        let sig_refs: Vec<&[u8]> = signatures.iter().map(|sig| sig.as_slice()).collect();
+        let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
+            .expect("aggregate execution QC signatures");
+        ExecutionQcRecord {
+            subject_block_hash: header.hash(),
+            parent_state_root,
+            post_state_root,
+            height: header.height().get(),
+            view: 0,
+            epoch: 0,
+            signers_bitmap,
+            bls_aggregate_signature: aggregate_signature,
+        }
+    }
+
+    fn signer_bitmap(signers: &[usize], roster_len: usize) -> Vec<u8> {
+        let mut bitmap = vec![0u8; roster_len.div_ceil(8)];
+        for signer in signers {
+            let byte_idx = signer / 8;
+            let bit = signer % 8;
+            if let Some(byte) = bitmap.get_mut(byte_idx) {
+                *byte |= 1u8 << bit;
+            }
+        }
+        bitmap
+    }
+
+    fn sample_lane_relay_envelope(
+        height: u64,
+        lane_id: LaneId,
+        signer: &KeyPair,
+    ) -> LaneRelayEnvelope {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
             None,
@@ -18705,15 +19123,15 @@ mod tests {
             1_700_000_000_000,
             0,
         );
-        let qc = ExecutionQcRecord {
-            subject_block_hash: header.hash(),
-            post_state_root: Hash::new([0xAB; 4]),
-            height,
-            view: 0,
-            epoch: 0,
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: vec![0x11; 48],
-        };
+        let parent_state_root = Hash::new([0xBC; 4]);
+        let post_state_root = Hash::new([0xAB; 4]);
+        let qc = execution_qc_with_signers(
+            &header,
+            parent_state_root,
+            post_state_root,
+            &[signer],
+            vec![0b0000_0001],
+        );
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id,
@@ -18742,9 +19160,14 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
+        let (validator_id, validator_keypair) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![validator_id.clone()])],
+        );
         configure_commit_topology(&state, 1);
 
-        let envelope = sample_lane_relay_envelope(1, LaneId::new(0));
+        let envelope = sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair);
         let first = state
             .record_lane_relay(&envelope)
             .expect("first relay stored");
@@ -18766,9 +19189,14 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
+        let (validator_id, validator_keypair) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![validator_id.clone()])],
+        );
         configure_commit_topology(&state, 1);
 
-        let mut envelope = sample_lane_relay_envelope(2, LaneId::new(0));
+        let mut envelope = sample_lane_relay_envelope(2, LaneId::new(0), &validator_keypair);
         envelope.block_height = 7; // Break header/settlement alignment.
         let err = state
             .record_lane_relay(&envelope)
@@ -18782,8 +19210,9 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
+        let (_, validator_keypair) = bls_account_in("validators");
 
-        let envelope = sample_lane_relay_envelope(1, LaneId::new(0));
+        let envelope = sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair);
         let err = state
             .record_lane_relay(&envelope)
             .expect_err("nexus disabled should reject relay");
@@ -18796,9 +19225,14 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
+        let (validator_id, validator_keypair) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![validator_id.clone()])],
+        );
         configure_commit_topology(&state, 1);
 
-        let mut envelope = sample_lane_relay_envelope(3, LaneId::new(0));
+        let mut envelope = sample_lane_relay_envelope(3, LaneId::new(0), &validator_keypair);
         envelope.execution_qc = None;
         let err = state
             .record_lane_relay(&envelope)
@@ -18812,14 +19246,27 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
+        let (validator_id, validator_keypair) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![validator_id.clone()])],
+        );
         configure_commit_topology(&state, 1);
 
         state
-            .record_lane_relay(&sample_lane_relay_envelope(2, LaneId::new(0)))
+            .record_lane_relay(&sample_lane_relay_envelope(
+                2,
+                LaneId::new(0),
+                &validator_keypair,
+            ))
             .expect("new relay accepted");
 
         let err = state
-            .record_lane_relay(&sample_lane_relay_envelope(1, LaneId::new(0)))
+            .record_lane_relay(&sample_lane_relay_envelope(
+                1,
+                LaneId::new(0),
+                &validator_keypair,
+            ))
             .expect_err("stale relay should be rejected");
         assert!(matches!(
             err,
@@ -18837,9 +19284,14 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
+        let (validator_id, validator_keypair) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![validator_id.clone()])],
+        );
         configure_commit_topology(&state, 1);
 
-        let envelope = sample_lane_relay_envelope(1, LaneId::new(0));
+        let envelope = sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair);
         state
             .record_lane_relay(&envelope)
             .expect("new relay accepted");
@@ -18870,9 +19322,14 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
+        let (validator_id, validator_keypair) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![validator_id.clone()])],
+        );
         configure_commit_topology(&state, 1);
 
-        let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0));
+        let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair);
         envelope.dataspace_id = DataSpaceId::new(1);
         let err = state
             .record_lane_relay(&envelope)
@@ -18890,9 +19347,14 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
+        let (validator_id, validator_keypair) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![validator_id.clone()])],
+        );
         configure_commit_topology(&state, 1);
 
-        let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0));
+        let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair);
         envelope
             .execution_qc
             .as_mut()
@@ -18905,14 +19367,395 @@ mod tests {
     }
 
     #[test]
+    fn record_lane_relay_rejects_invalid_aggregate_signature() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+        let (validator_id, validator_keypair) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![validator_id.clone()])],
+        );
+        configure_commit_topology(&state, 1);
+
+        let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair);
+        if let Some(qc) = envelope.execution_qc.as_mut() {
+            if let Some(first) = qc.bls_aggregate_signature.first_mut() {
+                *first ^= 0xFF;
+            }
+        }
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("invalid aggregate signature should be rejected");
+        assert!(matches!(err, LaneRelayError::AggregateSignatureInvalid));
+    }
+
+    #[test]
+    fn record_lane_relay_rejects_when_validator_pool_under_quorum() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::GLOBAL,
+            alias: "global".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+        state.set_nexus(nexus).expect("apply nexus config");
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::GLOBAL,
+                vec![ALICE_ID.clone(), BOB_ID.clone()],
+            )],
+        );
+
+        let (_, validator_keypair) = bls_account_in("validators");
+        let envelope = sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair);
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("under-quorum validator pool should be rejected");
+        assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+    }
+
+    #[test]
+    fn record_lane_relay_accepts_emergency_override_under_quorum() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let (base_1, base_1_kp) = bls_account_in("wonderland");
+        let (base_2, base_2_kp) = bls_account_in("wonderland");
+        let (extra_1, extra_1_kp) = bls_account_in("wonderland");
+        let (extra_2, extra_2_kp) = bls_account_in("wonderland");
+        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let world = World::with(
+            [Domain::new(domain).build(&ALICE_ID)],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(base_1.clone()).build(&ALICE_ID),
+                Account::new(base_2.clone()).build(&ALICE_ID),
+                Account::new(extra_1.clone()).build(&ALICE_ID),
+                Account::new(extra_2.clone()).build(&ALICE_ID),
+            ],
+            [],
+        );
+        let mut state = State::new_for_testing(world, kura, query_handle);
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::GLOBAL,
+            alias: "global".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+        state.set_nexus(nexus).expect("apply nexus config");
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::GLOBAL,
+                vec![base_1.clone(), base_2.clone()],
+            )],
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let permission = iroha_data_model::permission::Permission::new(
+            "CanManagePeers".into(),
+            Json::new(()),
+        );
+        stx.world.account_permissions.insert(
+            ALICE_ID.clone(),
+            BTreeSet::from([permission]),
+        );
+        SetLaneRelayEmergencyValidators {
+            dataspace_id: DataSpaceId::GLOBAL,
+            validators: vec![extra_1.clone(), extra_2.clone()],
+            expires_at_height: None,
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("set emergency validators");
+        stx.apply();
+        assert!(
+            state
+                .world
+                .lane_relay_emergency_validators
+                .view()
+                .get(&DataSpaceId::GLOBAL)
+                .is_some(),
+            "override should be stored in world"
+        );
+
+        let height = 1;
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("nonzero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let parent_state_root = Hash::new([0xBC; 4]);
+        let post_state_root = Hash::new([0xAB; 4]);
+        let mut validator_pool = vec![
+            base_1.clone(),
+            base_2.clone(),
+            extra_1.clone(),
+            extra_2.clone(),
+        ];
+        validator_pool.sort();
+        validator_pool.dedup();
+        let seed =
+            state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), height);
+        let committee =
+            State::lane_relay_committee_from_pool(&validator_pool, 4, seed)
+                .expect("committee");
+        let keypairs: BTreeMap<AccountId, KeyPair> = [
+            (base_1.clone(), base_1_kp.clone()),
+            (base_2.clone(), base_2_kp.clone()),
+            (extra_1.clone(), extra_1_kp.clone()),
+            (extra_2.clone(), extra_2_kp.clone()),
+        ]
+        .into_iter()
+        .collect();
+        let signer_indices = [0usize, 1, 2];
+        let signer_keys: Vec<&KeyPair> = signer_indices
+            .iter()
+            .map(|idx| keypairs.get(&committee[*idx]).expect("signer key"))
+            .collect();
+        let signers_bitmap = signer_bitmap(&signer_indices, committee.len());
+        let qc = execution_qc_with_signers(
+            &header,
+            parent_state_root,
+            post_state_root,
+            &signer_keys,
+            signers_bitmap,
+        );
+        let settlement = LaneBlockCommitment {
+            block_height: height,
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::GLOBAL,
+            tx_count: 1,
+            total_local_micro: 1,
+            total_xor_due_micro: 1,
+            total_xor_after_haircut_micro: 1,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: vec![LaneSettlementReceipt {
+                source_id: [0xAA; 32],
+                local_amount_micro: 1,
+                xor_due_micro: 1,
+                xor_after_haircut_micro: 1,
+                xor_variance_micro: 0,
+                timestamp_ms: 1_700_000_000_000,
+            }],
+        };
+        let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
+            .expect("lane relay envelope");
+        let inserted = state
+            .record_lane_relay(&envelope)
+            .expect("relay accepted with emergency override");
+        assert_eq!(inserted, LaneRelayInsert::Inserted);
+    }
+
+    #[test]
+    fn record_lane_relay_rejects_when_emergency_override_expired() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::GLOBAL,
+            alias: "global".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+        state.set_nexus(nexus).expect("apply nexus config");
+
+        let (base_1, _) = bls_account_in("validators");
+        let (base_2, _) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::GLOBAL,
+                vec![base_1.clone(), base_2.clone()],
+            )],
+        );
+
+        let (extra_1, _) = bls_account_in("validators");
+        let (extra_2, _) = bls_account_in("validators");
+        let mut wb = state.world.block();
+        wb.lane_relay_emergency_validators.insert(
+            DataSpaceId::GLOBAL,
+            LaneRelayEmergencyValidatorSet {
+                validators: vec![extra_1, extra_2],
+                expires_at_height: Some(0),
+                metadata: Metadata::default(),
+            },
+        );
+        wb.commit();
+
+        let (_, validator_keypair) = bls_account_in("validators");
+        let envelope = sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair);
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("expired override should be rejected");
+        assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+    }
+
+    #[test]
+    fn record_lane_relay_rejects_when_emergency_override_insufficient() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::GLOBAL,
+            alias: "global".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+        state.set_nexus(nexus).expect("apply nexus config");
+
+        let (base_1, _) = bls_account_in("validators");
+        let (base_2, _) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::GLOBAL,
+                vec![base_1.clone(), base_2.clone()],
+            )],
+        );
+
+        let (extra_1, _) = bls_account_in("validators");
+        let mut wb = state.world.block();
+        wb.lane_relay_emergency_validators.insert(
+            DataSpaceId::GLOBAL,
+            LaneRelayEmergencyValidatorSet {
+                validators: vec![extra_1],
+                expires_at_height: None,
+                metadata: Metadata::default(),
+            },
+        );
+        wb.commit();
+
+        let (_, validator_keypair) = bls_account_in("validators");
+        let envelope = sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair);
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("insufficient override should be rejected");
+        assert!(matches!(err, LaneRelayError::InvalidValidatorSet { .. }));
+    }
+
+    #[test]
+    fn lane_relay_committee_seed_is_deterministic() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), 1);
+        let same = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), 1);
+        assert_eq!(seed, same);
+
+        let different_lane =
+            state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(1), 1);
+        assert_ne!(seed, different_lane);
+        let different_ds =
+            state.lane_relay_committee_seed(DataSpaceId::new(1), LaneId::new(0), 1);
+        assert_ne!(seed, different_ds);
+    }
+
+    #[test]
+    fn lane_relay_committee_from_pool_is_deterministic() {
+        let (alice, _) = gen_account_in("wonderland");
+        let (bob, _) = gen_account_in("wonderland");
+        let (carol, _) = gen_account_in("wonderland");
+        let pool = vec![bob.clone(), alice.clone(), carol.clone(), alice.clone()];
+        let seed = [0x11; 32];
+
+        let committee =
+            State::lane_relay_committee_from_pool(&pool, 2, seed).expect("committee");
+        let again =
+            State::lane_relay_committee_from_pool(&pool, 2, seed).expect("committee");
+        assert_eq!(committee, again);
+        assert_eq!(committee.len(), 2);
+        let mut unique = committee.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), committee.len());
+        for member in committee {
+            assert!(pool.iter().any(|candidate| candidate == &member));
+        }
+    }
+
+    #[test]
+    fn lane_relay_validator_pool_uses_stake_when_no_manifest() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+
+        let validator = ALICE_ID.clone();
+        let mut wb = state.world.block();
+        wb.public_lane_validators.insert(
+            (LaneId::SINGLE, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                stake_account: validator.clone(),
+                total_stake: Numeric::new(1_000_000, 0),
+                self_stake: Numeric::new(1_000_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        wb.commit();
+
+        let manifest_registry = LaneManifestRegistry::empty();
+        let nexus = state.nexus_snapshot();
+        let validator_mode =
+            nexus.staking.validator_mode(LaneId::SINGLE, &nexus.lane_catalog);
+        let pool = state
+            .lane_relay_validator_pool(
+                LaneId::SINGLE,
+                validator_mode,
+                &manifest_registry,
+                &nexus,
+            )
+            .expect("validator pool");
+        assert_eq!(pool, vec![validator]);
+    }
+
+    #[test]
     fn record_lane_relay_builds_merge_candidate_for_single_lane() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
+        let (validator_id, validator_keypair) = bls_account_in("validators");
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, vec![validator_id.clone()])],
+        );
         let keypairs = configure_commit_topology(&state, 1);
 
-        let envelope = sample_lane_relay_envelope(1, LaneId::new(0));
+        let envelope = sample_lane_relay_envelope(1, LaneId::new(0), &validator_keypair);
         state.record_lane_relay(&envelope).expect("relay accepted");
 
         let candidates = state.merge_entry_candidates_from_lane_relays();
@@ -18947,6 +19790,8 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let (lane0_validator, lane0_keypair) = bls_account_in("validators");
+        let (lane1_validator, lane1_keypair) = bls_account_in("validators");
         let lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
@@ -18969,10 +19814,25 @@ mod tests {
             .set_nexus(nexus)
             .expect("apply two-lane Nexus catalog");
 
+        install_lane_manifest_registry(
+            &state,
+            &[
+                (
+                    LaneId::new(0),
+                    DataSpaceId::GLOBAL,
+                    vec![lane0_validator.clone()],
+                ),
+                (
+                    LaneId::new(1),
+                    DataSpaceId::GLOBAL,
+                    vec![lane1_validator.clone()],
+                ),
+            ],
+        );
         let keypairs = configure_commit_topology(&state, 1);
 
-        let lane0 = sample_lane_relay_envelope(1, LaneId::new(0));
-        let lane1 = sample_lane_relay_envelope(1, LaneId::new(1));
+        let lane0 = sample_lane_relay_envelope(1, LaneId::new(0), &lane0_keypair);
+        let lane1 = sample_lane_relay_envelope(1, LaneId::new(1), &lane1_keypair);
 
         state.record_lane_relay(&lane0).expect("lane0 accepted");
         assert!(

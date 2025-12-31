@@ -32,11 +32,7 @@ public final class TransactionFixtureManifestTests {
   private TransactionFixtureManifestTests() {}
 
   public static void main(final String[] args) throws Exception {
-    Path manifestPath =
-        Path.of("java/iroha_android/src/test/resources/transaction_fixtures.manifest.json");
-    if (!Files.exists(manifestPath)) {
-      manifestPath = Path.of("src/test/resources/transaction_fixtures.manifest.json");
-    }
+    final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
     final String json = Files.readString(manifestPath, StandardCharsets.UTF_8);
     final Map<String, Object> manifest = asMap(SimpleJson.parse(json), "manifest");
 
@@ -157,12 +153,12 @@ public final class TransactionFixtureManifestTests {
 
   private static Map<String, TransactionPayloadFixtures.Fixture> loadPayloadFixtures(final Path baseDir)
       throws Exception {
-    Path payloadPath = Path.of("java/iroha_android/src/test/resources/transaction_payloads.json");
-    if (!Files.exists(payloadPath)) {
-      payloadPath = Path.of("src/test/resources/transaction_payloads.json");
-    }
-    if (baseDir != null && Files.exists(baseDir.resolve("transaction_payloads.json"))) {
-      payloadPath = baseDir.resolve("transaction_payloads.json");
+    Path payloadPath = resolveFixturePath("transaction_payloads.json");
+    if (baseDir != null) {
+      final Path local = baseDir.resolve("transaction_payloads.json");
+      if (Files.exists(local)) {
+        payloadPath = local;
+      }
     }
     final List<TransactionPayloadFixtures.Fixture> fixtures = TransactionPayloadFixtures.load(payloadPath);
     final Map<String, TransactionPayloadFixtures.Fixture> map = new LinkedHashMap<>();
@@ -170,6 +166,24 @@ public final class TransactionFixtureManifestTests {
       map.put(fixture.name(), fixture);
     }
     return map;
+  }
+
+  private static Path resolveFixturePath(final String filename) {
+    final String[] candidates =
+        new String[] {
+          "java/iroha_android/src/test/resources/" + filename,
+          "src/test/resources/" + filename,
+          "../src/test/resources/" + filename,
+          "../../src/test/resources/" + filename
+        };
+    for (final String candidate : candidates) {
+      final Path path = Path.of(candidate);
+      if (Files.exists(path)) {
+        return path;
+      }
+    }
+    throw new IllegalStateException(
+        "Fixture not found: " + Path.of(candidates[0]).toAbsolutePath());
   }
 
   private static boolean optionalLongEquals(final Optional<Long> optional, final Long expected) {

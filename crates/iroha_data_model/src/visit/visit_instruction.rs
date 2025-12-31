@@ -6,6 +6,7 @@ use super::Visit;
 use crate::{
     isi::{
         Instruction, Log, RegisterPeerWithPop,
+        nexus::SetLaneRelayEmergencyValidators,
         staking::{ActivatePublicLaneValidator, ExitPublicLaneValidator},
     },
     prelude::*,
@@ -59,6 +60,11 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         visitor.visit_activate_public_lane_validator(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ExitPublicLaneValidator>() {
         visitor.visit_exit_public_lane_validator(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<SetLaneRelayEmergencyValidators>()
+    {
+        visitor.visit_set_lane_relay_emergency_validators(v);
     } else {
         unreachable!("Unknown instruction type");
     }
@@ -215,6 +221,7 @@ macro_rules! instruction_visitors {
             visit_cancel_twitter_escrow(&CancelTwitterEscrow),
             visit_activate_public_lane_validator(&ActivatePublicLaneValidator),
             visit_exit_public_lane_validator(&ExitPublicLaneValidator),
+            visit_set_lane_relay_emergency_validators(&SetLaneRelayEmergencyValidators),
         }
     };
 }

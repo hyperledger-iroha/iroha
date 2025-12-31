@@ -1453,6 +1453,7 @@ mod tests {
             subject_block_hash: iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
                 Hash::new([seed; 4]),
             ),
+            parent_state_root: Hash::new([seed.wrapping_add(1); 8]),
             post_state_root: Hash::new([seed; 8]),
             height: u64::from(seed),
             view: u64::from(seed),

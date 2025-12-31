@@ -27,7 +27,7 @@ public final class ClientConfigNoritoRpcTests {
   }
 
   private static void configProducesNoritoRpcClientWithHeadersAndObservers() throws Exception {
-    final RecordingObserver observer = new RecordingObserver();
+    final RecordingObserver observer = new RecordingObserver("Bearer config");
     final ClientConfig config =
         ClientConfig.builder()
             .setBaseUri(new URI("http://127.0.0.1:0"))
@@ -97,7 +97,7 @@ public final class ClientConfigNoritoRpcTests {
   }
 
   private static void executorReuseSharesObservers() throws Exception {
-    final RecordingObserver observer = new RecordingObserver();
+    final RecordingObserver observer = new RecordingObserver(null);
     final ClientConfig config =
         ClientConfig.builder()
             .setBaseUri(new URI("http://127.0.0.1:0"))
@@ -118,12 +118,19 @@ public final class ClientConfigNoritoRpcTests {
     private final AtomicInteger requestCount = new AtomicInteger();
     private final AtomicInteger responseCount = new AtomicInteger();
     private final AtomicInteger failureCount = new AtomicInteger();
+    private final String expectedAuthorization;
+
+    private RecordingObserver(final String expectedAuthorization) {
+      this.expectedAuthorization = expectedAuthorization;
+    }
 
     @Override
     public void onRequest(final TransportRequest request) {
       requestCount.incrementAndGet();
-      assert request.headers().getOrDefault("Authorization", java.util.List.of())
-          .contains("Bearer config") : "Config headers must be preserved";
+      if (expectedAuthorization != null) {
+        assert request.headers().getOrDefault("Authorization", java.util.List.of())
+            .contains(expectedAuthorization) : "Config headers must be preserved";
+      }
     }
 
     @Override

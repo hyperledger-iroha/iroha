@@ -1534,6 +1534,12 @@ pub mod nexus {
     /// Default lane index used when routing policy omits an explicit value.
     pub const DEFAULT_ROUTING_LANE_INDEX: u32 = 0;
 
+    /// Dataspace consensus defaults.
+    pub mod dataspace {
+        /// Default fault tolerance value (f) used to size per-dataspace committees (3f + 1).
+        pub const FAULT_TOLERANCE: u32 = 0;
+    }
+
     /// Lane registry defaults.
     pub mod registry {
         use std::time::Duration;

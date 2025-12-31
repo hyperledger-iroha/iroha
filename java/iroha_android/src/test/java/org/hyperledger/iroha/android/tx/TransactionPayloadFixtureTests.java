@@ -14,10 +14,7 @@ public final class TransactionPayloadFixtureTests {
   private TransactionPayloadFixtureTests() {}
 
   public static void main(final String[] args) throws Exception {
-    Path path = Path.of("java/iroha_android/src/test/resources/transaction_payloads.json");
-    if (!java.nio.file.Files.exists(path)) {
-      path = Path.of("src/test/resources/transaction_payloads.json");
-    }
+    final Path path = TransactionPayloadFixtures.resolveFixturePath();
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
     for (TransactionPayloadFixtures.Fixture fixture : TransactionPayloadFixtures.load(path)) {
       final String name = fixture.name();

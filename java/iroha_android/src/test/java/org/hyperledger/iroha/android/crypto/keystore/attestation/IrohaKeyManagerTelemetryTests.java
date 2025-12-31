@@ -18,7 +18,7 @@ import org.hyperledger.iroha.android.telemetry.DeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.KeystoreTelemetryEmitter;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 import org.hyperledger.iroha.android.telemetry.TelemetrySink;
-final class IrohaKeyManagerTelemetryTests {
+public final class IrohaKeyManagerTelemetryTests {
 
   public static void main(final String[] args) throws Exception {
     verifyAttestationEmitsTelemetry();

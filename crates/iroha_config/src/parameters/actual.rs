@@ -268,16 +268,19 @@ pub(crate) fn sora_dataspace_catalog() -> DataSpaceCatalog {
             id: DataSpaceId::GLOBAL,
             alias: "global".to_string(),
             description: Some("Single-lane data space".to_string()),
+            fault_tolerance: defaults::nexus::dataspace::FAULT_TOLERANCE,
         },
         DataSpaceMetadata {
             id: DataSpaceId::new(1),
             alias: "governance".to_string(),
             description: Some("Governance proposals & manifests".to_string()),
+            fault_tolerance: defaults::nexus::dataspace::FAULT_TOLERANCE,
         },
         DataSpaceMetadata {
             id: DataSpaceId::new(2),
             alias: "zk".to_string(),
             description: Some("Zero-knowledge proofs and attachments".to_string()),
+            fault_tolerance: defaults::nexus::dataspace::FAULT_TOLERANCE,
         },
     ];
     DataSpaceCatalog::new(entries).expect("static Sora dataspace catalog is valid")

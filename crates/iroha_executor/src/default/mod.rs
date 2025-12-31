@@ -32,7 +32,8 @@ use iroha_smart_contract::data_model::{
         RecordCapacityTelemetry, RecordReplicationReceipt, RegisterCapacityDeclaration,
         RegisterCapacityDispute, RegisterOfflineAllowance, RegisterPeerWithPop,
         RegisterPinManifest, RegisterProviderOwner, RemoveAssetKeyValue, RetirePinManifest,
-        SetAssetKeyValue, SetPricingSchedule, SubmitOfflineToOnlineTransfer,
+        SetAssetKeyValue, SetLaneRelayEmergencyValidators, SetPricingSchedule,
+        SubmitOfflineToOnlineTransfer,
         UnregisterProviderOwner, UpsertProviderCredit, bridge::RecordBridgeReceipt,
     },
     prelude::*,
@@ -60,6 +61,8 @@ pub use role::{
 };
 /// Re-export staking visitor helpers used by the default executor.
 pub use staking::{visit_activate_public_lane_validator, visit_exit_public_lane_validator};
+/// Re-export Nexus visitor helper used by the default executor.
+pub use nexus::visit_set_lane_relay_emergency_validators;
 mod offline;
 
 /// Re-export offline settlement visitor helper.
@@ -185,6 +188,10 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<ExitPublicLaneValidator>() {
             visit_exit_public_lane_validator(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetLaneRelayEmergencyValidators>() {
+            nexus::visit_set_lane_relay_emergency_validators(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<TransferBox>() {
@@ -345,6 +352,27 @@ pub mod staking {
             execute!(executor, isi);
         }
         deny!(executor, "Can't exit public-lane validator");
+    }
+}
+
+/// Permission-checked visitors for Nexus lane relay recovery instructions.
+pub mod nexus {
+    use iroha_executor_data_model::permission::peer::CanManagePeers;
+
+    use super::*;
+
+    /// Set or clear emergency lane relay validators when the caller is authorised or during genesis.
+    pub fn visit_set_lane_relay_emergency_validators<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetLaneRelayEmergencyValidators,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
+            execute!(executor, isi);
+        }
+        deny!(executor, "Can't set lane relay emergency validators");
     }
 }
 

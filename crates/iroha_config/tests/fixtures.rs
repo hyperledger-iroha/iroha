@@ -1021,6 +1021,7 @@ fn minimal_config_snapshot() {
                             ),
                             alias: "global",
                             description: None,
+                            fault_tolerance: 0,
                         },
                     ],
                 },
