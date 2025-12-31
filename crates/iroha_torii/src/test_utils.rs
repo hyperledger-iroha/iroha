@@ -460,6 +460,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             soranet_privacy_ingest: A::SoranetPrivacyIngest::default(),
             strict_addresses: false,
             debug_match_filters: false,
+            operator_auth: A::ToriiOperatorAuth::default(),
             preauth_max_connections: None,
             preauth_max_connections_per_ip: None,
             preauth_rate_per_ip_per_sec: None,
@@ -990,6 +991,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
+            runtime_upgrade_provenance: A::RuntimeUpgradeProvenancePolicy::default(),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: A::SorafsPenaltyPolicy::default(),
             sorafs_telemetry: A::SorafsTelemetryPolicy::default(),

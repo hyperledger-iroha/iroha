@@ -11199,6 +11199,8 @@ impl State {
                             .expect("valid default JDG signature scheme")
                     })
                     .collect(),
+                runtime_upgrade_provenance:
+                    iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
                 citizen_service: iroha_config::parameters::actual::CitizenServiceDiscipline::default(),
                 viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
@@ -18125,6 +18127,8 @@ pub(crate) mod deserialize {
                             .expect("valid default JDG signature scheme")
                     })
                     .collect(),
+            runtime_upgrade_provenance:
+                iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
             citizen_service: iroha_config::parameters::actual::CitizenServiceDiscipline::default(),
             viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
             sorafs_pin_policy:

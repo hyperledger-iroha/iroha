@@ -6314,6 +6314,8 @@ pub struct Metrics {
     pub p2p_frame_cap_violations_total: GenericGaugeVec<AtomicU64>,
     /// Runtime: upgrade lifecycle events (labeled by kind: proposed|activated|canceled)
     pub runtime_upgrade_events_total: IntCounterVec,
+    /// Runtime: provenance rejection events (labeled by reason)
+    pub runtime_upgrade_provenance_rejections_total: IntCounterVec,
     /// Runtime: count of active ABI versions (gauge)
     pub runtime_active_abi_versions_count: GenericGauge<AtomicU64>,
     /// IVM opcode pre-decode cache hits (cumulative)
@@ -6520,6 +6522,10 @@ pub struct Metrics {
     pub torii_connect_sessions_active: GenericGauge<AtomicU64>,
     /// Torii pre-auth: rejected connections before authentication, labeled by reason
     pub torii_pre_auth_reject_total: IntCounterVec,
+    /// Torii operator auth events (action, result, reason).
+    pub torii_operator_auth_total: IntCounterVec,
+    /// Torii operator auth lockouts (action, reason).
+    pub torii_operator_auth_lockout_total: IntCounterVec,
     /// Torii admission rejects due to exceeding signature-count limits.
     pub torii_signature_limit_total: IntCounter,
     /// Torii admission rejects due to signature-count limits, labeled by authority type.
@@ -9323,6 +9329,14 @@ impl Default for Metrics {
             &["kind"],
         )
         .expect("Infallible");
+        let runtime_upgrade_provenance_rejections_total = IntCounterVec::new(
+            Opts::new(
+                "runtime_upgrade_provenance_rejections_total",
+                "Runtime upgrade provenance rejections total labeled by reason",
+            ),
+            &["reason"],
+        )
+        .expect("Infallible");
         let runtime_active_abi_versions_count = GenericGauge::new(
             "runtime_active_abi_versions_count",
             "Count of active ABI versions allowed by runtime",
@@ -10352,6 +10366,22 @@ impl Default for Metrics {
                 "Torii pre-auth rejected connections",
             ),
             &["reason"],
+        )
+        .expect("Infallible");
+        let torii_operator_auth_total = IntCounterVec::new(
+            Opts::new(
+                "torii_operator_auth_total",
+                "Torii operator auth events by action, result, and reason",
+            ),
+            &["action", "result", "reason"],
+        )
+        .expect("Infallible");
+        let torii_operator_auth_lockout_total = IntCounterVec::new(
+            Opts::new(
+                "torii_operator_auth_lockout_total",
+                "Torii operator auth lockouts by action and reason",
+            ),
+            &["action", "reason"],
         )
         .expect("Infallible");
         let torii_signature_limit_total = IntCounter::new(
@@ -11778,6 +11808,8 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_connect_sessions_total);
         register_guarded(&registry, &torii_connect_sessions_active);
         register_guarded(&registry, &torii_pre_auth_reject_total);
+        register_guarded(&registry, &torii_operator_auth_total);
+        register_guarded(&registry, &torii_operator_auth_lockout_total);
         register_guarded(&registry, &torii_signature_limit_total);
         register_guarded(&registry, &torii_signature_limit_by_authority_total);
         register_guarded(&registry, &torii_signature_limit_last_count);
@@ -12162,6 +12194,7 @@ impl Default for Metrics {
             p2p_post_overflow_by_topic,
             p2p_frame_cap_violations_total,
             runtime_upgrade_events_total,
+            runtime_upgrade_provenance_rejections_total,
             runtime_active_abi_versions_count,
             sumeragi_tail_votes_total,
             sumeragi_votes_sent_total,
@@ -12678,6 +12711,7 @@ impl Default for Metrics {
             p2p_handshake_error_total,
             p2p_frame_cap_violations_total,
             runtime_upgrade_events_total,
+            runtime_upgrade_provenance_rejections_total,
             runtime_active_abi_versions_count,
             sumeragi_tail_votes_total,
             sumeragi_votes_sent_total,
@@ -12934,6 +12968,8 @@ impl Default for Metrics {
             torii_connect_sessions_total,
             torii_connect_sessions_active,
             torii_pre_auth_reject_total,
+            torii_operator_auth_total,
+            torii_operator_auth_lockout_total,
             torii_signature_limit_total,
             torii_signature_limit_by_authority_total,
             torii_signature_limit_last_count,
@@ -13599,6 +13635,20 @@ impl Metrics {
     pub fn inc_torii_norito_rpc_gate(&self, stage: &str, outcome: &str) {
         self.torii_norito_rpc_gate_total
             .with_label_values(&[stage, outcome])
+            .inc();
+    }
+
+    /// Record an operator auth event with action/result/reason labels.
+    pub fn inc_torii_operator_auth(&self, action: &str, result: &str, reason: &str) {
+        self.torii_operator_auth_total
+            .with_label_values(&[action, result, reason])
+            .inc();
+    }
+
+    /// Record an operator auth lockout with action/reason labels.
+    pub fn inc_torii_operator_auth_lockout(&self, action: &str, reason: &str) {
+        self.torii_operator_auth_lockout_total
+            .with_label_values(&[action, reason])
             .inc();
     }
 
@@ -15311,6 +15361,27 @@ mod test {
             metrics
                 .torii_norito_rpc_gate_total
                 .with_label_values(&["canary", "canary_denied"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn records_operator_auth_metrics() {
+        let metrics = Metrics::default();
+        metrics.inc_torii_operator_auth("gate", "allowed", "session");
+        metrics.inc_torii_operator_auth_lockout("gate", "invalid_session");
+        assert_eq!(
+            metrics
+                .torii_operator_auth_total
+                .with_label_values(&["gate", "allowed", "session"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_operator_auth_lockout_total
+                .with_label_values(&["gate", "invalid_session"])
                 .get(),
             1
         );

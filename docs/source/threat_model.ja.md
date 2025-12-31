@@ -97,7 +97,7 @@ _最終レビュー: 2025-11-07 — 次回予定: 2026-02-05_
 | --- | --- | --- | --- | --- |
 | Upgrade SBOM provenance gap | 未解決 | 受理時に SLSA L3 証跡を強制 (`SEC-147`) | Security WG | 2025-11-30 |
 | Aggregator fairness audit | 未解決 | サードパーティ監査を Milestone 2 GA 前に実施 (`SUM-203`) | Consensus WG | 2025-12-15 |
-| Torii operator auth hardening | 未解決 | WebAuthn をフィーチャフラグで提供 (`TOR-118`) | Torii WG | 2025-11-15 |
+| Torii operator auth hardening | 解決済み | WebAuthn/mTLS のオペレーター認証を提供し、資格情報の永続化・セッション・テレメトリを実装。 | Torii WG | 2025-11-15 |
 | Hardware-accelerated hashing | 未解決 | 決定論的フォールバック付きマルチバージョンハッシュを実装 (`RNT-092`) | Runtime WG | 2025-12-01 |
 | ZK circuit governance | 未解決 | ガバナンスプロトコルとツールを整理 (`ZK-077`) | ZK WG | 2025-11-20 |
 | Validator key HSM adoption | 未解決 | HSM ポリシー策定（チケット割当予定） | Security WG | 2025-11-15 |
@@ -125,9 +125,8 @@ _最終レビュー: 2025-11-07 — 次回予定: 2026-02-05_
 | Security WG | security@iroha | 未 | 2025-10-05 までに確認・チケット紐付け |
 | Core WG | core@iroha | 未 | pre-auth DoS 計画と churn テレメトリ確認 |
 | Runtime WG | runtime@iroha | 未 | 添付サニタイズと SBOM ゲート確認 |
-| Torii WG | torii@iroha | 未 | 認証強化 (`TOR-118`) と接続ゲート計画 |
+| Torii WG | torii@iroha | 未 | 認証強化 (`TOR-118`) の検証と接続ゲート計画 |
 | Consensus WG | consensus@iroha | 未 | 公平性監査とメンバーシップテレメトリ |
 | Data Model WG | data-model@iroha | 未 | Norito/Kotodama カバレッジとファズコーパス |
 | ZK WG | zk@iroha | 未 | 回路ガバナンス (`ZK-077`) と証人保持監査 |
 | Observability WG | observability@iroha | 未 | Redaction 施策とログ改ざん検出 |
-

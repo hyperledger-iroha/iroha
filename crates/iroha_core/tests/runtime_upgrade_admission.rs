@@ -1,7 +1,7 @@
 //! Admission gating for runtime upgrades: pre-activation reject, post-activation accept.
 #![allow(clippy::items_after_statements)]
 
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::BTreeSet};
 
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
 use iroha_core::{
@@ -9,9 +9,10 @@ use iroha_core::{
     state::{State, WorldReadOnly},
     tx::AcceptedTransaction,
 };
+use iroha_config::parameters::actual::RuntimeUpgradeProvenanceMode;
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
-    isi::error::InstructionExecutionError,
+    isi::error::{InstructionExecutionError, InvalidParameterError},
     prelude::*,
     runtime::{RuntimeUpgradeRecord, RuntimeUpgradeStatus},
 };
@@ -92,6 +93,9 @@ fn runtime_upgrade_abi_gating_pre_post_activation() {
         added_pointer_types: vec![],
         start_height: 2,
         end_height: 10,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
     };
     let upgrade_id = manifest.id();
     let manifest_bytes = manifest.canonical_bytes();
@@ -186,6 +190,9 @@ fn propose_runtime_upgrade_rejects_overlapping_windows() {
         added_pointer_types: vec![],
         start_height: start,
         end_height: end,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
     };
 
     let first = make_manifest(10, 20);
@@ -244,6 +251,9 @@ fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
         added_pointer_types: vec![],
         start_height: 10,
         end_height: 20,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
     };
     // Deliberately scramble abi_hash while keeping other fields valid.
     manifest.abi_hash[0] ^= 0xFF;
@@ -293,6 +303,9 @@ fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
         added_pointer_types: vec![0x00FF],
         start_height: 10,
         end_height: 20,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
     };
     let manifest_bytes = manifest.canonical_bytes();
     let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
@@ -339,6 +352,9 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
         added_pointer_types: vec![],
         start_height: 10,
         end_height: 20,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
     };
     let manifest_bytes = manifest.canonical_bytes();
     iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
@@ -400,6 +416,9 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
         added_pointer_types: vec![],
         start_height: 5,
         end_height: 15,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
     };
     let id = manifest.id();
     let manifest_bytes = manifest.canonical_bytes();
@@ -474,6 +493,9 @@ fn activation_allows_new_abi_in_same_block() {
         added_pointer_types: vec![],
         start_height: 2,
         end_height: 10,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
     };
     let id = manifest.id();
     let manifest_bytes = manifest.canonical_bytes();
@@ -538,6 +560,9 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
         added_pointer_types: vec![],
         start_height: 1,
         end_height: 5,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
     };
     let id = manifest.id();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -576,5 +601,121 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
             assert_eq!(info.expected, Hash::prehashed(manifest.abi_hash));
         }
         other => panic!("Expected ManifestAbiHashMismatch for tampered manifest, got {other:?}"),
+    }
+}
+
+#[test]
+fn propose_runtime_upgrade_rejects_missing_provenance_when_required() {
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
+
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+
+    let kp = KeyPair::random();
+    let (pubkey, _) = kp.clone().into_parts();
+    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let domain = Domain::new(domain_id.clone()).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
+    let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
+    let mut state = State::new_for_testing(world, kura, query_handle);
+    state.gov.runtime_upgrade_provenance.mode = RuntimeUpgradeProvenanceMode::Required;
+
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    Grant::account_permission(perm, account_id.clone())
+        .execute(&account_id, &mut stx)
+        .expect("grant permission");
+
+    let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
+        name: "ABI version 2".to_string(),
+        description: "Activate ABI version 2".to_string(),
+        abi_version: 2,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+        added_syscalls: vec![],
+        added_pointer_types: vec![],
+        start_height: 10,
+        end_height: 20,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
+    };
+    let manifest_bytes = manifest.canonical_bytes();
+    let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
+        .execute(&account_id, &mut stx)
+        .expect_err("missing provenance must be rejected");
+
+    match err {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+            assert!(
+                msg.contains("runtime_upgrade_provenance:missing_provenance"),
+                "unexpected msg: {msg}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn propose_runtime_upgrade_rejects_untrusted_signer() {
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
+
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+
+    let trusted = KeyPair::random();
+    let untrusted = KeyPair::random();
+    let (pubkey, _) = trusted.clone().into_parts();
+    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let account_id = AccountId::of(domain_id.clone(), pubkey);
+    let domain = Domain::new(domain_id.clone()).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
+    let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
+    let mut state = State::new_for_testing(world, kura, query_handle);
+    state.gov.runtime_upgrade_provenance.mode = RuntimeUpgradeProvenanceMode::Required;
+    state.gov.runtime_upgrade_provenance.signature_threshold = 1;
+    state.gov.runtime_upgrade_provenance.trusted_signers =
+        BTreeSet::from([trusted.public_key().clone()]);
+
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    Grant::account_permission(perm, account_id.clone())
+        .execute(&account_id, &mut stx)
+        .expect("grant permission");
+
+    let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
+        name: "ABI version 2".to_string(),
+        description: "Activate ABI version 2".to_string(),
+        abi_version: 2,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+        added_syscalls: vec![],
+        added_pointer_types: vec![],
+        start_height: 10,
+        end_height: 20,
+        sbom_digests: Vec::new(),
+        slsa_attestation: Vec::new(),
+        provenance: Vec::new(),
+    }
+    .signed(&untrusted);
+
+    let manifest_bytes = manifest.canonical_bytes();
+    let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
+        .execute(&account_id, &mut stx)
+        .expect_err("untrusted signer must be rejected");
+
+    match err {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+            assert!(
+                msg.contains("runtime_upgrade_provenance:untrusted_signer"),
+                "unexpected msg: {msg}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
     }
 }

@@ -117,6 +117,15 @@ fn tags_section() -> Value {
         Value::String("Node liveness and general system helpers.".to_owned()),
     );
 
+    let mut operator_auth = Map::new();
+    operator_auth.insert("name".into(), Value::String("OperatorAuth".to_owned()));
+    operator_auth.insert(
+        "description".into(),
+        Value::String(
+            "Operator WebAuthn bootstrap and session issuance endpoints.".to_owned(),
+        ),
+    );
+
     let mut transactions = Map::new();
     transactions.insert("name".into(), Value::String("Transactions".to_owned()));
     transactions.insert(
@@ -303,6 +312,7 @@ fn tags_section() -> Value {
         Value::Object(kaigi),
         Value::Object(nexus),
         Value::Object(system),
+        Value::Object(operator_auth),
         Value::Object(transactions),
         Value::Object(queries),
         Value::Object(streams),
@@ -2336,6 +2346,27 @@ fn system_paths() -> Map {
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
+    );
+    paths
+}
+
+fn operator_auth_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/operator/auth/registration/options".to_owned(),
+        Value::Object(operator_auth_registration_options_operation()),
+    );
+    paths.insert(
+        "/v1/operator/auth/registration/verify".to_owned(),
+        Value::Object(operator_auth_registration_verify_operation()),
+    );
+    paths.insert(
+        "/v1/operator/auth/login/options".to_owned(),
+        Value::Object(operator_auth_login_options_operation()),
+    );
+    paths.insert(
+        "/v1/operator/auth/login/verify".to_owned(),
+        Value::Object(operator_auth_login_verify_operation()),
     );
     paths
 }
@@ -5822,6 +5853,7 @@ fn paths_section() -> Map {
     paths.extend(da_paths());
     paths.extend(offline_paths());
     paths.extend(system_paths());
+    paths.extend(operator_auth_paths());
     paths.extend(transaction_paths());
     paths.extend(query_paths());
     paths.extend(stream_paths());
@@ -6570,6 +6602,220 @@ fn health_operation() -> Map {
     operation.insert("responses".into(), Value::Object(health_responses()));
     let mut methods = Map::new();
     methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn operator_auth_registration_options_operation() -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "WebAuthn registration options for operator enrollment.",
+            schema_ref("OperatorWebAuthnOptionsResponse"),
+        ),
+    );
+    responses.insert(
+        "401".to_owned(),
+        json_response("Authentication required or invalid.", error_schema_reference()),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Operator authentication disabled or mTLS required.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response("Operator auth rate limited or locked out.", error_schema_reference()),
+    );
+
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("OperatorAuth".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Start operator WebAuthn registration.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Issues WebAuthn registration options. Requires operator bootstrap auth.",
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("operatorAuthRegistrationOptions".to_owned()),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn operator_auth_registration_verify_operation() -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "Operator WebAuthn credential enrolled.",
+            schema_ref("OperatorWebAuthnRegistrationResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response("Invalid WebAuthn payload.", error_schema_reference()),
+    );
+    responses.insert(
+        "401".to_owned(),
+        json_response("Authentication required or invalid.", error_schema_reference()),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Operator authentication disabled or mTLS required.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response("Operator auth rate limited or locked out.", error_schema_reference()),
+    );
+
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("OperatorAuth".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Finish operator WebAuthn registration.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String("Verifies a WebAuthn attestation and stores the credential.".to_owned()),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("operatorAuthRegistrationVerify".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body("#/components/schemas/JsonValue")),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn operator_auth_login_options_operation() -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "WebAuthn authentication options for operator login.",
+            schema_ref("OperatorWebAuthnOptionsResponse"),
+        ),
+    );
+    responses.insert(
+        "401".to_owned(),
+        json_response("Authentication required or invalid.", error_schema_reference()),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Operator authentication disabled or mTLS required.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response("No operator credentials enrolled.", error_schema_reference()),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response("Operator auth rate limited or locked out.", error_schema_reference()),
+    );
+
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("OperatorAuth".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Start operator WebAuthn login.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String("Issues WebAuthn authentication options.".to_owned()),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("operatorAuthLoginOptions".to_owned()),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn operator_auth_login_verify_operation() -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "Operator session token issued.",
+            schema_ref("OperatorWebAuthnLoginResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response("Invalid WebAuthn payload.", error_schema_reference()),
+    );
+    responses.insert(
+        "401".to_owned(),
+        json_response("Authentication required or invalid.", error_schema_reference()),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Operator authentication disabled or mTLS required.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response("Operator auth rate limited or locked out.", error_schema_reference()),
+    );
+
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("OperatorAuth".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Finish operator WebAuthn login.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String("Verifies a WebAuthn assertion and issues a session token.".to_owned()),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("operatorAuthLoginVerify".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body("#/components/schemas/JsonValue")),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
     methods
 }
 
@@ -9054,6 +9300,44 @@ fn openapi_schemas() -> Map {
             }
         }),
     );
+    schemas.insert(
+        "OperatorWebAuthnOptionsResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["publicKey"],
+            "additionalProperties": false,
+            "properties": {
+                "publicKey": { "$ref": "#/components/schemas/JsonValue" }
+            }
+        }),
+    );
+    schemas.insert(
+        "OperatorWebAuthnRegistrationResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["status", "credential_id", "credentials_total"],
+            "additionalProperties": false,
+            "properties": {
+                "status": { "type": "string" },
+                "credential_id": { "type": "string" },
+                "credentials_total": { "type": "integer", "format": "uint32" }
+            }
+        }),
+    );
+    schemas.insert(
+        "OperatorWebAuthnLoginResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["status", "session_token", "expires_in_secs", "credential_id"],
+            "additionalProperties": false,
+            "properties": {
+                "status": { "type": "string" },
+                "session_token": { "type": "string" },
+                "expires_in_secs": { "type": "integer", "format": "uint64" },
+                "credential_id": { "type": "string" }
+            }
+        }),
+    );
     schemas
 }
 
@@ -9161,6 +9445,7 @@ mod tests {
         assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
         assert!(paths.contains_key("/health"));
+        assert!(paths.contains_key("/v1/operator/auth/login/verify"));
         assert!(paths.contains_key("/v1/kaigi/relays"));
         assert!(paths.contains_key("/v1/kaigi/relays/{relay_id}"));
         assert!(paths.contains_key("/v1/kaigi/relays/health"));
@@ -9364,6 +9649,11 @@ mod tests {
                 label: "system",
                 builder: system_paths,
                 expected: "/server_version",
+            },
+            PathCase {
+                label: "operator_auth",
+                builder: operator_auth_paths,
+                expected: "/v1/operator/auth/login/options",
             },
             PathCase {
                 label: "transactions",

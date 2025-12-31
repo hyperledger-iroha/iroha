@@ -3598,6 +3598,105 @@ pub mod isi {
         Ok((manifest, canonical_bytes))
     }
 
+    fn runtime_upgrade_provenance_error(
+        reason: iroha_data_model::runtime::RuntimeUpgradeProvenanceError,
+        _state_transaction: &StateTransaction<'_, '_>,
+    ) -> Error {
+        #[cfg(feature = "telemetry")]
+        _state_transaction
+            .telemetry
+            .record_runtime_upgrade_provenance_rejection(reason);
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            format!("runtime_upgrade_provenance:{}", reason.as_label()),
+        ))
+        .into()
+    }
+
+    fn validate_runtime_upgrade_provenance(
+        manifest: &iroha_data_model::runtime::RuntimeUpgradeManifest,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::runtime::RuntimeUpgradeProvenanceError;
+
+        let policy = &state_transaction.gov.runtime_upgrade_provenance;
+        let has_provenance = !(manifest.sbom_digests.is_empty()
+            && manifest.slsa_attestation.is_empty()
+            && manifest.provenance.is_empty());
+        if policy.mode.is_required() && !has_provenance {
+            return Err(runtime_upgrade_provenance_error(
+                RuntimeUpgradeProvenanceError::MissingProvenance,
+                state_transaction,
+            ));
+        }
+        if !has_provenance {
+            return Ok(());
+        }
+
+        if policy.require_sbom && manifest.sbom_digests.is_empty() {
+            return Err(runtime_upgrade_provenance_error(
+                RuntimeUpgradeProvenanceError::MissingSbom,
+                state_transaction,
+            ));
+        }
+        for entry in &manifest.sbom_digests {
+            if entry.algorithm.trim().is_empty() || entry.digest.is_empty() {
+                return Err(runtime_upgrade_provenance_error(
+                    RuntimeUpgradeProvenanceError::InvalidSbomDigest,
+                    state_transaction,
+                ));
+            }
+        }
+        if policy.require_slsa && manifest.slsa_attestation.is_empty() {
+            return Err(runtime_upgrade_provenance_error(
+                RuntimeUpgradeProvenanceError::MissingSlsaAttestation,
+                state_transaction,
+            ));
+        }
+
+        if policy.signature_threshold > 0 && manifest.provenance.is_empty() {
+            return Err(runtime_upgrade_provenance_error(
+                RuntimeUpgradeProvenanceError::MissingSignatures,
+                state_transaction,
+            ));
+        }
+        if !manifest.provenance.is_empty() {
+            let payload = manifest.signature_payload_bytes();
+            let mut trusted_signers = BTreeSet::new();
+            for provenance in &manifest.provenance {
+                provenance
+                    .signature
+                    .verify(&provenance.signer, &payload)
+                    .map_err(|_| {
+                        runtime_upgrade_provenance_error(
+                            RuntimeUpgradeProvenanceError::InvalidSignature,
+                            state_transaction,
+                        )
+                    })?;
+                if !policy.trusted_signers.is_empty()
+                    && !policy.trusted_signers.contains(&provenance.signer)
+                {
+                    return Err(runtime_upgrade_provenance_error(
+                        RuntimeUpgradeProvenanceError::UntrustedSigner,
+                        state_transaction,
+                    ));
+                }
+                if policy.trusted_signers.contains(&provenance.signer) {
+                    trusted_signers.insert(provenance.signer.clone());
+                }
+            }
+            if policy.signature_threshold > 0
+                && trusted_signers.len() < policy.signature_threshold
+            {
+                return Err(runtime_upgrade_provenance_error(
+                    RuntimeUpgradeProvenanceError::SignatureThresholdNotMet,
+                    state_transaction,
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     fn policy_for_abi_version(
         abi_version: u16,
     ) -> Result<(ivm::SyscallPolicy, u8), InstructionExecutionError> {
@@ -3877,6 +3976,7 @@ pub mod isi {
             if handle_existing_runtime_upgrade(id, &manifest, authority, state_transaction)? {
                 return Ok(());
             }
+            validate_runtime_upgrade_provenance(&manifest, state_transaction)?;
             ensure_runtime_upgrade_abi_version(&manifest, state_transaction)?;
             validate_runtime_upgrade_surface(&manifest, state_transaction)?;
             ensure_runtime_upgrade_no_overlap(&manifest, state_transaction)?;
@@ -3932,6 +4032,7 @@ pub mod isi {
                 )))
                 .into());
             };
+            validate_runtime_upgrade_provenance(&rec.manifest, state_transaction)?;
             validate_runtime_upgrade_surface(&rec.manifest, state_transaction)?;
             let h = state_transaction._curr_block.height().get();
             match rec.status {

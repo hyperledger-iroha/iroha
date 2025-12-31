@@ -114,9 +114,11 @@ eyre = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+ciborium = { version = "0.2.2", default-features = false, features = ["std"] }
 hex = { workspace = true }
 blake3 = { workspace = true }
 ed25519-dalek = "2.2.0"
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8"] }
 time = { version = "0.3.44", features = ["formatting"] }
 # Security: avoid vulnerable 2.x codec; use prost instead
 pprof = { version = "0.15.0", optional = true, default-features = false, features = ["prost-codec", "frame-pointer", "cpp"] }

@@ -1166,6 +1166,73 @@ pub mod torii {
             Vec::new()
         }
     }
+    /// Operator authentication defaults for Torii operator endpoints.
+    pub mod operator_auth {
+        /// Master enable switch for operator authentication.
+        pub const ENABLED: bool = false;
+        /// Require mTLS at the ingress tier before allowing operator endpoints.
+        pub const REQUIRE_MTLS: bool = false;
+        /// Token fallback mode (`disabled`, `bootstrap`, `always`).
+        pub const TOKEN_FALLBACK: &str = "bootstrap";
+        /// Token source selection (`operator`, `api`, `both`).
+        pub const TOKEN_SOURCE: &str = "operator";
+        /// Token allow-list for operator fallback (empty => none).
+        pub fn tokens() -> Vec<String> {
+            Vec::new()
+        }
+        /// Auth attempt rate (per minute). None disables.
+        pub const RATE_PER_MIN: Option<u32> = Some(30);
+        /// Burst budget for auth attempts (tokens).
+        pub const BURST: Option<u32> = Some(10);
+        /// Failures before applying a temporary lockout.
+        pub const LOCKOUT_FAILURES: u32 = 5;
+        /// Sliding window for lockout failure counts (seconds).
+        pub const LOCKOUT_WINDOW_SECS: u64 = 300;
+        /// Lockout duration once triggered (seconds).
+        pub const LOCKOUT_DURATION_SECS: u64 = 900;
+
+        /// WebAuthn configuration defaults.
+        pub mod webauthn {
+            /// Master enable switch for WebAuthn.
+            pub const ENABLED: bool = true;
+            /// Require user verification during assertions.
+            pub const REQUIRE_USER_VERIFICATION: bool = true;
+            /// Challenge TTL for WebAuthn ceremonies (seconds).
+            pub const CHALLENGE_TTL_SECS: u64 = 120;
+            /// Session token TTL after successful WebAuthn assertion (seconds).
+            pub const SESSION_TTL_SECS: u64 = 900;
+
+            /// Default RP name used in WebAuthn options.
+            pub fn rp_name() -> String {
+                "Iroha Operator".to_string()
+            }
+
+            /// Default user id encoded into WebAuthn options.
+            pub fn user_id() -> String {
+                "operator".to_string()
+            }
+
+            /// Default user name encoded into WebAuthn options.
+            pub fn user_name() -> String {
+                "operator".to_string()
+            }
+
+            /// Default user display name encoded into WebAuthn options.
+            pub fn user_display_name() -> String {
+                "Iroha Operator".to_string()
+            }
+
+            /// Allowed WebAuthn origins (empty => must be configured).
+            pub fn origins() -> Vec<String> {
+                Vec::new()
+            }
+
+            /// Allowed WebAuthn algorithms (COSE labels).
+            pub fn allowed_algorithms() -> Vec<String> {
+                vec!["es256".to_string(), "ed25519".to_string()]
+            }
+        }
+    }
     /// Capacity of the broadcast channel used for Torii events/SSE/webhooks.
     pub const EVENTS_BUFFER_CAPACITY: usize = 10_000;
     /// Default page size for app-facing list/query endpoints.
@@ -2302,6 +2369,14 @@ pub mod governance {
     pub const DEBUG_TRACE_PIPELINE: bool = false;
     /// Default JDG signature schemes accepted during attestation validation.
     pub const JDG_SIGNATURE_SCHEMES: &[&str] = &["simple_threshold"];
+    /// Default runtime-upgrade provenance enforcement mode.
+    pub const RUNTIME_UPGRADE_PROVENANCE_MODE: &str = "optional";
+    /// Require SBOM digests for runtime-upgrade provenance.
+    pub const RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM: bool = false;
+    /// Require SLSA attestation bytes for runtime-upgrade provenance.
+    pub const RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA: bool = false;
+    /// Default signature threshold for runtime-upgrade provenance.
+    pub const RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD: usize = 0;
 
     /// Default TEU minimum required for alias admission.
     pub const fn alias_teu_minimum() -> u128 {

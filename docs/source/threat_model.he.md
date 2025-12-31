@@ -74,7 +74,7 @@ _עודכן לאחרונה: 2025-11-07 · סקירה הבאה: 2026-02-05_
 
 **Sumeragi Consensus** – ... (כמו מקור)
 
-**Torii API** – הגנות כניסה מוגבלות; פערים: WebAuthn ועוד.
+**Torii API** – הגנות כניסה מוגבלות; פערים: בקרות DoS לפני אימות.
 
 **מצורפים** – ...
 
@@ -94,7 +94,7 @@ _עודכן לאחרונה: 2025-11-07 · סקירה הבאה: 2026-02-05_
 | --- | --- | --- | --- | --- |
 | Upgrade SBOM provenance gap | פתוח | SLSA Level 3 בזמן קבלה (`SEC-147`) | Security WG | 2025-11-30 |
 | Aggregator fairness audit | פתוח | ביקורת צד ג' לפני GA (`SUM-203`) | Consensus WG | 2025-12-15 |
-| Torii operator auth hardening | פתוח | WebAuthn מאחורי פיצ׳ר (`TOR-118`) | Torii WG | 2025-11-15 |
+| Torii operator auth hardening | סגור | WebAuthn/mTLS לאופרטור, התמדה של אישורים, טוקני סשן וטלמטריה | Torii WG | 2025-11-15 |
 | Hardware-accelerated hashing | פתוח | Multi-version עם fallback (`RNT-092`) | Runtime WG | 2025-12-01 |
 | ZK circuit governance | פתוח | פרוטוקול ממשל (`ZK-077`) | ZK WG | 2025-11-20 |
 | Validator key HSM adoption | פתוח | מדיניות HSM (טיקט TBD) | Security WG | 2025-11-15 |
@@ -122,7 +122,7 @@ _עודכן לאחרונה: 2025-11-07 · סקירה הבאה: 2026-02-05_
 | Security | security@iroha | בהמתנה | תגובה עד 2025-10-05 |
 | Core | core@iroha | בהמתנה | אימות DoS ו-churn |
 | Runtime | runtime@iroha | בהמתנה | Sanitisation + SBOM |
-| Torii | torii@iroha | בהמתנה | Auth + gating |
+| Torii | torii@iroha | בהמתנה | אימות הקשחת auth (`TOR-118`) ותוכנית gating |
 | Consensus | consensus@iroha | בהמתנה | Audit + telemetry |
 | Data Model | data-model@iroha | בהמתנה | Norito/Kotodama |
 | ZK | zk@iroha | בהמתנה | Governance + witness |
