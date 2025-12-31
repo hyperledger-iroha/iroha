@@ -713,6 +713,7 @@ mod tests {
                 soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
                 strict_addresses: true,
                 debug_match_filters: false,
+                operator_auth: iroha_config::parameters::actual::ToriiOperatorAuth::default(),
                 preauth_max_connections: None,
                 preauth_max_connections_per_ip: None,
                 preauth_rate_per_ip_per_sec: None,
@@ -1495,6 +1496,8 @@ mod tests {
                             .expect("valid default JDG signature scheme")
                     })
                     .collect(),
+                runtime_upgrade_provenance:
+                    iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
                 citizen_service: iroha_config::parameters::actual::CitizenServiceDiscipline::default(),
                 viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),

@@ -3952,9 +3952,10 @@ mod evidence_http_tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
-            move |snapshot| {
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
-                match snapshot.url.path() {
+                match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::NOT_FOUND)),
                     "/query" => {
                         let response = QueryResponse::Iterable(QueryOutput {

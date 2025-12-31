@@ -202,6 +202,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             peer_telemetry_urls: Vec::new(),
             strict_addresses: false,
             debug_match_filters: false,
+            operator_auth: A::ToriiOperatorAuth::default(),
             preauth_max_connections: None,
             preauth_max_connections_per_ip: None,
             preauth_rate_per_ip_per_sec: None,
@@ -838,6 +839,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
+            runtime_upgrade_provenance:
+                iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
             sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
             sorafs_telemetry: iroha_config::parameters::actual::SorafsTelemetryPolicy::default(),
             sorafs_provider_owners: std::collections::BTreeMap::new(),

@@ -49,9 +49,29 @@ Evidence (audit; non-consensus)
     - `iroha sumeragi evidence count --summary`
     - `iroha sumeragi evidence submit --evidence-hex <hex>` (or `--evidence-hex-file <path>`)
 
+Operator authentication (WebAuthn/mTLS)
+- POST `/v1/operator/auth/registration/options`
+  - Returns WebAuthn registration options (`publicKey`) for initial credential enrollment.
+- POST `/v1/operator/auth/registration/verify`
+  - Verifies the WebAuthn attestation payload and persists the operator credential.
+- POST `/v1/operator/auth/login/options`
+  - Returns WebAuthn authentication options (`publicKey`) for operator login.
+- POST `/v1/operator/auth/login/verify`
+  - Verifies the WebAuthn assertion payload and returns an operator session token.
+- Headers:
+  - `x-iroha-operator-session`: session token for operator endpoints (issued by login verify).
+  - `x-iroha-operator-token`: bootstrap token (allowed when `torii.operator_auth.token_fallback` permits it).
+  - `x-api-token`: required when `torii.require_api_token = true` or `torii.operator_auth.token_source = "api"`.
+  - `x-forwarded-client-cert`: required when `torii.operator_auth.require_mtls = true` (set by the ingress proxy).
+- Enrollment flow:
+  1. Call registration options with a bootstrap token (only allowed before the first credential is enrolled when `token_fallback = "bootstrap"`).
+  2. Run `navigator.credentials.create` in the operator UI and submit the attestation to registration verify.
+  3. Call login options and login verify to obtain `x-iroha-operator-session`.
+  4. Send `x-iroha-operator-session` on operator endpoints.
+
 Notes
-- These endpoints are node‑local views (in‑memory where noted) and do not affect consensus or persistence.
-- Access may be guarded by API tokens and rate limits depending on your Torii configuration.
+- These endpoints are node-local views (in-memory where noted) and do not affect consensus or persistence.
+- Access may be guarded by API tokens, operator auth (WebAuthn/mTLS), and rate limits depending on your Torii configuration.
 
 CLI watch snippets (bash)
 

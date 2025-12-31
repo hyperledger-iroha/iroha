@@ -30,11 +30,17 @@ State Objects (Data Model)
   - `added_pointer_types: Vec<u16>` — pointer-type identifiers added by the upgrade.
   - `start_height: u64` — first block height where activation is permitted.
   - `end_height: u64` — exclusive upper bound on the activation window.
+  - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` — SBOM digests for upgrade artefacts.
+  - `slsa_attestation: Vec<u8>` — raw SLSA attestation bytes (base64 in JSON).
+  - `provenance: Vec<ManifestProvenance>` — signatures over the canonical payload.
 - `RuntimeUpgradeRecord` fields:
   - `manifest: RuntimeUpgradeManifest` — canonical proposal payload.
   - `status: RuntimeUpgradeStatus` — proposal lifecycle state.
   - `proposer: AccountId` — authority that submitted the proposal.
   - `created_height: u64` — block height where the proposal entered the ledger.
+- `RuntimeUpgradeSbomDigest` fields:
+  - `algorithm: String` — digest algorithm identifier.
+  - `digest: Vec<u8>` — raw digest bytes (base64 in JSON).
 <!-- END RUNTIME UPGRADE TYPES -->
   - Invariants: `end_height > start_height`; `abi_version` is strictly greater than any active version; `abi_hash` must equal `ivm::syscalls::compute_abi_hash(policy_for(abi_version))`; `added_*` must list exactly the additive delta between the new ABI policy and the previously active one; existing numbers/IDs MUST NOT be removed or renumbered.
 
@@ -63,6 +69,19 @@ Admission Rules
   - Before activation of `v`: reject with `IvmAdmissionError::AbiVersionNotActive { v }`.
   - After activation: recompute `abi_hash(v)` and require equality with payload/manifest; else reject with `IvmAdmissionError::ManifestAbiHashMismatch`.
 - Transaction Admission: Instructions `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` require appropriate permissions (root/sudo); must satisfy window overlap constraints.
+
+Provenance Enforcement
+- Runtime-upgrade manifests may carry SBOM digests (`sbom_digests`), SLSA attestation bytes (`slsa_attestation`), and signer metadata (`provenance` signatures). Signatures cover the canonical `RuntimeUpgradeManifestSignaturePayload` (all manifest fields except the `provenance` signatures list).
+- Governance configuration controls enforcement under `governance.runtime_upgrade_provenance`:
+  - `mode`: `optional` (accept missing provenance, verify if present) or `required` (reject if provenance is absent).
+  - `require_sbom`: when `true`, at least one SBOM digest is required.
+  - `require_slsa`: when `true`, a non-empty SLSA attestation is required.
+  - `trusted_signers`: list of approved signer public keys.
+  - `signature_threshold`: minimum number of trusted signatures required.
+- Provenance rejections surface stable error codes in instruction failures (prefix `runtime_upgrade_provenance:`):
+  - `missing_provenance`, `missing_sbom`, `invalid_sbom_digest`, `missing_slsa_attestation`
+  - `missing_signatures`, `invalid_signature`, `untrusted_signer`, `signature_threshold_not_met`
+- Telemetry: `runtime_upgrade_provenance_rejections_total{reason}` counts provenance rejection reasons.
 
 Execution Rules
 - VM Host Policy: During program execution, derive `SyscallPolicy` from `ProgramMetadata.abi_version`. Unknown syscalls for that version map to `VMError::UnknownSyscall`.

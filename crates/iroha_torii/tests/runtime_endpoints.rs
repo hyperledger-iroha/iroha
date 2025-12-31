@@ -92,6 +92,9 @@ async fn runtime_upgrades_list_sorted_by_window_then_version() {
             added_pointer_types: vec![],
             start_height: 10,
             end_height: 18,
+            sbom_digests: Vec::new(),
+            slsa_attestation: Vec::new(),
+            provenance: Vec::new(),
         },
         RuntimeUpgradeManifest {
             name: "ABI version 2".into(),
@@ -102,6 +105,9 @@ async fn runtime_upgrades_list_sorted_by_window_then_version() {
             added_pointer_types: vec![],
             start_height: 2,
             end_height: 5,
+            sbom_digests: Vec::new(),
+            slsa_attestation: Vec::new(),
+            provenance: Vec::new(),
         },
         RuntimeUpgradeManifest {
             name: "ABI v3".into(),
@@ -112,6 +118,9 @@ async fn runtime_upgrades_list_sorted_by_window_then_version() {
             added_pointer_types: vec![],
             start_height: 6,
             end_height: 9,
+            sbom_digests: Vec::new(),
+            slsa_attestation: Vec::new(),
+            provenance: Vec::new(),
         },
     ];
 

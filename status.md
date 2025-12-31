@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- Completed SEC-TORII-OPERATOR-AUTH: WebAuthn/mTLS operator auth with enrollment/login flow, session tokens, mTLS gating, operator endpoint protection, telemetry, and updated OpenAPI/docs/tests.
+- Tests: not run (not requested).
+- Completed SEC-UPGRADE-PROVENANCE: runtime upgrade manifests now carry SBOM/SLSA provenance and signer metadata, governance config enforces trusted signer thresholds, admission rejects missing/invalid provenance with telemetry/error codes, and docs/tests refreshed.
+- Tests: `cargo test -p iroha pipeline_status_404_falls_back_to_committed_query` (passes; existing unused-variable warnings in `crates/iroha_core/src/state.rs`).
 - Forced Sora profile detection merges to override streaming identity keys with deterministic Ed25519 values (even when config layers supply BLS) and added unit coverage to prevent parse warnings.
 - Raised the localnet test-network pipeline time to DA-safe defaults to avoid consensus stalls and hanging event tests.
 - Sanitized `irohad` child environments in `iroha_test_network` to prevent config env overrides from hijacking test peer ports; added unit coverage for the env key list/stripping.
@@ -67,6 +71,9 @@
 - Translated the Sora Nexus data-space operator onboarding guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus bootstrap & observability plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus ledger refactor plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus transition notes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus lane model across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus confidential assets & ZK transfers doc across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Norito Try-It console across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraNet PQ rollout plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraNet PQ ratchet runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).

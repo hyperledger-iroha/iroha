@@ -1492,6 +1492,110 @@ impl Default for CitizenServiceDiscipline {
     }
 }
 
+/// Runtime-upgrade provenance enforcement modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
+#[strum(serialize_all = "snake_case")]
+pub enum RuntimeUpgradeProvenanceMode {
+    /// Provenance is optional; when provided it is verified.
+    #[default]
+    Optional,
+    /// Provenance is required for runtime upgrade manifests.
+    Required,
+}
+
+impl json::JsonSerialize for RuntimeUpgradeProvenanceMode {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+}
+
+impl json::JsonDeserialize for RuntimeUpgradeProvenanceMode {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let text = parser.parse_string()?;
+        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
+            field: "governance.runtime_upgrade_provenance.mode".into(),
+            message: err.to_string(),
+        })
+    }
+}
+
+fn default_runtime_upgrade_provenance_mode() -> RuntimeUpgradeProvenanceMode {
+    RuntimeUpgradeProvenanceMode::from_str(
+        defaults::governance::RUNTIME_UPGRADE_PROVENANCE_MODE,
+    )
+    .expect("invalid runtime upgrade provenance mode default")
+}
+
+/// Runtime-upgrade provenance policy (user view).
+#[derive(Debug, ReadConfig, Clone)]
+pub struct RuntimeUpgradeProvenance {
+    /// Whether provenance is required for runtime upgrade manifests.
+    #[config(default = "default_runtime_upgrade_provenance_mode()")]
+    pub mode: RuntimeUpgradeProvenanceMode,
+    /// Require at least one SBOM digest entry when provenance is present/required.
+    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM")]
+    pub require_sbom: bool,
+    /// Require a non-empty SLSA attestation when provenance is present/required.
+    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA")]
+    pub require_slsa: bool,
+    /// Minimum number of trusted signatures required when provenance is present/required.
+    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD")]
+    pub signature_threshold: usize,
+    /// Trusted signer public keys (multihash).
+    #[config(default)]
+    pub trusted_signers: Vec<String>,
+}
+
+impl RuntimeUpgradeProvenance {
+    fn parse(self) -> actual::RuntimeUpgradeProvenancePolicy {
+        if matches!(self.mode, RuntimeUpgradeProvenanceMode::Optional)
+            && (self.require_sbom || self.require_slsa || self.signature_threshold > 0)
+        {
+            panic!(
+                "governance.runtime_upgrade_provenance.mode=optional cannot require sbom/slsa/signatures"
+            );
+        }
+        let mut trusted_signers = BTreeSet::new();
+        for signer in self.trusted_signers {
+            let pk = PublicKey::from_str(signer.trim()).unwrap_or_else(|err| {
+                panic!("invalid runtime upgrade provenance signer {signer}: {err}");
+            });
+            trusted_signers.insert(pk);
+        }
+        if self.signature_threshold > 0 {
+            assert!(
+                !trusted_signers.is_empty(),
+                "governance.runtime_upgrade_provenance.signature_threshold requires trusted_signers"
+            );
+            assert!(
+                self.signature_threshold <= trusted_signers.len(),
+                "governance.runtime_upgrade_provenance.signature_threshold exceeds trusted_signers"
+            );
+        }
+        actual::RuntimeUpgradeProvenancePolicy {
+            mode: self.mode.into(),
+            require_sbom: self.require_sbom,
+            require_slsa: self.require_slsa,
+            trusted_signers,
+            signature_threshold: self.signature_threshold,
+        }
+    }
+}
+
+impl Default for RuntimeUpgradeProvenance {
+    fn default() -> Self {
+        Self {
+            mode: default_runtime_upgrade_provenance_mode(),
+            require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
+            require_slsa: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA,
+            signature_threshold: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
+            trusted_signers: Vec::new(),
+        }
+    }
+}
+
 /// Governance configuration (user view).
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Governance {
@@ -1577,6 +1681,9 @@ pub struct Governance {
     /// Allowed JDG signature schemes for attestation validation.
     #[config(default = "defaults::governance::jdg_signature_schemes()")]
     pub jdg_signature_schemes: Vec<String>,
+    /// Runtime upgrade provenance enforcement policy.
+    #[config(nested)]
+    pub runtime_upgrade_provenance: RuntimeUpgradeProvenance,
     /// Citizen service discipline knobs (cooldowns, slashing, seat caps).
     #[config(nested)]
     pub citizen_service: CitizenServiceDiscipline,
@@ -1799,6 +1906,7 @@ impl Default for Governance {
             alias_frontier_telemetry: defaults::governance::ALIAS_FRONTIER_TELEMETRY,
             debug_trace_pipeline: defaults::governance::DEBUG_TRACE_PIPELINE,
             jdg_signature_schemes: defaults::governance::jdg_signature_schemes(),
+            runtime_upgrade_provenance: RuntimeUpgradeProvenance::default(),
             citizen_service: CitizenServiceDiscipline::default(),
             viral_incentive_pool_account: defaults::governance::viral_incentive_pool_account(),
             viral_escrow_account: defaults::governance::viral_escrow_account(),
@@ -1902,6 +2010,7 @@ impl Governance {
             );
         }
         let jdg_signature_schemes = normalize_jdg_signature_schemes(self.jdg_signature_schemes);
+        let runtime_upgrade_provenance = self.runtime_upgrade_provenance.parse();
         actual::Governance {
             vk_ballot: self.vk_ballot.map(VerifyingKeyRef::parse),
             vk_tally: self.vk_tally.map(VerifyingKeyRef::parse),
@@ -1934,6 +2043,7 @@ impl Governance {
             alias_frontier_telemetry: self.alias_frontier_telemetry,
             debug_trace_pipeline: self.debug_trace_pipeline,
             jdg_signature_schemes,
+            runtime_upgrade_provenance,
             citizen_service,
             viral_incentives,
             sorafs_pin_policy: self.sorafs_pin_policy.parse(),
@@ -11078,6 +11188,9 @@ pub struct Torii {
     /// Emit filter-match debug traces (developer diagnostics only).
     #[config(default = "defaults::torii::DEBUG_MATCH_FILTERS")]
     pub debug_match_filters: bool,
+    /// Operator authentication policy for operator-facing endpoints.
+    #[config(nested)]
+    pub operator_auth: ToriiOperatorAuth,
     /// Maximum concurrent pre-auth connections across all clients.
     pub preauth_max_connections: Option<NonZeroUsize>,
     /// Maximum concurrent pre-auth connections per IP.
@@ -11463,6 +11576,7 @@ impl Torii {
             soranet_privacy_ingest: self.soranet_privacy_ingest.parse(),
             strict_addresses: self.strict_addresses,
             debug_match_filters: self.debug_match_filters,
+            operator_auth: self.operator_auth.parse(),
             preauth_max_connections: self.preauth_max_connections,
             preauth_max_connections_per_ip: self.preauth_max_connections_per_ip,
             preauth_rate_per_ip_per_sec: self
@@ -11551,6 +11665,199 @@ impl Torii {
     }
 }
 
+/// Operator authentication configuration for Torii operator endpoints.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiOperatorAuth {
+    /// Master enable switch for operator authentication.
+    #[config(default = "defaults::torii::operator_auth::ENABLED")]
+    pub enabled: bool,
+    /// Require mTLS at ingress before allowing operator endpoints.
+    #[config(default = "defaults::torii::operator_auth::REQUIRE_MTLS")]
+    pub require_mtls: bool,
+    /// Token fallback mode (`disabled`, `bootstrap`, `always`).
+    #[config(default = "defaults::torii::operator_auth::TOKEN_FALLBACK.to_string()")]
+    pub token_fallback: String,
+    /// Token source (`operator`, `api`, `both`).
+    #[config(default = "defaults::torii::operator_auth::TOKEN_SOURCE.to_string()")]
+    pub token_source: String,
+    /// Token allow-list used for operator fallback (if enabled).
+    #[config(default = "defaults::torii::operator_auth::tokens()")]
+    pub tokens: Vec<String>,
+    /// Auth attempt rate (per minute). None disables.
+    pub rate_per_minute: Option<u32>,
+    /// Auth attempt burst tokens. None disables.
+    pub burst: Option<u32>,
+    /// Failures before triggering a temporary lockout (0 disables).
+    #[config(default = "defaults::torii::operator_auth::LOCKOUT_FAILURES")]
+    pub lockout_failures: u32,
+    /// Window for counting failures before lockout (seconds).
+    #[config(default = "defaults::torii::operator_auth::LOCKOUT_WINDOW_SECS")]
+    pub lockout_window_secs: u64,
+    /// Lockout duration once triggered (seconds).
+    #[config(default = "defaults::torii::operator_auth::LOCKOUT_DURATION_SECS")]
+    pub lockout_duration_secs: u64,
+    /// WebAuthn configuration block.
+    #[config(nested)]
+    pub webauthn: ToriiOperatorWebAuthn,
+}
+
+/// WebAuthn configuration for operator authentication.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiOperatorWebAuthn {
+    /// Master enable switch for WebAuthn.
+    #[config(default = "defaults::torii::operator_auth::webauthn::ENABLED")]
+    pub enabled: bool,
+    /// RP ID expected by WebAuthn clients (must be set when enabled).
+    pub rp_id: Option<String>,
+    /// RP display name for WebAuthn options.
+    #[config(default = "defaults::torii::operator_auth::webauthn::rp_name()")]
+    pub rp_name: String,
+    /// Allowed WebAuthn origins.
+    #[config(default = "defaults::torii::operator_auth::webauthn::origins()")]
+    pub origins: Vec<String>,
+    /// User id inserted into WebAuthn registration options.
+    #[config(default = "defaults::torii::operator_auth::webauthn::user_id()")]
+    pub user_id: String,
+    /// User name inserted into WebAuthn registration options.
+    #[config(default = "defaults::torii::operator_auth::webauthn::user_name()")]
+    pub user_name: String,
+    /// User display name inserted into WebAuthn registration options.
+    #[config(default = "defaults::torii::operator_auth::webauthn::user_display_name()")]
+    pub user_display_name: String,
+    /// Challenge TTL for registration/assertion options (seconds).
+    #[config(default = "defaults::torii::operator_auth::webauthn::CHALLENGE_TTL_SECS")]
+    pub challenge_ttl_secs: u64,
+    /// Session token TTL after successful assertion (seconds).
+    #[config(default = "defaults::torii::operator_auth::webauthn::SESSION_TTL_SECS")]
+    pub session_ttl_secs: u64,
+    /// Require user verification during assertions.
+    #[config(default = "defaults::torii::operator_auth::webauthn::REQUIRE_USER_VERIFICATION")]
+    pub require_user_verification: bool,
+    /// Allowed WebAuthn algorithms (COSE labels).
+    #[config(default = "defaults::torii::operator_auth::webauthn::allowed_algorithms()")]
+    pub allowed_algorithms: Vec<String>,
+}
+
+impl ToriiOperatorAuth {
+    fn parse(self) -> actual::ToriiOperatorAuth {
+        let token_fallback = parse_operator_token_fallback(&self.token_fallback);
+        let token_source = parse_operator_token_source(&self.token_source);
+        let rate_per_minute = self
+            .rate_per_minute
+            .or(super::defaults::torii::operator_auth::RATE_PER_MIN)
+            .and_then(std::num::NonZeroU32::new);
+        let burst = self
+            .burst
+            .or(super::defaults::torii::operator_auth::BURST)
+            .and_then(std::num::NonZeroU32::new);
+        let lockout_failures = std::num::NonZeroU32::new(self.lockout_failures);
+        let lockout_window = Duration::from_secs(self.lockout_window_secs.max(1));
+        let lockout_duration = Duration::from_secs(self.lockout_duration_secs.max(1));
+        let webauthn = if self.enabled {
+            self.webauthn.parse()
+        } else {
+            None
+        };
+        if self.enabled && webauthn.is_none() {
+            panic!("torii.operator_auth.webauthn.enabled must be true when operator auth is enabled");
+        }
+        actual::ToriiOperatorAuth {
+            enabled: self.enabled,
+            require_mtls: self.require_mtls,
+            token_fallback,
+            token_source,
+            tokens: self.tokens,
+            rate_per_minute,
+            burst,
+            lockout: actual::OperatorAuthLockout {
+                failures: lockout_failures,
+                window: lockout_window,
+                duration: lockout_duration,
+            },
+            webauthn,
+        }
+    }
+}
+
+impl ToriiOperatorWebAuthn {
+    fn parse(self) -> Option<actual::OperatorWebAuthnConfig> {
+        if !self.enabled {
+            return None;
+        }
+        let rp_id = self.rp_id.unwrap_or_else(|| {
+            panic!("torii.operator_auth.webauthn.rp_id must be set when WebAuthn is enabled");
+        });
+        let rp_id = rp_id.trim();
+        if rp_id.is_empty() {
+            panic!("torii.operator_auth.webauthn.rp_id must not be empty");
+        }
+        if self.origins.is_empty() {
+            panic!("torii.operator_auth.webauthn.origins must not be empty");
+        }
+        let origins = self
+            .origins
+            .into_iter()
+            .map(|origin| {
+                url::Url::parse(&origin).unwrap_or_else(|err| {
+                    panic!("invalid torii.operator_auth.webauthn.origins entry `{origin}`: {err}")
+                })
+            })
+            .collect();
+        let user_id = self.user_id.into_bytes();
+        if user_id.is_empty() || user_id.len() > 64 {
+            panic!("torii.operator_auth.webauthn.user_id must be 1..=64 bytes");
+        }
+        let algorithms = self
+            .allowed_algorithms
+            .into_iter()
+            .map(|label| parse_operator_webauthn_algorithm(&label))
+            .collect();
+        Some(actual::OperatorWebAuthnConfig {
+            rp_id: rp_id.to_string(),
+            rp_name: self.rp_name,
+            origins,
+            user_id,
+            user_name: self.user_name,
+            user_display_name: self.user_display_name,
+            challenge_ttl: Duration::from_secs(self.challenge_ttl_secs.max(1)),
+            session_ttl: Duration::from_secs(self.session_ttl_secs.max(1)),
+            require_user_verification: self.require_user_verification,
+            allowed_algorithms: algorithms,
+        })
+    }
+}
+
+fn parse_operator_token_fallback(value: &str) -> actual::OperatorTokenFallback {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "disabled" => actual::OperatorTokenFallback::Disabled,
+        "bootstrap" => actual::OperatorTokenFallback::Bootstrap,
+        "always" => actual::OperatorTokenFallback::Always,
+        other => panic!(
+            "invalid torii.operator_auth.token_fallback `{other}`; expected `disabled`, `bootstrap`, or `always`"
+        ),
+    }
+}
+
+fn parse_operator_token_source(value: &str) -> actual::OperatorTokenSource {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "operator" => actual::OperatorTokenSource::OperatorTokens,
+        "api" => actual::OperatorTokenSource::ApiTokens,
+        "both" => actual::OperatorTokenSource::Both,
+        other => panic!(
+            "invalid torii.operator_auth.token_source `{other}`; expected `operator`, `api`, or `both`"
+        ),
+    }
+}
+
+fn parse_operator_webauthn_algorithm(value: &str) -> actual::OperatorWebAuthnAlgorithm {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "es256" | "p256" => actual::OperatorWebAuthnAlgorithm::Es256,
+        "ed25519" | "eddsa" => actual::OperatorWebAuthnAlgorithm::Ed25519,
+        other => panic!(
+            "invalid torii.operator_auth.webauthn.allowed_algorithms entry `{other}`; expected `es256` or `ed25519`"
+        ),
+    }
+}
 /// Transport-specific Torii configuration (Norito-RPC rollout, streaming knobs).
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize, Default)]
 pub struct ToriiTransport {

@@ -1365,6 +1365,60 @@ impl Default for ViralIncentives {
     }
 }
 
+/// Runtime-upgrade provenance enforcement modes (actual layer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeUpgradeProvenanceMode {
+    /// Provenance is optional; when provided it is verified.
+    Optional,
+    /// Provenance is required for runtime upgrade manifests.
+    Required,
+}
+
+impl RuntimeUpgradeProvenanceMode {
+    /// Return whether provenance is required.
+    #[inline]
+    #[must_use]
+    pub const fn is_required(self) -> bool {
+        matches!(self, Self::Required)
+    }
+}
+
+impl From<user::RuntimeUpgradeProvenanceMode> for RuntimeUpgradeProvenanceMode {
+    fn from(mode: user::RuntimeUpgradeProvenanceMode) -> Self {
+        match mode {
+            user::RuntimeUpgradeProvenanceMode::Optional => Self::Optional,
+            user::RuntimeUpgradeProvenanceMode::Required => Self::Required,
+        }
+    }
+}
+
+/// Runtime-upgrade provenance policy (actual layer).
+#[derive(Debug, Clone)]
+pub struct RuntimeUpgradeProvenancePolicy {
+    /// Enforcement mode for provenance.
+    pub mode: RuntimeUpgradeProvenanceMode,
+    /// Require at least one SBOM digest entry when provenance is present/required.
+    pub require_sbom: bool,
+    /// Require a non-empty SLSA attestation when provenance is present/required.
+    pub require_slsa: bool,
+    /// Trusted signer public keys.
+    pub trusted_signers: BTreeSet<PublicKey>,
+    /// Minimum number of trusted signatures required.
+    pub signature_threshold: usize,
+}
+
+impl Default for RuntimeUpgradeProvenancePolicy {
+    fn default() -> Self {
+        Self {
+            mode: RuntimeUpgradeProvenanceMode::Optional,
+            require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
+            require_slsa: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA,
+            trusted_signers: BTreeSet::new(),
+            signature_threshold: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
+        }
+    }
+}
+
 /// Governance configuration (actual layer).
 #[derive(Debug, Clone)]
 pub struct Governance {
@@ -1400,6 +1454,8 @@ pub struct Governance {
     pub debug_trace_pipeline: bool,
     /// Allowed JDG signature schemes for attestation validation.
     pub jdg_signature_schemes: BTreeSet<JdgSignatureScheme>,
+    /// Runtime upgrade provenance enforcement policy.
+    pub runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy,
     /// Citizen service discipline knobs (cooldown/seat caps/slashing).
     pub citizen_service: CitizenServiceDiscipline,
     /// Viral incentive policy for social rewards.
@@ -1506,6 +1562,7 @@ impl Default for Governance {
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
+            runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy::default(),
             citizen_service: CitizenServiceDiscipline {
                 seat_cooldown_blocks: defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS,
                 max_seats_per_epoch: defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH,
@@ -3826,6 +3883,8 @@ pub struct Torii {
     pub strict_addresses: bool,
     /// Emit filter-match debug traces (developer diagnostics only).
     pub debug_match_filters: bool,
+    /// Operator authentication policy for operator-facing endpoints.
+    pub operator_auth: ToriiOperatorAuth,
     /// Maximum concurrent pre-auth connections (global).
     pub preauth_max_connections: Option<NonZeroUsize>,
     /// Maximum concurrent pre-auth connections per IP.
@@ -3911,6 +3970,179 @@ pub struct Torii {
     pub webhook: Webhook,
     /// Push notification delivery configuration.
     pub push: Push,
+}
+
+/// Operator authentication configuration for Torii operator endpoints.
+#[derive(Debug, Clone)]
+pub struct ToriiOperatorAuth {
+    /// Master enable switch for operator authentication.
+    pub enabled: bool,
+    /// Require mTLS at ingress before allowing operator endpoints.
+    pub require_mtls: bool,
+    /// Token fallback mode for operator auth.
+    pub token_fallback: OperatorTokenFallback,
+    /// Token source selection for operator auth.
+    pub token_source: OperatorTokenSource,
+    /// Token allow-list used for operator fallback.
+    pub tokens: Vec<String>,
+    /// Auth attempt rate (per minute). None disables.
+    pub rate_per_minute: Option<NonZeroU32>,
+    /// Auth attempt burst tokens. None disables.
+    pub burst: Option<NonZeroU32>,
+    /// Temporary lockout policy for repeated failures.
+    pub lockout: OperatorAuthLockout,
+    /// WebAuthn configuration (when enabled).
+    pub webauthn: Option<OperatorWebAuthnConfig>,
+}
+
+impl Default for ToriiOperatorAuth {
+    fn default() -> Self {
+        let token_fallback = match defaults::torii::operator_auth::TOKEN_FALLBACK {
+            "disabled" => OperatorTokenFallback::Disabled,
+            "bootstrap" => OperatorTokenFallback::Bootstrap,
+            "always" => OperatorTokenFallback::Always,
+            _ => OperatorTokenFallback::Bootstrap,
+        };
+        let token_source = match defaults::torii::operator_auth::TOKEN_SOURCE {
+            "operator" => OperatorTokenSource::OperatorTokens,
+            "api" => OperatorTokenSource::ApiTokens,
+            "both" => OperatorTokenSource::Both,
+            _ => OperatorTokenSource::OperatorTokens,
+        };
+        Self {
+            enabled: defaults::torii::operator_auth::ENABLED,
+            require_mtls: defaults::torii::operator_auth::REQUIRE_MTLS,
+            token_fallback,
+            token_source,
+            tokens: defaults::torii::operator_auth::tokens(),
+            rate_per_minute: defaults::torii::operator_auth::RATE_PER_MIN
+                .and_then(NonZeroU32::new),
+            burst: defaults::torii::operator_auth::BURST.and_then(NonZeroU32::new),
+            lockout: OperatorAuthLockout::default(),
+            webauthn: None,
+        }
+    }
+}
+
+/// Token fallback policy for operator auth.
+#[derive(Debug, Clone, Copy)]
+pub enum OperatorTokenFallback {
+    /// Never accept tokens for operator auth.
+    Disabled,
+    /// Allow tokens only for bootstrap endpoints.
+    Bootstrap,
+    /// Allow tokens for all operator endpoints.
+    Always,
+}
+
+impl OperatorTokenFallback {
+    /// Render a stable label for telemetry and logging.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Bootstrap => "bootstrap",
+            Self::Always => "always",
+        }
+    }
+}
+
+/// Token source selection for operator auth.
+#[derive(Debug, Clone, Copy)]
+pub enum OperatorTokenSource {
+    /// Use the operator-specific token allow-list.
+    OperatorTokens,
+    /// Use Torii API tokens.
+    ApiTokens,
+    /// Accept both operator and Torii API tokens.
+    Both,
+}
+
+impl OperatorTokenSource {
+    /// Render a stable label for telemetry and logging.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::OperatorTokens => "operator",
+            Self::ApiTokens => "api",
+            Self::Both => "both",
+        }
+    }
+}
+
+/// Lockout policy applied after repeated authentication failures.
+#[derive(Debug, Clone, Copy)]
+pub struct OperatorAuthLockout {
+    /// Failures required to trigger a lockout (None disables lockouts).
+    pub failures: Option<NonZeroU32>,
+    /// Sliding window used to count failures.
+    pub window: Duration,
+    /// Lockout duration once triggered.
+    pub duration: Duration,
+}
+
+impl Default for OperatorAuthLockout {
+    fn default() -> Self {
+        Self {
+            failures: NonZeroU32::new(defaults::torii::operator_auth::LOCKOUT_FAILURES),
+            window: Duration::from_secs(defaults::torii::operator_auth::LOCKOUT_WINDOW_SECS),
+            duration: Duration::from_secs(defaults::torii::operator_auth::LOCKOUT_DURATION_SECS),
+        }
+    }
+}
+
+/// WebAuthn configuration required for operator auth.
+#[derive(Debug, Clone)]
+pub struct OperatorWebAuthnConfig {
+    /// RP ID used for WebAuthn (domain).
+    pub rp_id: String,
+    /// RP display name used in WebAuthn options.
+    pub rp_name: String,
+    /// Allowed WebAuthn origins.
+    pub origins: Vec<Url>,
+    /// User identifier injected into WebAuthn registration options.
+    pub user_id: Vec<u8>,
+    /// User name injected into WebAuthn registration options.
+    pub user_name: String,
+    /// User display name injected into WebAuthn registration options.
+    pub user_display_name: String,
+    /// Challenge TTL for registration/assertion options.
+    pub challenge_ttl: Duration,
+    /// Session token TTL after successful assertion.
+    pub session_ttl: Duration,
+    /// Require user verification during assertions.
+    pub require_user_verification: bool,
+    /// Allowed WebAuthn algorithms.
+    pub allowed_algorithms: Vec<OperatorWebAuthnAlgorithm>,
+}
+
+/// Supported WebAuthn algorithms for operator auth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorWebAuthnAlgorithm {
+    /// COSE alg -7 (ES256 / P-256).
+    Es256,
+    /// COSE alg -8 (Ed25519).
+    Ed25519,
+}
+
+impl OperatorWebAuthnAlgorithm {
+    /// Return the COSE algorithm identifier.
+    #[must_use]
+    pub const fn cose_alg(self) -> i64 {
+        match self {
+            Self::Es256 => -7,
+            Self::Ed25519 => -8,
+        }
+    }
+
+    /// Render a stable label for telemetry and logging.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Es256 => "es256",
+            Self::Ed25519 => "ed25519",
+        }
+    }
 }
 
 /// Ingress controls for SoraNet privacy telemetry endpoints.

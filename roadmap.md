@@ -215,6 +215,9 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal Sora Nexus data-space operator onboarding translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal Sora Nexus bootstrap & observability plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal Sora Nexus ledger refactor plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus transition notes translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus lane model translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus confidential assets & ZK transfers translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal account address compliance reference translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal publishing checklist translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal address safety & accessibility reference translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
@@ -264,20 +267,20 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Add alerting guidance + runbook updates for NTS drift/unsynced states.
    - [x] Add tests for insufficient samples, out-of-bounds offsets, and enforcement behavior.
 
-37. **SEC-UPGRADE-PROVENANCE — Require SBOM/SLSA attestations for runtime upgrades** (Core/Governance/Security, Line: Shared, Owner: Security WG + Governance WG, Priority: High, Status: 🈳 Not Started, target TBD)
-   - [ ] Extend runtime-upgrade manifests with provenance payloads (SBOM digests, SLSA attestation bytes, signer metadata).
-   - [ ] Add config-driven enforcement for provenance policy and trusted signers/thresholds.
-   - [ ] Enforce provenance in runtime-upgrade ISIs; reject missing or invalid attestations.
-   - [ ] Surface telemetry + error codes for provenance failures.
-   - [ ] Wire Torii/governance APIs to accept provenance and emit rejection telemetry.
-   - [ ] Add tests + update `docs/source/runtime_upgrades.md` and threat model tracking.
+37. **SEC-UPGRADE-PROVENANCE — Require SBOM/SLSA attestations for runtime upgrades** (Core/Governance/Security, Line: Shared, Owner: Security WG + Governance WG, Priority: High, Status: 🈴 Completed, target TBD)
+   - [x] Extend runtime-upgrade manifests with provenance payloads (SBOM digests, SLSA attestation bytes, signer metadata).
+   - [x] Add config-driven enforcement for provenance policy and trusted signers/thresholds.
+   - [x] Enforce provenance in runtime-upgrade ISIs; reject missing or invalid attestations.
+   - [x] Surface telemetry + error codes for provenance failures.
+   - [x] Wire Torii/governance APIs to accept provenance and emit rejection telemetry.
+   - [x] Add tests + update `docs/source/runtime_upgrades.md` and threat model tracking.
 
-38. **SEC-TORII-OPERATOR-AUTH — WebAuthn/mTLS hardening for operator endpoints** (Torii/Security, Line: Shared, Owner: Torii WG, Priority: High, Status: 🈳 Not Started, target TBD)
-   - [ ] Define operator auth policy in `iroha_config` (WebAuthn required, mTLS gating, token fallback rules).
-   - [ ] Implement WebAuthn credential enrollment + storage (WSV or config-backed).
-   - [ ] Add challenge/verify flow and gate operator endpoints behind auth policy.
-   - [ ] Add rate limits and audit telemetry for auth failures/lockouts.
-   - [ ] Add tests for enrollment, rollover, and fallback paths; update OpenAPI + runbooks.
+38. **SEC-TORII-OPERATOR-AUTH — WebAuthn/mTLS hardening for operator endpoints** (Torii/Security, Line: Shared, Owner: Torii WG, Priority: High, Status: 🈴 Completed, target TBD)
+   - [x] Define operator auth policy in `iroha_config` (WebAuthn required, mTLS gating, token fallback rules).
+   - [x] Implement WebAuthn credential enrollment + storage (WSV or config-backed).
+   - [x] Add challenge/verify flow and gate operator endpoints behind auth policy.
+   - [x] Add rate limits and audit telemetry for auth failures/lockouts.
+   - [x] Add tests for enrollment, rollover, and fallback paths; update OpenAPI + runbooks.
 
 39. **SEC-ATTACHMENT-SANITISATION — Safe ingest pipeline for Torii attachments** (Torii/Runtime, Line: Shared, Owner: Runtime WG + Torii WG, Priority: High, Status: 🈳 Not Started, target TBD)
    - [ ] Add config for allowed MIME types, max expanded size, and archive depth.

@@ -69,10 +69,10 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 - Admission compares `abi_hash` and `code_hash`; mismatches reject deployment (tested in `crates/iroha_core/tests/runtime_upgrade_admission.rs`).
 - Upgrade rollouts require governance approval and support deterministic rollback to the prior build.
 - Config pinning via `iroha_config` prevents unexpected ABI versions during admission.
+- Runtime admission enforces provenance policy (SBOM digests, SLSA attestation bytes, trusted signer signatures + thresholds) with rejection telemetry.
 
 **Outstanding gaps**
 - Release-signing keys still co-located with validator ops environments (**see residual risks: Release-signing key separation**).
-- Supply-chain attestations (SBOM/SLSA) enforced only in CI, not during runtime admission (**see residual risks: Upgrade SBOM provenance gap**).
 
 ### Sumeragi Consensus
 
@@ -97,10 +97,10 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 - Route registration isolated in builder helpers; unsupported feature combinations rejected in tests (status.md Sep 10 2025).
 - Rate limiting per account and credential; adaptive backoff for repeated failures (see `crates/iroha_torii/src`).
 - Operator endpoints can require mTLS; audit trails keyed to `AccountId`/`DomainId`.
+- Operator endpoints are gated by WebAuthn sessions with bootstrap token fallback and lockout telemetry.
 
 **Outstanding gaps**
 - Connection-level handshake throttling and circuit breakers are not yet implemented (**see residual risks: Pre-auth DoS controls**).
-- WebAuthn-based operator auth remains gated behind development flag (**see residual risks: Torii operator auth hardening**).
 
 ### Attachments and Payloads
 
@@ -168,9 +168,9 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 
 | Risk | Status | Mitigation Plan | Owner | Target |
 | --- | --- | --- | --- | --- |
-| Upgrade SBOM provenance gap | Open | Integrate SLSA Level 3 attestations into runtime admission (`SEC-147`) | Security WG | 2025-11-30 |
+| Upgrade SBOM provenance gap | Closed | Runtime admission enforces SBOM/SLSA provenance policy and trusted signer thresholds (see `docs/source/runtime_upgrades.md`). | Security WG | 2025-11-30 |
 | Aggregator fairness audit | Open | Commission third-party review; publish before Milestone 2 GA (`SUM-203`) | Consensus WG | 2025-12-15 |
-| Torii operator auth hardening | Open | Ship WebAuthn behind feature flag; evaluate rollout (`TOR-118`) | Torii WG | 2025-11-15 |
+| Torii operator auth hardening | Closed | WebAuthn/mTLS operator auth shipped with credential persistence, session tokens, and telemetry. | Torii WG | 2025-11-15 |
 | Hardware-accelerated hashing | Open | Implement multiversion hashing with deterministic fallback (`RNT-092`) | Runtime WG | 2025-12-01 |
 | ZK circuit governance | Open | Draft governance protocol and tooling (`ZK-077`) | ZK WG | 2025-11-20 |
 | Validator key HSM adoption | Open | Define policy and reference deployment (tracked via `roadmap.md` entry *Security & privacy hardening — SNNet-15H*) | Security WG | 2025-11-15 |
@@ -197,7 +197,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 | --- | --- | --- | --- |
 | Security WG | security@iroha | Pending | Circulate document; collect acknowledgements and ticket references by 2025-10-05. |
 | Core WG | core@iroha | Pending | Confirm pre-auth DoS roadmap and churn telemetry alerting coverage. |
-| Runtime WG | runtime@iroha | Pending | Confirm attachment sanitisation and SBOM gate actions. |
+| Runtime WG | runtime@iroha | Pending | Confirm attachment sanitisation follow-up actions. |
 | Torii WG | torii@iroha | Pending | Validate auth hardening (`TOR-118`) and connection gating schedule. |
 | Consensus WG | consensus@iroha | Pending | Provide fairness audit schedule and membership telemetry plan. |
 | Data Model WG | data-model@iroha | Pending | Confirm Norito/Kotodama coverage and fuzz corpus maintenance. |

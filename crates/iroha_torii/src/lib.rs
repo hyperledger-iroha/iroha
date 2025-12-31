@@ -58,6 +58,7 @@
 mod api_version;
 #[cfg(feature = "push")]
 mod push;
+mod operator_auth;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
     use norito::json::{self, JsonSerialize, Value};
@@ -621,6 +622,7 @@ struct AppState {
     content_config: iroha_config::parameters::actual::Content,
     require_api_token: bool,
     api_tokens_set: Arc<HashSet<String>>,
+    operator_auth: Arc<operator_auth::OperatorAuth>,
     soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest,
     soranet_privacy_tokens: Arc<HashSet<String>>,
     soranet_privacy_allow_nets: Arc<Vec<limits::IpNet>>,
@@ -10654,6 +10656,7 @@ pub struct Torii {
     require_api_token: bool,
     strict_addresses: bool,
     api_tokens_set: std::sync::Arc<std::collections::HashSet<String>>,
+    operator_auth: Arc<operator_auth::OperatorAuth>,
     soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest,
     soranet_privacy_tokens: std::sync::Arc<std::collections::HashSet<String>>,
     soranet_privacy_allow_nets: std::sync::Arc<Vec<limits::IpNet>>,
@@ -10710,8 +10713,12 @@ impl Torii {
     #[cfg(feature = "telemetry")]
     #[allow(clippy::unused_self)]
     fn add_telemetry_routes(&self, builder: &mut RouterBuilder) {
-        builder.apply(|router| {
-            router
+        builder.apply_with_state(|router, state| {
+            let operator_layer = axum::middleware::from_fn_with_state(
+                state.clone(),
+                operator_auth::enforce_operator_auth,
+            );
+            let operator_router = Router::new()
                 .route(&format!("{}/*tail", uri::STATUS), get(handler_status_tail))
                 // Telemetry-gated Sumeragi endpoints (runtime gate inside handlers)
                 .route("/v1/sumeragi/rbc", get(handler_rbc_status))
@@ -10724,6 +10731,9 @@ impl Torii {
                 .route("/v1/debug/axt/cache", get(handler_debug_axt_cache))
                 .route(uri::STATUS, get(handler_status_root))
                 .route(uri::METRICS, get(handler_metrics))
+                .route_layer(operator_layer);
+
+            let public_router = Router::new()
                 .route(
                     routing::SORANET_PRIVACY_EVENT_ENDPOINT,
                     axum::routing::post(handler_post_soranet_privacy_event),
@@ -10739,7 +10749,9 @@ impl Torii {
                 .route(
                     "/v1/assets/{definition_id}/holders/query",
                     post(handler_asset_holders_query),
-                )
+                );
+
+            router.merge(operator_router).merge(public_router)
         });
     }
 
@@ -10897,8 +10909,12 @@ impl Torii {
 
     fn add_sumeragi_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
-        builder.apply(|router| {
-            let router = router
+        builder.apply_with_state(|router, state| {
+            let operator_layer = axum::middleware::from_fn_with_state(
+                state.clone(),
+                operator_auth::enforce_operator_auth,
+            );
+            let mut sumeragi = Router::new()
                 .route(
                     "/v1/sumeragi/evidence/count",
                     get(handler_sumeragi_evidence_count),
@@ -10909,8 +10925,8 @@ impl Torii {
                 );
 
             #[cfg(feature = "telemetry")]
-            let router = {
-                router
+            {
+                sumeragi = sumeragi
                     .route("/v1/sumeragi/new_view/sse", get(handler_new_view_sse))
                     .route("/v1/sumeragi/new_view/json", get(handler_new_view_json))
                     .route("/v1/sumeragi/status", get(handler_sumeragi_status))
@@ -10955,13 +10971,10 @@ impl Torii {
                     .route("/v1/sumeragi/rbc/sessions", get(handler_rbc_sessions))
                     .route("/v1/sumeragi/exec_root/{hash}", get(handler_exec_root))
                     .route("/v1/sumeragi/exec_qc/{hash}", get(handler_exec_qc))
-                    .route("/v1/sumeragi/collectors", get(handler_sumeragi_collectors))
-            };
+                    .route("/v1/sumeragi/collectors", get(handler_sumeragi_collectors));
+            }
 
-            #[cfg(not(feature = "telemetry"))]
-            let router = router;
-
-            router
+            let sumeragi = sumeragi
                 .route(
                     "/v1/sumeragi/vrf/penalties/{epoch}",
                     get(handler_sumeragi_vrf_penalties),
@@ -10973,15 +10986,20 @@ impl Torii {
                 .route("/v1/sumeragi/vrf/commit", post(handler_sumeragi_vrf_commit))
                 .route("/v1/sumeragi/vrf/reveal", post(handler_sumeragi_vrf_reveal))
                 .route("/v1/sumeragi/rbc/sample", post(handler_rbc_sample))
+                .route_layer(operator_layer);
+
+            router.merge(sumeragi)
         });
     }
 
     fn add_core_info_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
-        builder.apply(|router| {
-            router
-                .route(uri::API_VERSION, get(handler_version))
-                .route(uri::API_VERSIONS, get(handler_api_versions))
+        builder.apply_with_state(|router, state| {
+            let operator_layer = axum::middleware::from_fn_with_state(
+                state.clone(),
+                operator_auth::enforce_operator_auth,
+            );
+            let operator_router = Router::new()
                 .route(
                     uri::CONFIGURATION,
                     get(handler_get_configuration).post(handler_post_configuration),
@@ -10990,12 +11008,17 @@ impl Torii {
                     iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE,
                     post(handler_post_nexus_lane_lifecycle),
                 )
+                .route_layer(operator_layer);
+            let public_router = Router::new()
+                .route(uri::API_VERSION, get(handler_version))
+                .route(uri::API_VERSIONS, get(handler_api_versions))
                 .route(uri::PEERS, get(handler_peers))
                 .route(uri::HEALTH, get(handler_health))
                 .route(uri::LEDGER_HEADERS, get(handler_ledger_headers))
                 .route(uri::LEDGER_STATE_ROOT, get(handler_ledger_state_root))
                 .route(uri::LEDGER_STATE_PROOF, get(handler_ledger_state_proof))
-                .route(uri::LEDGER_BLOCK_PROOF, get(handler_block_proof))
+                .route(uri::LEDGER_BLOCK_PROOF, get(handler_block_proof));
+            router.merge(operator_router).merge(public_router)
         });
     }
 
@@ -11046,10 +11069,42 @@ impl Torii {
         });
     }
 
+    #[allow(clippy::unused_self)]
+    fn add_operator_auth_routes(&self, builder: &mut RouterBuilder) {
+        builder.apply(|router| {
+            router
+                .route(
+                    "/v1/operator/auth/registration/options",
+                    post(operator_auth::handle_operator_register_options),
+                )
+                .route(
+                    "/v1/operator/auth/registration/verify",
+                    post(operator_auth::handle_operator_register_verify),
+                )
+                .route(
+                    "/v1/operator/auth/login/options",
+                    post(operator_auth::handle_operator_login_options),
+                )
+                .route(
+                    "/v1/operator/auth/login/verify",
+                    post(operator_auth::handle_operator_login_verify),
+                )
+        });
+    }
+
     #[cfg(feature = "profiling")]
     #[allow(clippy::unused_self)]
     fn add_profiling_routes(&self, builder: &mut RouterBuilder) {
-        builder.apply(|router| router.route(uri::PROFILE, get(handler_profile)));
+        builder.apply_with_state(|router, state| {
+            let operator_layer = axum::middleware::from_fn_with_state(
+                state.clone(),
+                operator_auth::enforce_operator_auth,
+            );
+            let profiling = Router::new()
+                .route(uri::PROFILE, get(handler_profile))
+                .route_layer(operator_layer);
+            router.merge(profiling)
+        });
     }
 
     #[cfg(not(feature = "profiling"))]
@@ -12275,6 +12330,20 @@ impl Torii {
 
         let telemetry_profile = telemetry.profile();
 
+        let api_tokens_set: Arc<HashSet<String>> =
+            Arc::new(config.api_tokens.iter().cloned().collect());
+        let operator_auth = Arc::new(
+            operator_auth::OperatorAuth::new(
+                config.operator_auth.clone(),
+                api_tokens_set.clone(),
+                config.data_dir.clone(),
+                telemetry.clone(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("invalid torii.operator_auth configuration: {err}")
+            }),
+        );
+
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_telemetry_urls = config
             .peer_telemetry_urls
@@ -12398,7 +12467,8 @@ impl Torii {
             norito_rpc: config.transport.norito_rpc.clone(),
             require_api_token: config.require_api_token,
             strict_addresses: config.strict_addresses,
-            api_tokens_set: std::sync::Arc::new(config.api_tokens.into_iter().collect()),
+            api_tokens_set: api_tokens_set.clone(),
+            operator_auth,
             soranet_privacy_ingest: config.soranet_privacy_ingest.clone(),
             soranet_privacy_tokens: std::sync::Arc::new(soranet_privacy_tokens),
             soranet_privacy_allow_nets: std::sync::Arc::new(soranet_privacy_allow_nets),
@@ -12602,6 +12672,7 @@ impl Torii {
             content_config: self.content_config.clone(),
             require_api_token: self.require_api_token,
             api_tokens_set: self.api_tokens_set.clone(),
+            operator_auth: self.operator_auth.clone(),
             soranet_privacy_ingest: self.soranet_privacy_ingest.clone(),
             soranet_privacy_tokens: self.soranet_privacy_tokens.clone(),
             soranet_privacy_allow_nets: self.soranet_privacy_allow_nets.clone(),
@@ -12763,6 +12834,7 @@ impl Torii {
         // Core info and introspection
         self.add_telemetry_routes(&mut builder);
         self.add_core_info_routes(&mut builder);
+        self.add_operator_auth_routes(&mut builder);
         self.add_alias_routes(&mut builder);
         self.add_time_routes(&mut builder);
         self.add_schema_routes(&mut builder);
@@ -14307,6 +14379,16 @@ pub(crate) mod tests_runtime_handlers {
                 .map(std::num::NonZeroU32::get),
             soranet_privacy_ingest.burst.map(std::num::NonZeroU32::get),
         );
+        let api_tokens_set: Arc<HashSet<String>> = Arc::new(Default::default());
+        let operator_auth = Arc::new(
+            operator_auth::OperatorAuth::new(
+                iroha_config::parameters::actual::ToriiOperatorAuth::default(),
+                api_tokens_set.clone(),
+                defaults::torii::data_dir(),
+                telemetry.clone(),
+            )
+            .expect("operator auth defaults should be valid"),
+        );
 
         Arc::new(AppState {
             events,
@@ -14324,7 +14406,8 @@ pub(crate) mod tests_runtime_handlers {
             proof_limits: routing::ProofApiLimits::default(),
             content_config: content_config_snapshot,
             require_api_token: false,
-            api_tokens_set: Arc::new(Default::default()),
+            api_tokens_set: api_tokens_set.clone(),
+            operator_auth,
             soranet_privacy_ingest,
             soranet_privacy_tokens: Arc::new(soranet_privacy_tokens),
             soranet_privacy_allow_nets: Arc::new(soranet_privacy_allow_nets),

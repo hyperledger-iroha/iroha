@@ -3970,6 +3970,9 @@ pub mod tests {
             added_pointer_types: vec![],
             start_height: 42,
             end_height: 84,
+            sbom_digests: Vec::new(),
+            slsa_attestation: Vec::new(),
+            provenance: Vec::new(),
         }
         .canonical_bytes()
     }

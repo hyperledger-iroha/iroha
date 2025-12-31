@@ -858,6 +858,8 @@ Run `scripts/check_prometheus_rules.sh` to validate the rules locally. The helpe
 
 Pre-auth connection gating exposes two metrics:
 - `torii_pre_auth_reject_total{reason}` — counter of rejected connections. Reasons: `global_cap`, `ip_cap`, `rate`, `ban`.
+- `torii_operator_auth_total{action,result,reason}` — operator auth events; `action` is `gate|register_options|register_verify|login_options|login_verify`, `result` is `allowed|denied|rate_limited|locked`, and `reason` mirrors the auth error labels.
+- `torii_operator_auth_lockout_total{action,reason}` — operator auth lockouts per action and failure reason.
 - `torii_sorafs_admission_total{result,reason}` — SoraFS provider advert admission results; `result` is `accepted`/`rejected` (and `warn` once the SF-2 rollout adds legacy tracking), while `reason` surfaces the validator path (e.g., `stored`, `duplicate`, `unknown_capabilities`, `admission_missing`, `policy_violation`, `stale`).
 - `torii_contract_throttled_total{endpoint}` — contract API requests rejected by the deploy limiter (`endpoint` = `code`, `deploy`, `activate`).
 - `torii_contract_errors_total{endpoint}` — contract API requests that failed for other reasons (missing token, queue error, etc.).

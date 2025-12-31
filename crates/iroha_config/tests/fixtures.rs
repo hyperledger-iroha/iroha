@@ -18,9 +18,10 @@ use iroha_config::parameters::user::ParseError;
 use iroha_config::parameters::{
     actual::{
         BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
-        LaneProfile, OfflineProofMode, OracleChangeThresholds, OracleEconomics, OracleGovernance,
+        LaneProfile, OfflineProofMode, OperatorAuthLockout, OperatorTokenFallback,
+        OperatorTokenSource, OracleChangeThresholds, OracleEconomics, OracleGovernance,
         OracleTwitterBinding, Root as Config, SoranetVpn, Streaming, StreamingSoranetAccessKind,
-        StreamingSync, TransactionGossiper,
+        StreamingSync, ToriiOperatorAuth, TransactionGossiper,
     },
     defaults,
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
@@ -370,6 +371,27 @@ fn minimal_config_snapshot() {
                 peer_telemetry_urls: [],
                 strict_addresses: true,
                 debug_match_filters: false,
+                operator_auth: ToriiOperatorAuth {
+                    enabled: false,
+                    require_mtls: false,
+                    token_fallback: OperatorTokenFallback::Bootstrap,
+                    token_source: OperatorTokenSource::OperatorTokens,
+                    tokens: [],
+                    rate_per_minute: Some(
+                        30,
+                    ),
+                    burst: Some(
+                        10,
+                    ),
+                    lockout: OperatorAuthLockout {
+                        failures: Some(
+                            5,
+                        ),
+                        window: 300s,
+                        duration: 900s,
+                    },
+                    webauthn: None,
+                },
                 preauth_max_connections: None,
                 preauth_max_connections_per_ip: None,
                 preauth_rate_per_ip_per_sec: Some(

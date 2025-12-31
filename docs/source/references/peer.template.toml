@@ -147,6 +147,14 @@
 # Allowed JDG attestation signature schemes.
 # jdg_signature_schemes = ["simple_threshold"] # or "bls_normal_aggregate"
 
+# Runtime upgrade provenance policy.
+# [governance.runtime_upgrade_provenance]
+# mode = "optional" # or "required"
+# require_sbom = false
+# require_slsa = false
+# signature_threshold = 0
+# trusted_signers = ["ed0120..."]
+
 [snapshot]
 # mode = "read_write"
 # create_every_ms = 60_000

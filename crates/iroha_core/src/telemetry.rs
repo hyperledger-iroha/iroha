@@ -3559,6 +3559,20 @@ impl StateTelemetry {
         }
     }
 
+    /// Increment runtime upgrade provenance rejection counter labeled by reason.
+    pub fn record_runtime_upgrade_provenance_rejection(
+        &self,
+        reason: iroha_data_model::runtime::RuntimeUpgradeProvenanceError,
+    ) {
+        if self.is_enabled() {
+            let label = reason.as_label();
+            self.metrics
+                .runtime_upgrade_provenance_rejections_total
+                .with_label_values(&[label])
+                .inc();
+        }
+    }
+
     /// Update governance proposal counters on status transition.
     pub fn record_governance_proposal_transition(
         &self,
@@ -5625,6 +5639,26 @@ impl Telemetry {
                 .torii_pre_auth_reject_total
                 .with_label_values(&[reason])
                 .inc();
+        }
+    }
+
+    /// Increment Torii operator auth event counters.
+    pub fn inc_torii_operator_auth(
+        &self,
+        action: &'static str,
+        result: &'static str,
+        reason: &'static str,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .inc_torii_operator_auth(action, result, reason);
+        }
+    }
+
+    /// Increment Torii operator auth lockout counters.
+    pub fn inc_torii_operator_auth_lockout(&self, action: &'static str, reason: &'static str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.inc_torii_operator_auth_lockout(action, reason);
         }
     }
 
@@ -11866,6 +11900,22 @@ mod tests {
                 .get(),
             1
         );
+        telemetry.inc_torii_operator_auth("gate", "allowed", "session");
+        assert_eq!(
+            metrics
+                .torii_operator_auth_total
+                .with_label_values(&["gate", "allowed", "session"])
+                .get(),
+            1
+        );
+        telemetry.inc_torii_operator_auth_lockout("gate", "invalid_session");
+        assert_eq!(
+            metrics
+                .torii_operator_auth_lockout_total
+                .with_label_values(&["gate", "invalid_session"])
+                .get(),
+            1
+        );
         telemetry.inc_torii_active_conn("http");
         assert_eq!(
             metrics
@@ -11931,6 +11981,24 @@ mod tests {
             metrics.torii_multisig_direct_sign_reject_total.get(),
             1,
             "disabled telemetry must not record additional direct-sign rejects"
+        );
+        telemetry.inc_torii_operator_auth("gate", "denied", "missing_session");
+        assert_eq!(
+            metrics
+                .torii_operator_auth_total
+                .with_label_values(&["gate", "allowed", "session"])
+                .get(),
+            1,
+            "disabled telemetry must not record operator auth events"
+        );
+        telemetry.inc_torii_operator_auth_lockout("gate", "missing_session");
+        assert_eq!(
+            metrics
+                .torii_operator_auth_lockout_total
+                .with_label_values(&["gate", "invalid_session"])
+                .get(),
+            1,
+            "disabled telemetry must not record operator auth lockouts"
         );
         telemetry.inc_multisig_derived_account_detected();
         assert_eq!(
