@@ -2393,8 +2393,7 @@ fn sora_profile_detection_defaults() -> Table {
         let private_key: PrivateKey = SORA_PROFILE_STREAM_PRIVATE_KEY
             .parse()
             .expect("sora profile streaming private key should parse");
-        KeyPair::new(public_key, private_key)
-            .expect("sora profile streaming keypair should match")
+        KeyPair::new(public_key, private_key).expect("sora profile streaming keypair should match")
     });
     let p2p_literal = socket_addr!(127.0.0.1:1337).to_literal();
     let torii_literal = socket_addr!(127.0.0.1:8080).to_literal();
@@ -5394,7 +5393,9 @@ mod tests {
             }
         }
 
-        let mut cmd = DummyCommand { removed: Vec::new() };
+        let mut cmd = DummyCommand {
+            removed: Vec::new(),
+        };
         strip_config_env_overrides(&mut cmd);
         let removed: HashSet<_> = cmd.removed.into_iter().collect();
         assert!(removed.contains("API_ADDRESS"));
