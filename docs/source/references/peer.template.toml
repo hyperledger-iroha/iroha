@@ -89,6 +89,8 @@
 # msg_channel_cap = 100                 # legacy fallback when per-queue caps are omitted
 # commit_inflight_timeout_ms = 30000
 # missing_block_signer_fallback_attempts = 1 # fetch from QC signers before falling back to full topology
+# membership_mismatch_alert_threshold = 1    # consecutive mismatches before alert/fail-closed
+# membership_mismatch_fail_closed = false    # drop consensus messages from mismatched peers
 # da_quorum_timeout_multiplier = 3          # DA quorum timeout scaling (block_time + 4 * commit_time)
 # da_availability_timeout_multiplier = 2    # availability timeout scaling for DA logging/rebroadcasts
 # da_availability_timeout_floor_ms = 2000   # floor for availability timeouts (0 disables floor)
@@ -112,6 +114,10 @@
 # smoothing_enabled = false            # Enable EMA smoothing (advisory)
 # smoothing_alpha = 0.2                # EMA alpha in [0,1]; higher = more responsive
 # max_adjust_ms_per_min = 50           # Slew cap: max ms adjustment per minute
+# min_samples = 3                      # Minimum samples required for healthy status
+# max_offset_ms = 1_000                # Max absolute offset (ms) before unhealthy (0 disables)
+# max_confidence_ms = 500              # Max MAD confidence (ms) before unhealthy (0 disables)
+# enforcement_mode = "warn"            # Admission behavior: "warn" or "reject"
 
 [kura]
 # init_mode = "strict"

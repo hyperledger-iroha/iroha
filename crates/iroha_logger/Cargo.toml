@@ -31,7 +31,9 @@ tokio = { workspace = true, features = ["macros", "time", "rt"] }
 
 
 [features]
-# Enables redaction of sensitive telemetry fields (disabled by default).
+# Redaction should be enabled by default for telemetry output.
+default = ["log-obfuscation"]
+# Enables redaction of sensitive telemetry fields.
 log-obfuscation = []
 # When this feature is enabled, tokio console will be started anyway.
 # Configured via ENV:

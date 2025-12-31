@@ -1,4 +1,4 @@
-.PHONY: dev-workflow check-agents-guardrails check-dependency-discipline check-status-sync check-std-only check-missing-docs check-tests-guard check-todo-guard check-env-config-surface check-serde-guard check-proc-macro-ui check-iroha-monitor-docs check-iroha-monitor-screenshots monitor-screenshots agents-preflight check-axt-fixtures check-docs-tests-metrics
+.PHONY: dev-workflow check-agents-guardrails check-dependency-discipline check-status-sync check-std-only check-missing-docs check-tests-guard check-todo-guard check-env-config-surface check-serde-guard check-telemetry-redaction-guard check-proc-macro-ui check-iroha-monitor-docs check-iroha-monitor-screenshots monitor-screenshots agents-preflight check-axt-fixtures check-docs-tests-metrics
 .PHONY: examples examples-run examples-inspect docs-syscalls docs-da-threat-model check-docs guards swift-dashboards swift-docs-lint
 .PHONY: gost-bench gost-bench-update gost-dudect
 .PHONY: docs-cli docs-kagami-cli
@@ -71,6 +71,7 @@ agents-preflight:
 	@bash ci/check_std_only.sh
 	@bash ci/check_env_config_surface.sh
 	@bash ci/check_serde_guard.sh
+	@bash ci/check_telemetry_redaction_guard.sh
 	@bash ci/check_iroha_monitor_assets.sh
 	@bash ci/check_iroha_monitor_screenshots.sh
 	@bash ci/check_axt_fixtures.sh
@@ -84,6 +85,9 @@ check-env-config-surface:
 
 check-serde-guard:
 	@bash ci/check_serde_guard.sh
+
+check-telemetry-redaction-guard:
+	@bash ci/check_telemetry_redaction_guard.sh
 
 check-axt-fixtures:
 	@bash ci/check_axt_fixtures.sh

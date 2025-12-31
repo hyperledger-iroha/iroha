@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client.okhttp;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -114,7 +115,7 @@ public final class OkHttpTransportExecutor implements HttpTransportExecutor {
   }
 
   private static boolean permitsEmptyBody(final String method) {
-    final String normalized = method == null ? "" : method.trim().toUpperCase();
+    final String normalized = method == null ? "" : method.trim().toUpperCase(Locale.ROOT);
     return "GET".equals(normalized) || "HEAD".equals(normalized);
   }
 }

@@ -19,7 +19,7 @@ use iroha_data_model::block::{
     BlockHeader,
     consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Vote},
 };
-use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
+use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::{codec::Encode as _, json::Value};
 use tokio::runtime::Runtime;

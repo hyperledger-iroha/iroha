@@ -1,7 +1,7 @@
 //! Helpers for NPoS-specific genesis validation.
 
 use color_eyre::eyre::{Result, eyre};
-use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_genesis::RawGenesisTransaction;
 
 /// Check that the provided genesis manifest carries `sumeragi_npos_parameters`.

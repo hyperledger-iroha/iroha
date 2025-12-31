@@ -393,6 +393,42 @@ pub struct SumeragiMembershipStatus {
     pub view_hash: Option<[u8; 32]>,
 }
 
+/// Membership mismatch snapshot exported through `/v1/sumeragi/status`.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiMembershipMismatchStatus {
+    /// Peers currently flagged for membership mismatches.
+    #[norito(default)]
+    pub active_peers: Vec<PeerId>,
+    /// Last peer observed with a mismatch (best-effort).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub last_peer: Option<PeerId>,
+    /// Height associated with the last mismatch (best-effort).
+    #[norito(default)]
+    pub last_height: u64,
+    /// View associated with the last mismatch (best-effort).
+    #[norito(default)]
+    pub last_view: u64,
+    /// Epoch associated with the last mismatch (best-effort).
+    #[norito(default)]
+    pub last_epoch: u64,
+    /// Local membership hash observed during the last mismatch (best-effort).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub last_local_hash: Option<[u8; 32]>,
+    /// Remote membership hash observed during the last mismatch (best-effort).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub last_remote_hash: Option<[u8; 32]>,
+    /// Milliseconds since UNIX epoch when the last mismatch was recorded.
+    #[norito(default)]
+    pub last_timestamp_ms: u64,
+}
+
 /// Aggregated per-lane commitment summary reported by Sumeragi status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -1450,6 +1486,9 @@ pub struct SumeragiStatusWire {
     /// Deterministic membership snapshot.
     #[norito(default)]
     pub membership: SumeragiMembershipStatus,
+    /// Membership mismatch snapshot.
+    #[norito(default)]
+    pub membership_mismatch: SumeragiMembershipMismatchStatus,
     /// Aggregated lane-level commitment snapshots.
     #[norito(default)]
     pub lane_commitments: Vec<SumeragiLaneCommitment>,

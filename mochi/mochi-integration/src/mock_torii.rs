@@ -19,10 +19,10 @@ use iroha_data_model::{
         consensus::{
             SumeragiBlockSyncRosterStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
             SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
-            SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipStatus,
-            SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus, SumeragiRbcStoreStatus,
-            SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-            SumeragiViewChangeCauseStatus,
+            SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
+            SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus,
+            SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+            SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
         },
     },
     nexus::{DataSpaceId, LaneId},
@@ -196,6 +196,7 @@ impl Default for MockToriiData {
             vrf_penalties_applied_total: 0,
             vrf_penalties_pending: 0,
             membership: SumeragiMembershipStatus::default(),
+            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
             lane_commitments: vec![SumeragiLaneCommitment {
                 block_height: 10,
                 lane_id: LaneId::new(0),

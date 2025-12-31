@@ -299,7 +299,7 @@ pub mod prelude {
 mod tests {
     use std::{mem::ManuallyDrop, slice};
 
-    use data_model::{isi::Log, prelude::*};
+    use data_model::isi::Log;
     use iroha_data_model::query::{QueryOutput, QueryOutputBatchBox};
 
     use super::*;

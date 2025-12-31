@@ -2251,7 +2251,7 @@ pub fn global_sorafs_node_otel() -> Arc<SorafsNodeOtel> {
 
 #[cfg(test)]
 mod tests {
-    use norito::{from_bytes, to_bytes};
+    use norito::{NoritoDeserialize, from_bytes, to_bytes};
 
     use super::*;
 
@@ -2323,7 +2323,7 @@ mod tests {
         NexusDataspaceTeuStatus {
             lane_id: 0,
             dataspace_id: 0,
-            fault_tolerance: 0,
+            fault_tolerance: 1,
             backlog: 1,
             age_slots: 0,
             virtual_finish: 0,
@@ -2339,8 +2339,8 @@ mod tests {
         status.fault_tolerance = 2;
 
         let bytes = to_bytes(&status).expect("serialize status");
-        let decoded: NexusDataspaceTeuStatus =
-            from_bytes(&bytes).expect("deserialize status");
+        let archived = from_bytes(&bytes).expect("deserialize status");
+        let decoded = NexusDataspaceTeuStatus::deserialize(archived);
 
         assert_eq!(decoded.fault_tolerance, status.fault_tolerance);
     }
@@ -3779,7 +3779,9 @@ impl<'a> DecodeFromSlice<'a> for NexusDataspaceTeuStatus {
                 description,
             ),
             used,
-        ) = <(u32, u64, u32, u64, u64, u64, u64, String, Option<String>)>::decode_from_slice(bytes)?;
+        ) = <(u32, u64, u32, u64, u64, u64, u64, String, Option<String>)>::decode_from_slice(
+            bytes,
+        )?;
         Ok((
             Self {
                 lane_id,
@@ -5820,6 +5822,12 @@ pub struct Metrics {
     pub streaming_fec_parity_current: GenericGaugeVec<AtomicU64>,
     /// Streaming feedback timeout events.
     pub streaming_feedback_timeout_total: IntCounter,
+    /// Telemetry redaction events grouped by reason.
+    pub telemetry_redaction_total: IntCounterVec,
+    /// Telemetry redaction skips grouped by reason.
+    pub telemetry_redaction_skipped_total: IntCounterVec,
+    /// Telemetry field truncations.
+    pub telemetry_truncation_total: IntCounter,
     /// Streaming privacy telemetry redaction failures.
     pub streaming_privacy_redaction_fail_total: IntCounter,
     /// Streaming encode latency (milliseconds).
@@ -6520,6 +6528,8 @@ pub struct Metrics {
     pub torii_signature_limit_last_count: GenericGauge<AtomicU64>,
     /// Configured signature cap recorded during the last signature-limit enforcement.
     pub torii_signature_limit_max: GenericGauge<AtomicU64>,
+    /// Torii admission rejects when NTS is unhealthy for time-sensitive transactions.
+    pub torii_nts_unhealthy_reject_total: IntCounter,
     /// Torii admission rejects for direct multisig signing attempts.
     pub torii_multisig_direct_sign_reject_total: IntCounter,
     /// Torii admission rejects for multisig accounts that still use derived keys.
@@ -6858,6 +6868,18 @@ pub struct Metrics {
     pub nts_confidence_ms: GenericGauge<AtomicU64>,
     /// NTS: number of peers currently contributing samples
     pub nts_peers_sampled: GenericGauge<AtomicU64>,
+    /// NTS: number of samples used in aggregation (post-filter)
+    pub nts_samples_used: GenericGauge<AtomicU64>,
+    /// NTS: health status (1 = healthy, 0 = unhealthy)
+    pub nts_healthy: IntGauge,
+    /// NTS: fallback indicator (1 = local time fallback, 0 = NTS offset)
+    pub nts_fallback: IntGauge,
+    /// NTS: minimum sample threshold check (1 = ok, 0 = fail)
+    pub nts_min_samples_ok: IntGauge,
+    /// NTS: offset bound check (1 = ok, 0 = fail)
+    pub nts_offset_ok: IntGauge,
+    /// NTS: confidence bound check (1 = ok, 0 = fail)
+    pub nts_confidence_ok: IntGauge,
     /// NTS: RTT histogram buckets labeled by `le` (ms)
     pub nts_rtt_ms_bucket: GenericGaugeVec<AtomicU64>,
     /// NTS: RTT histogram sum of ms
@@ -8091,6 +8113,31 @@ impl Default for Metrics {
             "Streaming feedback timeout events",
         )
         .expect("Infallible");
+        let telemetry_redaction_total = IntCounterVec::new(
+            Opts::new(
+                "telemetry_redaction_total",
+                "Telemetry redaction events grouped by reason",
+            ),
+            &["reason"],
+        )
+        .expect("Infallible");
+        for reason in ["keyword", "explicit"] {
+            let _ = telemetry_redaction_total.with_label_values(&[reason]);
+        }
+        let telemetry_redaction_skipped_total = IntCounterVec::new(
+            Opts::new(
+                "telemetry_redaction_skipped_total",
+                "Telemetry redaction skips grouped by reason",
+            ),
+            &["reason"],
+        )
+        .expect("Infallible");
+        for reason in ["allowlist", "disabled", "unsupported"] {
+            let _ = telemetry_redaction_skipped_total.with_label_values(&[reason]);
+        }
+        let telemetry_truncation_total =
+            IntCounter::new("telemetry_truncation_total", "Telemetry field truncations")
+                .expect("Infallible");
         let streaming_privacy_redaction_fail_total = IntCounter::new(
             "streaming_privacy_redaction_fail_total",
             "Streaming telemetry redaction failures",
@@ -8401,6 +8448,9 @@ impl Default for Metrics {
             streaming_quic_datagrams_sent_total,
             streaming_quic_datagrams_dropped_total,
             streaming_feedback_timeout_total,
+            telemetry_redaction_total,
+            telemetry_redaction_skipped_total,
+            telemetry_truncation_total,
             streaming_privacy_redaction_fail_total,
             streaming_encode_dropped_layers_total,
             streaming_decode_dropped_frames_total,
@@ -10327,6 +10377,11 @@ impl Default for Metrics {
             "Configured transaction signature cap recorded during signature-limit enforcement",
         )
         .expect("Infallible");
+        let torii_nts_unhealthy_reject_total = IntCounter::new(
+            "torii_nts_unhealthy_reject_total",
+            "Transactions rejected during admission due to unhealthy network time service",
+        )
+        .expect("Infallible");
         let torii_multisig_direct_sign_reject_total = IntCounter::new(
             "torii_multisig_direct_sign_reject_total",
             "Transactions rejected during admission for being signed directly by a multisig account",
@@ -11727,6 +11782,7 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_signature_limit_by_authority_total);
         register_guarded(&registry, &torii_signature_limit_last_count);
         register_guarded(&registry, &torii_signature_limit_max);
+        register_guarded(&registry, &torii_nts_unhealthy_reject_total);
         register_guarded(&registry, &torii_multisig_direct_sign_reject_total);
         register_guarded(&registry, &torii_multisig_derived_account_reject_total);
         register_guarded(&registry, &multisig_derived_account_detected_total);
@@ -11850,6 +11906,36 @@ impl Default for Metrics {
             "Number of peers contributing NTS samples",
         )
         .expect("Infallible");
+        let nts_samples_used = GenericGauge::new(
+            "nts_samples_used",
+            "Number of samples used in NTS aggregation after filtering",
+        )
+        .expect("Infallible");
+        let nts_healthy = IntGauge::new(
+            "nts_healthy",
+            "NTS health status (1 = healthy, 0 = unhealthy)",
+        )
+        .expect("Infallible");
+        let nts_fallback = IntGauge::new(
+            "nts_fallback",
+            "NTS fallback indicator (1 = local time fallback, 0 = network time)",
+        )
+        .expect("Infallible");
+        let nts_min_samples_ok = IntGauge::new(
+            "nts_min_samples_ok",
+            "NTS minimum-sample health check (1 = ok, 0 = fail)",
+        )
+        .expect("Infallible");
+        let nts_offset_ok = IntGauge::new(
+            "nts_offset_ok",
+            "NTS offset bound health check (1 = ok, 0 = fail)",
+        )
+        .expect("Infallible");
+        let nts_confidence_ok = IntGauge::new(
+            "nts_confidence_ok",
+            "NTS confidence bound health check (1 = ok, 0 = fail)",
+        )
+        .expect("Infallible");
         let nts_rtt_ms_bucket = GenericGaugeVec::new(
             Opts::new(
                 "nts_rtt_ms_bucket",
@@ -11866,6 +11952,21 @@ impl Default for Metrics {
             "NTS RTT histogram count of observations",
         )
         .expect("Infallible");
+        register!(
+            registry,
+            nts_offset_ms,
+            nts_confidence_ms,
+            nts_peers_sampled,
+            nts_samples_used,
+            nts_healthy,
+            nts_fallback,
+            nts_min_samples_ok,
+            nts_offset_ok,
+            nts_confidence_ok,
+            nts_rtt_ms_bucket,
+            nts_rtt_ms_sum,
+            nts_rtt_ms_count
+        );
 
         // BLS signature verification counters per latest block
         let pipeline_sig_bls_agg_same = GenericGauge::new(
@@ -12487,6 +12588,9 @@ impl Default for Metrics {
             streaming_quic_datagrams_dropped_total,
             streaming_fec_parity_current,
             streaming_feedback_timeout_total,
+            telemetry_redaction_total,
+            telemetry_redaction_skipped_total,
+            telemetry_truncation_total,
             streaming_privacy_redaction_fail_total,
             streaming_encode_latency_ms,
             streaming_encode_audio_jitter_ms,
@@ -12834,6 +12938,7 @@ impl Default for Metrics {
             torii_signature_limit_by_authority_total,
             torii_signature_limit_last_count,
             torii_signature_limit_max,
+            torii_nts_unhealthy_reject_total,
             torii_multisig_direct_sign_reject_total,
             torii_multisig_derived_account_reject_total,
             multisig_derived_account_detected_total,
@@ -13005,6 +13110,12 @@ impl Default for Metrics {
             nts_offset_ms,
             nts_confidence_ms,
             nts_peers_sampled,
+            nts_samples_used,
+            nts_healthy,
+            nts_fallback,
+            nts_min_samples_ok,
+            nts_offset_ok,
+            nts_confidence_ok,
             nts_rtt_ms_bucket,
             nts_rtt_ms_sum,
             nts_rtt_ms_count,
@@ -16069,11 +16180,22 @@ mod test {
                   "verifier_max_batch": 8
                 }
               },
+              "stack": {
+                "requested_scheduler_bytes": 1048576,
+                "requested_prover_bytes": 1048576,
+                "requested_guest_bytes": 1048576,
+                "scheduler_bytes": 1048576,
+                "prover_bytes": 1048576,
+                "guest_bytes": 1048576,
+                "gas_to_stack_multiplier": 4,
+                "scheduler_clamped": false,
+                "prover_clamped": false,
+                "guest_clamped": false,
+                "pool_fallback_total": 0,
+                "budget_hit_total": 0
+              },
               "sumeragi": {
                 "mode_tag": "iroha2-consensus::permissioned-sumeragi@v1",
-                "staged_mode_tag": null,
-                "staged_mode_activation_height": null,
-                "mode_activation_lag_blocks": null,
                 "leader_index": 1,
                 "highest_qc_height": 10,
                 "locked_qc_height": 9,

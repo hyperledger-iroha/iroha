@@ -6,8 +6,8 @@ direction: ltr
 source: docs/portal/docs/soranet/privacy-metrics-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9b45156aa4a4ae3b980ce168c18b4ec83cb88db543bf4a651a2ef9f9af1eb57e
-source_last_modified: "2025-11-15T19:17:38.774226+00:00"
+source_hash: 9c42ab96daf6fcc2344f4b2361c5c91a371a87cf16dd8408448b7c6b69bd45ec
+source_last_modified: "2025-11-20T11:52:13.452903+00:00"
 translation_last_reviewed: 2025-12-30
 ---
 

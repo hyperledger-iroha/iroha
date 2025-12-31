@@ -4,7 +4,9 @@
 package org.hyperledger.iroha.norito;
 
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -28,6 +30,7 @@ public final class NoritoTests {
     testArchiveViewFlagsHint();
     testChecksumMismatch();
     testStructAdapter();
+    testMapAdapter();
     testStructuralSchemaHash();
     testCompression();
     testCompressionProfiles();
@@ -304,7 +307,7 @@ public final class NoritoTests {
   }
 
   private static void testStructAdapter() {
-    List<NoritoAdapters.StructField> fields = List.of(
+    List<NoritoAdapters.StructField<?>> fields = List.of(
         NoritoAdapters.field("id", NoritoAdapters.sint(32)),
         NoritoAdapters.field("name", NoritoAdapters.stringAdapter()),
         NoritoAdapters.field("values", NoritoAdapters.sequence(NoritoAdapters.uint(8))));
@@ -313,12 +316,34 @@ public final class NoritoTests {
         NoritoAdapters.struct(fields, map -> new Demo(
             ((Long) map.get("id")),
             (String) map.get("name"),
-            (List<Long>) map.get("values")));
+            coerceLongList(map.get("values"))));
 
     Demo demo = new Demo(-7L, "alice", List.of(1L, 2L, 3L));
     byte[] encoded = NoritoCodec.encode(demo, "iroha.test.Struct", structAdapter);
     Demo decoded = (Demo) NoritoCodec.decode(encoded, structAdapter, "iroha.test.Struct");
     assert decoded.equals(demo);
+  }
+
+  private static void testMapAdapter() {
+    TypeAdapter<Map<String, String>> adapter =
+        NoritoAdapters.map(NoritoAdapters.stringAdapter(), NoritoAdapters.stringAdapter());
+    Map<String, String> value = new LinkedHashMap<>();
+    value.put("alpha", "1");
+    value.put("beta", "2");
+    byte[] encoded = NoritoCodec.encode(value, "iroha.test.Map", adapter);
+    Map<String, String> decoded = NoritoCodec.decode(encoded, adapter, "iroha.test.Map");
+    assert decoded.equals(value) : "Map adapter roundtrip mismatch";
+  }
+
+  private static List<Long> coerceLongList(Object value) {
+    if (!(value instanceof List<?> list)) {
+      throw new AssertionError("Expected list for struct field values");
+    }
+    List<Long> result = new ArrayList<>(list.size());
+    for (Object entry : list) {
+      result.add(((Number) entry).longValue());
+    }
+    return result;
   }
 
   private static void testStructuralSchemaHash() {

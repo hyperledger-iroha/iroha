@@ -138,6 +138,7 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
     header.set_da_commitments_hash(da_commitment_hash);
     let mut qc = ExecutionQcRecord {
         subject_block_hash: header.hash(),
+        parent_state_root: Hash::new([0x22; 4]),
         post_state_root: Hash::new([0x11, 0x22, 0x33, 0x44]),
         height: header.height().get(),
         view: 1,
@@ -164,6 +165,7 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
     // Height mismatch should also be rejected.
     let height_mismatch_qc = ExecutionQcRecord {
         subject_block_hash: header.hash(),
+        parent_state_root: Hash::new([0x22; 4]),
         post_state_root: Hash::new([0x11, 0x22, 0x33, 0x44]),
         height: header.height().get() + 1,
         view: 1,
@@ -189,6 +191,7 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
         header,
         Some(ExecutionQcRecord {
             subject_block_hash: header.hash(),
+            parent_state_root: Hash::new([0x22; 4]),
             post_state_root: Hash::new([0x11, 0x22, 0x33, 0x44]),
             height: header.height().get(),
             view: 1,
@@ -384,6 +387,7 @@ fn lane_relay_quorum_rejects_out_of_range_signer() {
     );
     let qc = ExecutionQcRecord {
         subject_block_hash: header.hash(),
+        parent_state_root: Hash::new([0x33; 4]),
         post_state_root: Hash::new([0x44; 4]),
         height: header.height().get(),
         view: 2,
@@ -431,6 +435,7 @@ fn lane_relay_quorum_rejects_zero_signature() {
     );
     let qc = ExecutionQcRecord {
         subject_block_hash: header.hash(),
+        parent_state_root: Hash::new([0x44; 4]),
         post_state_root: Hash::new([0x55; 4]),
         height: header.height().get(),
         view: 1,
@@ -478,6 +483,7 @@ fn lane_relay_quorum_requires_quorum_bitmap() {
     );
     let qc = ExecutionQcRecord {
         subject_block_hash: header.hash(),
+        parent_state_root: Hash::new([0x55; 4]),
         post_state_root: Hash::new([0x66; 4]),
         height: header.height().get(),
         view: 2,

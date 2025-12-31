@@ -12,7 +12,8 @@ use std::{
 };
 
 use iroha_config::parameters::actual::{
-    LaneCompliance, LaneConfig, NexusAxt, NexusEndorsement, NexusFees, NexusStaking,
+    LaneCompliance, LaneConfig, LaneRelayEmergency, NexusAxt, NexusEndorsement, NexusFees,
+    NexusStaking,
 };
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
@@ -220,13 +221,13 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
         id: DataSpaceId::new(7),
         alias: "alpha".to_string(),
         description: Some("Primary execution dataspace".to_string()),
-        fault_tolerance: 0,
+        fault_tolerance: 1,
     };
     let secondary_dataspace = DataSpaceMetadata {
         id: DataSpaceId::new(11),
         alias: "beta".to_string(),
         description: Some("Operations dataspace".to_string()),
-        fault_tolerance: 0,
+        fault_tolerance: 1,
     };
     let lane_catalog = LaneCatalog::new(nonzero!(4_u32), vec![lane_core.clone(), lane_ops.clone()])
         .expect("lane catalog");
@@ -641,7 +642,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
             id: DataSpaceId::new(1),
             alias: "gov".to_string(),
             description: Some("Governance dataspace".to_string()),
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         },
     ])
     .expect("dataspace catalog");
@@ -684,6 +685,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         fees: NexusFees::default(),
         endorsement: NexusEndorsement::default(),
         axt: NexusAxt::default(),
+        lane_relay_emergency: LaneRelayEmergency::default(),
         lane_config: LaneConfig::from_catalog(&lane_catalog),
         lane_catalog,
         dataspace_catalog,

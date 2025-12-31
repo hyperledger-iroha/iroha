@@ -7,10 +7,11 @@ use iroha_data_model::{
     block::consensus::{
         SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiConsensusCapsStatus,
         SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
-        SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
-        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-        SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
+        SumeragiMembershipMismatchStatus, SumeragiMembershipStatus, SumeragiPeerKeyPolicyStatus,
+        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiRuntimeUpgradeHook,
+        SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
+        SumeragiWorkerQueueTotals,
     },
     nexus::{DataSpaceId, LaneId},
 };
@@ -1888,6 +1889,47 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                 .unwrap_or(Value::Null),
         ),
     ]);
+    let membership_mismatch = json_object(vec![
+        json_entry(
+            "active_peers",
+            Value::Array(
+                snap.membership_mismatch
+                    .active_peers
+                    .iter()
+                    .map(|peer| Value::from(peer.to_string()))
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "last_peer",
+            snap.membership_mismatch
+                .last_peer
+                .as_ref()
+                .map(|peer| Value::from(peer.to_string()))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("last_height", snap.membership_mismatch.last_height),
+        json_entry("last_view", snap.membership_mismatch.last_view),
+        json_entry("last_epoch", snap.membership_mismatch.last_epoch),
+        json_entry(
+            "last_local_hash",
+            snap.membership_mismatch
+                .last_local_hash
+                .map(|bytes| Value::from(hex::encode(bytes)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "last_remote_hash",
+            snap.membership_mismatch
+                .last_remote_hash
+                .map(|bytes| Value::from(hex::encode(bytes)))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "last_timestamp_ms",
+            snap.membership_mismatch.last_timestamp_ms,
+        ),
+    ]);
     let lane_commitments = Value::Array(
         snap.lane_commitments
             .iter()
@@ -2282,6 +2324,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("redundant_sends_total", snap.redundant_sends_total),
         json_entry("prf", prf),
         json_entry("membership", membership),
+        json_entry("membership_mismatch", membership_mismatch),
         json_entry(
             "lane_governance_sealed_total",
             snap.lane_governance_sealed_total,
@@ -2458,6 +2501,63 @@ mod status_tests {
                 .get("view_hash")
                 .map(|value| value.is_null())
                 .unwrap_or(false)
+        );
+        let membership_mismatch = payload
+            .get("membership_mismatch")
+            .and_then(Value::as_object)
+            .expect("membership_mismatch object present");
+        assert!(
+            membership_mismatch
+                .get("active_peers")
+                .and_then(Value::as_array)
+                .map(|peers| peers.is_empty())
+                .unwrap_or(false)
+        );
+        assert!(
+            membership_mismatch
+                .get("last_peer")
+                .map(|value| value.is_null())
+                .unwrap_or(false)
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_height")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_view")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_epoch")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            0
+        );
+        assert!(
+            membership_mismatch
+                .get("last_local_hash")
+                .map(|value| value.is_null())
+                .unwrap_or(false)
+        );
+        assert!(
+            membership_mismatch
+                .get("last_remote_hash")
+                .map(|value| value.is_null())
+                .unwrap_or(false)
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_timestamp_ms")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            0
         );
         assert!(
             payload
@@ -3047,6 +3147,16 @@ pub async fn handle_v1_sumeragi_status(
                 view: snap.membership_view,
                 epoch: snap.membership_epoch,
                 view_hash: snap.membership_view_hash,
+            },
+            membership_mismatch: SumeragiMembershipMismatchStatus {
+                active_peers: snap.membership_mismatch.active_peers.clone(),
+                last_peer: snap.membership_mismatch.last_peer.clone(),
+                last_height: snap.membership_mismatch.last_height,
+                last_view: snap.membership_mismatch.last_view,
+                last_epoch: snap.membership_mismatch.last_epoch,
+                last_local_hash: snap.membership_mismatch.last_local_hash,
+                last_remote_hash: snap.membership_mismatch.last_remote_hash,
+                last_timestamp_ms: snap.membership_mismatch.last_timestamp_ms,
             },
             lane_commitments: snap
                 .lane_commitments

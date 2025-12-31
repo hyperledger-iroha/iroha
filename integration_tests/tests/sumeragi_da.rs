@@ -58,6 +58,7 @@ struct RbcObservation {
     block_hash: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 struct SumeragiSnapshot {
     index: u64,

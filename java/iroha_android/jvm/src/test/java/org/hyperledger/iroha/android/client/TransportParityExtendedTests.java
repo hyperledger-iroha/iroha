@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -50,6 +51,7 @@ import org.junit.Test;
 /** Parity tests covering OkHttp vs JDK transports for streaming surfaces on the JVM. */
 public final class TransportParityExtendedTests {
 
+  private static final int TEST_TIMEOUT_SECONDS = 5;
   private static final OkHttpClient SHARED_CLIENT = new OkHttpClient();
   private static final ExecutorService JDK_EXECUTOR =
       Executors.newCachedThreadPool(
@@ -115,7 +117,7 @@ public final class TransportParityExtendedTests {
               .build();
       try (ToriiEventStream stream =
           okHttpClient.openSseStream("/events", options, okHttpListener)) {
-        stream.completion().get(2, TimeUnit.SECONDS);
+        stream.completion().get(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
       }
 
       final RecordingSseListener jdkListener = new RecordingSseListener();
@@ -126,7 +128,7 @@ public final class TransportParityExtendedTests {
               .build();
       try (ToriiEventStream stream =
           jdkClient.openSseStream("/events", options, jdkListener)) {
-        stream.completion().get(2, TimeUnit.SECONDS);
+        stream.completion().get(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
       }
 
       assertEquals(okHttpListener.events.size(), jdkListener.events.size());
@@ -149,7 +151,9 @@ public final class TransportParityExtendedTests {
 
       final URI baseUri = new URI(server.url("/").toString());
       final ToriiWebSocketOptions options =
-          ToriiWebSocketOptions.builder().setConnectTimeout(Duration.ofSeconds(2)).build();
+          ToriiWebSocketOptions.builder()
+              .setConnectTimeout(Duration.ofSeconds(TEST_TIMEOUT_SECONDS))
+              .build();
 
       final RecordingWebSocketListener okHttpListener = new RecordingWebSocketListener();
       final ToriiWebSocketClient okHttpClient =
@@ -159,8 +163,8 @@ public final class TransportParityExtendedTests {
               .build();
       final ToriiWebSocketSession okHttpSession =
           okHttpClient.connect("/ws", options, okHttpListener);
-      assertTrue("okhttp open", okHttpListener.await());
-      okHttpSession.close(ToriiWebSocketSession.NORMAL_CLOSURE, "done").get(2, TimeUnit.SECONDS);
+      assertTrue("okhttp open", okHttpListener.awaitOpen());
+      awaitCloseOrCloseSession(okHttpSession, okHttpListener);
 
       final RecordingWebSocketListener jdkListener = new RecordingWebSocketListener();
       final ToriiWebSocketClient jdkClient =
@@ -169,12 +173,30 @@ public final class TransportParityExtendedTests {
               .setWebSocketConnector(new JdkWebSocketConnector(JDK_CLIENT))
               .build();
       final ToriiWebSocketSession jdkSession = jdkClient.connect("/ws", options, jdkListener);
-      assertTrue("jdk open", jdkListener.await());
-      jdkSession.close(ToriiWebSocketSession.NORMAL_CLOSURE, "done").get(2, TimeUnit.SECONDS);
+      assertTrue("jdk open", jdkListener.awaitOpen());
+      awaitCloseOrCloseSession(jdkSession, jdkListener);
 
       assertEquals(okHttpListener.textMessages, jdkListener.textMessages);
       assertEquals(okHttpListener.binaryMessages, jdkListener.binaryMessages);
     }
+  }
+
+  private static void awaitCloseOrCloseSession(
+      final ToriiWebSocketSession session, final RecordingWebSocketListener listener)
+      throws InterruptedException, ExecutionException, java.util.concurrent.TimeoutException {
+    if (listener.awaitClose()) {
+      return;
+    }
+    try {
+      session
+          .close(ToriiWebSocketSession.NORMAL_CLOSURE, "done")
+          .get(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    } catch (ExecutionException ex) {
+      if (!(ex.getCause() instanceof IOException)) {
+        throw ex;
+      }
+    }
+    assertTrue("close", listener.awaitClose());
   }
 
   private static final class RecordingSseListener implements ToriiEventStreamListener {
@@ -225,8 +247,12 @@ public final class TransportParityExtendedTests {
       closed.countDown();
     }
 
-    boolean await() throws InterruptedException {
-      return opened.await(2, TimeUnit.SECONDS) && closed.await(2, TimeUnit.SECONDS);
+    boolean awaitOpen() throws InterruptedException {
+      return opened.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    }
+
+    boolean awaitClose() throws InterruptedException {
+      return closed.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
   }
 

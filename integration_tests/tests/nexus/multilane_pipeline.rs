@@ -132,13 +132,13 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
             id: DataSpaceId::new(1),
             alias: "governance".to_string(),
             description: Some("Governance proposals & manifests".to_string()),
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         },
         DataSpaceMetadata {
             id: DataSpaceId::new(2),
             alias: "zk".to_string(),
             description: Some("Zero-knowledge proofs and attachments".to_string()),
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         },
     ])
     .expect("static multi-dataspace catalog");

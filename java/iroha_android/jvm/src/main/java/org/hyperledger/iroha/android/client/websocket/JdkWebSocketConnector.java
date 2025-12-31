@@ -18,6 +18,11 @@ public final class JdkWebSocketConnector implements ToriiWebSocketClient.WebSock
     this(HttpClient.newHttpClient());
   }
 
+  /**
+   * Creates a connector backed by the provided {@link HttpClient}.
+   *
+   * @param httpClient HTTP client instance used to create WebSocket sessions
+   */
   public JdkWebSocketConnector(final HttpClient httpClient) {
     this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
   }

@@ -15,6 +15,13 @@ val noritoSchemaNames =
         "ConnectJournalRecordV1",
         "iroha.android.transaction.Payload.v1",
     )
+val noritoJar =
+    rootProject.layout.projectDirectory
+        .dir("../norito_java/build/libs")
+        .file("norito-java-${noritoJavaVersion.get()}.jar")
+val noritoJarTask = gradle.includedBuild("norito_java").task(":jar")
+// Use the built jar to keep Android lint happy with composite builds.
+val noritoJarDependency = files(noritoJar.asFile).builtBy(noritoJarTask)
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(21))
@@ -47,9 +54,7 @@ val noritoVerification by configurations.creating {
     isCanBeConsumed = false
     isCanBeResolved = true
     dependencies.add(
-        project.dependencies.create(
-            "org.hyperledger.iroha:norito-java:${noritoJavaVersion.get()}",
-        ),
+        project.dependencies.create(noritoJarDependency),
     )
 }
 
@@ -218,7 +223,7 @@ tasks.named("check") {
 }
 
 dependencies {
-    api("org.hyperledger.iroha:norito-java:${noritoJavaVersion.get()}")
+    api(noritoJarDependency)
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("com.squareup.okhttp3:okhttp:4.12.0")

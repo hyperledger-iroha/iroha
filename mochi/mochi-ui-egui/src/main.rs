@@ -567,41 +567,39 @@ fn parse_profile_override(value: &str) -> Result<ParsedProfileOverride, CliParse
         format!("{{ {trimmed} }}")
     };
     let doc = format!("profile = {table_literal}");
-    let value: toml::Value = toml::from_str(&doc).map_err(|err| {
-        CliParseError::new(format!("invalid profile table `{trimmed}`: {err}"))
-    })?;
+    let value: toml::Value = toml::from_str(&doc)
+        .map_err(|err| CliParseError::new(format!("invalid profile table `{trimmed}`: {err}")))?;
     let root = value.as_table().ok_or_else(|| {
         CliParseError::new(format!(
             "invalid profile `{trimmed}`; expected an inline TOML table"
         ))
     })?;
-    let table = root.get("profile").and_then(TomlValue::as_table).ok_or_else(|| {
-        CliParseError::new(format!(
-            "invalid profile `{trimmed}`; expected an inline TOML table"
-        ))
-    })?;
+    let table = root
+        .get("profile")
+        .and_then(TomlValue::as_table)
+        .ok_or_else(|| {
+            CliParseError::new(format!(
+                "invalid profile `{trimmed}`; expected an inline TOML table"
+            ))
+        })?;
     parse_profile_table_override(table)
 }
 
 fn parse_profile_table_override(table: &TomlTable) -> Result<ParsedProfileOverride, CliParseError> {
-    let peer_value = table.get("peer_count").ok_or_else(|| {
-        CliParseError::new("profile override missing `peer_count`")
-    })?;
+    let peer_value = table
+        .get("peer_count")
+        .ok_or_else(|| CliParseError::new("profile override missing `peer_count`"))?;
     let peer_count = parse_profile_peer_count(peer_value)?;
-    let consensus_value = table.get("consensus_mode").ok_or_else(|| {
-        CliParseError::new("profile override missing `consensus_mode`")
-    })?;
+    let consensus_value = table
+        .get("consensus_mode")
+        .ok_or_else(|| CliParseError::new("profile override missing `consensus_mode`"))?;
     let consensus_mode = parse_profile_consensus_mode(consensus_value)?;
     let genesis_profile = table
         .get("genesis_profile")
         .and_then(TomlValue::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| {
-            value
-                .parse()
-                .map_err(|err: String| CliParseError::new(err))
-        })
+        .map(|value| value.parse().map_err(|err: String| CliParseError::new(err)))
         .transpose()?;
 
     if genesis_profile.is_some() && consensus_mode != SumeragiConsensusMode::Npos {
@@ -620,9 +618,9 @@ fn parse_profile_table_override(table: &TomlTable) -> Result<ParsedProfileOverri
 }
 
 fn parse_profile_peer_count(value: &TomlValue) -> Result<usize, CliParseError> {
-    let raw = value.as_integer().ok_or_else(|| {
-        CliParseError::new("profile override peer_count must be an integer")
-    })?;
+    let raw = value
+        .as_integer()
+        .ok_or_else(|| CliParseError::new("profile override peer_count must be an integer"))?;
     if raw <= 0 {
         return Err(CliParseError::new(
             "profile override peer_count must be greater than zero",
@@ -635,12 +633,10 @@ fn parse_profile_peer_count(value: &TomlValue) -> Result<usize, CliParseError> {
         .map_err(|_| CliParseError::new("profile override peer_count exceeds the supported range"))
 }
 
-fn parse_profile_consensus_mode(
-    value: &TomlValue,
-) -> Result<SumeragiConsensusMode, CliParseError> {
-    let raw = value.as_str().ok_or_else(|| {
-        CliParseError::new("profile override consensus_mode must be a string")
-    })?;
+fn parse_profile_consensus_mode(value: &TomlValue) -> Result<SumeragiConsensusMode, CliParseError> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| CliParseError::new("profile override consensus_mode must be a string"))?;
     let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
     match normalized.as_str() {
         "permissioned" | "permissioned-sumeragi" => Ok(SumeragiConsensusMode::Permissioned),
@@ -5120,7 +5116,7 @@ impl MochiApp {
                 for attempt in 0..attempts {
                     match client.apply_lane_lifecycle(&plan).await {
                         Ok(_) => return Ok(()),
-                        Err(err) if attempt + 1 < attempts => {
+                        Err(_err) if attempt + 1 < attempts => {
                             tokio::time::sleep(backoff).await;
                             backoff = (backoff.saturating_mul(2)).min(Duration::from_secs(2));
                         }
@@ -11395,7 +11391,8 @@ mod tests {
             BlockHeader,
             consensus::{
                 SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
-                SumeragiMembershipStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+                SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+                SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
             },
         },
         da::commitment::DaProofScheme,
@@ -12329,6 +12326,7 @@ mod tests {
                 epoch: 2,
                 view_hash: Some([0xAB; 32]),
             },
+            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
             lane_commitments: vec![SumeragiLaneCommitment {
                 block_height: 10,
                 lane_id: LaneId::new(0),

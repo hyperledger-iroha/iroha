@@ -116,6 +116,10 @@ pub struct Root {
     pub telemetry_profile: TelemetryProfile,
     /// Telemetry destination (if enabled).
     pub telemetry: Option<Telemetry>,
+    /// Telemetry redaction policy.
+    pub telemetry_redaction: TelemetryRedaction,
+    /// Telemetry integrity policy.
+    pub telemetry_integrity: TelemetryIntegrity,
     /// Developer telemetry settings.
     pub dev_telemetry: DevTelemetry,
     /// Pipeline execution settings.
@@ -341,6 +345,10 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 "#;
 
     fn minimal_root() -> Root {
@@ -1790,6 +1798,33 @@ impl Default for NexusAxt {
     }
 }
 
+/// Lane-relay emergency override configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct LaneRelayEmergency {
+    /// Whether emergency validator overrides are enabled.
+    pub enabled: bool,
+    /// Minimum multisig threshold required for override transactions.
+    pub multisig_threshold: NonZeroU16,
+    /// Minimum multisig member count required for override transactions.
+    pub multisig_members: NonZeroU16,
+}
+
+impl Default for LaneRelayEmergency {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::nexus::lane_relay_emergency::ENABLED,
+            multisig_threshold: NonZeroU16::new(
+                defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
+            )
+            .expect("default threshold must be non-zero"),
+            multisig_members: NonZeroU16::new(
+                defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
+            )
+            .expect("default member count must be non-zero"),
+        }
+    }
+}
+
 /// Nexus configuration describing lanes, data spaces, and routing policy.
 #[derive(Debug, Clone)]
 pub struct Nexus {
@@ -1803,6 +1838,8 @@ pub struct Nexus {
     pub endorsement: NexusEndorsement,
     /// AXT execution and expiry configuration.
     pub axt: NexusAxt,
+    /// Lane-relay emergency override configuration.
+    pub lane_relay_emergency: LaneRelayEmergency,
     /// Validated lane catalog.
     pub lane_catalog: LaneCatalog,
     /// Derived storage/configuration geometry for lanes.
@@ -1834,6 +1871,7 @@ impl Default for Nexus {
             fees: NexusFees::default(),
             endorsement: NexusEndorsement::default(),
             axt: NexusAxt::default(),
+            lane_relay_emergency: LaneRelayEmergency::default(),
             lane_catalog: LaneCatalog::default(),
             lane_config: LaneConfig::default(),
             dataspace_catalog: DataSpaceCatalog::default(),
@@ -3259,6 +3297,10 @@ pub struct Sumeragi {
     /// Missing-block fetch attempts before falling back to the full commit topology.
     /// A value of 0 disables signer preference.
     pub missing_block_signer_fallback_attempts: u32,
+    /// Consecutive membership mismatches required before alerting.
+    pub membership_mismatch_alert_threshold: u32,
+    /// Whether to drop consensus messages from peers with repeated membership mismatches.
+    pub membership_mismatch_fail_closed: bool,
     /// Maximum DA commitments (blobs) permitted in a single block.
     pub da_max_commitments_per_block: usize,
     /// Maximum DA proof openings permitted in a single block (aggregate cap).
@@ -5584,6 +5626,85 @@ impl From<TelemetryProfile> for TelemetryCapabilities {
     }
 }
 
+/// Telemetry redaction modes (runtime).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelemetryRedactionMode {
+    /// Redact all sensitive fields; ignore allow-list entries.
+    Strict,
+    /// Redact sensitive fields unless explicitly allow-listed.
+    Allowlist,
+    /// Disable telemetry redaction (developer-only).
+    Disabled,
+}
+
+impl TelemetryRedactionMode {
+    /// Return whether redaction is disabled.
+    #[inline]
+    #[must_use]
+    pub const fn is_disabled(self) -> bool {
+        matches!(self, Self::Disabled)
+    }
+
+    /// Return whether allow-list entries may bypass keyword redaction.
+    #[inline]
+    #[must_use]
+    pub const fn allowlist_enabled(self) -> bool {
+        matches!(self, Self::Allowlist)
+    }
+}
+
+impl From<user::TelemetryRedactionMode> for TelemetryRedactionMode {
+    fn from(mode: user::TelemetryRedactionMode) -> Self {
+        match mode {
+            user::TelemetryRedactionMode::Strict => Self::Strict,
+            user::TelemetryRedactionMode::Allowlist => Self::Allowlist,
+            user::TelemetryRedactionMode::Disabled => Self::Disabled,
+        }
+    }
+}
+
+/// Telemetry redaction policy.
+#[derive(Debug, Clone)]
+pub struct TelemetryRedaction {
+    /// Redaction mode.
+    pub mode: TelemetryRedactionMode,
+    /// Allow-list of field names exempted from keyword redaction.
+    pub allowlist: Vec<String>,
+}
+
+impl Default for TelemetryRedaction {
+    fn default() -> Self {
+        Self {
+            mode: TelemetryRedactionMode::Strict,
+            allowlist: Vec::new(),
+        }
+    }
+}
+
+/// Telemetry integrity policy (hash chaining + optional signing key).
+#[derive(Debug, Clone)]
+pub struct TelemetryIntegrity {
+    /// Enable hash-chained telemetry exports.
+    pub enabled: bool,
+    /// Optional directory for integrity state snapshots.
+    pub state_dir: Option<PathBuf>,
+    /// Optional signing key for keyed hashes.
+    pub signing_key: Option<[u8; 32]>,
+    /// Optional key identifier for rotation workflows.
+    pub signing_key_id: Option<String>,
+}
+
+impl Default for TelemetryIntegrity {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::telemetry::integrity::ENABLED,
+            state_dir: None,
+            signing_key: None,
+            signing_key_id: None,
+        }
+    }
+}
+
 /// Complete configuration needed to start regular telemetry.
 #[derive(Debug, Clone)]
 pub struct Telemetry {
@@ -5636,6 +5757,34 @@ pub struct Nts {
     pub smoothing_alpha: f64,
     /// Maximum allowed adjustment per minute (ms) when smoothing.
     pub max_adjust_ms_per_min: u64,
+    /// Minimum number of peer samples required before NTS is considered healthy.
+    pub min_samples: usize,
+    /// Maximum absolute offset (ms) allowed before NTS is considered unhealthy (0 disables).
+    pub max_offset_ms: u64,
+    /// Maximum confidence (MAD) in ms allowed before NTS is considered unhealthy (0 disables).
+    pub max_confidence_ms: u64,
+    /// Enforcement mode for unhealthy NTS.
+    pub enforcement_mode: NtsEnforcementMode,
+}
+
+/// Enforcement modes for unhealthy NTS during admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NtsEnforcementMode {
+    /// Log unhealthy NTS status but accept time-sensitive transactions.
+    Warn,
+    /// Reject time-sensitive transactions when NTS is unhealthy.
+    Reject,
+}
+
+impl NtsEnforcementMode {
+    /// Canonical config label for this mode.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Warn => "warn",
+            Self::Reject => "reject",
+        }
+    }
 }
 
 #[cfg(test)]

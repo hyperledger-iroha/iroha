@@ -4498,7 +4498,7 @@ pub mod tests {
             id: test_dataspace,
             alias: "dataspace3".to_string(),
             description: None,
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         };
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(16).expect("nonzero lane count"),
@@ -4607,7 +4607,7 @@ pub mod tests {
             id: test_dataspace,
             alias: "dataspace9".to_string(),
             description: None,
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         };
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(16).expect("nonzero lane count"),

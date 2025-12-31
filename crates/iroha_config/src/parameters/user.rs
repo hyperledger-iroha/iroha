@@ -32,6 +32,8 @@ use std::{
 };
 
 use error_stack::{Report, ResultExt};
+#[cfg(test)]
+use iroha_config_base::ParameterId;
 use iroha_config_base::{
     ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
@@ -687,6 +689,12 @@ pub struct Root {
     #[config(env = "TELEMETRY_PROFILE", default = "TelemetryProfile::Operator")]
     telemetry_profile: TelemetryProfile,
     telemetry: Option<Telemetry>,
+    /// Telemetry redaction policy.
+    #[config(nested)]
+    telemetry_redaction: TelemetryRedaction,
+    /// Telemetry integrity policy (hash chaining + optional signing key).
+    #[config(nested)]
+    telemetry_integrity: TelemetryIntegrity,
     #[config(nested)]
     dev_telemetry: DevTelemetry,
     #[config(nested)]
@@ -755,6 +763,9 @@ pub enum ParseError {
     /// Streaming configuration block lacked required or valid values.
     #[error("Invalid streaming configuration")]
     InvalidStreamingConfig,
+    /// Telemetry configuration contained invalid or unsupported values.
+    #[error("Invalid telemetry configuration")]
+    InvalidTelemetryConfig,
     /// Settlement engine configuration was invalid or incomplete.
     #[error("Invalid settlement configuration")]
     InvalidSettlementConfig,
@@ -851,6 +862,8 @@ impl Root {
         } else {
             actual::TelemetryProfile::Disabled
         };
+        let telemetry_redaction = self.telemetry_redaction.parse(&mut emitter);
+        let telemetry_integrity = self.telemetry_integrity.parse(&mut emitter);
 
         let sumeragi = self.sumeragi.parse(&mut emitter);
         let pipeline = self.pipeline.parse();
@@ -951,6 +964,8 @@ impl Root {
             telemetry_enabled: self.telemetry_enabled,
             telemetry_profile,
             telemetry,
+            telemetry_redaction,
+            telemetry_integrity,
             dev_telemetry,
             pipeline,
             tiered_state,
@@ -1007,6 +1022,128 @@ impl json::JsonDeserialize for TelemetryProfile {
             message: err.to_string(),
         })
     }
+}
+
+/// Telemetry redaction modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
+#[strum(serialize_all = "snake_case")]
+pub enum TelemetryRedactionMode {
+    /// Redact all sensitive fields; ignore allow-list entries.
+    #[default]
+    Strict,
+    /// Redact sensitive fields unless explicitly allow-listed.
+    Allowlist,
+    /// Disable telemetry redaction (developer-only).
+    Disabled,
+}
+
+impl json::JsonSerialize for TelemetryRedactionMode {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+}
+
+impl json::JsonDeserialize for TelemetryRedactionMode {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let text = parser.parse_string()?;
+        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
+            field: "telemetry_redaction.mode".into(),
+            message: err.to_string(),
+        })
+    }
+}
+
+fn default_telemetry_redaction_mode() -> TelemetryRedactionMode {
+    TelemetryRedactionMode::from_str(defaults::telemetry::redaction::MODE)
+        .expect("invalid telemetry redaction default")
+}
+
+/// User-level configuration container for telemetry redaction.
+#[derive(Debug, Clone, ReadConfig)]
+pub struct TelemetryRedaction {
+    /// Redaction mode (default: `strict`).
+    #[config(default = "default_telemetry_redaction_mode()")]
+    pub mode: TelemetryRedactionMode,
+    /// Optional allow-list of field names that may bypass keyword redaction.
+    #[config(default)]
+    pub allowlist: Vec<String>,
+}
+
+impl TelemetryRedaction {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::TelemetryRedaction {
+        let mut allowlist = Vec::with_capacity(self.allowlist.len());
+        for entry in self.allowlist {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                emitter.emit(
+                    Report::new(ParseError::InvalidTelemetryConfig)
+                        .attach("telemetry_redaction.allowlist entry cannot be empty"),
+                );
+                continue;
+            }
+            allowlist.push(trimmed.to_string());
+        }
+        actual::TelemetryRedaction {
+            mode: self.mode.into(),
+            allowlist,
+        }
+    }
+}
+
+/// User-level configuration container for telemetry integrity.
+#[derive(Debug, Clone, ReadConfig)]
+pub struct TelemetryIntegrity {
+    /// Enable hash-chained telemetry exports.
+    #[config(default = "defaults::telemetry::integrity::ENABLED")]
+    pub enabled: bool,
+    /// Optional directory for integrity state snapshots (enables continuity across restarts).
+    pub state_dir: Option<WithOrigin<PathBuf>>,
+    /// Optional hex-encoded 32-byte signing key for keyed hashes.
+    pub signing_key_hex: Option<String>,
+    /// Optional key identifier for rotation workflows.
+    pub signing_key_id: Option<String>,
+}
+
+impl TelemetryIntegrity {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::TelemetryIntegrity {
+        let signing_key = match self.signing_key_hex {
+            Some(raw) => match parse_telemetry_signing_key(&raw) {
+                Ok(key) => Some(key),
+                Err(message) => {
+                    emitter.emit(Report::new(ParseError::InvalidTelemetryConfig).attach(message));
+                    None
+                }
+            },
+            None => None,
+        };
+
+        let state_dir = self.state_dir.map(|path| path.resolve_relative_path());
+
+        actual::TelemetryIntegrity {
+            enabled: self.enabled,
+            signing_key,
+            signing_key_id: self.signing_key_id,
+            state_dir,
+        }
+    }
+}
+
+fn parse_telemetry_signing_key(raw: &str) -> core::result::Result<[u8; 32], String> {
+    let trimmed = raw.trim();
+    let trimmed = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    let bytes = hex::decode(trimmed)
+        .map_err(|err| format!("telemetry_integrity.signing_key_hex must be hex-encoded: {err}"))?;
+    if bytes.len() != 32 {
+        return Err(format!(
+            "telemetry_integrity.signing_key_hex must be 32 bytes (got {})",
+            bytes.len()
+        ));
+    }
+    let mut key = [0_u8; 32];
+    key.copy_from_slice(&bytes);
+    Ok(key)
 }
 
 /// Verifying key reference (user view)
@@ -1977,6 +2114,43 @@ impl Concurrency {
     }
 }
 
+/// Network Time Service enforcement modes (user view).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
+#[strum(serialize_all = "snake_case")]
+pub enum NtsEnforcementMode {
+    /// Log unhealthy NTS status but accept time-sensitive transactions.
+    Warn,
+    /// Reject time-sensitive transactions when NTS is unhealthy.
+    Reject,
+}
+
+impl NtsEnforcementMode {
+    fn into_actual(self) -> actual::NtsEnforcementMode {
+        match self {
+            Self::Warn => actual::NtsEnforcementMode::Warn,
+            Self::Reject => actual::NtsEnforcementMode::Reject,
+        }
+    }
+}
+
+impl json::JsonSerialize for NtsEnforcementMode {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+}
+
+impl json::JsonDeserialize for NtsEnforcementMode {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let text = parser.parse_string()?;
+        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
+            field: "nts.enforcement_mode".into(),
+            message: err.to_string(),
+        })
+    }
+}
+
 /// Network Time Service (user view).
 /// User-level configuration container for `Nts`.
 #[derive(Debug, ReadConfig, Clone, Copy)]
@@ -2020,6 +2194,27 @@ pub struct Nts {
         default = "defaults::time::NTS_MAX_ADJUST_MS_PER_MIN"
     )]
     pub max_adjust_ms_per_min: u64,
+    /// Minimum number of peer samples required before NTS is considered healthy.
+    #[config(env = "NTS_MIN_SAMPLES", default = "defaults::time::NTS_MIN_SAMPLES")]
+    pub min_samples: usize,
+    /// Maximum absolute offset (ms) before NTS is considered unhealthy (0 disables).
+    #[config(
+        env = "NTS_MAX_OFFSET_MS",
+        default = "defaults::time::NTS_MAX_OFFSET_MS"
+    )]
+    pub max_offset_ms: u64,
+    /// Maximum confidence (MAD) in ms before NTS is considered unhealthy (0 disables).
+    #[config(
+        env = "NTS_MAX_CONFIDENCE_MS",
+        default = "defaults::time::NTS_MAX_CONFIDENCE_MS"
+    )]
+    pub max_confidence_ms: u64,
+    /// Enforcement mode for unhealthy NTS (warn/reject).
+    #[config(
+        env = "NTS_ENFORCEMENT_MODE",
+        default = "defaults::time::NTS_ENFORCEMENT_MODE.parse().unwrap()"
+    )]
+    pub enforcement_mode: NtsEnforcementMode,
 }
 
 /// Hardware acceleration settings for IVM (user view).
@@ -2109,6 +2304,10 @@ impl Nts {
             smoothing_enabled: self.smoothing_enabled,
             smoothing_alpha: self.smoothing_alpha,
             max_adjust_ms_per_min: self.max_adjust_ms_per_min,
+            min_samples: self.min_samples,
+            max_offset_ms: self.max_offset_ms,
+            max_confidence_ms: self.max_confidence_ms,
+            enforcement_mode: self.enforcement_mode.into_actual(),
         }
     }
 }
@@ -4772,6 +4971,12 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS"
     )]
     pub missing_block_signer_fallback_attempts: u32,
+    /// Consecutive membership mismatches required before alerting.
+    #[config(default = "defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD")]
+    pub membership_mismatch_alert_threshold: u32,
+    /// Whether to drop consensus messages from peers with repeated membership mismatches.
+    #[config(default = "defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED")]
+    pub membership_mismatch_fail_closed: bool,
     /// Maximum DA commitments (blobs) permitted in a single block.
     #[config(
         env = "SUMERAGI_DA_MAX_COMMITMENTS_PER_BLOCK",
@@ -5291,6 +5496,8 @@ impl Sumeragi {
             kura_store_retry_max_attempts,
             commit_inflight_timeout_ms,
             missing_block_signer_fallback_attempts,
+            membership_mismatch_alert_threshold,
+            membership_mismatch_fail_closed,
             da_max_commitments_per_block,
             da_max_proof_openings_per_block,
             rbc_chunk_max_bytes,
@@ -5445,6 +5652,16 @@ impl Sumeragi {
             true
         };
 
+        let membership_mismatch_threshold_ok =
+            if membership_mismatch_alert_threshold == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.membership_mismatch_alert_threshold must be greater than zero",
+                ));
+                false
+            } else {
+                true
+            };
+
         let pending_caps_ok = if rbc_pending_max_chunks == 0 || rbc_pending_max_bytes == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig).attach(
@@ -5494,6 +5711,7 @@ impl Sumeragi {
             && da_openings_ok
             && kura_retry_ok
             && commit_inflight_ok
+            && membership_mismatch_threshold_ok
             && bls_ok)
         {
             return None;
@@ -5578,6 +5796,8 @@ impl Sumeragi {
             kura_store_retry_max_attempts,
             commit_inflight_timeout: std::time::Duration::from_millis(commit_inflight_timeout_ms),
             missing_block_signer_fallback_attempts,
+            membership_mismatch_alert_threshold,
+            membership_mismatch_fail_closed,
             da_max_commitments_per_block,
             da_max_proof_openings_per_block,
             rbc_chunk_max_bytes,
@@ -7772,11 +7992,13 @@ impl ReadConfigTrait for Streaming {
 
         let identity_public_key = reader
             .read_parameter::<PublicKey>(["identity_public_key"])
+            .env("STREAMING_IDENTITY_PUBLIC_KEY")
             .value_optional()
             .finish_with_origin();
 
         let identity_private_key = reader
             .read_parameter::<PrivateKey>(["identity_private_key"])
+            .env("STREAMING_IDENTITY_PRIVATE_KEY")
             .value_optional()
             .finish_with_origin();
 
@@ -8460,6 +8682,9 @@ pub struct Nexus {
     /// AXT execution and expiry policy configuration.
     #[config(nested)]
     pub axt: NexusAxt,
+    /// Lane-relay emergency override configuration.
+    #[config(nested)]
+    pub lane_relay_emergency: LaneRelayEmergency,
     /// Lane routing policy configuration.
     #[config(default)]
     pub routing_policy: RoutingPolicy,
@@ -8494,6 +8719,7 @@ impl Default for Nexus {
             fees: NexusFees::default(),
             endorsement: NexusEndorsement::default(),
             axt: NexusAxt::default(),
+            lane_relay_emergency: LaneRelayEmergency::default(),
             routing_policy: RoutingPolicy::default(),
             registry: LaneRegistryConfig::default(),
             governance: GovernanceCatalogConfig::default(),
@@ -8547,6 +8773,7 @@ pub struct DataSpaceDescriptor {
     /// Optional description for documentation and dashboards.
     pub description: Option<String>,
     /// Fault tolerance value (f) used to size per-dataspace committees (3f + 1).
+    /// Must be at least 1.
     pub fault_tolerance: Option<u32>,
 }
 
@@ -9533,6 +9760,71 @@ impl Default for NexusAxt {
     }
 }
 
+/// Lane-relay emergency override configuration.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+pub struct LaneRelayEmergency {
+    /// Whether emergency validator overrides are enabled.
+    #[config(default = "defaults::nexus::lane_relay_emergency::ENABLED")]
+    pub enabled: bool,
+    /// Minimum multisig threshold required for override transactions.
+    #[config(default = "defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD")]
+    pub multisig_threshold: u16,
+    /// Minimum multisig member count required for override transactions.
+    #[config(default = "defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS")]
+    pub multisig_members: u16,
+}
+
+impl Default for LaneRelayEmergency {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::nexus::lane_relay_emergency::ENABLED,
+            multisig_threshold: defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
+            multisig_members: defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
+        }
+    }
+}
+
+impl LaneRelayEmergency {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::LaneRelayEmergency> {
+        let mut invalid = false;
+        let threshold = NonZeroU16::new(self.multisig_threshold).or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.lane_relay_emergency.multisig_threshold must be > 0"),
+            );
+            None
+        });
+        let members = NonZeroU16::new(self.multisig_members).or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.lane_relay_emergency.multisig_members must be > 0"),
+            );
+            None
+        });
+
+        if let (Some(threshold), Some(members)) = (threshold, members)
+            && threshold.get() > members.get()
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.lane_relay_emergency.multisig_threshold {threshold} must be <= multisig_members {members}"
+            )));
+        }
+
+        if invalid || threshold.is_none() || members.is_none() {
+            return None;
+        }
+
+        Some(actual::LaneRelayEmergency {
+            enabled: self.enabled,
+            multisig_threshold: threshold.expect("validated"),
+            multisig_members: members.expect("validated"),
+        })
+    }
+}
+
 impl NexusAxt {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusAxt> {
         let mut invalid = false;
@@ -9633,6 +9925,7 @@ impl Nexus {
             fees,
             endorsement: endorsement_cfg,
             axt,
+            lane_relay_emergency,
             routing_policy,
             registry,
             governance,
@@ -9655,6 +9948,7 @@ impl Nexus {
         let commit = commit.parse(emitter)?;
         let da = da.parse(emitter)?;
         let axt_cfg = axt.parse(emitter)?;
+        let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let fees = fees.parse(emitter)?;
         let endorsement = endorsement_cfg.parse(emitter)?;
@@ -9669,6 +9963,13 @@ impl Nexus {
                 Report::new(ParseError::InvalidNexusConfig).attach(
                     "multi-lane catalogs or routing policies require `nexus.enabled = true` (set the flag or use `--sora`)",
                 ),
+            );
+            return None;
+        }
+        if lane_relay_emergency.enabled && !enabled {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.lane_relay_emergency.enabled requires nexus.enabled = true"),
             );
             return None;
         }
@@ -9701,6 +10002,7 @@ impl Nexus {
             commit,
             da,
             axt: axt_cfg,
+            lane_relay_emergency,
         })
     }
 
@@ -9925,6 +10227,14 @@ impl Nexus {
                 let fault_tolerance = descriptor
                     .fault_tolerance
                     .unwrap_or(defaults::nexus::dataspace::FAULT_TOLERANCE);
+                if fault_tolerance == 0 {
+                    dataspace_errors = true;
+                    emitter.emit(
+                        Report::new(ParseError::InvalidNexusConfig)
+                            .attach(format!("dataspace[{idx}] fault_tolerance must be >= 1")),
+                    );
+                    continue;
+                }
                 if fault_tolerance > (u32::MAX.saturating_sub(1)) / 3 {
                     dataspace_errors = true;
                     emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
@@ -10528,6 +10838,62 @@ fn telemetry_json_invalid_url() {
     let json = r#"{"name":"ops","url":"not a url"}"#;
     let err = norito::json::from_json::<Telemetry>(json).expect_err("reject invalid url");
     assert!(err.to_string().contains("invalid field `url`"));
+}
+
+#[cfg(test)]
+#[test]
+fn telemetry_redaction_mode_round_trips() {
+    let json = r#""allowlist""#;
+    let mode =
+        norito::json::from_json::<TelemetryRedactionMode>(json).expect("parse redaction mode");
+    assert_eq!(mode, TelemetryRedactionMode::Allowlist);
+
+    let mut out = String::new();
+    mode.json_serialize(&mut out);
+    assert_eq!(out, "\"allowlist\"");
+}
+
+#[cfg(test)]
+#[test]
+fn telemetry_signing_key_parses_hex() {
+    let key = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    let parsed = parse_telemetry_signing_key(key).expect("parse key");
+    assert_eq!(parsed[0], 0);
+    assert_eq!(parsed[31], 0x1f);
+}
+
+#[cfg(test)]
+#[test]
+fn telemetry_signing_key_rejects_wrong_length() {
+    let err = parse_telemetry_signing_key("deadbeef").expect_err("reject short key");
+    assert!(err.contains("must be 32 bytes"));
+}
+
+#[cfg(test)]
+#[test]
+fn telemetry_integrity_state_dir_resolves_relative_path() {
+    use std::path::Path;
+
+    let origin = ParameterOrigin::file(
+        ParameterId::from(["telemetry_integrity", "state_dir"]),
+        PathBuf::from("/config/root/config.toml"),
+    );
+    let state_dir = WithOrigin::new(PathBuf::from("telemetry-state"), origin);
+    let integrity = TelemetryIntegrity {
+        enabled: true,
+        state_dir: Some(state_dir),
+        signing_key_hex: None,
+        signing_key_id: None,
+    };
+
+    let mut emitter = Emitter::new();
+    let parsed = integrity.parse(&mut emitter);
+    emitter.into_result().expect("state dir parse error");
+
+    assert_eq!(
+        parsed.state_dir.as_deref(),
+        Some(Path::new("/config/root/telemetry-state"))
+    );
 }
 
 impl From<Telemetry> for actual::Telemetry {
@@ -13352,6 +13718,10 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 "#;
 
     fn base_table() -> Table {
@@ -13425,6 +13795,21 @@ public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B704
             .as_table_mut()
             .expect("sumeragi table");
         sumeragi.insert("enable_bls".into(), Value::Boolean(false));
+        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+    }
+
+    #[test]
+    fn sumeragi_rejects_zero_membership_mismatch_threshold() {
+        let mut table = base_table();
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        sumeragi.insert(
+            "membership_mismatch_alert_threshold".into(),
+            Value::Integer(0),
+        );
         assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
     }
 

@@ -34,6 +34,8 @@ envelopes_dir = "defaults/nexus/sorafs_admission"
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 
 [streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 # Advertise support for feedback hints and privacy overlay provider
 feature_bits = 0b11
 
@@ -71,19 +73,19 @@ metadata = {}
 alias = "global"
 id = 0
 description = "Single-lane data space"
-fault_tolerance = 0
+fault_tolerance = 1
 
 [[nexus.dataspace_catalog]]
 alias = "governance"
 id = 1
 description = "Governance proposals & manifests"
-fault_tolerance = 0
+fault_tolerance = 1
 
 [[nexus.dataspace_catalog]]
 alias = "zk"
 id = 2
 description = "Zero-knowledge proofs and attachments"
-fault_tolerance = 0
+fault_tolerance = 1
 
 [nexus.routing_policy]
 default_lane = 0
@@ -111,6 +113,11 @@ max_window_slots = 16
 
 [nexus.commit]
 window_slots = 2
+
+[nexus.lane_relay_emergency]
+enabled = false
+multisig_threshold = 3
+multisig_members = 5
 
 [nexus.da]
 q_in_slot_total = 2048
