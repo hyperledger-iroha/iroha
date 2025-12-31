@@ -2072,6 +2072,7 @@ mod tests {
                 message::ConsensusParamsAdvert {
                     collectors_k: 1,
                     redundant_send_r: 1,
+                    membership: None,
                 },
             ))
             .expect("send consensus params");
@@ -2191,6 +2192,7 @@ mod tests {
                 message::ConsensusParamsAdvert {
                     collectors_k: 1,
                     redundant_send_r: 1,
+                    membership: None,
                 },
             ))
             .expect("send consensus params");
@@ -2602,6 +2604,7 @@ mod tests {
             message::ConsensusParamsAdvert {
                 collectors_k: 1,
                 redundant_send_r: 1,
+                membership: None,
             },
         ));
 
@@ -2611,12 +2614,14 @@ mod tests {
             BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
                 collectors_k: 2,
                 redundant_send_r: 1,
+                membership: None,
             }),
         );
         handle.broadcast(BlockMessage::ConsensusParams(
             message::ConsensusParamsAdvert {
                 collectors_k: 3,
                 redundant_send_r: 1,
+                membership: None,
             },
         ));
 

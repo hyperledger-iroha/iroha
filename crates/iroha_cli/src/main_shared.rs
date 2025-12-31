@@ -572,7 +572,7 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     let help_language = detect_language(language_override.as_deref());
     let help_i18n = Localizer::new(Bundle::Cli, help_language);
 
-    let mut cmd = Args::command();
+    let cmd = Args::command();
     let matches = match cmd.try_get_matches_from(&raw_args) {
         Ok(matches) => matches,
         Err(err) => match err.kind() {

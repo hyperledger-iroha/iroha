@@ -9,6 +9,7 @@ pluginManagement {
 rootProject.name = "iroha-android"
 
 includeBuild("../norito_java") {
+    name = "norito_java"
     dependencySubstitution {
         substitute(module("org.hyperledger.iroha:norito-java")).using(project(":"))
     }

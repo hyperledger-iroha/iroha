@@ -10,12 +10,12 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
+    AccountId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
     consensus::ExecutionQcRecord,
     da::commitment::DaCommitmentBundle,
     nexus::{DataSpaceId, LaneId},
     prelude::Metadata,
-    AccountId,
 };
 
 /// Relay envelope broadcast by Nexus lanes for merge validation.
@@ -73,6 +73,8 @@ pub struct LaneRelayEvidenceBundle {
 }
 
 /// Emergency validator override for a dataspace when lane relay quorum is at risk.
+///
+/// Application of this override is gated by `nexus.lane_relay_emergency.enabled`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",

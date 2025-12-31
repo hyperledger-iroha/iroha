@@ -1,8 +1,14 @@
 //! Module with telemetry layer for tracing
 
-use std::{error::Error, fmt::Debug};
+use std::{
+    collections::BTreeSet,
+    error::Error,
+    fmt::Debug,
+    sync::{Arc, OnceLock, RwLock},
+};
 
 use derive_more::{Deref, DerefMut};
+use iroha_config::parameters::actual::{TelemetryRedaction, TelemetryRedactionMode};
 use iroha_data_model::nexus::{DataSpaceId, LaneId};
 use norito::json::{Value, native::Map as JsonMap};
 use tokio::sync::mpsc;
@@ -33,10 +39,16 @@ const SENSITIVE_FIELD_KEYWORDS: &[&str] = &[
     "passwd",
     "passphrase",
     "secret",
+    "credential",
     "token",
     "access_token",
     "refresh_token",
     "session_token",
+    "session",
+    "authorization",
+    "cookie",
+    "jwt",
+    "bearer",
     "api_key",
     "apikey",
     "private_key",
@@ -44,6 +56,152 @@ const SENSITIVE_FIELD_KEYWORDS: &[&str] = &[
     "mnemonic",
     "seed",
 ];
+
+// Prefixes that explicitly mark a field as sensitive (takes precedence over allow-list entries).
+const EXPLICIT_REDACTION_PREFIXES: &[&str] = &["redact", "sensitive", "secret", "pii"];
+
+/// Normalized field names explicitly allowed to bypass keyword redaction.
+///
+/// This list must remain short and documented in `docs/source/telemetry.md`.
+pub const REDACTION_ALLOWLIST_POLICY: &[&str] = &[];
+
+/// Compile-time support flag for telemetry redaction.
+pub const REDACTION_SUPPORTED: bool = cfg!(feature = "log-obfuscation");
+
+/// Redaction classification for telemetry fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedactionReason {
+    /// Field was explicitly marked as sensitive.
+    Explicit,
+    /// Field matched a sensitive keyword.
+    Keyword,
+}
+
+/// Reasons a redaction was skipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedactionSkipReason {
+    /// Redaction disabled by configuration.
+    Disabled,
+    /// Field allow-listed by configuration.
+    Allowlist,
+    /// Redaction feature not compiled in.
+    Unsupported,
+}
+
+/// Audit events emitted by the telemetry redaction layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedactionMetricEvent {
+    /// A redaction was applied.
+    Redacted {
+        #[doc = "Reason for applying redaction."]
+        reason: RedactionReason,
+    },
+    /// A redaction was skipped.
+    Skipped {
+        #[doc = "Reason for skipping redaction."]
+        reason: RedactionSkipReason,
+    },
+    /// A string payload was truncated.
+    Truncated,
+}
+
+/// Hook invoked for redaction audit events.
+pub type RedactionAuditHook = Arc<dyn Fn(RedactionMetricEvent) + Send + Sync + 'static>;
+
+/// Redaction policy derived from configuration.
+#[derive(Debug, Clone)]
+pub struct RedactionPolicy {
+    mode: TelemetryRedactionMode,
+    allowlist: BTreeSet<String>,
+}
+
+impl Default for RedactionPolicy {
+    fn default() -> Self {
+        Self {
+            mode: TelemetryRedactionMode::Strict,
+            allowlist: BTreeSet::new(),
+        }
+    }
+}
+
+impl RedactionPolicy {
+    /// Construct a policy from the runtime telemetry configuration.
+    #[must_use]
+    pub fn from_config(config: &TelemetryRedaction) -> Self {
+        let allowlist = config
+            .allowlist
+            .iter()
+            .map(|entry| normalize_field_name(entry))
+            .filter(|entry| !entry.is_empty())
+            .collect();
+        Self {
+            mode: config.mode,
+            allowlist,
+        }
+    }
+
+    #[inline]
+    fn allowlist_enabled(&self) -> bool {
+        self.mode.allowlist_enabled()
+    }
+
+    #[inline]
+    fn is_allowlisted(&self, field_name: &str) -> bool {
+        let normalized = normalize_field_name(field_name);
+        self.allowlist.contains(&normalized)
+    }
+}
+
+static REDACTION_POLICY: OnceLock<RwLock<RedactionPolicy>> = OnceLock::new();
+static REDACTION_AUDIT_HOOK: OnceLock<RwLock<Option<RedactionAuditHook>>> = OnceLock::new();
+
+/// Return true if the build includes telemetry redaction support.
+#[inline]
+#[must_use]
+pub const fn redaction_supported() -> bool {
+    REDACTION_SUPPORTED
+}
+
+/// Return the approved allow-list policy for bypassing keyword redaction.
+#[inline]
+#[must_use]
+pub const fn redaction_allowlist_policy() -> &'static [&'static str] {
+    REDACTION_ALLOWLIST_POLICY
+}
+
+/// Normalize a field name for allow-list comparisons.
+#[must_use]
+pub fn normalize_redaction_field(field_name: &str) -> String {
+    normalize_field_name(field_name)
+}
+
+/// Override the telemetry redaction policy at runtime.
+pub fn set_redaction_policy(policy: RedactionPolicy) {
+    let slot = REDACTION_POLICY.get_or_init(|| RwLock::new(policy.clone()));
+    let mut guard = slot
+        .write()
+        .expect("telemetry redaction policy lock poisoned");
+    *guard = policy;
+}
+
+/// Install a telemetry redaction audit hook.
+pub fn set_redaction_audit_hook(hook: RedactionAuditHook) {
+    let slot = REDACTION_AUDIT_HOOK.get_or_init(|| RwLock::new(None));
+    let mut guard = slot
+        .write()
+        .expect("telemetry redaction audit hook lock poisoned");
+    *guard = Some(hook);
+}
+
+#[cfg(test)]
+fn clear_redaction_audit_hook() {
+    if let Some(slot) = REDACTION_AUDIT_HOOK.get() {
+        let mut guard = slot
+            .write()
+            .expect("telemetry redaction audit hook lock poisoned");
+        *guard = None;
+    }
+}
 
 /// Fields for telemetry (type for efficient saving)
 #[derive(Clone, Debug, PartialEq, Eq, Default, Deref, DerefMut)]
@@ -183,7 +341,7 @@ impl<S: Subscriber> EventInspectorTrait for Layer<S> {
 
 #[inline]
 fn sanitize_value(field_name: &str, value: Value) -> Value {
-    if should_redact(field_name) {
+    if matches!(redaction_decision(field_name), RedactionDecision::Redact) {
         return Value::from(REDACTED_PLACEHOLDER);
     }
 
@@ -193,6 +351,7 @@ fn sanitize_value(field_name: &str, value: Value) -> Value {
                 let keep = MAX_FIELD_LENGTH.saturating_sub(TRUNCATION_SUFFIX.len());
                 raw.truncate(keep);
                 raw.push_str(TRUNCATION_SUFFIX);
+                emit_redaction_event(RedactionMetricEvent::Truncated);
             }
             Value::String(raw)
         }
@@ -214,37 +373,132 @@ fn sanitize_value(field_name: &str, value: Value) -> Value {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RedactionDecision {
+    Redact,
+    Allow,
+}
+
 #[inline]
-fn should_redact(field_name: &str) -> bool {
-    if cfg!(feature = "log-obfuscation") {
-        is_sensitive_field(field_name)
-    } else {
-        let _ = field_name;
-        false
+fn redaction_decision(field_name: &str) -> RedactionDecision {
+    let Some(reason) = classify_sensitive_field(field_name) else {
+        return RedactionDecision::Allow;
+    };
+
+    if !redaction_supported() {
+        emit_redaction_event(RedactionMetricEvent::Skipped {
+            reason: RedactionSkipReason::Unsupported,
+        });
+        return RedactionDecision::Allow;
+    }
+
+    let policy = current_redaction_policy();
+    if policy.mode.is_disabled() {
+        emit_redaction_event(RedactionMetricEvent::Skipped {
+            reason: RedactionSkipReason::Disabled,
+        });
+        return RedactionDecision::Allow;
+    }
+
+    if matches!(reason, RedactionReason::Keyword)
+        && policy.allowlist_enabled()
+        && policy.is_allowlisted(field_name)
+    {
+        emit_redaction_event(RedactionMetricEvent::Skipped {
+            reason: RedactionSkipReason::Allowlist,
+        });
+        return RedactionDecision::Allow;
+    }
+
+    emit_redaction_event(RedactionMetricEvent::Redacted { reason });
+    RedactionDecision::Redact
+}
+
+fn current_redaction_policy() -> RedactionPolicy {
+    REDACTION_POLICY
+        .get_or_init(|| RwLock::new(RedactionPolicy::default()))
+        .read()
+        .expect("telemetry redaction policy lock poisoned")
+        .clone()
+}
+
+fn emit_redaction_event(event: RedactionMetricEvent) {
+    let Some(slot) = REDACTION_AUDIT_HOOK.get() else {
+        return;
+    };
+    let hook = slot
+        .read()
+        .expect("telemetry redaction audit hook lock poisoned")
+        .clone();
+    if let Some(hook) = hook {
+        hook(event);
     }
 }
 
-fn is_sensitive_field(field_name: &str) -> bool {
-    let mut normalized = String::with_capacity(field_name.len());
-    for ch in field_name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            normalized.push(ch.to_ascii_lowercase());
-        } else {
-            normalized.push('_');
-        }
+fn classify_sensitive_field(field_name: &str) -> Option<RedactionReason> {
+    let normalized = normalize_field_name(field_name);
+    if normalized.is_empty() {
+        return None;
+    }
+    let segments: Vec<&str> = normalized
+        .split('_')
+        .filter(|seg| !seg.is_empty())
+        .collect();
+
+    if let Some(first) = segments.first()
+        && EXPLICIT_REDACTION_PREFIXES.contains(first)
+    {
+        return Some(RedactionReason::Explicit);
     }
 
     if SENSITIVE_FIELD_KEYWORDS
         .iter()
         .any(|keyword| normalized == *keyword)
     {
-        return true;
+        return Some(RedactionReason::Keyword);
+    }
+
+    if segments
+        .iter()
+        .any(|segment| SENSITIVE_FIELD_KEYWORDS.contains(segment))
+    {
+        return Some(RedactionReason::Keyword);
+    }
+
+    None
+}
+
+#[cfg(test)]
+fn is_sensitive_field(field_name: &str) -> bool {
+    classify_sensitive_field(field_name).is_some()
+}
+
+fn normalize_field_name(field_name: &str) -> String {
+    let chars: Vec<char> = field_name.chars().collect();
+    let mut normalized = String::with_capacity(field_name.len() + 4);
+
+    for (idx, ch) in chars.iter().enumerate() {
+        if ch.is_ascii_alphanumeric() {
+            let is_upper = ch.is_ascii_uppercase();
+            if is_upper {
+                let prev_is_alnum = idx > 0 && chars[idx - 1].is_ascii_alphanumeric();
+                let prev_is_upper = idx > 0 && chars[idx - 1].is_ascii_uppercase();
+                let next_is_lower = idx + 1 < chars.len() && chars[idx + 1].is_ascii_lowercase();
+                if (prev_is_alnum && !prev_is_upper) || (prev_is_upper && next_is_lower) {
+                    if !normalized.ends_with('_') {
+                        normalized.push('_');
+                    }
+                }
+                normalized.push(ch.to_ascii_lowercase());
+            } else {
+                normalized.push(ch.to_ascii_lowercase());
+            }
+        } else if !normalized.ends_with('_') {
+            normalized.push('_');
+        }
     }
 
     normalized
-        .split('_')
-        .filter(|segment| !segment.is_empty())
-        .any(|segment| SENSITIVE_FIELD_KEYWORDS.contains(&segment))
 }
 
 /// A pair of [`Channel`] associated with [`Event`]
@@ -261,70 +515,174 @@ pub enum Channel {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use norito::json::{self, Value};
 
     use super::*;
 
-    #[test]
-    fn conditionally_redacts_sensitive_fields() {
-        let value = sanitize_value("password", Value::from("super-secret"));
-        let direct = sanitize_value("access_token", Value::from("token"));
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-        if cfg!(feature = "log-obfuscation") {
-            assert_eq!(value, Value::from(REDACTED_PLACEHOLDER));
-            assert_eq!(direct, Value::from(REDACTED_PLACEHOLDER));
-        } else {
-            assert_eq!(value, Value::from("super-secret"));
-            assert_eq!(direct, Value::from("token"));
-        }
+    fn with_test_lock<F: FnOnce()>(f: F) {
+        let lock = TEST_LOCK.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().expect("telemetry test lock poisoned");
+        f();
+    }
+
+    fn configure_policy(mode: TelemetryRedactionMode, allowlist: &[&str]) {
+        let cfg = TelemetryRedaction {
+            mode,
+            allowlist: allowlist.iter().map(|entry| (*entry).to_string()).collect(),
+        };
+        set_redaction_policy(RedactionPolicy::from_config(&cfg));
+    }
+
+    fn install_counter_hook() -> (Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let redacted = Arc::new(AtomicUsize::new(0));
+        let skipped = Arc::new(AtomicUsize::new(0));
+        let truncated = Arc::new(AtomicUsize::new(0));
+        let redacted_hook = Arc::clone(&redacted);
+        let skipped_hook = Arc::clone(&skipped);
+        let truncated_hook = Arc::clone(&truncated);
+        set_redaction_audit_hook(Arc::new(move |event| match event {
+            RedactionMetricEvent::Redacted { .. } => {
+                redacted_hook.fetch_add(1, Ordering::SeqCst);
+            }
+            RedactionMetricEvent::Skipped { .. } => {
+                skipped_hook.fetch_add(1, Ordering::SeqCst);
+            }
+            RedactionMetricEvent::Truncated => {
+                truncated_hook.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        (redacted, skipped, truncated)
     }
 
     #[test]
-    fn truncates_oversized_strings() {
-        let payload = "x".repeat(MAX_FIELD_LENGTH + 64);
-        let sanitized = sanitize_value("payload", Value::from(payload.clone()));
+    fn redacts_sensitive_fields_by_default() {
+        with_test_lock(|| {
+            configure_policy(TelemetryRedactionMode::Strict, &[]);
 
-        let Value::String(output) = sanitized else {
-            panic!("sanitized value is not a string");
-        };
+            let value = sanitize_value("password", Value::from("super-secret"));
+            let direct = sanitize_value("accessToken", Value::from("token"));
 
-        assert_eq!(output.len(), MAX_FIELD_LENGTH);
-        assert!(output.ends_with(TRUNCATION_SUFFIX));
+            if redaction_supported() {
+                assert_eq!(value, Value::from(REDACTED_PLACEHOLDER));
+                assert_eq!(direct, Value::from(REDACTED_PLACEHOLDER));
+            } else {
+                assert_eq!(value, Value::from("super-secret"));
+                assert_eq!(direct, Value::from("token"));
+            }
+        });
+    }
 
-        let keep = MAX_FIELD_LENGTH.saturating_sub(TRUNCATION_SUFFIX.len());
-        assert_eq!(&output[..keep], &payload[..keep]);
+    #[test]
+    fn allowlist_skips_keyword_redaction_when_enabled() {
+        with_test_lock(|| {
+            configure_policy(TelemetryRedactionMode::Allowlist, &["ApiKeyHash"]);
+            let value = sanitize_value("api_key_hash", Value::from("hash"));
+            if redaction_supported() {
+                assert_eq!(value, Value::from("hash"));
+            } else {
+                assert_eq!(value, Value::from("hash"));
+            }
+        });
+    }
+
+    #[test]
+    fn strict_mode_ignores_allowlist() {
+        with_test_lock(|| {
+            configure_policy(TelemetryRedactionMode::Strict, &["api_key_hash"]);
+            let value = sanitize_value("api_key_hash", Value::from("hash"));
+            if redaction_supported() {
+                assert_eq!(value, Value::from(REDACTED_PLACEHOLDER));
+            } else {
+                assert_eq!(value, Value::from("hash"));
+            }
+        });
+    }
+
+    #[test]
+    fn explicit_markers_force_redaction() {
+        with_test_lock(|| {
+            configure_policy(TelemetryRedactionMode::Allowlist, &["sensitive_payload"]);
+            let value = sanitize_value("sensitive_payload", Value::from("data"));
+            if redaction_supported() {
+                assert_eq!(value, Value::from(REDACTED_PLACEHOLDER));
+            } else {
+                assert_eq!(value, Value::from("data"));
+            }
+        });
+    }
+
+    #[test]
+    fn truncates_oversized_strings_and_emits_metric() {
+        with_test_lock(|| {
+            configure_policy(TelemetryRedactionMode::Strict, &[]);
+            let (_redacted, _skipped, truncated) = install_counter_hook();
+
+            let payload = "x".repeat(MAX_FIELD_LENGTH + 64);
+            let sanitized = sanitize_value("payload", Value::from(payload.clone()));
+
+            let Value::String(output) = sanitized else {
+                panic!("sanitized value is not a string");
+            };
+
+            assert_eq!(output.len(), MAX_FIELD_LENGTH);
+            assert!(output.ends_with(TRUNCATION_SUFFIX));
+
+            let keep = MAX_FIELD_LENGTH.saturating_sub(TRUNCATION_SUFFIX.len());
+            assert_eq!(&output[..keep], &payload[..keep]);
+            assert!(truncated.load(Ordering::SeqCst) >= 1);
+            clear_redaction_audit_hook();
+        });
     }
 
     #[test]
     fn sanitizes_nested_structures() {
-        let nested = json::object([("token", Value::from("abc")), ("note", Value::from("ok"))])
-            .expect("construct nested object");
+        with_test_lock(|| {
+            configure_policy(TelemetryRedactionMode::Strict, &[]);
+            let nested = json::object([("token", Value::from("abc")), ("note", Value::from("ok"))])
+                .expect("construct nested object");
 
-        let sanitized = sanitize_value("wrapper", nested);
-        let Value::Object(mut map) = sanitized else {
-            panic!("expected object after sanitization");
-        };
+            let sanitized = sanitize_value("wrapper", nested);
+            let Value::Object(mut map) = sanitized else {
+                panic!("expected object after sanitization");
+            };
 
-        let token_entry = map.remove("token");
-        if cfg!(feature = "log-obfuscation") {
-            assert_eq!(token_entry, Some(Value::from(REDACTED_PLACEHOLDER)));
-        } else {
-            assert_eq!(token_entry, Some(Value::from("abc")));
-        }
+            let token_entry = map.remove("token");
+            if redaction_supported() {
+                assert_eq!(token_entry, Some(Value::from(REDACTED_PLACEHOLDER)));
+            } else {
+                assert_eq!(token_entry, Some(Value::from("abc")));
+            }
 
-        assert_eq!(map.remove("note"), Some(Value::from("ok")));
+            assert_eq!(map.remove("note"), Some(Value::from("ok")));
+        });
     }
 
     #[test]
     fn leaves_non_sensitive_values_intact() {
-        let before = json::object([
-            ("count", Value::Number(10_u64.into())),
-            ("status", Value::from("ready")),
-        ])
-        .expect("construct metrics object");
-        let sanitized = sanitize_value("metrics", before.clone());
-        assert_eq!(sanitized, before);
+        with_test_lock(|| {
+            configure_policy(TelemetryRedactionMode::Strict, &[]);
+            let before = json::object([
+                ("count", Value::Number(10_u64.into())),
+                ("status", Value::from("ready")),
+            ])
+            .expect("construct metrics object");
+            let sanitized = sanitize_value("metrics", before.clone());
+            assert_eq!(sanitized, before);
 
-        assert!(!is_sensitive_field("metrics"));
+            assert!(!is_sensitive_field("metrics"));
+        });
+    }
+
+    #[test]
+    fn detects_camel_case_keywords() {
+        assert!(is_sensitive_field("refreshToken"));
+        assert!(is_sensitive_field("APIKey"));
     }
 }

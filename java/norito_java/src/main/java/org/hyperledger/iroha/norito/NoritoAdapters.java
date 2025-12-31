@@ -3,8 +3,10 @@
 
 package org.hyperledger.iroha.norito;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -16,6 +18,54 @@ import java.util.Optional;
 /** Factory helpers for Norito adapters. */
 public final class NoritoAdapters {
   private NoritoAdapters() {}
+
+  // Reflection avoids unchecked casts while staying compatible with Android API levels < 26.
+  private static final Method TYPE_ADAPTER_ENCODE;
+  private static final Method TYPE_ADAPTER_DECODE;
+
+  static {
+    try {
+      TYPE_ADAPTER_ENCODE =
+          TypeAdapter.class.getMethod("encode", NoritoEncoder.class, Object.class);
+      TYPE_ADAPTER_DECODE = TypeAdapter.class.getMethod("decode", NoritoDecoder.class);
+    } catch (NoSuchMethodException ex) {
+      throw new ExceptionInInitializerError(ex);
+    }
+  }
+
+  private static void encodeAdapter(TypeAdapter<?> adapter, NoritoEncoder encoder, Object value) {
+    try {
+      TYPE_ADAPTER_ENCODE.invoke(adapter, encoder, value);
+    } catch (InvocationTargetException ex) {
+      Throwable target = ex.getTargetException();
+      if (target instanceof RuntimeException runtime) {
+        throw runtime;
+      }
+      if (target instanceof Error err) {
+        throw err;
+      }
+      throw new IllegalStateException("Unable to encode value", target);
+    } catch (IllegalAccessException ex) {
+      throw new IllegalStateException("Unable to encode value", ex);
+    }
+  }
+
+  private static Object decodeAdapter(TypeAdapter<?> adapter, NoritoDecoder decoder) {
+    try {
+      return TYPE_ADAPTER_DECODE.invoke(adapter, decoder);
+    } catch (InvocationTargetException ex) {
+      Throwable target = ex.getTargetException();
+      if (target instanceof RuntimeException runtime) {
+        throw runtime;
+      }
+      if (target instanceof Error err) {
+        throw err;
+      }
+      throw new IllegalStateException("Unable to decode value", target);
+    } catch (IllegalAccessException ex) {
+      throw new IllegalStateException("Unable to decode value", ex);
+    }
+  }
 
   public static TypeAdapter<Long> uint(int bits) {
     return new UIntAdapter(bits);
@@ -57,19 +107,20 @@ public final class NoritoAdapters {
     return new MapAdapter<>(key, value);
   }
 
-  public static TypeAdapter<List<Object>> tuple(List<TypeAdapter<Object>> elements) {
+  public static TypeAdapter<List<Object>> tuple(List<? extends TypeAdapter<?>> elements) {
     return new TupleAdapter(elements);
   }
 
-  public static StructField field(String name, TypeAdapter<?> adapter) {
-    return new StructField(name, adapter);
+  public static <T> StructField<T> field(String name, TypeAdapter<T> adapter) {
+    return new StructField<>(name, adapter);
   }
 
-  public static StructAdapter struct(List<StructField> fields, StructAdapter.StructFactory factory) {
+  public static StructAdapter struct(
+      List<? extends StructField<?>> fields, StructAdapter.StructFactory factory) {
     return new StructAdapter(fields, factory);
   }
 
-  public static StructAdapter struct(List<StructField> fields) {
+  public static StructAdapter struct(List<? extends StructField<?>> fields) {
     return new StructAdapter(fields, null);
   }
 
@@ -420,34 +471,29 @@ public final class NoritoAdapters {
   private static final class MapAdapter<K, V> implements TypeAdapter<Map<K, V>> {
     private final TypeAdapter<K> key;
     private final TypeAdapter<V> value;
-    private final TupleAdapter tupleAdapter;
+    private final EntryAdapter<K, V> entryAdapter;
+    private final SequenceAdapter<Map.Entry<K, V>> seq;
 
     private MapAdapter(TypeAdapter<K> key, TypeAdapter<V> value) {
       this.key = key;
       this.value = value;
-      List<TypeAdapter<Object>> elements = new ArrayList<>(2);
-      elements.add((TypeAdapter<Object>) key);
-      elements.add((TypeAdapter<Object>) value);
-      this.tupleAdapter = new TupleAdapter(elements);
+      this.entryAdapter = new EntryAdapter<>(key, value);
+      this.seq = new SequenceAdapter<>(entryAdapter);
     }
 
     @Override
     public void encode(NoritoEncoder encoder, Map<K, V> map) {
-      SequenceAdapter<List<Object>> seq = new SequenceAdapter<>(tupleAdapter);
-      List<List<Object>> tuples = new ArrayList<>(map.size());
-      for (Map.Entry<K, V> entry : map.entrySet()) {
-        tuples.add(List.of(entry.getKey(), entry.getValue()));
-      }
-      seq.encode(encoder, tuples);
+      List<Map.Entry<K, V>> entries = new ArrayList<>(map.size());
+      entries.addAll(map.entrySet());
+      seq.encode(encoder, entries);
     }
 
     @Override
     public Map<K, V> decode(NoritoDecoder decoder) {
-      SequenceAdapter<List<Object>> seq = new SequenceAdapter<>(tupleAdapter);
-      List<List<Object>> tuples = seq.decode(decoder);
-      Map<K, V> map = new LinkedHashMap<>();
-      for (List<Object> tuple : tuples) {
-        map.put((K) tuple.get(0), (V) tuple.get(1));
+      List<Map.Entry<K, V>> entries = seq.decode(decoder);
+      Map<K, V> map = new LinkedHashMap<>(entries.size());
+      for (Map.Entry<K, V> entry : entries) {
+        map.put(entry.getKey(), entry.getValue());
       }
       return map;
     }
@@ -458,11 +504,49 @@ public final class NoritoAdapters {
     }
   }
 
-  private static final class TupleAdapter implements TypeAdapter<List<Object>> {
-    private final List<TypeAdapter<Object>> elements;
+  private static final class EntryAdapter<K, V> implements TypeAdapter<Map.Entry<K, V>> {
+    private final TypeAdapter<K> key;
+    private final TypeAdapter<V> value;
 
-    private TupleAdapter(List<TypeAdapter<Object>> elements) {
-      this.elements = elements;
+    private EntryAdapter(TypeAdapter<K> key, TypeAdapter<V> value) {
+      this.key = key;
+      this.value = value;
+    }
+
+    @Override
+    public void encode(NoritoEncoder encoder, Map.Entry<K, V> entry) {
+      key.encode(encoder, entry.getKey());
+      value.encode(encoder, entry.getValue());
+    }
+
+    @Override
+    public Map.Entry<K, V> decode(NoritoDecoder decoder) {
+      K decodedKey = key.decode(decoder);
+      V decodedValue = value.decode(decoder);
+      return new AbstractMap.SimpleImmutableEntry<>(decodedKey, decodedValue);
+    }
+
+    @Override
+    public int fixedSize() {
+      int keySize = key.fixedSize();
+      int valueSize = value.fixedSize();
+      if (keySize >= 0 && valueSize >= 0) {
+        return keySize + valueSize;
+      }
+      return -1;
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return key.isSelfDelimiting() && value.isSelfDelimiting();
+    }
+  }
+
+  private static final class TupleAdapter implements TypeAdapter<List<Object>> {
+    private final List<TypeAdapter<?>> elements;
+
+    private TupleAdapter(List<? extends TypeAdapter<?>> elements) {
+      this.elements = List.copyOf(elements);
     }
 
     @Override
@@ -471,22 +555,22 @@ public final class NoritoAdapters {
         throw new IllegalArgumentException("Tuple size mismatch");
       }
       for (int i = 0; i < elements.size(); i++) {
-        elements.get(i).encode(encoder, value.get(i));
+        encodeAdapter(elements.get(i), encoder, value.get(i));
       }
     }
 
     @Override
     public List<Object> decode(NoritoDecoder decoder) {
       List<Object> values = new ArrayList<>(elements.size());
-      for (TypeAdapter<Object> element : elements) {
-        values.add(element.decode(decoder));
+      for (TypeAdapter<?> element : elements) {
+        values.add(decodeAdapter(element, decoder));
       }
       return values;
     }
 
     @Override
     public boolean isSelfDelimiting() {
-      for (TypeAdapter<Object> element : elements) {
+      for (TypeAdapter<?> element : elements) {
         if (!element.isSelfDelimiting()) {
           return false;
         }
@@ -495,11 +579,11 @@ public final class NoritoAdapters {
     }
   }
 
-  public static final class StructField {
+  public static final class StructField<T> {
     private final String name;
-    private final TypeAdapter<?> adapter;
+    private final TypeAdapter<T> adapter;
 
-    public StructField(String name, TypeAdapter<?> adapter) {
+    public StructField(String name, TypeAdapter<T> adapter) {
       this.name = Objects.requireNonNull(name);
       this.adapter = Objects.requireNonNull(adapter);
     }
@@ -508,7 +592,7 @@ public final class NoritoAdapters {
       return name;
     }
 
-    public TypeAdapter<?> adapter() {
+    public TypeAdapter<T> adapter() {
       return adapter;
     }
   }
@@ -519,10 +603,10 @@ public final class NoritoAdapters {
       Object create(Map<String, Object> fields);
     }
 
-    private final List<StructField> fields;
+    private final List<StructField<?>> fields;
     private final StructFactory factory;
 
-    private StructAdapter(List<StructField> fields, StructFactory factory) {
+    private StructAdapter(List<? extends StructField<?>> fields, StructFactory factory) {
       this.fields = List.copyOf(fields);
       this.factory = factory;
     }
@@ -534,9 +618,9 @@ public final class NoritoAdapters {
         encodePacked(encoder, value);
         return;
       }
-      for (StructField field : fields) {
+      for (StructField<?> field : fields) {
         Object fieldValue = extractField(value, field.name());
-        ((TypeAdapter<Object>) field.adapter()).encode(encoder, fieldValue);
+        encodeAdapter(field.adapter(), encoder, fieldValue);
       }
     }
 
@@ -544,10 +628,10 @@ public final class NoritoAdapters {
       List<byte[]> payloads = new ArrayList<>(fields.size());
       int bitset = 0;
       for (int i = 0; i < fields.size(); i++) {
-        StructField field = fields.get(i);
+        StructField<?> field = fields.get(i);
         Object fieldValue = extractField(value, field.name());
         NoritoEncoder child = encoder.childEncoder();
-        ((TypeAdapter<Object>) field.adapter()).encode(child, fieldValue);
+        encodeAdapter(field.adapter(), child, fieldValue);
         byte[] bytes = child.toByteArray();
         payloads.add(bytes);
         if (needsExplicitSize(field.adapter())) {
@@ -575,8 +659,8 @@ public final class NoritoAdapters {
           && (decoder.flags() & NoritoHeader.FIELD_BITSET) != 0) {
         decodePacked(decoder, values);
       } else {
-        for (StructField field : fields) {
-          Object value = ((TypeAdapter<Object>) field.adapter()).decode(decoder);
+        for (StructField<?> field : fields) {
+          Object value = decodeAdapter(field.adapter(), decoder);
           values.put(field.name(), value);
         }
       }
@@ -606,19 +690,19 @@ public final class NoritoAdapters {
         }
       }
       for (int i = 0; i < fields.size(); i++) {
-        StructField field = fields.get(i);
-        TypeAdapter<Object> adapter = (TypeAdapter<Object>) field.adapter();
+        StructField<?> field = fields.get(i);
+        TypeAdapter<?> adapter = field.adapter();
         Integer size = encodedSizes.get(i);
         Object value;
         if (size != null) {
           byte[] chunk = decoder.readBytes(size);
           NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags(), decoder.flagsHint());
-          value = adapter.decode(child);
+          value = decodeAdapter(adapter, child);
           if (child.remaining() != 0) {
             throw new IllegalArgumentException("Packed field did not consume all bytes");
           }
         } else {
-          value = adapter.decode(decoder);
+          value = decodeAdapter(adapter, decoder);
         }
         values.put(field.name(), value);
       }

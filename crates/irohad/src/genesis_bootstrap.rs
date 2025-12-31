@@ -1151,6 +1151,7 @@ mod tests {
                 .await;
         }
 
+        wait_for_posts(&network, 1).await;
         let posted = network.posted.lock().expect("posted");
         assert_eq!(posted.len(), 1);
         if let Some(NetworkMessage::GenesisResponse(resp)) = posted.first().map(|post| &post.data) {
@@ -1313,32 +1314,56 @@ mod tests {
         let fetch = bootstrapper.fetch_genesis(&peers, &genesis_account, None);
         let posted = network.posted.clone();
         tokio::spawn(async move {
-            // Wait for preflight post to capture request id.
-            for _ in 0..10 {
-                if let Some(post) = posted.lock().expect("posted").first() {
-                    if let NetworkMessage::GenesisRequest(req) = &post.data {
-                        let mut preflight = GenesisResponse {
-                            chain_id: req.chain_id.clone(),
-                            request_id: req.request_id,
-                            hash: Some(payload.hash.clone()),
-                            public_key: Some(payload.signer.clone()),
-                            size_hint: Some(payload.bytes.len() as u64),
-                            payload: None,
-                            error: None,
-                        };
-                        network.push_response(peer.clone(), preflight.clone());
-                        preflight.request_id = req.request_id + 1;
-                        let payload_response = GenesisResponse {
-                            request_id: req.request_id + 1,
-                            payload: Some(payload.bytes.clone()),
-                            ..preflight
-                        };
-                        network.push_response(peer.clone(), payload_response);
-                        break;
-                    }
+            wait_for_posts(&network, 1).await;
+            let preflight_req = {
+                let guard = posted.lock().expect("posted");
+                match guard.first().map(|post| &post.data) {
+                    Some(NetworkMessage::GenesisRequest(req)) => req.clone(),
+                    other => panic!("unexpected preflight message: {other:?}"),
+                }
+            };
+            let preflight = GenesisResponse {
+                chain_id: preflight_req.chain_id.clone(),
+                request_id: preflight_req.request_id,
+                hash: Some(payload.hash.clone()),
+                public_key: Some(payload.signer.clone()),
+                size_hint: Some(payload.bytes.len() as u64),
+                payload: None,
+                error: None,
+            };
+            network.push_response(peer.clone(), preflight);
+
+            let mut payload_req = None;
+            for _ in 0..100 {
+                payload_req = posted
+                    .lock()
+                    .expect("posted")
+                    .iter()
+                    .find_map(|post| match &post.data {
+                        NetworkMessage::GenesisRequest(req)
+                            if matches!(req.kind, GenesisRequestKind::Fetch) =>
+                        {
+                            Some(req.clone())
+                        }
+                        _ => None,
+                    });
+                if payload_req.is_some() {
+                    break;
                 }
                 time::sleep(Duration::from_millis(10)).await;
             }
+            let payload_req =
+                payload_req.expect("fetch request should arrive after preflight response");
+            let payload_response = GenesisResponse {
+                chain_id: payload_req.chain_id.clone(),
+                request_id: payload_req.request_id,
+                hash: Some(payload.hash.clone()),
+                public_key: Some(payload.signer.clone()),
+                size_hint: Some(payload.bytes.len() as u64),
+                payload: Some(payload.bytes.clone()),
+                error: None,
+            };
+            network.push_response(peer.clone(), payload_response);
         });
 
         let result = fetch.await.expect("fetch succeeds");
@@ -1413,7 +1438,7 @@ mod tests {
             manifest_json: None,
             expected_hash: None,
             bootstrap_allowlist: vec![peer.id().clone()],
-            bootstrap_max_bytes: 1024,
+            bootstrap_max_bytes: payload.size_bytes().saturating_add(1),
             bootstrap_response_throttle: Duration::from_secs(0),
             bootstrap_request_timeout: Duration::from_secs(1),
             bootstrap_retry_interval: Duration::from_millis(10),

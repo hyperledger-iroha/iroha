@@ -31,7 +31,7 @@ use iroha_crypto::{Hash, HashOf, MerkleTree, PrivateKey, Signature};
 use iroha_data_model::{
     ChainId, Encode as _,
     account::AccountId,
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, SignedBlock, consensus::SumeragiMembershipStatus},
     consensus::{
         ExecutionQcRecord, VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome,
         ValidatorElectionParameters, ValidatorSetCheckpoint, VrfEpochRecord, VrfLateRevealRecord,
@@ -3839,7 +3839,7 @@ impl Actor {
     }
 
     fn record_membership_snapshot(
-        &self,
+        &mut self,
         height: u64,
         view: u64,
         epoch: u64,
@@ -3851,6 +3851,30 @@ impl Actor {
         #[cfg(feature = "telemetry")]
         self.telemetry
             .set_membership_view_hash(height, view, epoch, hash);
+        self.broadcast_consensus_params(SumeragiMembershipStatus {
+            height,
+            view,
+            epoch,
+            view_hash: Some(hash),
+        });
+    }
+
+    fn broadcast_consensus_params(&mut self, membership: SumeragiMembershipStatus) {
+        let collectors_k = u16::try_from(self.config.collectors_k).unwrap_or_else(|_| {
+            warn!(
+                collectors_k = self.config.collectors_k,
+                "collectors_k exceeds u16::MAX; clamping in consensus params advert"
+            );
+            u16::MAX
+        });
+        let advert = super::message::ConsensusParamsAdvert {
+            collectors_k,
+            redundant_send_r: self.config.collectors_redundant_send_r,
+            membership: Some(membership),
+        };
+        self.schedule_background(BackgroundRequest::Broadcast {
+            msg: BlockMessage::ConsensusParams(advert),
+        });
     }
 
     fn determine_genesis_account(state: &State) -> Result<AccountId> {

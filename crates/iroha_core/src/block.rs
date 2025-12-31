@@ -4298,6 +4298,13 @@ pub(crate) mod valid {
                             "transaction expired: expires_at_ms={expires_at_ms} now_ms={now_ms}"
                         )),
                     ),
+                    AcceptTransactionFail::NetworkTimeUnhealthy { reason } => {
+                        TransactionRejectionReason::Validation(
+                            iroha_data_model::ValidationFail::NotPermitted(format!(
+                                "network time service unhealthy: {reason}"
+                            )),
+                        )
+                    }
                 }
             };
 
@@ -9391,7 +9398,8 @@ mod event {
                 | AcceptTransactionFail::UnexpectedGenesisAccountSignature
                 | AcceptTransactionFail::ChainIdMismatch(_)
                 | AcceptTransactionFail::TransactionInTheFuture
-                | AcceptTransactionFail::TransactionExpired { .. } => {
+                | AcceptTransactionFail::TransactionExpired { .. }
+                | AcceptTransactionFail::NetworkTimeUnhealthy { .. } => {
                     Reason::TransactionValidationFailed
                 }
             },

@@ -35,8 +35,8 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Mitigate memory exposure for commitment witness material (zeroization in the Norito bridge).
 
 3. **INTEGRATION-TEST-REVALIDATION — Re-run integration tests after Sumeragi drain-order fix** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈺 In Progress, target TBD)
-   - [ ] Re-run `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` to confirm the suite completes without timeouts.
-   - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly.
+   - [ ] Re-run `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` to confirm the suite completes without timeouts (blocked in sandbox: loopback binds denied; rerun outside sandbox).
+   - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly (currently fails to compile: missing `parent_state_root` in `integration_tests/tests/nexus/cross_lane.rs`).
 
 4. **LOCALNET-DEMO-FLOW — Verify training-script localnet bootstrap** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Align consensus rebroadcast cooldowns (RBC/pending/precommit) to on-chain `block_time` with a 200ms floor and 2x base multiplier, keeping payload replays at an additional 2x to avoid queue saturation on 1s targets.
@@ -182,6 +182,40 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraNet PQ ratchet runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraNet PQ rollout plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraNet puzzle service operations guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraNet privacy metrics pipeline translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal intro page translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito Streaming roadmap translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal reference index translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito codec reference translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito overview translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito getting started translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito quickstart translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito streaming translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito ledger walkthrough translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito examples index translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito Hajimari entrypoint example translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito call-transfer-asset example translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito register-and-mint example translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito transfer-asset example translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito NFT flow example translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Norito Try-It console translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus overview translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus operations runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus settlement FAQ translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus default lane quickstart translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus elastic lane provisioning translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus technical specification translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus fee model updates translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus telemetry remediation plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal confidential gas calibration ledger translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus routed-trace audit report (2026 Q1) translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus data-space operator onboarding translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus bootstrap & observability plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Sora Nexus ledger refactor plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal account address compliance reference translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal publishing checklist translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal address safety & accessibility reference translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Torii app API parity audit translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal GAR operator onboarding brief translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS dispute & revocation runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS capacity reconciliation runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
@@ -205,11 +239,57 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraFS direct-mode fallback pack translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS SDK index translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS Rust SDK snippets translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
-   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond the completed SoraFS docs set (quickstart, runbooks, pipeline/orchestrator guides, node plan/storage, node operations, provider admission policy, multi-source provider advert, provider advert rollout, priority snapshot 2025-03, taikai monitoring dashboards, sf6 security review, sf1 determinism dry-run, orchestrator GA parity report, sf2c capacity soak report, ai moderation calibration report 2026-02, capacity marketplace validation report, GAR jurisdictional review, GAR operator onboarding, pq primitives, pq ratchet runbook, pq rollout plan, puzzle service operations guide, constant-rate profiles, transport overview, testnet rollout, reserve ledger digest, migration ledger, migration roadmap, pin registry plan, pin registry ops, pin registry validation plan, portal publish plan, signing ceremony, storage capacity marketplace, chunker docs, developer docs, SDK docs), then fill remaining portal stubs per locale.
+   - [ ] TODO: Continue SoraFS/SoraNet portal translations beyond the completed SoraFS docs set (quickstart, runbooks, pipeline/orchestrator guides, node plan/storage, node operations, provider admission policy, multi-source provider advert, provider advert rollout, priority snapshot 2025-03, taikai monitoring dashboards, sf6 security review, sf1 determinism dry-run, orchestrator GA parity report, sf2c capacity soak report, ai moderation calibration report 2026-02, capacity marketplace validation report, GAR jurisdictional review, GAR operator onboarding, pq primitives, pq ratchet runbook, pq rollout plan, puzzle service operations guide, privacy metrics pipeline, constant-rate profiles, transport overview, testnet rollout, reserve ledger digest, migration ledger, migration roadmap, pin registry plan, pin registry ops, pin registry validation plan, portal publish plan, signing ceremony, storage capacity marketplace, chunker docs, developer docs, SDK docs), then fill remaining portal stubs per locale.
     - [x] Ensure Akkadian translations are semantic and written in cuneiform (no transliteration).
     - [x] Extend CLI i18n coverage (remaining messages and clap help output).
     - [x] Fill governance schedule placeholders in scripts/templates that currently say TBD.
     - [x] Add checks to prevent stub-only translations from shipping (CI guard + `scripts/sync_docs_i18n.py --dry-run` gate).
+
+35. **SEC-TELEMETRY-REDACTION — Enforce redaction + tamper-evident telemetry** (Observability/Security, Line: Shared, Owner: Observability WG, Priority: High, Status: 🈴 Completed, target TBD)
+   - [x] Define sensitive-field taxonomy and expected redaction behavior (keywords + explicit annotations).
+   - [x] Make redaction mandatory for operator/release telemetry profiles (config default + build guard).
+   - [x] Add CI/static checks to prevent new unredacted sensitive fields and update allowlist policy.
+   - [x] Implement tamper-evident telemetry export (hash chaining + optional signing key rotation).
+   - [x] Emit redaction/audit metrics for skipped or truncated fields.
+   - [x] Add unit/integration tests + update `docs/source/telemetry.md` and threat model notes.
+
+36. **SEC-TIME-HARDENING — Enforce NTS/time bounds** (Runtime/Ops, Line: Shared, Owner: Runtime WG + Ops, Priority: High, Status: 🈴 Completed, target TBD)
+   - [x] Add config for min samples, max offset, max confidence, and enforcement mode (warn/reject).
+   - [x] Extend network time status with sample counts and health flags.
+   - [x] Gate time-sensitive validations on NTS health (offline receipts, attestations, governance windows).
+   - [x] Emit telemetry/status for drift, unhealthy states, and fallback usage.
+   - [x] Add alerting guidance + runbook updates for NTS drift/unsynced states.
+   - [x] Add tests for insufficient samples, out-of-bounds offsets, and enforcement behavior.
+
+37. **SEC-UPGRADE-PROVENANCE — Require SBOM/SLSA attestations for runtime upgrades** (Core/Governance/Security, Line: Shared, Owner: Security WG + Governance WG, Priority: High, Status: 🈳 Not Started, target TBD)
+   - [ ] Extend runtime-upgrade manifests with provenance payloads (SBOM digests, SLSA attestation bytes, signer metadata).
+   - [ ] Add config-driven enforcement for provenance policy and trusted signers/thresholds.
+   - [ ] Enforce provenance in runtime-upgrade ISIs; reject missing or invalid attestations.
+   - [ ] Surface telemetry + error codes for provenance failures.
+   - [ ] Wire Torii/governance APIs to accept provenance and emit rejection telemetry.
+   - [ ] Add tests + update `docs/source/runtime_upgrades.md` and threat model tracking.
+
+38. **SEC-TORII-OPERATOR-AUTH — WebAuthn/mTLS hardening for operator endpoints** (Torii/Security, Line: Shared, Owner: Torii WG, Priority: High, Status: 🈳 Not Started, target TBD)
+   - [ ] Define operator auth policy in `iroha_config` (WebAuthn required, mTLS gating, token fallback rules).
+   - [ ] Implement WebAuthn credential enrollment + storage (WSV or config-backed).
+   - [ ] Add challenge/verify flow and gate operator endpoints behind auth policy.
+   - [ ] Add rate limits and audit telemetry for auth failures/lockouts.
+   - [ ] Add tests for enrollment, rollover, and fallback paths; update OpenAPI + runbooks.
+
+39. **SEC-ATTACHMENT-SANITISATION — Safe ingest pipeline for Torii attachments** (Torii/Runtime, Line: Shared, Owner: Runtime WG + Torii WG, Priority: High, Status: 🈳 Not Started, target TBD)
+   - [ ] Add config for allowed MIME types, max expanded size, and archive depth.
+   - [ ] Implement magic-byte sniffing + strict allowlist enforcement before persistence.
+   - [ ] Enforce deterministic decompression/expansion limits and reject unknown formats.
+   - [ ] Sandbox risky parsers (seccomp/WASI) with strict CPU/memory limits.
+   - [ ] Store provenance metadata (sniffed type, hashes, sanitizer verdict) alongside attachment records.
+   - [ ] Add telemetry counters + malicious fixture tests; update `docs/source/security_hardening_requirements.md`.
+
+40. **SEC-MEMBERSHIP-MISMATCH — Detect and alert on roster drift** (Consensus/Sumeragi, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
+   - [x] Propagate membership view-hash in consensus gossip/status payloads.
+   - [x] Compare peer hash vs local roster and record mismatch counters + active gauges.
+   - [x] Add config for alert thresholds and optional fail-closed behavior.
+   - [x] Clear mismatch on alignment and expose last-mismatch context via `/v1/sumeragi/status`.
+   - [x] Add tests for mismatch detection + update Sumeragi runbook with remediation steps.
 
 26. **JDG-SIGNATURE-SCHEMES — Expand jurisdiction signature support** (Core/Governance, Line: Shared, Owner: Governance WG, Priority: Medium, Status: 🈴 Completed, target TBD)
     - [x] Define policy surface for additional JDG signature schemes and encode it in config/data model.

@@ -84,11 +84,14 @@ records for stake-elected lanes. Committee membership is deterministically sampl
 the VRF epoch seed bound with `dataspace_id` and `lane_id` (stable for the epoch). If the pool is
 smaller than `3f+1`, lane relay finality pauses until quorum is restored. Operators can extend the
 pool using the admin multisig instruction `SetLaneRelayEmergencyValidators` (requires
-`CanManagePeers`). Overrides are stored per dataspace, applied only when the pool is under quorum,
-and cleared by submitting an empty validator list. When `expires_at_height` is set, validation
-ignores the override once the lane relay envelope `block_height` exceeds the expiry height. The
-telemetry counter `lane_relay_emergency_override_total{lane,dataspace,outcome}` records whether the
-override was applied (`applied`) or missing/expired/insufficient during validation.
+`CanManagePeers` and `nexus.lane_relay_emergency.enabled = true`, which is disabled by default).
+When enabled, the authority must be a multisig account meeting the configured minimums
+(`nexus.lane_relay_emergency.multisig_threshold`/`multisig_members`, default 3-of-5). Overrides are
+stored per dataspace, applied only when the pool is under quorum, and cleared by submitting an
+empty validator list. When `expires_at_height` is set, validation ignores the override once the
+lane relay envelope `block_height` exceeds the expiry height. The telemetry counter
+`lane_relay_emergency_override_total{lane,dataspace,outcome}` records whether the override was
+applied (`applied`) or missing/expired/insufficient/disabled during validation.
 
 ## Commitment Lifecycle
 

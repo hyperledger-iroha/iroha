@@ -12799,7 +12799,10 @@ impl Torii {
             .layer((
                 TraceLayer::new_for_http()
                     .make_span_with(DefaultMakeSpan::default().include_headers(true)),
-                TimeoutLayer::new(SERVER_SHUTDOWN_TIMEOUT),
+                TimeoutLayer::with_status_code(
+                    StatusCode::REQUEST_TIMEOUT,
+                    SERVER_SHUTDOWN_TIMEOUT,
+                ),
             ))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
@@ -16417,6 +16420,37 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[test]
+    fn accept_transaction_nts_unhealthy_sets_header_code() {
+        let err = super::Error::AcceptTransaction(
+            iroha_core::tx::AcceptTransactionFail::NetworkTimeUnhealthy {
+                reason: "fallback".to_owned(),
+            },
+        );
+
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let headers = response.headers();
+        assert_eq!(
+            headers
+                .get("x-iroha-reject-code")
+                .and_then(|v| v.to_str().ok()),
+            Some("PRTRY:NTS_UNHEALTHY")
+        );
+
+        let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
+            .expect("collect body")
+            .to_bytes();
+        let envelope = norito::decode_from_bytes::<super::ErrorEnvelope>(&body)
+            .expect("decode error envelope");
+        assert_eq!(envelope.code(), "PRTRY:NTS_UNHEALTHY");
+        assert!(
+            envelope
+                .message()
+                .contains("Network time service is unhealthy")
+        );
+    }
+
+    #[test]
     fn offline_reason_query_error_sets_reject_code_header() {
         use iroha_data_model::{
             offline::OFFLINE_REJECTION_REASON_PREFIX, query::error::QueryExecutionFail,
@@ -16748,6 +16782,10 @@ fn accept_transaction_metadata(
                 format!("failed to accept transaction: {detail}"),
             )
         }
+        iroha_core::tx::AcceptTransactionFail::NetworkTimeUnhealthy { .. } => (
+            "PRTRY:NTS_UNHEALTHY",
+            format!("failed to accept transaction: {err}"),
+        ),
         iroha_core::tx::AcceptTransactionFail::TransactionLimit(limit) => (
             "transaction_rejected",
             format!("failed to accept transaction: {}", limit.reason),

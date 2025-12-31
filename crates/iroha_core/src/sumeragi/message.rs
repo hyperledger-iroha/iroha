@@ -1,7 +1,7 @@
 //! Contains message structures for p2p communication during consensus.
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    block::{BlockHeader, SignedBlock},
+    block::{BlockHeader, SignedBlock, consensus::SumeragiMembershipStatus},
     peer::PeerId,
 };
 use iroha_macro::*;
@@ -128,6 +128,10 @@ pub struct ConsensusParamsAdvert {
     pub collectors_k: u16,
     /// Redundant send fanout (r).
     pub redundant_send_r: u8,
+    /// Optional membership hash snapshot for the active `(height, view, epoch)`.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub membership: Option<SumeragiMembershipStatus>,
 }
 
 /// `BlockCreated` message structure.

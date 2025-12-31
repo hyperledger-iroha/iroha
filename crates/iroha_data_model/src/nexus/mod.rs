@@ -819,7 +819,7 @@ impl Default for DataSpaceMetadata {
             id: DataSpaceId::GLOBAL,
             alias: "global".to_string(),
             description: None,
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         }
     }
 }
@@ -834,8 +834,8 @@ impl DataSpaceCatalog {
     /// Build a catalog ensuring identifiers and aliases remain unique.
     ///
     /// # Errors
-    /// Returns a [`DataSpaceCatalogError`] when metadata reuses an identifier or alias or when
-    /// an alias is left blank.
+    /// Returns a [`DataSpaceCatalogError`] when metadata reuses an identifier or alias, when
+    /// an alias is left blank, or when fault tolerance is below 1.
     pub fn new(entries: Vec<DataSpaceMetadata>) -> Result<Self, DataSpaceCatalogError> {
         let mut seen_ids = BTreeSet::new();
         let mut seen_aliases = BTreeSet::new();
@@ -843,6 +843,12 @@ impl DataSpaceCatalog {
         for entry in &entries {
             if entry.alias.trim().is_empty() {
                 return Err(DataSpaceCatalogError::EmptyAlias(entry.id));
+            }
+            if entry.fault_tolerance == 0 {
+                return Err(DataSpaceCatalogError::InvalidFaultTolerance {
+                    id: entry.id,
+                    fault_tolerance: entry.fault_tolerance,
+                });
             }
             if !seen_ids.insert(entry.id) {
                 return Err(DataSpaceCatalogError::DuplicateId(entry.id));
@@ -888,6 +894,14 @@ pub enum DataSpaceCatalogError {
     /// Alias field left blank.
     #[error("dataspace {0} has an empty alias")]
     EmptyAlias(DataSpaceId),
+    /// Fault tolerance must be at least 1.
+    #[error("dataspace {id} has invalid fault_tolerance {fault_tolerance}; must be >= 1")]
+    InvalidFaultTolerance {
+        /// Dataspace identifier with an invalid fault tolerance value.
+        id: DataSpaceId,
+        /// Fault tolerance value that failed validation.
+        fault_tolerance: u32,
+    },
 }
 
 #[cfg(feature = "json")]
@@ -1051,23 +1065,35 @@ mod tests {
             id: DataSpaceId::new(1),
             alias: "telemetry".into(),
             description: None,
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         }])
         .expect("valid dataspace");
         assert!(catalog.by_alias("telemetry").is_some());
+
+        let invalid_fault_tolerance = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::new(9),
+            alias: "invalid".into(),
+            description: None,
+            fault_tolerance: 0,
+        }])
+        .expect_err("fault tolerance below 1 should fail");
+        assert!(matches!(
+            invalid_fault_tolerance,
+            DataSpaceCatalogError::InvalidFaultTolerance { .. }
+        ));
 
         let dup = DataSpaceCatalog::new(vec![
             DataSpaceMetadata {
                 id: DataSpaceId::new(2),
                 alias: "ops".into(),
                 description: None,
-                fault_tolerance: 0,
+                fault_tolerance: 1,
             },
             DataSpaceMetadata {
                 id: DataSpaceId::new(2),
                 alias: "ops".into(),
                 description: None,
-                fault_tolerance: 0,
+                fault_tolerance: 1,
             },
         ])
         .expect_err("duplicate dataspace");
@@ -1077,10 +1103,16 @@ mod tests {
             id: DataSpaceId::new(3),
             alias: "   ".into(),
             description: None,
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         }])
         .expect_err("blank alias");
         assert!(matches!(empty_alias, DataSpaceCatalogError::EmptyAlias(_)));
+    }
+
+    #[test]
+    fn dataspace_default_fault_tolerance_is_nonzero() {
+        let entry = DataSpaceMetadata::default();
+        assert_eq!(entry.fault_tolerance, 1);
     }
 
     #[test]

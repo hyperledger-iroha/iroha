@@ -33,8 +33,8 @@ use iroha_smart_contract::data_model::{
         RegisterCapacityDispute, RegisterOfflineAllowance, RegisterPeerWithPop,
         RegisterPinManifest, RegisterProviderOwner, RemoveAssetKeyValue, RetirePinManifest,
         SetAssetKeyValue, SetLaneRelayEmergencyValidators, SetPricingSchedule,
-        SubmitOfflineToOnlineTransfer,
-        UnregisterProviderOwner, UpsertProviderCredit, bridge::RecordBridgeReceipt,
+        SubmitOfflineToOnlineTransfer, UnregisterProviderOwner, UpsertProviderCredit,
+        bridge::RecordBridgeReceipt,
     },
     prelude::*,
     visit::Visit,
@@ -43,6 +43,8 @@ use iroha_smart_contract::data_model::{
 pub use isi::visit_custom_instruction;
 /// Re-export logging instruction visitor helper.
 pub use log::visit_log;
+/// Re-export Nexus visitor helper used by the default executor.
+pub use nexus::visit_set_lane_relay_emergency_validators;
 /// Re-export NFT visitor helpers used by the default executor.
 pub use nft::{
     visit_register_nft, visit_remove_nft_key_value, visit_set_nft_key_value, visit_transfer_nft,
@@ -61,8 +63,6 @@ pub use role::{
 };
 /// Re-export staking visitor helpers used by the default executor.
 pub use staking::{visit_activate_public_lane_validator, visit_exit_public_lane_validator};
-/// Re-export Nexus visitor helper used by the default executor.
-pub use nexus::visit_set_lane_relay_emergency_validators;
 mod offline;
 
 /// Re-export offline settlement visitor helper.

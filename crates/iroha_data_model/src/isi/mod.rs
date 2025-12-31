@@ -1167,10 +1167,10 @@ pub mod content;
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
 pub mod mint_burn;
-/// Offline allowance settlement instructions.
-pub mod offline;
 /// Nexus lane governance instructions.
 pub mod nexus;
+/// Offline allowance settlement instructions.
+pub mod offline;
 /// Oracle feed registration and aggregation instructions.
 pub mod oracle;
 /// Registration-related instructions (accounts, assets, domains, etc.).
@@ -1206,8 +1206,8 @@ pub mod zk;
 pub use confidential::*;
 pub use kaigi::*;
 pub use mint_burn::*;
-pub use offline::*;
 pub use nexus::*;
+pub use offline::*;
 pub use oracle::*;
 pub use register::*;
 pub use repo::*;

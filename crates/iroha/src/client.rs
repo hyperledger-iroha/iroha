@@ -1882,6 +1882,55 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
             .map_or(Value::Null, |hash| Value::from(bytes_to_hex(hash))),
     );
 
+    let mut membership_mismatch = Map::new();
+    membership_mismatch.insert(
+        "active_peers".into(),
+        Value::Array(
+            wire.membership_mismatch
+                .active_peers
+                .iter()
+                .map(|peer| Value::from(peer.to_string()))
+                .collect(),
+        ),
+    );
+    membership_mismatch.insert(
+        "last_peer".into(),
+        wire.membership_mismatch
+            .last_peer
+            .as_ref()
+            .map_or(Value::Null, |peer| Value::from(peer.to_string())),
+    );
+    membership_mismatch.insert(
+        "last_height".into(),
+        Value::from(wire.membership_mismatch.last_height),
+    );
+    membership_mismatch.insert(
+        "last_view".into(),
+        Value::from(wire.membership_mismatch.last_view),
+    );
+    membership_mismatch.insert(
+        "last_epoch".into(),
+        Value::from(wire.membership_mismatch.last_epoch),
+    );
+    membership_mismatch.insert(
+        "last_local_hash".into(),
+        wire.membership_mismatch
+            .last_local_hash
+            .as_ref()
+            .map_or(Value::Null, |hash| Value::from(bytes_to_hex(hash))),
+    );
+    membership_mismatch.insert(
+        "last_remote_hash".into(),
+        wire.membership_mismatch
+            .last_remote_hash
+            .as_ref()
+            .map_or(Value::Null, |hash| Value::from(bytes_to_hex(hash))),
+    );
+    membership_mismatch.insert(
+        "last_timestamp_ms".into(),
+        Value::from(wire.membership_mismatch.last_timestamp_ms),
+    );
+
     let lane_commitments: Vec<Value> = wire
         .lane_commitments
         .iter()
@@ -2125,6 +2174,10 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     root.insert("rbc_store".into(), Value::Object(rbc_store));
     root.insert("prf".into(), Value::Object(prf));
     root.insert("membership".into(), Value::Object(membership));
+    root.insert(
+        "membership_mismatch".into(),
+        Value::Object(membership_mismatch),
+    );
     root.insert("lane_commitments".into(), Value::Array(lane_commitments));
     root.insert(
         "dataspace_commitments".into(),
@@ -8480,10 +8533,11 @@ mod tests {
                 LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
                 LaneVolatilityClass, SumeragiBlockSyncRosterStatus, SumeragiDaGateReason,
                 SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
-                SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
-                SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcStatus, SumeragiQcEntry,
-                SumeragiQcSnapshot, SumeragiRbcStoreStatus, SumeragiStatusWire,
-                SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+                SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+                SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
+                SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+                SumeragiRbcStoreStatus, SumeragiStatusWire, SumeragiValidationRejectStatus,
+                SumeragiViewChangeCauseStatus,
             },
         },
         da::{
@@ -8672,6 +8726,7 @@ mod tests {
                 epoch: 2,
                 view_hash: Some([0xCC; 32]),
             },
+            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
             lane_commitments: vec![iroha_data_model::block::consensus::SumeragiLaneCommitment {
                 block_height: 12,
                 lane_id: LaneId::new(1),
@@ -10427,6 +10482,7 @@ mod tests {
                 epoch: 0,
                 view_hash: None,
             },
+            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
             lane_commitments: vec![iroha_data_model::block::consensus::SumeragiLaneCommitment {
                 block_height: 1,
                 lane_id: LaneId::new(0),
@@ -10701,6 +10757,7 @@ mod tests {
                 epoch: 2,
                 view_hash: Some([0xCC; 32]),
             },
+            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
             lane_commitments: vec![iroha_data_model::block::consensus::SumeragiLaneCommitment {
                 block_height: 12,
                 lane_id: LaneId::new(1),
@@ -10938,6 +10995,57 @@ mod tests {
         assert_eq!(
             membership.get("view_hash").and_then(Value::as_str),
             Some(expected_membership_hash.as_str())
+        );
+        let membership_mismatch = root
+            .get("membership_mismatch")
+            .and_then(Value::as_object)
+            .expect("membership mismatch object");
+        assert!(
+            membership_mismatch
+                .get("active_peers")
+                .and_then(Value::as_array)
+                .map(|peers| peers.is_empty())
+                .unwrap_or(false)
+        );
+        assert!(
+            membership_mismatch
+                .get("last_peer")
+                .map(|value| value.is_null())
+                .unwrap_or(false)
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_height")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            membership_mismatch.get("last_view").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_epoch")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            membership_mismatch
+                .get("last_local_hash")
+                .map(|value| value.is_null())
+                .unwrap_or(false)
+        );
+        assert!(
+            membership_mismatch
+                .get("last_remote_hash")
+                .map(|value| value.is_null())
+                .unwrap_or(false)
+        );
+        assert_eq!(
+            membership_mismatch
+                .get("last_timestamp_ms")
+                .and_then(Value::as_u64),
+            Some(0)
         );
         let expected_subject = format!("{highest}");
         assert_eq!(

@@ -4,14 +4,17 @@
 lang: he
 direction: rtl
 source: docs/portal/docs/norito/examples/index.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+title: דוגמאות Norito
+description: קטעי Kotodama נבחרים עם סיורי ספר החשבונות.
+slug: /norito/examples
 ---
 
-# בתהליך תרגום
+דוגמאות אלה משקפות את ה-quickstarts של ה-SDK ואת סיורי ספר החשבונות. כל קטע כולל רשימת בדיקה של ספר החשבונות ומקשר למדריכי Rust, Python ו-JavaScript כדי שתוכלו לשחזר את אותו תרחיש מקצה לקצה.
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
-
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+- **[שלד נקודת כניסה Hajimari](./hajimari-entrypoint)** — שלד חוזה Kotodama מינימלי עם נקודת כניסה ציבורית אחת וידית מצב.
+- **[רישום דומיין והטבעת נכסים](./register-and-mint)** — מדגים יצירת דומיינים עם הרשאה, רישום נכסים והטבעה דטרמיניסטית.
+- **[הפעלת העברה מהמארח מתוך Kotodama](./call-transfer-asset)** — מדגים כיצד נקודת כניסה של Kotodama יכולה לקרוא להוראת המארח `transfer_asset` עם אימות מטא-דאטה מקוון.
+- **[העברת נכס בין חשבונות](./transfer-asset)** — תהליך העברה פשוט של נכסים שמשקף את ה-quickstarts של ה-SDK ואת סיורי ספר החשבונות.
+- **[הטבעה, העברה ושריפה של NFT](./nft-flow)** — מוביל דרך מחזור החיים של NFT מקצה לקצה: הטבעה לבעלים, העברות, תיוג מטא-דאטה ושריפה.

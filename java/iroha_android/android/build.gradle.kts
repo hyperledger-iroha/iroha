@@ -18,7 +18,7 @@ buildscript {
         gradlePluginPortal()
     }
     dependencies {
-        classpath("org.cyclonedx:cyclonedx-gradle-plugin:1.8.2")
+        classpath("org.cyclonedx:cyclonedx-gradle-plugin:3.1.0")
     }
 }
 
@@ -97,6 +97,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
+        isCoreLibraryDesugaringEnabled = true
     }
 
     // Keep packaging simple for now; publishing wiring will follow.
@@ -118,7 +119,8 @@ android {
 }
 
 dependencies {
-    implementation(project(":core"))
+    api(project(":core"))
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
@@ -129,6 +131,7 @@ val androidDependencyManifest =
     tasks.register("androidDependencyManifest") {
         description = "Generates runtime dependency manifest for the Android AAR."
         group = "verification"
+        val androidCoordinates = "${project.group}:$androidArtifactId"
         val manifestOut =
             layout.buildDirectory
                 .file(
@@ -153,7 +156,7 @@ val androidDependencyManifest =
             val rendered =
                 renderDependencyManifest(
                     configurationName = "releaseRuntimeClasspath",
-                    coordinates = "${project.group}:$androidArtifactId",
+                    coordinates = androidCoordinates,
                     primary = aarFile,
                     artifacts = runtimeArtifacts,
                 )
@@ -165,6 +168,52 @@ val androidDependencyManifest =
 
 val releaseAar = layout.buildDirectory.file("outputs/aar/android-release.aar")
 val hasCycloneDx = enableCycloneDx.get() && plugins.hasPlugin("org.cyclonedx.bom")
+if (hasCycloneDx) {
+    val cycloneTasks = setOf("cyclonedxBom", "cyclonedxDirectBom")
+    tasks.matching { it.name in cycloneTasks }.configureEach {
+        val schemaProperty =
+            javaClass.methods.firstOrNull { method ->
+                method.name == "getSchemaVersion" && method.parameterCount == 0
+            }?.invoke(this)
+        val versionValue =
+            runCatching {
+                val versionClass = javaClass.classLoader.loadClass("org.cyclonedx.Version")
+                versionClass.enumConstants.firstOrNull { constant ->
+                    (constant as? Enum<*>)?.name == "VERSION_15"
+                }
+            }.getOrNull()
+        val providerClass =
+            runCatching { javaClass.classLoader.loadClass("org.gradle.api.provider.Provider") }
+                .getOrNull()
+        val setter =
+            if (schemaProperty != null && versionValue != null) {
+                schemaProperty.javaClass.methods.firstOrNull { method ->
+                    method.name == "set" &&
+                        method.parameterCount == 1 &&
+                        (providerClass == null ||
+                            !providerClass.isAssignableFrom(method.parameterTypes[0])) &&
+                        method.parameterTypes[0].isInstance(versionValue)
+                }
+            } else {
+                null
+            }
+        val applied =
+            if (setter != null && versionValue != null) {
+                runCatching { setter.invoke(schemaProperty, versionValue) }.isSuccess
+            } else {
+                false
+            }
+        if (!applied && schemaProperty != null) {
+            schemaProperty.javaClass.methods
+                .firstOrNull { method ->
+                    method.name == "set" &&
+                        method.parameterCount == 1 &&
+                        method.parameterTypes[0] == String::class.java
+                }
+                ?.let { method -> runCatching { method.invoke(schemaProperty, "1.5") } }
+        }
+    }
+}
 val androidBomFile =
     if (hasCycloneDx) {
         tasks.named("cyclonedxBom").flatMap { task ->
@@ -182,6 +231,9 @@ val androidRuntimeManifest =
     layout.buildDirectory.file("reports/publishing/${androidArtifactId}-runtime-manifest.json")
 val androidRuntimeChecksum =
     layout.buildDirectory.file("reports/publishing/${androidArtifactId}-${project.version}-runtime.sha256")
+val androidCoordinates = "${project.group}:$androidArtifactId:${project.version}"
+val projectRoot = project.rootProject.rootDir.toPath()
+val projectVersion = project.version.toString()
 
 tasks.register("writeAndroidRuntimeManifest") {
     description = "Emits runtime manifest + checksum for the Android release AAR."
@@ -211,23 +263,22 @@ tasks.register("writeAndroidRuntimeManifest") {
                 "artifact" to
                     mapOf(
                         "type" to "aar",
-                        "coordinates" to "${project.group}:$androidArtifactId:${project.version}",
-                        "path" to project.rootProject.rootDir.toPath().relativize(aarFile.toPath()).toString(),
-                        "version" to project.version.toString(),
+                        "coordinates" to androidCoordinates,
+                        "path" to projectRoot.relativize(aarFile.toPath()).toString(),
+                        "version" to projectVersion,
                     ),
                 "checksums" to
                     mapOf(
                         "sha256" to checksum,
                         "file" to
-                            project.rootProject.rootDir
-                                .toPath()
+                            projectRoot
                                 .relativize(androidRuntimeChecksum.get().asFile.toPath())
                                 .toString(),
                     ),
                 "sbom" to
                     mapOf(
                         "format" to if (hasCycloneDx) "cyclonedx" else "absent",
-                        "path" to project.rootProject.rootDir.toPath().relativize(bomFile.toPath()).toString(),
+                        "path" to projectRoot.relativize(bomFile.toPath()).toString(),
                     ),
             )
         androidRuntimeManifest.get().asFile.apply {

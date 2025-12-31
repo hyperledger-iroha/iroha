@@ -7712,10 +7712,36 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "TimeHealth".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["healthy", "min_samples_ok", "offset_ok", "confidence_ok"],
+            "additionalProperties": false,
+            "properties": {
+                "healthy": {
+                    "type": "boolean",
+                    "description": "Overall health status (true when all checks pass)."
+                },
+                "min_samples_ok": {
+                    "type": "boolean",
+                    "description": "Whether the minimum sample threshold is satisfied."
+                },
+                "offset_ok": {
+                    "type": "boolean",
+                    "description": "Whether the absolute offset is within configured bounds."
+                },
+                "confidence_ok": {
+                    "type": "boolean",
+                    "description": "Whether the confidence (MAD) is within configured bounds."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "TimeNowResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["now", "offset_ms", "confidence_ms"],
+            "required": ["now", "offset_ms", "confidence_ms", "sample_count", "peer_count", "fallback", "health"],
             "additionalProperties": false,
             "properties": {
                 "now": {
@@ -7730,8 +7756,25 @@ fn openapi_schemas() -> Map {
                 },
                 "confidence_ms": {
                     "type": "integer",
-                    "format": "int64",
+                    "format": "uint64",
                     "description": "Confidence interval (±ms) reported by the network time service."
+                },
+                "sample_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Number of peer samples used in the aggregation."
+                },
+                "peer_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Number of peers with recent samples."
+                },
+                "fallback": {
+                    "type": "boolean",
+                    "description": "Whether the response falls back to the local clock."
+                },
+                "health": {
+                    "$ref": "#/components/schemas/TimeHealth"
                 }
             }
         }),
@@ -7811,13 +7854,35 @@ fn openapi_schemas() -> Map {
         "TimeStatusResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["peers", "samples", "rtt", "note"],
+            "required": ["peers", "samples_used", "offset_ms", "confidence_ms", "fallback", "health", "samples", "rtt", "note"],
             "additionalProperties": false,
             "properties": {
                 "peers": {
                     "type": "integer",
                     "format": "uint64",
                     "description": "Number of peers reporting time samples."
+                },
+                "samples_used": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Number of peer samples used in the aggregation."
+                },
+                "offset_ms": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Estimated offset from the local clock in milliseconds."
+                },
+                "confidence_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Confidence interval (±ms) reported by the network time service."
+                },
+                "fallback": {
+                    "type": "boolean",
+                    "description": "Whether the service fell back to the local clock."
+                },
+                "health": {
+                    "$ref": "#/components/schemas/TimeHealth"
                 },
                 "samples": {
                     "type": "array",

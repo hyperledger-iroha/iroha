@@ -4,14 +4,35 @@
 lang: he
 direction: rtl
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/hajimari-entrypoint
+title: שלד נקודת כניסה Hajimari
+description: שלד חוזה Kotodama מינימלי עם נקודת כניסה ציבורית אחת וידית מצב.
+source: crates/ivm/docs/examples/01_hajimari.ko
 ---
 
-# בתהליך תרגום
+שלד חוזה Kotodama מינימלי עם נקודת כניסה ציבורית אחת וידית מצב.
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+## סיור בספר החשבונות
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+- קומפלו את החוזה עם `koto_compile --abi 1` כפי שמוצג ב-[Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) או באמצעות `cargo test -p ivm developer_portal_norito_snippets_compile`.
+- בצעו בדיקת עשן לבייטקוד מקומית עם `ivm_run` / `developer_portal_norito_snippets_run` כדי לאמת את לוג `info!` ואת ה-syscall הראשוני לפני שנוגעים בצומת.
+- פרסו את הארטיפקט באמצעות `iroha_cli contracts deploy` ואמתו את המניפסט באמצעות השלבים ב-[Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).
+
+## מדריכי SDK קשורים
+
+- [Quickstart של Rust SDK](/sdks/rust)
+- [Quickstart של Python SDK](/sdks/python)
+- [Quickstart של JavaScript SDK](/sdks/javascript)
+
+[הורדת מקור Kotodama](/norito-snippets/hajimari-entrypoint.ko)
+
+```text
+// Minimal initializer-style function inside a contract.
+seiyaku HajimariExample {
+  hajimari() {
+    info("Hello from hajimari");
+  }
+}
+```

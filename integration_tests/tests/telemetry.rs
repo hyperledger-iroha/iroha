@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use iroha_data_model::{Level, isi::Log, peer::Peer};
-use iroha_test_network::{Network, NetworkBuilder};
+use iroha_test_network::NetworkBuilder;
 use tokio::runtime::Runtime;
 
 const TELEMETRY_REQUIRED_KEYS: &[&str] = &[

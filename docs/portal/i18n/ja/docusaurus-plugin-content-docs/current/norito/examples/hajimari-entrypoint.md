@@ -4,12 +4,35 @@
 lang: ja
 direction: ltr
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/hajimari-entrypoint
+title: Hajimari エントリポイントの骨組み
+description: 単一の公開エントリポイントと状態ハンドルを備えた、最小構成の Kotodama コントラクトの足場。
+source: crates/ivm/docs/examples/01_hajimari.ko
 ---
 
-# 翻訳作業中
+単一の公開エントリポイントと状態ハンドルを備えた、最小構成の Kotodama コントラクトの足場。
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+## 台帳ウォークスルー
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+- `koto_compile --abi 1` でコントラクトをコンパイルします。[Norito 入門](/norito/getting-started#1-compile-a-kotodama-contract) の手順に従うか、`cargo test -p ivm developer_portal_norito_snippets_compile` を使います。
+- `ivm_run` / `developer_portal_norito_snippets_run` でバイトコードをローカルにスモークテストし、`info!` ログと初期 syscall を確認してからノードに触れます。
+- `iroha_cli contracts deploy` でアーティファクトをデプロイし、[Norito 入門](/norito/getting-started#4-deploy-via-iroha_cli) の手順でマニフェストを確認します。
+
+## 関連 SDK ガイド
+
+- [Rust SDK クイックスタート](/sdks/rust)
+- [Python SDK クイックスタート](/sdks/python)
+- [JavaScript SDK クイックスタート](/sdks/javascript)
+
+[Kotodama ソースをダウンロード](/norito-snippets/hajimari-entrypoint.ko)
+
+```text
+// Minimal initializer-style function inside a contract.
+seiyaku HajimariExample {
+  hajimari() {
+    info("Hello from hajimari");
+  }
+}
+```

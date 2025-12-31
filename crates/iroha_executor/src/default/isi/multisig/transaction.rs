@@ -415,7 +415,7 @@ mod tests {
         AccountId::new(domain.clone(), key_pair.public_key().clone())
     }
 
-    fn sample_spec(domain: &DomainId, signer: &AccountId) -> MultisigSpec {
+    fn sample_spec(_domain: &DomainId, signer: &AccountId) -> MultisigSpec {
         MultisigSpec::new(
             BTreeMap::from([(signer.clone(), 1)]),
             NonZeroU16::new(1).expect("nonzero quorum"),

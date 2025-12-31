@@ -13,4 +13,8 @@ The [`Config`](src/lib.rs) structure controls logger behaviour:
 
 ## Features
 
-- `log-obfuscation` – redact telemetry fields that match sensitive keywords before emitting them.
+- `log-obfuscation` – redact telemetry fields that match sensitive keywords before emitting them
+  (enabled by default).
+
+Telemetry redaction policy (strict vs allow-list vs disabled) is configured via
+`iroha_config.telemetry_redaction`.

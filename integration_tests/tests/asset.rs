@@ -639,10 +639,9 @@ fn transfer_asset_definition() -> Result<()> {
         return Ok(());
     }
 
-    let mut last_err = None;
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
-        match test_client
+        let last_err = match test_client
             .query(FindAssetsDefinitions::new())
             .execute_all()
         {
@@ -652,17 +651,22 @@ fn transfer_asset_definition() -> Result<()> {
                     .find(|asset_definition| asset_definition.id() == &asset_definition_id)
                 {
                     if asset_definition.owned_by() == &alice_id {
-                        break;
+                        None
+                    } else {
+                        Some(eyre!(
+                            "unexpected asset definition owner: expected={alice_id}, actual={}",
+                            asset_definition.owned_by()
+                        ))
                     }
-                    last_err = Some(eyre!(
-                        "unexpected asset definition owner: expected={alice_id}, actual={}",
-                        asset_definition.owned_by()
-                    ));
                 } else {
-                    last_err = Some(eyre!("asset definition not found after registration"));
+                    Some(eyre!("asset definition not found after registration"))
                 }
             }
-            Err(err) => last_err = Some(Report::new(err)),
+            Err(err) => Some(Report::new(err)),
+        };
+
+        if last_err.is_none() {
+            break;
         }
 
         if Instant::now() >= deadline {
@@ -685,10 +689,9 @@ fn transfer_asset_definition() -> Result<()> {
         return Ok(());
     }
 
-    let mut last_err = None;
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
-        match test_client
+        let last_err = match test_client
             .query(FindAssetsDefinitions::new())
             .execute_all()
         {
@@ -698,17 +701,22 @@ fn transfer_asset_definition() -> Result<()> {
                     .find(|asset_definition| asset_definition.id() == &asset_definition_id)
                 {
                     if asset_definition.owned_by() == &new_owner_id {
-                        break;
+                        None
+                    } else {
+                        Some(eyre!(
+                            "unexpected asset definition owner after transfer: expected={new_owner_id}, actual={}",
+                            asset_definition.owned_by()
+                        ))
                     }
-                    last_err = Some(eyre!(
-                        "unexpected asset definition owner after transfer: expected={new_owner_id}, actual={}",
-                        asset_definition.owned_by()
-                    ));
                 } else {
-                    last_err = Some(eyre!("asset definition not found after transfer"));
+                    Some(eyre!("asset definition not found after transfer"))
                 }
             }
-            Err(err) => last_err = Some(Report::new(err)),
+            Err(err) => Some(Report::new(err)),
+        };
+
+        if last_err.is_none() {
+            break;
         }
 
         if Instant::now() >= deadline {

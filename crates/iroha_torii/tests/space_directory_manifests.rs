@@ -97,7 +97,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
             id: dataspace,
             alias: "cbdc".into(),
             description: Some("CBDC lane".into()),
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         },
     ])
     .expect("dataspace catalog");
@@ -362,13 +362,13 @@ async fn space_directory_manifest_endpoint_returns_records() {
             id: dataspace,
             alias: "cbdc".into(),
             description: None,
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         },
         DataSpaceMetadata {
             id: dataspace_two,
             alias: "retail".into(),
             description: None,
-            fault_tolerance: 0,
+            fault_tolerance: 1,
         },
     ])
     .expect("dataspace catalog");

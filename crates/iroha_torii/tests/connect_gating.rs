@@ -314,6 +314,10 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             ),
             missing_block_signer_fallback_attempts:
                 iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+            membership_mismatch_alert_threshold:
+                iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
+            membership_mismatch_fail_closed:
+                iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
             role: A::NodeRole::Validator,
             allow_view0_slack: false,
             collectors_k: 1,
@@ -445,6 +449,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         telemetry_enabled: false,
         telemetry_profile: A::TelemetryProfile::Disabled,
         telemetry: None,
+        telemetry_redaction: A::TelemetryRedaction::default(),
+        telemetry_integrity: A::TelemetryIntegrity::default(),
         dev_telemetry: iroha_config::parameters::user::DevTelemetry {
             out_file: None,
             panic_on_duplicate_metrics: iroha_config::parameters::defaults::telemetry::PANIC_ON_DUPLICATE_METRICS,
@@ -970,6 +976,11 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             smoothing_alpha: iroha_config::parameters::defaults::time::NTS_SMOOTHING_ALPHA,
             max_adjust_ms_per_min:
                 iroha_config::parameters::defaults::time::NTS_MAX_ADJUST_MS_PER_MIN,
+            min_samples: iroha_config::parameters::defaults::time::NTS_MIN_SAMPLES,
+            max_offset_ms: iroha_config::parameters::defaults::time::NTS_MAX_OFFSET_MS,
+            max_confidence_ms:
+                iroha_config::parameters::defaults::time::NTS_MAX_CONFIDENCE_MS,
+            enforcement_mode: A::NtsEnforcementMode::Warn,
         },
         crypto: A::Crypto::default(),
         streaming: A::Streaming {

@@ -29,6 +29,13 @@
 | `developer`        | ○         | ×          | ○                      | ローカル検証／開発用    |
 | `full`             | ○         | ○          | ○                      | 開発＋運用両対応        |
 
+## テレメトリ匿名化と整合性
+
+- `telemetry_redaction.mode` は `strict|allowlist|disabled`。`operator`/`extended`/`full` では `strict` が必須です。
+- センシティブ判定は接頭辞とキーワードの一覧に基づきます。詳細な一覧は `docs/source/telemetry.md` を参照してください。
+- `telemetry_integrity.enabled` を有効にすると `chain { seq, prev_hash, hash, signature?, key_id? }` が追加されます。`telemetry_integrity.signing_key_hex` を設定すると keyed Blake3 署名が付与されます。
+- 継続性が必要な場合は `telemetry_integrity.state_dir` を設定し、再起動後もシーケンスを継続します。
+
 ## プラットフォーム別テレメトリプロファイル
 
 ### Android SDK (AND7)

@@ -531,6 +531,10 @@ mod tests {
             commit_inflight_timeout: Duration::from_millis(5_000),
             missing_block_signer_fallback_attempts:
                 iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+            membership_mismatch_alert_threshold:
+                iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
+            membership_mismatch_fail_closed:
+                iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
             da_max_commitments_per_block: 0,
             da_max_proof_openings_per_block: 0,
             proof_policy: ProofPolicy::Off,
