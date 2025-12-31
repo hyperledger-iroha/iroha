@@ -12269,7 +12269,14 @@ impl State {
         let min_quorum =
             crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
         if validator_pool.len() < committee_size {
+            #[cfg(feature = "telemetry")]
             let mut override_outcome = None;
+            #[cfg(feature = "telemetry")]
+            let mut set_override_outcome = |value: &'static str| {
+                override_outcome = Some(value);
+            };
+            #[cfg(not(feature = "telemetry"))]
+            let set_override_outcome = |_: &'static str| {};
             if let Some(record) = self
                 .world
                 .lane_relay_emergency_validators
@@ -12281,19 +12288,19 @@ impl State {
                     .expires_at_height
                     .is_some_and(|height| envelope.block_height > height)
                 {
-                    override_outcome = Some("expired");
+                    set_override_outcome("expired");
                 } else {
                     validator_pool.extend(record.validators);
                     validator_pool.sort();
                     validator_pool.dedup();
                     if validator_pool.len() < committee_size {
-                        override_outcome = Some("insufficient");
+                        set_override_outcome("insufficient");
                     } else {
-                        override_outcome = Some("applied");
+                        set_override_outcome("applied");
                     }
                 }
             } else {
-                override_outcome = Some("missing");
+                set_override_outcome("missing");
             }
 
             #[cfg(feature = "telemetry")]
@@ -18791,7 +18798,7 @@ mod tests {
     fn apply_lane_lifecycle_aborts_on_storage_error() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
 
         let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -19562,6 +19569,129 @@ mod tests {
         let inserted = state
             .record_lane_relay(&envelope)
             .expect("relay accepted with emergency override");
+        assert_eq!(inserted, LaneRelayInsert::Inserted);
+    }
+
+    #[test]
+    fn record_lane_relay_accepts_emergency_override_on_expiry_height() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let (base_1, base_1_kp) = bls_account_in("wonderland");
+        let (base_2, base_2_kp) = bls_account_in("wonderland");
+        let (extra_1, extra_1_kp) = bls_account_in("wonderland");
+        let (extra_2, extra_2_kp) = bls_account_in("wonderland");
+        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let world = World::with(
+            [Domain::new(domain).build(&ALICE_ID)],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(base_1.clone()).build(&ALICE_ID),
+                Account::new(base_2.clone()).build(&ALICE_ID),
+                Account::new(extra_1.clone()).build(&ALICE_ID),
+                Account::new(extra_2.clone()).build(&ALICE_ID),
+            ],
+            [],
+        );
+        let mut state = State::new_for_testing(world, kura, query_handle);
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::GLOBAL,
+            alias: "global".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+        state.set_nexus(nexus).expect("apply nexus config");
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                LaneId::new(0),
+                DataSpaceId::GLOBAL,
+                vec![base_1.clone(), base_2.clone()],
+            )],
+        );
+
+        let height = 1;
+        let mut wb = state.world.block();
+        wb.lane_relay_emergency_validators.insert(
+            DataSpaceId::GLOBAL,
+            LaneRelayEmergencyValidatorSet {
+                validators: vec![extra_1.clone(), extra_2.clone()],
+                expires_at_height: Some(height),
+                metadata: Metadata::default(),
+            },
+        );
+        wb.commit();
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("nonzero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let parent_state_root = Hash::new([0xBC; 4]);
+        let post_state_root = Hash::new([0xAB; 4]);
+        let mut validator_pool = vec![
+            base_1.clone(),
+            base_2.clone(),
+            extra_1.clone(),
+            extra_2.clone(),
+        ];
+        validator_pool.sort();
+        validator_pool.dedup();
+        let seed =
+            state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), height);
+        let committee =
+            State::lane_relay_committee_from_pool(&validator_pool, 4, seed)
+                .expect("committee");
+        let keypairs: BTreeMap<AccountId, KeyPair> = [
+            (base_1.clone(), base_1_kp.clone()),
+            (base_2.clone(), base_2_kp.clone()),
+            (extra_1.clone(), extra_1_kp.clone()),
+            (extra_2.clone(), extra_2_kp.clone()),
+        ]
+        .into_iter()
+        .collect();
+        let signer_indices = [0usize, 1, 2];
+        let signer_keys: Vec<&KeyPair> = signer_indices
+            .iter()
+            .map(|idx| keypairs.get(&committee[*idx]).expect("signer key"))
+            .collect();
+        let signers_bitmap = signer_bitmap(&signer_indices, committee.len());
+        let qc = execution_qc_with_signers(
+            &header,
+            parent_state_root,
+            post_state_root,
+            &signer_keys,
+            signers_bitmap,
+        );
+        let settlement = LaneBlockCommitment {
+            block_height: height,
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::GLOBAL,
+            tx_count: 1,
+            total_local_micro: 1,
+            total_xor_due_micro: 1,
+            total_xor_after_haircut_micro: 1,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: vec![LaneSettlementReceipt {
+                source_id: [0xAA; 32],
+                local_amount_micro: 1,
+                xor_due_micro: 1,
+                xor_after_haircut_micro: 1,
+                xor_variance_micro: 0,
+                timestamp_ms: 1_700_000_000_000,
+            }],
+        };
+        let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
+            .expect("lane relay envelope");
+        let inserted = state
+            .record_lane_relay(&envelope)
+            .expect("relay accepted on expiry height");
         assert_eq!(inserted, LaneRelayInsert::Inserted);
     }
 

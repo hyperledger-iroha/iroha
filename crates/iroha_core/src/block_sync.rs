@@ -971,6 +971,17 @@ pub mod message {
     }
 
     impl RosterMetadata {
+        fn validator_set(&self) -> Option<&[PeerId]> {
+            self.commit_certificate
+                .as_ref()
+                .map(|cert| cert.validator_set.as_slice())
+                .or_else(|| {
+                    self.validator_checkpoint
+                        .as_ref()
+                        .map(|checkpoint| checkpoint.validator_set.as_slice())
+                })
+        }
+
         #[cfg(test)]
         pub(crate) fn roster_snapshot(&self) -> Option<Vec<PeerId>> {
             self.commit_certificate
@@ -1301,16 +1312,28 @@ pub mod message {
 
         fn filter_blocks_with_valid_signatures(
             entries: Vec<(SignedBlock, Option<Qc>)>,
-            topology: &Topology,
+            rosters: &BTreeMap<HashOf<BlockHeader>, RosterMetadata>,
+            fallback_topology: Option<&Topology>,
             state_view: &StateView<'_>,
             mode_tag: &str,
         ) -> (Vec<(SignedBlock, Option<Qc>)>, usize) {
             let mut dropped = 0usize;
+            let fallback_topology = fallback_topology.cloned();
             let filtered = entries
                 .into_iter()
                 .filter_map(|(block, qc)| {
+                    let block_hash = block.hash();
+                    let roster_topology = rosters
+                        .get(&block_hash)
+                        .and_then(RosterMetadata::validator_set)
+                        .filter(|roster| !roster.is_empty())
+                        .map(|roster| Topology::new(roster.iter().cloned()));
+                    let topology = roster_topology.or_else(|| fallback_topology.clone());
+                    let Some(topology) = topology else {
+                        return Some((block, qc));
+                    };
                     let context =
-                        BlockSyncValidationContext::new(&block, topology, state_view, mode_tag);
+                        BlockSyncValidationContext::new(&block, &topology, state_view, mode_tag);
                     let sanitized_qc = sanitize_block_sync_qc(&block, qc, &context);
                     let signature_check = BlockSynchronizer::block_signatures_valid(
                         &block,
@@ -1433,17 +1456,15 @@ pub mod message {
                         let state_view = block_sync.state.view();
                         let commit_topology: Vec<_> =
                             state_view.commit_topology().iter().cloned().collect();
-                        if commit_topology.is_empty() {
-                            (paired, 0)
-                        } else {
-                            let topology = Topology::new(commit_topology);
-                            Self::filter_blocks_with_valid_signatures(
-                                paired,
-                                &topology,
-                                &state_view,
-                                &block_sync.mode_tag,
-                            )
-                        }
+                        let fallback_topology =
+                            (!commit_topology.is_empty()).then(|| Topology::new(commit_topology));
+                        Self::filter_blocks_with_valid_signatures(
+                            paired,
+                            &roster_by_hash,
+                            fallback_topology.as_ref(),
+                            &state_view,
+                            &block_sync.mode_tag,
+                        )
                     };
                     if dropped > 0 {
                         warn!(
@@ -1739,12 +1760,18 @@ pub mod message {
 
     #[cfg(test)]
     mod filter_tests {
-        use std::{collections::BTreeSet, str::FromStr};
+        use std::{
+            collections::{BTreeMap, BTreeSet},
+            str::FromStr,
+        };
 
         use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature, SignatureOf};
         use iroha_data_model::{
             block::BlockSignature,
-            consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
+            consensus::{
+                ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
+                VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
+            },
             parameter::Parameters,
             peer::PeerId,
         };
@@ -2073,7 +2100,8 @@ pub mod message {
             let (_, mode_tag) = test_chain_config();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(insufficient_block, None), (valid_block.clone(), None)],
-                &topology,
+                &BTreeMap::new(),
+                Some(&topology),
                 &state_view,
                 &mode_tag,
             );
@@ -2113,7 +2141,8 @@ pub mod message {
             let (_, mode_tag) = test_chain_config();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(invalid_block, None), (valid_block.clone(), None)],
-                &topology,
+                &BTreeMap::new(),
+                Some(&topology),
                 &state_view,
                 &mode_tag,
             );
@@ -2149,11 +2178,76 @@ pub mod message {
             let mode_tag = PERMISSIONED_TAG.to_owned();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],
-                &topology,
+                &BTreeMap::new(),
+                Some(&topology),
                 &state_view,
                 &mode_tag,
             );
 
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered, vec![(block, None)]);
+        }
+
+        #[test]
+        fn filter_blocks_prefers_roster_metadata() {
+            let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let fallback_topology = Topology::new(vec![
+                PeerId::new(kp_a.public_key().clone()),
+                PeerId::new(kp_b.public_key().clone()),
+            ]);
+
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(kp_b.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(4_u64));
+                })
+                .into();
+            let roster = vec![
+                PeerId::new(kp_b.public_key().clone()),
+                PeerId::new(kp_a.public_key().clone()),
+            ];
+            let checkpoint = ValidatorSetCheckpoint::new(
+                block.header().height().get(),
+                block.hash(),
+                roster,
+                Vec::new(),
+                VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            );
+            let mut rosters = BTreeMap::new();
+            rosters.insert(
+                block.hash(),
+                RosterMetadata {
+                    commit_certificate: None,
+                    validator_checkpoint: Some(checkpoint),
+                },
+            );
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), None)],
+                &BTreeMap::new(),
+                Some(&fallback_topology),
+                &state_view,
+                &mode_tag,
+            );
+            assert_eq!(dropped, 1);
+            assert!(filtered.is_empty());
+
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), None)],
+                &rosters,
+                Some(&fallback_topology),
+                &state_view,
+                &mode_tag,
+            );
             assert_eq!(dropped, 0);
             assert_eq!(filtered, vec![(block, None)]);
         }
@@ -2202,7 +2296,8 @@ pub mod message {
             let (_, mode_tag) = test_chain_config();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(expired_block, None), (fresh_block.clone(), None)],
-                &topology,
+                &BTreeMap::new(),
+                Some(&topology),
                 &state_view,
                 &mode_tag,
             );
@@ -2310,7 +2405,8 @@ pub mod message {
 
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), Some(forged_qc))],
-                &topology,
+                &BTreeMap::new(),
+                Some(&topology),
                 &state_view,
                 &mode_tag,
             );
@@ -2384,7 +2480,8 @@ pub mod message {
 
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), Some(forged_qc))],
-                &topology,
+                &BTreeMap::new(),
+                Some(&topology),
                 &state_view,
                 &mode_tag,
             );
@@ -2488,7 +2585,8 @@ pub mod message {
 
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), Some(forged_qc))],
-                &topology,
+                &BTreeMap::new(),
+                Some(&topology),
                 &state_view,
                 &mode_tag,
             );
@@ -2539,7 +2637,8 @@ pub mod message {
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), Some(qc.clone()))],
-                &topology,
+                &BTreeMap::new(),
+                Some(&topology),
                 &state_view,
                 &mode_tag,
             );
@@ -2594,7 +2693,8 @@ pub mod message {
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block, Some(forged_qc))],
-                &topology,
+                &BTreeMap::new(),
+                Some(&topology),
                 &state_view,
                 &mode_tag,
             );
@@ -2673,7 +2773,8 @@ pub mod message {
             let state_view = state.view();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],
-                &topology,
+                &BTreeMap::new(),
+                Some(&topology),
                 &state_view,
                 &mode_tag,
             );

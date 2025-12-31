@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Resolved merge conflict in the status update list.
 - Stabilized Android/JVM SDK tests: fixed BouncyCastle Ed25519 test key encodings, hardened fixture loading/exporter fallbacks, filtered JDK-restricted headers, made WebSocket close idempotent, ensured JDK WebSocket request flow, and tightened transport parity fixtures.
 - Closed lane relay validation gaps by enforcing committee-backed QC signatures (including parent_state_root), adding signer-bitmap length checks, and surfacing dataspace fault_tolerance in telemetry; docs/tests updated.
 - Completed NEXUS-LANE-RELAY-RECOVERY with emergency lane relay validator overrides, telemetry, tests, and docs updates.
@@ -25,6 +26,9 @@
 - Translated the Taikai monitoring dashboards across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS priority snapshot (2025-03) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS provider advert rollout across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Prioritized Sumeragi worker loop drains so block payload/RBC traffic runs ahead of block sync, preventing READY quorum stalls; updated unit priority-order coverage.
+- Block sync QC tally now preserves QC bitmap indices when caching precommit signer sets, preventing mismatched QC propagation; added unit coverage.
+- Pacemaker now ignores precommit votes for unknown blocks to avoid proposal stalls; updated and added unit tests.
 - Translated the SoraFS storage capacity marketplace across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS node implementation plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS node storage design across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).

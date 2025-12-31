@@ -34,6 +34,10 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Add receipt timestamps + `max_receipt_age_ms` guardrails to reduce front-running and replay risk; update SDK UX and docs.
    - [x] Mitigate memory exposure for commitment witness material (zeroization in the Norito bridge).
 
+3. **INTEGRATION-TEST-REVALIDATION — Re-run integration tests after Sumeragi drain-order fix** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈺 In Progress, target TBD)
+   - [ ] Re-run `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` to confirm the suite completes without timeouts.
+   - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly.
+
 4. **LOCALNET-DEMO-FLOW — Verify training-script localnet bootstrap** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Align consensus rebroadcast cooldowns (RBC/pending/precommit) to on-chain `block_time` with a 200ms floor and 2x base multiplier, keeping payload replays at an additional 2x to avoid queue saturation on 1s targets.
    - [x] Widen Sumeragi worker loop drain budgets and block `BlockSyncUpdate` enqueue under backpressure to prevent DA-localnet asset test hangs.【crates/iroha_core/src/sumeragi/mod.rs】

@@ -1658,6 +1658,10 @@ impl Actor {
         self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
     }
 
+    pub(in crate::sumeragi) fn poll_commit_results(&mut self) -> bool {
+        self.drain_commit_results()
+    }
+
     fn abort_inflight_commit_if_timed_out(&mut self, now: Instant) -> bool {
         let timeout = self.config.commit_inflight_timeout;
         if timeout.is_zero() {
@@ -3064,6 +3068,9 @@ impl Actor {
                 return false;
             }
             if vote.height != height || vote.epoch != epoch || vote.block_hash == block_hash {
+                return false;
+            }
+            if vote.view < view {
                 return false;
             }
             let signature_topology =
