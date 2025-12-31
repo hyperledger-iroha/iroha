@@ -1847,7 +1847,7 @@ impl Actor {
         let commit_topology = self.effective_commit_topology();
         let local_peer_id = self.common_config.peer.id().clone();
 
-        if self.pending.pending_blocks.is_empty() {
+        if self.active_pending_blocks_len() == 0 {
             let inflight = self.commit.inflight.is_some();
             if matches!(trigger, CommitPipelineTrigger::Tick) {
                 super::status::note_commit_pipeline_tick(self.consensus_mode, inflight);

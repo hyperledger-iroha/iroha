@@ -79,7 +79,8 @@ use tracing::{Instrument, debug, error, info, info_span, warn};
 use crate::config::ensure_genesis_results;
 pub use crate::config::genesis as genesis_factory;
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
-const LOCALNET_PIPELINE_TIME: Duration = Duration::from_millis(1_000);
+// Keep the localnet pipeline time aligned with DA-safe defaults to avoid stalls.
+const LOCALNET_PIPELINE_TIME: Duration = Duration::from_secs(6);
 // Sumeragi defaults, used only when the builder is explicitly told to keep them.
 const DEFAULT_BLOCK_TIME: Duration = Duration::from_secs(2);
 const DEFAULT_COMMIT_TIME: Duration = Duration::from_secs(4);
@@ -363,6 +364,54 @@ fn init_logger_once() {
 fn env_filter_from_env_or_default() -> tracing_subscriber::EnvFilter {
     tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
+}
+
+trait CommandEnv {
+    fn env_remove(&mut self, key: &str);
+}
+
+impl CommandEnv for tokio::process::Command {
+    fn env_remove(&mut self, key: &str) {
+        tokio::process::Command::env_remove(self, key);
+    }
+}
+
+fn config_env_override_keys() -> &'static [&'static str] {
+    static KEYS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    KEYS.get_or_init(|| {
+        let source = include_str!("../../iroha_config/src/parameters/user.rs");
+        let mut keys = Vec::new();
+        let mut offset = 0;
+        const MARKER: &str = "env = \"";
+
+        while let Some(pos) = source[offset..].find(MARKER) {
+            let start = offset + pos + MARKER.len();
+            let Some(end_rel) = source[start..].find('"') else {
+                break;
+            };
+            let end = start + end_rel;
+            let key = &source[start..end];
+            if !key.is_empty()
+                && key
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+            {
+                keys.push(key);
+            }
+            offset = end + 1;
+        }
+
+        keys.sort_unstable();
+        keys.dedup();
+        keys
+    })
+}
+
+fn strip_config_env_overrides(cmd: &mut impl CommandEnv) {
+    // Prevent developer env overrides from shadowing test network configs.
+    for key in config_env_override_keys() {
+        cmd.env_remove(key);
+    }
 }
 
 fn generate_and_keep_temp_dir() -> PathBuf {
@@ -2316,11 +2365,87 @@ fn merge_tables(dst: &mut Table, src: &Table) {
     }
 }
 
-fn merged_config_table(config_layers: &[Table]) -> Table {
-    let mut merged = Table::new();
+// Deterministic BLS keypair so consensus validation doesn't reject profile detection defaults.
+const SORA_PROFILE_BLS_PUBLIC_KEY: &str = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2";
+const SORA_PROFILE_BLS_PRIVATE_KEY: &str =
+    "8926201ca347641228c3b79aa43839dedc85fa51c0e8b9b6a00f6b0d6b0423e902973f";
+static SORA_PROFILE_BLS_KEYPAIR: OnceLock<KeyPair> = OnceLock::new();
+const SORA_PROFILE_STREAM_PUBLIC_KEY: &str =
+    "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
+const SORA_PROFILE_STREAM_PRIVATE_KEY: &str =
+    "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
+static SORA_PROFILE_STREAM_KEYPAIR: OnceLock<KeyPair> = OnceLock::new();
+
+fn sora_profile_detection_defaults() -> Table {
+    let bls_keypair = SORA_PROFILE_BLS_KEYPAIR.get_or_init(|| {
+        let public_key: PublicKey = SORA_PROFILE_BLS_PUBLIC_KEY
+            .parse()
+            .expect("sora profile BLS public key should parse");
+        let private_key: PrivateKey = SORA_PROFILE_BLS_PRIVATE_KEY
+            .parse()
+            .expect("sora profile BLS private key should parse");
+        KeyPair::new(public_key, private_key).expect("sora profile BLS keypair should match")
+    });
+    let streaming_keypair = SORA_PROFILE_STREAM_KEYPAIR.get_or_init(|| {
+        let public_key: PublicKey = SORA_PROFILE_STREAM_PUBLIC_KEY
+            .parse()
+            .expect("sora profile streaming public key should parse");
+        let private_key: PrivateKey = SORA_PROFILE_STREAM_PRIVATE_KEY
+            .parse()
+            .expect("sora profile streaming private key should parse");
+        KeyPair::new(public_key, private_key)
+            .expect("sora profile streaming keypair should match")
+    });
+    let p2p_literal = socket_addr!(127.0.0.1:1337).to_literal();
+    let torii_literal = socket_addr!(127.0.0.1:8080).to_literal();
+    Table::new()
+        .write("chain", chain_id().to_string())
+        .write("public_key", bls_keypair.public_key().to_string())
+        .write(
+            "private_key",
+            ExposedPrivateKey(bls_keypair.private_key().clone()).to_string(),
+        )
+        .write(
+            ["streaming", "identity_public_key"],
+            streaming_keypair.public_key().to_string(),
+        )
+        .write(
+            ["streaming", "identity_private_key"],
+            ExposedPrivateKey(streaming_keypair.private_key().clone()).to_string(),
+        )
+        .write(["network", "address"], p2p_literal.clone())
+        .write(["network", "public_address"], p2p_literal)
+        .write(["torii", "address"], torii_literal)
+        .write(
+            ["genesis", "public_key"],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().to_string(),
+        )
+}
+
+fn apply_streaming_identity_defaults_for_detection(merged: &mut Table) {
+    // Profile detection does not depend on streaming identity, but config parsing does.
+    // Always force the deterministic Ed25519 keys so BLS identities never trip validation here.
+    let mut streaming = match merged.remove("streaming") {
+        Some(Value::Table(table)) => table,
+        _ => Table::new(),
+    };
+    streaming.insert(
+        "identity_public_key".into(),
+        Value::String(SORA_PROFILE_STREAM_PUBLIC_KEY.to_string()),
+    );
+    streaming.insert(
+        "identity_private_key".into(),
+        Value::String(SORA_PROFILE_STREAM_PRIVATE_KEY.to_string()),
+    );
+    merged.insert("streaming".into(), Value::Table(streaming));
+}
+
+fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
+    let mut merged = sora_profile_detection_defaults();
     for layer in config_layers {
         merge_tables(&mut merged, layer);
     }
+    apply_streaming_identity_defaults_for_detection(&mut merged);
     merged
 }
 
@@ -2341,7 +2466,8 @@ fn raw_nexus_overrides(table: &Table) -> bool {
 }
 
 fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
-    let merged = merged_config_table(config_layers);
+    // Inject required fields so profile detection can parse without the base layer.
+    let merged = merged_sora_profile_detection_config(config_layers);
     match iroha_config::parameters::actual::Root::from_toml_source(TomlSource::inline(
         merged.clone(),
     )) {
@@ -2463,9 +2589,8 @@ impl Default for NetworkBuilder {
 impl NetworkBuilder {
     /// Constructor
     pub fn new() -> Self {
-        // Default to a fast localnet pipeline to keep integration tests moving quickly.
-        // Callers can opt back into the baked-in Sumeragi defaults via
-        // `with_default_pipeline_time` when they need longer timings.
+        // Default to a DA-safe localnet pipeline; use `with_default_pipeline_time` to
+        // avoid injecting explicit on-chain timings when defaults are sufficient.
         let mut builder = Self {
             env: Environment::new(),
             n_peers: 1,
@@ -2787,9 +2912,9 @@ impl NetworkBuilder {
         let sumeragi_overrides = sumeragi_parameters.clone();
 
         // Determine the effective pipeline time we report to tests.
-        // By default we inject a fast localnet pipeline into genesis; callers can opt out
+        // By default we inject a DA-safe localnet pipeline into genesis; callers can opt out
         // via `with_default_pipeline_time`, which keeps the baked-in Sumeragi defaults
-        // (2s block, 4s commit) for timing-sensitive scenarios.
+        // (2s block, 4s commit) without extra on-chain overrides.
         let (block_time, commit_time) = if let Some(duration) = pipeline_time {
             let total_ms_u128 = duration.as_millis();
             let total_ms = u64::try_from(total_ms_u128)
@@ -3262,6 +3387,7 @@ impl NetworkPeer {
         let use_sora_profile = config_requires_sora_profile(&config_layers);
 
         let mut cmd = tokio::process::Command::new(Program::Irohad.resolve()?);
+        strip_config_env_overrides(&mut cmd);
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -4665,8 +4791,98 @@ mod diagnostics_tests {
 }
 
 #[cfg(test)]
+mod shutdown_tests {
+    use std::process::Stdio;
+
+    use tempfile::tempdir;
+    use tokio::process::Command;
+
+    use super::*;
+
+    #[cfg(target_family = "unix")]
+    #[tokio::test]
+    async fn shutdown_prefers_sigterm_before_sigquit() {
+        let dir = tempdir().expect("tempdir");
+        let signal_log = dir.path().join("signals.log");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(
+            r#": > "$SIGNAL_LOG"; trap 'echo SIGTERM >> "$SIGNAL_LOG"; exit 0' TERM; trap 'echo SIGQUIT >> "$SIGNAL_LOG"; exit 0' QUIT; while true; do sleep 1; done"#,
+        );
+        cmd.env("SIGNAL_LOG", &signal_log);
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let child = cmd.spawn().expect("spawn signal trapper");
+
+        let (events, _rx) = broadcast::channel(4);
+        let (block_height, _rx) = watch::channel(None);
+        let mut peer_exit = PeerExit {
+            child,
+            span: tracing::Span::none(),
+            is_running: Arc::new(AtomicBool::new(true)),
+            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
+            events,
+            block_height,
+            fatal_notify: Arc::new(Notify::new()),
+            stderr_log_ready: Arc::new(Notify::new()),
+            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _status = peer_exit
+            .shutdown_or_kill()
+            .await
+            .expect("shutdown should complete");
+
+        let log = std::fs::read_to_string(&signal_log).expect("read signal log");
+        assert!(
+            log.contains("SIGTERM"),
+            "expected SIGTERM handler to run, log: {log:?}"
+        );
+        assert!(
+            !log.contains("SIGQUIT"),
+            "SIGQUIT should not be used for a responsive shutdown, log: {log:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod sora_profile_tests {
     use super::*;
+
+    #[test]
+    fn sora_profile_detection_defaults_parse_with_bls_keys() {
+        let defaults = sora_profile_detection_defaults();
+        let config =
+            iroha_config::parameters::actual::Root::from_toml_source(TomlSource::inline(defaults))
+                .expect("sora profile detection defaults should parse");
+        assert_eq!(
+            config.streaming.key_material.identity().algorithm(),
+            iroha_crypto::Algorithm::Ed25519
+        );
+    }
+
+    #[test]
+    fn sora_profile_detection_overrides_streaming_identity_keys() {
+        let mut streaming = Table::new();
+        streaming.insert(
+            "identity_public_key".into(),
+            Value::String(SORA_PROFILE_BLS_PUBLIC_KEY.to_string()),
+        );
+        streaming.insert(
+            "identity_private_key".into(),
+            Value::String(SORA_PROFILE_BLS_PRIVATE_KEY.to_string()),
+        );
+        let mut layer = Table::new();
+        layer.insert("streaming".into(), Value::Table(streaming));
+
+        let merged = merged_sora_profile_detection_config(&[layer]);
+        let config =
+            iroha_config::parameters::actual::Root::from_toml_source(TomlSource::inline(merged))
+                .expect("merged sora profile detection config should parse");
+        assert_eq!(
+            config.streaming.key_material.identity().algorithm(),
+            iroha_crypto::Algorithm::Ed25519
+        );
+    }
 
     #[test]
     fn sora_profile_detection_is_false_for_defaults() {
@@ -4728,6 +4944,24 @@ mod sora_profile_tests {
         table.insert("nexus".into(), toml::Value::Table(nexus));
 
         assert!(config_requires_sora_profile(&[table]));
+    }
+
+    #[test]
+    fn sora_profile_detection_ignores_default_routing_policy() {
+        let mut policy = toml::map::Map::new();
+        policy.insert("default_lane".into(), toml::Value::Integer(0));
+        policy.insert(
+            "default_dataspace".into(),
+            toml::Value::String("global".into()),
+        );
+
+        let mut nexus = toml::map::Map::new();
+        nexus.insert("routing_policy".into(), toml::Value::Table(policy));
+
+        let mut table = Table::new();
+        table.insert("nexus".into(), toml::Value::Table(nexus));
+
+        assert!(!config_requires_sora_profile(&[table]));
     }
 }
 
@@ -4824,21 +5058,6 @@ impl PeerExit {
         self.is_normal_shutdown_started
             .store(true, Ordering::Relaxed);
 
-        // First try to capture a backtrace (where supported) via SIGQUIT before the normal shutdown.
-        #[cfg(target_family = "unix")]
-        if let Some(pid) = self.child.id() {
-            if let Err(err) = signal::kill(Pid::from_raw(pid as i32), signal::Signal::SIGQUIT)
-                .map_err(Report::from)
-            {
-                self.span
-                    .in_scope(|| warn!(?err, pid, "failed to send SIGQUIT before shutdown"));
-            } else {
-                self.span
-                    .in_scope(|| debug!(pid, "sent SIGQUIT to peer for diagnostics"));
-                tokio::time::sleep(QUIT_GRACE).await;
-            }
-        }
-
         self.span.in_scope(|| info!("sending SIGTERM"));
         signal::kill(
             Pid::from_raw(self.child.id().ok_or(eyre!("race condition"))? as i32),
@@ -4850,6 +5069,25 @@ impl PeerExit {
             self.span.in_scope(|| info!("exited gracefully"));
             return status.wrap_err("wait failure");
         };
+
+        // If graceful shutdown stalls, attempt to capture a backtrace (where supported).
+        #[cfg(target_family = "unix")]
+        if let Some(pid) = self.child.id() {
+            if let Err(err) = signal::kill(Pid::from_raw(pid as i32), signal::Signal::SIGQUIT)
+                .map_err(Report::from)
+            {
+                self.span
+                    .in_scope(|| warn!(?err, pid, "failed to send SIGQUIT before killing"));
+            } else {
+                self.span
+                    .in_scope(|| debug!(pid, "sent SIGQUIT to peer for diagnostics"));
+                if let Ok(status) = timeout(QUIT_GRACE, self.child.wait()).await {
+                    self.span.in_scope(|| info!("exited after SIGQUIT"));
+                    return status.wrap_err("wait failure");
+                }
+            }
+        }
+
         self.span
             .in_scope(|| warn!("process didn't terminate after {TIMEOUT:?}, killing"));
         timeout(TIMEOUT, async move {
@@ -5034,6 +5272,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::{
+        collections::HashSet,
         env,
         ffi::{OsStr, OsString},
         fs,
@@ -5132,6 +5371,35 @@ mod tests {
         K: AsRef<OsStr>,
     {
         unsafe { std::env::remove_var(key) }
+    }
+
+    #[test]
+    fn config_env_override_keys_include_core_settings() {
+        let keys = config_env_override_keys();
+        assert!(keys.contains(&"API_ADDRESS"));
+        assert!(keys.contains(&"P2P_ADDRESS"));
+        assert!(keys.contains(&"CHAIN"));
+        assert!(!keys.is_empty());
+    }
+
+    #[test]
+    fn strip_config_env_overrides_marks_keys_for_removal() {
+        struct DummyCommand {
+            removed: Vec<String>,
+        }
+
+        impl CommandEnv for DummyCommand {
+            fn env_remove(&mut self, key: &str) {
+                self.removed.push(key.to_string());
+            }
+        }
+
+        let mut cmd = DummyCommand { removed: Vec::new() };
+        strip_config_env_overrides(&mut cmd);
+        let removed: HashSet<_> = cmd.removed.into_iter().collect();
+        assert!(removed.contains("API_ADDRESS"));
+        assert!(removed.contains("P2P_ADDRESS"));
+        assert!(removed.contains("CHAIN"));
     }
 
     #[tokio::test]

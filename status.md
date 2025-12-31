@@ -1,6 +1,15 @@
 # Status
 
 ## Latest Updates
+- Forced Sora profile detection merges to override streaming identity keys with deterministic Ed25519 values (even when config layers supply BLS) and added unit coverage to prevent parse warnings.
+- Raised the localnet test-network pipeline time to DA-safe defaults to avoid consensus stalls and hanging event tests.
+- Sanitized `irohad` child environments in `iroha_test_network` to prevent config env overrides from hijacking test peer ports; added unit coverage for the env key list/stripping.
+- Localnet Sumeragi smoke test now keeps DA enabled to avoid invalid config overrides and DA mismatch warnings.
+- Test-network shutdown now waits for SIGTERM before SIGQUIT to avoid spurious exit status 3 during localnet checks; added unit coverage.
+- Added Ed25519 streaming identity overrides to Sora profile defaults and testnet/localnet configs so BLS validators no longer trip streaming config parsing.
+- Client pipeline-status 404 responses now fall back to committed queries without warning spam; added mock HTTP coverage for the fallback.
+- Added Kagami localnet config coverage for required addr literals and keys.
+- Seeded Sora profile detection defaults with BLS consensus keys to avoid testnet parse warnings and kept default routing policy coverage.
 - Prioritized Sumeragi worker loop drains so block payload/RBC traffic runs ahead of block sync, preventing READY quorum stalls; updated unit priority-order coverage.
 - Block sync QC tally now preserves QC bitmap indices when caching precommit signer sets, preventing mismatched QC propagation; added unit coverage.
 - Pacemaker now ignores precommit votes for unknown blocks to avoid proposal stalls; updated and added unit tests.

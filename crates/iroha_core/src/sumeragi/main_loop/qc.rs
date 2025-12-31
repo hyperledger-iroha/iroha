@@ -749,7 +749,11 @@ impl Actor {
         self.pending
             .pending_blocks
             .values()
-            .any(|pending| pending.height == height && !pending.block.transactions_vec().is_empty())
+            .any(|pending| {
+                pending.height == height
+                    && !pending.aborted
+                    && !pending.block.transactions_vec().is_empty()
+            })
     }
 
     pub(super) fn drop_missing_lock_if_unknown(&mut self, qc: &crate::sumeragi::consensus::Qc) {

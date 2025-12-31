@@ -947,6 +947,7 @@ impl Actor {
         let topology_peers = self.effective_commit_topology_from_view(&view_snapshot);
         let local_index = self.local_validator_index(&view_snapshot);
         let pending_queue_len = self.queue.tx_len();
+        let active_pending = self.active_pending_blocks_len();
         let view_height = view_snapshot.height();
         let committed_height = view_height as u64;
         drop(view_snapshot);
@@ -1087,10 +1088,10 @@ impl Actor {
                 height = view_height,
                 "pacemaker evaluating proposal assembly with queued transactions"
             );
-            if !self.pending.pending_blocks.is_empty() {
+            if active_pending > 0 {
                 iroha_logger::debug!(
                     height = view_height,
-                    pending = self.pending.pending_blocks.len(),
+                    pending = active_pending,
                     "pending block already assembled for current slot; waiting for view-change"
                 );
             }
@@ -1298,7 +1299,7 @@ impl Actor {
             .pending
             .pending_blocks
             .values()
-            .filter(|pending| pending.height == height && pending.view == view_idx)
+            .filter(|pending| !pending.aborted && pending.height == height && pending.view == view_idx)
             .map(|pending| (pending.age(), pending.view))
             .min_by_key(|(age, _)| *age)
         {
@@ -1321,7 +1322,7 @@ impl Actor {
             .pending
             .pending_blocks
             .iter()
-            .find(|(_, pending)| pending.height == height && pending.view == view_idx)
+            .find(|(_, pending)| !pending.aborted && pending.height == height && pending.view == view_idx)
             .map(|(hash, pending)| (*hash, pending.block.header().prev_block_hash()))
         {
             let view = self.state.view();

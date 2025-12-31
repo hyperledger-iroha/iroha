@@ -3,5 +3,5 @@ chain_id: iroha3-testus
 collectors: k=3 r=2
 vrf_seed: 8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B
 peers_with_pop: 4
-consensus_fingerprint: 0x991d53bb72e2adf5b4d957485d220550f3672fdc0bb477a885954a41a40ce0d2
+consensus_fingerprint: 0xf2de99dad6e75c18ba3fd3cee91cb2fa17b484c0f089ada2883072298b73a710
 kagami_version: 2.0.0-rc.2.0

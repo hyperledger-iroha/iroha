@@ -1,4 +1,4 @@
-//! Bounded-latency localnet smoke test for permissioned Sumeragi with DA disabled.
+//! Bounded-latency localnet smoke test for permissioned Sumeragi with DA enabled.
 
 use std::time::{Duration, Instant};
 
@@ -27,7 +27,6 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
-                .write(["sumeragi", "da_enabled"], false)
                 // Tighten local timeouts to keep proposal/view-change cadence bounded.
                 .write(["sumeragi", "npos", "timeouts", "propose_ms"], 200_i64)
                 .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 400_i64)

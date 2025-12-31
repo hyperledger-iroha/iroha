@@ -2280,6 +2280,21 @@ fn is_peer_admin_instruction(instr: &iroha_data_model::isi::InstructionBox) -> b
 }
 
 impl Actor {
+    fn active_pending_blocks_len(&self) -> usize {
+        self.pending
+            .pending_blocks
+            .values()
+            .filter(|pending| !pending.aborted)
+            .count()
+    }
+
+    fn has_active_pending_blocks(&self) -> bool {
+        self.pending
+            .pending_blocks
+            .values()
+            .any(|pending| !pending.aborted)
+    }
+
     fn is_peer_admin_transaction(tx: &AcceptedTransaction<'_>) -> bool {
         match tx.as_ref().instructions() {
             Executable::Instructions(batch) => batch.iter().any(is_peer_admin_instruction),
@@ -4733,7 +4748,7 @@ impl Actor {
         let mut progress = self.tick_mode_management();
         let now = tick_start;
         let queue_len = self.queue.tx_len();
-        let queue_ready = queue_len > 0 && self.pending.pending_blocks.is_empty();
+        let queue_ready = queue_len > 0 && self.active_pending_blocks_len() == 0;
         if queue_ready {
             self.propose.pacemaker.next_deadline = now;
         }
@@ -4765,7 +4780,7 @@ impl Actor {
             || committed_progress
             || reschedule_progress
             || idle_view_progress;
-        if should_run_commit_pipeline_on_tick(self.pending.pending_blocks.len())
+        if should_run_commit_pipeline_on_tick(self.active_pending_blocks_len())
             || self.commit.inflight.is_some()
         {
             let pipeline_start = Instant::now();
@@ -6044,7 +6059,7 @@ impl Actor {
     }
 
     fn force_view_change_if_idle(&mut self, now: Instant) -> bool {
-        if !self.pending.pending_blocks.is_empty() {
+        if self.has_active_pending_blocks() {
             return false;
         }
 
@@ -6119,7 +6134,7 @@ impl Actor {
             .pending
             .pending_blocks
             .values()
-            .any(|candidate| candidate.height == child_height)
+            .any(|candidate| !candidate.aborted && candidate.height == child_height)
         {
             return None;
         }

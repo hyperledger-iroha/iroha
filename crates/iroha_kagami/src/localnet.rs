@@ -1061,7 +1061,7 @@ mod tests {
         },
         transaction::Executable,
     };
-    use norito::derive::JsonDeserialize;
+    use norito::{derive::JsonDeserialize, literal};
 
     use super::*;
 
@@ -1123,6 +1123,70 @@ mod tests {
         let source =
             TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
         actual::Root::from_toml_source(source).expect("generated config must parse");
+    }
+
+    #[test]
+    fn generated_peer_config_includes_required_addr_literals() {
+        let temp = tempfile::tempdir().expect("make temp dir");
+        let opts = LocalnetOptions {
+            peers: NonZeroU16::new(2).expect("non-zero"),
+            seed: Some("kagami-addr-literals".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 21080,
+            base_p2p_port: 24337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        assert!(
+            peer_cfg.get("public_key").is_some(),
+            "public_key is required"
+        );
+        assert!(
+            peer_cfg.get("private_key").is_some(),
+            "private_key is required"
+        );
+        assert!(peer_cfg.get("genesis").is_some(), "genesis is required");
+
+        let network = peer_cfg
+            .get("network")
+            .and_then(toml::Value::as_table)
+            .expect("network table");
+        let torii = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .expect("torii table");
+        let addr_fields = [
+            ("network.address", network.get("address")),
+            ("network.public_address", network.get("public_address")),
+            ("torii.address", torii.get("address")),
+        ];
+        for (label, value) in addr_fields {
+            let literal = value
+                .and_then(toml::Value::as_str)
+                .unwrap_or_else(|| panic!("{label} is required"));
+            let body =
+                literal::parse("addr", literal).unwrap_or_else(|err| panic!("{label}: {err}"));
+            assert!(
+                body.contains(':'),
+                "expected host:port in {label}, got {body}"
+            );
+        }
     }
 
     #[test]

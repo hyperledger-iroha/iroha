@@ -1508,6 +1508,61 @@ async fn empty_child_fallback_uses_committed_parent_when_pending_missing() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn empty_child_fallback_ignores_aborted_pending_child() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block1 = sample_block(1, 0, None);
+    let block2 = sample_block(2, 0, Some(block1.hash()));
+
+    actor.kura.store_block(block1.clone()).expect("store block");
+    actor.kura.store_block(block2.clone()).expect("store block");
+
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+    state.push_block_hash_for_testing(block2.hash());
+
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Precommit,
+        subject_block_hash: block2.hash(),
+        height: 2,
+        view: 0,
+        epoch: 0,
+    });
+    super::status::set_locked_qc(2, 0, Some(block2.hash()));
+
+    let pending_child = sample_block(3, 0, Some(block2.hash()));
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&pending_child));
+    let mut pending = PendingBlock::new(pending_child, payload_hash, 3, 0);
+    pending.mark_aborted();
+    actor
+        .pending
+        .pending_blocks
+        .insert(pending.block.hash(), pending);
+
+    let now = Instant::now();
+    let block_time = actor
+        .state
+        .view()
+        .world()
+        .parameters()
+        .sumeragi()
+        .block_time();
+    let backoff = block_time.max(Duration::from_millis(1));
+    let last_success = now
+        .checked_sub(backoff.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor.propose.last_successful_proposal = Some(last_success);
+
+    assert!(
+        actor.empty_child_fallback(now).is_some(),
+        "aborted pending child should not block empty-child fallback"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn empty_child_fallback_ignores_prevote_highest_qc() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -6578,6 +6633,41 @@ fn empty_block_disfavored_detects_queue_or_pending() {
     assert!(!super::empty_block_disfavored(0, 0, false));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn has_nonempty_pending_at_height_ignores_aborted() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 2_u64;
+    let block = sample_block(height, 0, None);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, 0);
+    pending.mark_aborted();
+    actor
+        .pending
+        .pending_blocks
+        .insert(pending.block.hash(), pending);
+
+    assert!(
+        !actor.has_nonempty_pending_at_height(height),
+        "aborted pending block should not count as nonempty"
+    );
+
+    let block2 = block_with_txs(height, 1, None, vec![sample_transaction()]);
+    let payload_hash2 = Hash::new(super::proposals::block_payload_bytes(&block2));
+    actor
+        .pending
+        .pending_blocks
+        .insert(block2.hash(), PendingBlock::new(block2, payload_hash2, height, 1));
+
+    assert!(
+        actor.has_nonempty_pending_at_height(height),
+        "active pending block with txs should count as nonempty"
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn non_rbc_payload_budget_respects_frame_cap_when_unset() {
     let frame_cap: usize = 1024 * 1024;
@@ -11262,6 +11352,33 @@ fn idle_view_timeout_waits_for_first_proposal() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn active_pending_blocks_len_ignores_aborted() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(1, 0, None);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, 1, 0);
+    pending.mark_aborted();
+    actor
+        .pending
+        .pending_blocks
+        .insert(pending.block.hash(), pending);
+
+    let block2 = sample_block(2, 0, None);
+    let payload_hash2 = Hash::new(super::proposals::block_payload_bytes(&block2));
+    actor
+        .pending
+        .pending_blocks
+        .insert(block2.hash(), PendingBlock::new(block2, payload_hash2, 2, 0));
+
+    assert_eq!(actor.active_pending_blocks_len(), 1);
+    assert!(actor.has_active_pending_blocks());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -11308,6 +11425,53 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
     assert_eq!(snapshot.last_cause.as_deref(), Some("missing_qc"));
 
     super::status::reset_view_change_cause_counters_for_tests();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_ignores_aborted_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.propose.pacemaker.propose_interval,
+    );
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+
+    let pending_block = sample_block(height, 0, None);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&pending_block));
+    let mut pending = PendingBlock::new(pending_block, payload_hash, height, current_view);
+    pending.mark_aborted();
+    actor
+        .pending
+        .pending_blocks
+        .insert(pending.block.hash(), pending);
+
+    assert!(
+        actor.force_view_change_if_idle(now),
+        "idle timeout should ignore aborted pending blocks"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
 }
 
 #[test]
@@ -14088,6 +14252,10 @@ async fn handle_new_view_catches_up_and_tracks_quorum() {
         );
         actor.handle_new_view(frame).expect("handle_new_view");
         assert_eq!(actor.phase_tracker.current_view(height), Some(view));
+        assert_eq!(
+            actor.propose.forced_view_after_timeout,
+            Some((height, view))
+        );
         let count_with_local =
             actor
                 .propose
@@ -14348,14 +14516,16 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
     let committed_height = actor.state.view().height() as u64;
     let tracked_height = committed_height.saturating_add(1);
     let highest_qc = actor.latest_committed_qc().expect("latest committed qc");
-    let topology_len =
-        u32::try_from(actor.effective_commit_topology().len()).expect("topology len fits u32");
-    let local_idx = actor
-        .local_validator_index(&actor.state.view())
-        .expect("local validator index");
-    let view = u64::from(local_idx);
-    let sender_a = ValidatorIndex::try_from((local_idx + 1) % topology_len).expect("sender index");
-    let sender_b = ValidatorIndex::try_from((local_idx + 2) % topology_len).expect("sender index");
+    let topology_peers = actor.effective_commit_topology();
+    let local_pos = topology_peers
+        .iter()
+        .position(|peer| peer == actor.common_config.peer.id())
+        .expect("local peer in topology");
+    let view = u64::try_from(local_pos).unwrap_or_default();
+    let sender_a =
+        ValidatorIndex::try_from((local_pos + 1) % topology_peers.len()).expect("sender index");
+    let sender_b =
+        ValidatorIndex::try_from((local_pos + 2) % topology_peers.len()).expect("sender index");
 
     actor
         .propose
@@ -14483,6 +14653,15 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
             signature: Vec::new(),
         },
     );
+
+    let pending_block = sample_block(tracked_height, view as u32, Some(block1.hash()));
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&pending_block));
+    let mut pending = PendingBlock::new(pending_block, payload_hash, tracked_height, view);
+    pending.mark_aborted();
+    actor
+        .pending
+        .pending_blocks
+        .insert(pending.block.hash(), pending);
 
     let proposed = actor.on_pacemaker_propose_ready(now);
     assert!(
