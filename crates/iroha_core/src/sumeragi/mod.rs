@@ -533,6 +533,34 @@ mod tests {
     }
 
     #[test]
+    fn non_vote_budget_reserve_leaves_headroom() {
+        assert_eq!(
+            non_vote_budget_reserve(Duration::from_millis(1_000)),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            non_vote_budget_reserve(Duration::from_millis(200)),
+            Duration::from_millis(50)
+        );
+        assert_eq!(
+            non_vote_budget_reserve(Duration::from_millis(1)),
+            Duration::from_millis(0)
+        );
+    }
+
+    #[test]
+    fn effective_vote_budget_respects_reserve() {
+        assert_eq!(
+            effective_vote_budget(Duration::from_millis(1_000), Duration::from_millis(2_000)),
+            Duration::from_millis(750)
+        );
+        assert_eq!(
+            effective_vote_budget(Duration::from_millis(1_000), Duration::from_millis(100)),
+            Duration::from_millis(100)
+        );
+    }
+
+    #[test]
     fn worker_time_budget_clamps_to_floor_for_small_quorum_timeout() {
         let budget = worker_time_budget(
             Duration::from_millis(10),
@@ -4045,6 +4073,23 @@ fn cap_rbc_drain_budget(raw: Duration, floor: Duration) -> Duration {
         .max(floor)
 }
 
+fn non_vote_budget_reserve(time_budget: Duration) -> Duration {
+    let quarter = time_budget
+        .checked_div(4)
+        .unwrap_or_else(|| Duration::from_millis(1));
+    let reserve = quarter.max(Duration::from_millis(1));
+    let max_reserve = time_budget.saturating_sub(Duration::from_millis(1));
+    reserve.min(max_reserve)
+}
+
+fn effective_vote_budget(time_budget: Duration, requested: Duration) -> Duration {
+    let reserve = non_vote_budget_reserve(time_budget);
+    let cap = time_budget
+        .saturating_sub(reserve)
+        .max(Duration::from_millis(1));
+    requested.min(cap)
+}
+
 trait WorkerActor {
     fn on_block_message(&mut self, msg: BlockMessage) -> Result<()>;
     fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()>;
@@ -4166,7 +4211,7 @@ fn run_worker_iteration<A: WorkerActor>(
     let mut remaining_budget = cfg.time_budget;
 
     let non_vote_drain_cap = cfg.tick_max_gap.max(Duration::from_millis(1));
-    let vote_drain_budget = cfg.vote_rx_drain_budget;
+    let vote_drain_budget = effective_vote_budget(cfg.time_budget, cfg.vote_rx_drain_budget);
     let block_rx_drain_budget = cfg.block_rx_drain_budget.min(non_vote_drain_cap);
     let rbc_chunk_drain_budget = cfg.rbc_chunk_rx_drain_budget.min(non_vote_drain_cap);
     let block_payload_drain_budget = cfg.block_payload_rx_drain_budget.min(non_vote_drain_cap);
