@@ -356,6 +356,59 @@ async fn sumeragi_status_endpoint_reflects_leader_and_highest_qc() {
             .and_then(norito::json::Value::as_str),
         Some(expected_hash_hex.as_str())
     );
+    let membership_mismatch = v
+        .get("membership_mismatch")
+        .and_then(|value| value.as_object())
+        .expect("membership_mismatch object present");
+    assert!(
+        membership_mismatch
+            .get("active_peers")
+            .and_then(norito::json::Value::as_array)
+            .map(|peers| peers.is_empty())
+            .unwrap_or(false)
+    );
+    assert!(
+        membership_mismatch
+            .get("last_peer")
+            .map(norito::json::Value::is_null)
+            .unwrap_or(false)
+    );
+    assert_eq!(
+        membership_mismatch
+            .get("last_height")
+            .and_then(norito::json::Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        membership_mismatch
+            .get("last_view")
+            .and_then(norito::json::Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        membership_mismatch
+            .get("last_epoch")
+            .and_then(norito::json::Value::as_u64),
+        Some(0)
+    );
+    assert!(
+        membership_mismatch
+            .get("last_local_hash")
+            .map(norito::json::Value::is_null)
+            .unwrap_or(false)
+    );
+    assert!(
+        membership_mismatch
+            .get("last_remote_hash")
+            .map(norito::json::Value::is_null)
+            .unwrap_or(false)
+    );
+    assert_eq!(
+        membership_mismatch
+            .get("last_timestamp_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(0)
+    );
 }
 
 #[allow(clippy::await_holding_lock)]
@@ -414,6 +467,14 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
     assert_eq!(wire.membership.view, 0);
     assert_eq!(wire.membership.epoch, 0);
     assert!(wire.membership.view_hash.is_none());
+    assert!(wire.membership_mismatch.active_peers.is_empty());
+    assert!(wire.membership_mismatch.last_peer.is_none());
+    assert_eq!(wire.membership_mismatch.last_height, 0);
+    assert_eq!(wire.membership_mismatch.last_view, 0);
+    assert_eq!(wire.membership_mismatch.last_epoch, 0);
+    assert!(wire.membership_mismatch.last_local_hash.is_none());
+    assert!(wire.membership_mismatch.last_remote_hash.is_none());
+    assert_eq!(wire.membership_mismatch.last_timestamp_ms, 0);
     assert!(wire.missing_block_fetch.total >= 1);
     assert_eq!(wire.missing_block_fetch.last_targets, 3);
     assert_eq!(wire.missing_block_fetch.last_dwell_ms, 17);

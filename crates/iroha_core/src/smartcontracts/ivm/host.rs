@@ -185,8 +185,6 @@ pub struct CoreHost {
     nft_seq: u64,
     // Optional trigger arguments for by-call entrypoints.
     args: Option<iroha_primitives::json::Json>,
-    // Cursor into INPUT region for host-provided Norito blobs.
-    input_cursor: u64,
     // Snapshot of durable smart-contract state persisted in WSV.
     durable_state_base: BTreeMap<Name, Vec<u8>>,
     // Overlay of durable state updates staged by the current VM execution.
@@ -316,7 +314,6 @@ impl CoreHost {
             accounts_snapshot: Arc::new(Vec::new()),
             nft_seq: 0,
             args: None,
-            input_cursor: 0,
             durable_state_base: BTreeMap::new(),
             durable_state_overlay: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
@@ -387,7 +384,6 @@ impl CoreHost {
             accounts_snapshot: accounts,
             nft_seq: 0,
             args: None,
-            input_cursor: 0,
             durable_state_base: BTreeMap::new(),
             durable_state_overlay: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),
@@ -449,7 +445,6 @@ impl CoreHost {
             accounts_snapshot: accounts,
             nft_seq: 0,
             args: Some(args),
-            input_cursor: 0,
             durable_state_base: BTreeMap::new(),
             durable_state_overlay: BTreeMap::new(),
             state_access_log: ivm::host::AccessLog::default(),

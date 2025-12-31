@@ -29,6 +29,11 @@ private final class QueueStubPipelineClient: ToriiTransactionSubmitting {
 }
 
 final class PendingTransactionQueueTests: XCTestCase {
+    private func requireNativeEncoder() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+                      "Native transaction encoder unavailable")
+    }
+
     private func makeEnvelope() -> SignedTransactionEnvelope {
         let payload = Data([0x00, 0x01, 0x02])
         let signed = Data([0xAA, 0xBB])
@@ -123,6 +128,7 @@ final class PendingTransactionQueueTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSdkQueuesAfterRetryExhaustion() async throws {
+        try requireNativeEncoder()
         let stub = QueueStubPipelineClient()
         stub.defaultResult = .failure(ToriiClientError.transport(URLError(.notConnectedToInternet)))
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
@@ -150,6 +156,7 @@ final class PendingTransactionQueueTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testQueuedTransactionsFlushBeforeNewSubmission() async throws {
+        try requireNativeEncoder()
         let stub = QueueStubPipelineClient()
         stub.queuedResults = [.success(nil), .success(nil)]
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)

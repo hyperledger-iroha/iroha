@@ -25,6 +25,7 @@
 | `iroha_slot_duration_ms_latest` | Mirrors most recent slot; investigate if > 1100 ms even when quantiles look OK. | Export value when filing incidents. |
 | `iroha_da_quorum_ratio` | ≥ 0.95 over rolling 30 m window. | Derived from missing-availability telemetry during block commits. |
 | `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` | Should remain flat outside chaos rehearsals. | Treat sustained increases as missing availability evidence. |
+| `lane_relay_emergency_override_total{outcome="applied"}` | Should stay at 0 outside emergency drills. | Non-zero indicates admin override of lane relay validators. Check `outcome="disabled"` if overrides are not configured. |
 | `iroha_oracle_staleness_seconds` | ≤ 60 s. Alert at 75 s. | Indicates stale 60 s TWAP feeds. |
 | `iroha_oracle_twap_window_seconds` | Exactly 60 s ± 5 s tolerance. | Divergence means the oracle is misconfigured. |
 | `iroha_oracle_haircut_basis_points` | Matches lane liquidity tier (0/25/75 bps). | Escalate if haircuts spike unexpectedly. |
@@ -43,6 +44,20 @@
 2. If ratio <0.95, pin failing attesters, widen sampling parameters, or move profile to XOR-only mode.  
 3. Run `scripts/telemetry/check_nexus_audit_outcome.py` during routed-trace rehearsals to prove `nexus.audit.outcome` events still pass after remediation.  
 4. Archive DA receipt bundles with the incident ticket.
+
+### Lane relay quorum recovery
+1. Confirm `lane_relay_invalid_total{error="InvalidValidatorSet"}` and
+   `lane_relay_emergency_override_total{outcome}` spikes for the affected lane/dataspace.
+2. Ensure `nexus.lane_relay_emergency.enabled = true` and the authority is a multisig account
+   meeting the configured minimums (default 3-of-5).
+3. Prepare an admin multisig transaction using `SetLaneRelayEmergencyValidators`:
+   - `dataspace_id` for the impacted dataspace.
+   - `validators` list with enough extra accounts to restore `3f+1`.
+   - Optional `expires_at_height` (compared against the lane relay envelope `block_height`).
+   - Optional `metadata` for audit notes.
+4. Submit the multisig as an authority with `CanManagePeers`.
+5. Once the lane validator pool recovers, clear the override by re-submitting the instruction
+   with an empty `validators` list.
 
 ### Oracle staleness / haircut drift
 1. Use panels 5–8 to verify price, staleness, TWAP window, and haircut.  

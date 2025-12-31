@@ -599,6 +599,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             ),
             missing_block_signer_fallback_attempts:
                 defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+            membership_mismatch_alert_threshold:
+                defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
+            membership_mismatch_fail_closed: defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
             role: A::NodeRole::Validator,
             allow_view0_slack: false,
             collectors_k: 1,
@@ -694,6 +697,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         telemetry_enabled: false,
         telemetry_profile: A::TelemetryProfile::Disabled,
         telemetry: None,
+        telemetry_redaction: A::TelemetryRedaction::default(),
+        telemetry_integrity: A::TelemetryIntegrity::default(),
         dev_telemetry: iroha_config::parameters::user::DevTelemetry {
             out_file: None,
             panic_on_duplicate_metrics: defaults::telemetry::PANIC_ON_DUPLICATE_METRICS,
@@ -1041,6 +1046,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             smoothing_enabled: defaults::time::NTS_SMOOTHING_ENABLED,
             smoothing_alpha: defaults::time::NTS_SMOOTHING_ALPHA,
             max_adjust_ms_per_min: defaults::time::NTS_MAX_ADJUST_MS_PER_MIN,
+            min_samples: defaults::time::NTS_MIN_SAMPLES,
+            max_offset_ms: defaults::time::NTS_MAX_OFFSET_MS,
+            max_confidence_ms: defaults::time::NTS_MAX_CONFIDENCE_MS,
+            enforcement_mode: A::NtsEnforcementMode::Warn,
         },
         accel: A::Acceleration {
             enable_simd: false,

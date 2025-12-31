@@ -63,6 +63,9 @@ final class NativeBridgeLoaderTests: XCTestCase {
             .appendingPathComponent("dist/NoritoBridge.xcframework")
             .appendingPathComponent(identifier)
             .appendingPathComponent("NoritoBridge.framework/NoritoBridge")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("NoritoBridge.xcframework missing at \(url.path)")
+        }
         return (url, identifier)
     }
 }

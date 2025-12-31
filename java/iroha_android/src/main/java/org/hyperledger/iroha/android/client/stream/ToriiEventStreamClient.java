@@ -106,6 +106,9 @@ public final class ToriiEventStreamClient {
           listener.onError(parseError);
         } else if (!stream.closedByCaller()) {
           listener.onClosed();
+          stream.signalSuccess();
+        } else {
+          stream.signalSuccess();
         }
       });
     });
@@ -336,17 +339,14 @@ public final class ToriiEventStreamClient {
 
     void attach(final CompletableFuture<Void> readerFuture) {
       this.readerFuture = readerFuture;
-      readerFuture.whenComplete((ignored, throwable) -> {
-        if (throwable == null || throwable instanceof CancellationException) {
-          completion.complete(null);
-        } else {
-          completion.completeExceptionally(throwable);
-        }
-      });
     }
 
     void signalFailure(final Throwable error) {
       completion.completeExceptionally(error);
+    }
+
+    void signalSuccess() {
+      completion.complete(null);
     }
 
     boolean closed() {

@@ -20,6 +20,9 @@ final class SorafsOrchestratorParityTests: XCTestCase {
         guard SorafsBridgeBootstrap.ensureLoaded() else {
             throw XCTSkip("SoraFS Norito bridge artifacts unavailable")
         }
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge unavailable on this platform")
+        }
 
         let orchestratorFixture = try OrchestratorFixture.load()
         let planSpecs = orchestratorFixture.plan

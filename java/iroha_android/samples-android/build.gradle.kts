@@ -40,6 +40,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
+        isCoreLibraryDesugaringEnabled = true
     }
 
     buildTypes {
@@ -56,7 +57,7 @@ repositories {
         mavenLocal()
         if (!repoUrlProp.isNullOrBlank()) {
             maven {
-                url = uri(repoUrlProp!!)
+                url = uri(repoUrlProp)
                 isAllowInsecureProtocol = true
             }
         }
@@ -82,5 +83,6 @@ dependencies {
     } else {
         implementation(project(":android"))
     }
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     testImplementation("junit:junit:4.13.2")
 }

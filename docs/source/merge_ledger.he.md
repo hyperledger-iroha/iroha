@@ -34,7 +34,7 @@ translator: manual
 כל בלוק `B_i` הסגור ע״י ועדת הנתיב מפיק:
 - `lane_state_root_i`: קומיטמנט Poseidon2-SMT על שורשי המצב שנגעו בבלוק.
 - `merge_hint_root_i`: מועמד מתגלגל ל-merge ledger (תג `"iroha:merge:candidate:v1\0"`).
-- `lane_qc_i`: חתימות מצטברות של ועדת הנתיב על כותרת הבלוק.
+- `lane_qc_i`: חתימות מצטברות של ועדת הנתיב על preimage של הצבעת הביצוע (hash הבלוק, `parent_state_root`, `post_state_root`, height/view/epoch, ‏chain_id ותג מצב).
 
 צמתי המיזוג אוספים את הטיפים האחרונים `{(B_i, lane_qc_i, merge_hint_root_i)}` עבור כל נתיב `i ∈ [0, K)`.
 
@@ -99,7 +99,7 @@ merge_qc_digest = blake2b32(
 ### 3.1 סופיות ברמת נתיב
 1. טרנזקציות משובצות לנתיבים בסלוטים דטרמיניסטיים.
 2. המנוע מיישם overlays על `StateBlock`.
-3. לאחר אימות, ועדת הנתיב חותמת על הכותרת (כולל merge hint). הטופל `(block_hash, lane_qc_i, merge_hint_root_i)` נחשב סופי ברמת נתיב.
+3. לאחר אימות, ועדת הנתיב חותמת על preimage של הצבעת הביצוע שקושר את hash הבלוק, `parent_state_root`, `post_state_root`, height/view/epoch, ‏chain_id ותג מצב. הטופל `(block_hash, lane_qc_i, merge_hint_root_i)` נחשב סופי ברמת נתיב.
 4. קליינטים קלים רשאים להתייחס לטיפ כסופי להוכחות DS מוגבלות, אך חייבים לשמור את ה-hint לצורך התאמה עם merge ledger.
 
 ### 3.2 סופיות merge ledger

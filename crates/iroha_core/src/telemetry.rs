@@ -306,6 +306,7 @@ impl Default for LaneMetadataSnapshot {
 struct DataspaceMetadataSnapshot {
     alias: String,
     description: Option<String>,
+    fault_tolerance: u32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -719,6 +720,7 @@ impl StateTelemetry {
                     DataspaceMetadataSnapshot {
                         alias: entry.alias.clone(),
                         description: entry.description.clone(),
+                        fault_tolerance: entry.fault_tolerance,
                     },
                 )
             })
@@ -842,6 +844,7 @@ impl StateTelemetry {
                 entry.dataspace_id = *dataspace_id;
                 entry.alias.clone_from(&info.alias);
                 entry.description.clone_from(&info.description);
+                entry.fault_tolerance = info.fault_tolerance;
             }
         }
     }
@@ -1550,6 +1553,10 @@ impl StateTelemetry {
                 map.insert("id".to_string(), json_value(&entry.id.as_u64()));
                 map.insert("alias".to_string(), json_value(&entry.alias));
                 map.insert("description".to_string(), json_value(&entry.description));
+                map.insert(
+                    "fault_tolerance".to_string(),
+                    json_value(&entry.fault_tolerance),
+                );
                 norito::json::Value::Object(map)
             })
             .collect();
@@ -1562,6 +1569,10 @@ impl StateTelemetry {
                 map.insert("id".to_string(), json_value(&entry.id.as_u64()));
                 map.insert("alias".to_string(), json_value(&entry.alias));
                 map.insert("description".to_string(), json_value(&entry.description));
+                map.insert(
+                    "fault_tolerance".to_string(),
+                    json_value(&entry.fault_tolerance),
+                );
                 norito::json::Value::Object(map)
             })
             .collect();
@@ -1843,6 +1854,7 @@ impl StateTelemetry {
         let info = self.dataspace_metadata_snapshot(dataspace_id);
         entry.alias = info.alias;
         entry.description = info.description;
+        entry.fault_tolerance = info.fault_tolerance;
     }
 
     fn apply_manifest_status(&self, lane_id: LaneId, entry: &mut NexusLaneTeuStatus) {
@@ -2558,6 +2570,24 @@ impl StateTelemetry {
             entry.finality_lag_slots = lag;
             entry.rbc_bytes_total = rbc_bytes_total;
         });
+    }
+
+    /// Record use of emergency validator overrides during lane relay validation.
+    pub fn record_lane_relay_emergency_override(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        outcome: &str,
+    ) {
+        if !self.nexus_lane_metrics_enabled() {
+            return;
+        }
+        self.record_lane_with_dataspace(lane_id, dataspace_id);
+        let (lane_label, dataspace_label) = self.lane_label_values(lane_id);
+        self.metrics
+            .lane_relay_emergency_override_total
+            .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), outcome])
+            .inc();
     }
 
     fn with_dataspace_snapshot<F>(&self, lane_id: LaneId, dataspace_id: DataSpaceId, update: F)
@@ -5616,6 +5646,13 @@ impl Telemetry {
         }
     }
 
+    /// Record a rejection when NTS is unhealthy for time-sensitive admission.
+    pub fn inc_torii_nts_unhealthy_reject(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.torii_nts_unhealthy_reject_total.inc();
+        }
+    }
+
     /// Record a rejection of a transaction directly signed by a multisig account.
     pub fn inc_torii_multisig_direct_sign_reject(&self) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -7894,9 +7931,19 @@ impl Actor {
         let nts = crate::time::now();
         self.metrics.nts_offset_ms.set(nts.offset_ms);
         self.metrics.nts_confidence_ms.set(nts.confidence_ms);
+        self.metrics.nts_peers_sampled.set(nts.peer_count as u64);
+        self.metrics.nts_samples_used.set(nts.sample_count as u64);
+        self.metrics.nts_healthy.set(i64::from(nts.health.healthy));
+        self.metrics.nts_fallback.set(i64::from(nts.fallback));
         self.metrics
-            .nts_peers_sampled
-            .set(crate::time::debug_snapshot().len() as u64);
+            .nts_min_samples_ok
+            .set(i64::from(nts.health.min_samples_ok));
+        self.metrics
+            .nts_offset_ok
+            .set(i64::from(nts.health.offset_ok));
+        self.metrics
+            .nts_confidence_ok
+            .set(i64::from(nts.health.confidence_ok));
         // NTS RTT histogram (export counters)
         let bounds = crate::time::rtt_bucket_bounds_ms();
         let counts = crate::time::rtt_bucket_counts();
@@ -8703,11 +8750,13 @@ mod tests {
                 id: DataSpaceId::new(7),
                 alias: "alpha".to_owned(),
                 description: Some("restricted alpha".to_owned()),
+                fault_tolerance: 1,
             },
             DataSpaceMetadata {
                 id: DataSpaceId::new(9),
                 alias: "beta".to_owned(),
                 description: None,
+                fault_tolerance: 1,
             },
         ])
         .expect("dataspace catalog");
@@ -9437,6 +9486,78 @@ mod tests {
     }
 
     #[test]
+    fn lane_relay_emergency_override_metric_increments() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        let lane_id = LaneId::new(0);
+        let dataspace_id = DataSpaceId::new(7);
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneMetadata {
+                id: lane_id,
+                dataspace_id,
+                alias: "alpha".to_string(),
+                ..LaneMetadata::default()
+            }],
+        )
+        .expect("lane catalog");
+        telemetry.set_nexus_catalogs(&lane_catalog, &DataSpaceCatalog::default());
+
+        telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "applied");
+
+        let lane_label = lane_id.as_u32().to_string();
+        let dataspace_label = dataspace_id.as_u64().to_string();
+        assert_eq!(
+            metrics
+                .lane_relay_emergency_override_total
+                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), "applied",])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn lane_relay_emergency_override_metric_skips_when_disabled() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), false);
+        let lane_id = LaneId::SINGLE;
+        let dataspace_id = DataSpaceId::GLOBAL;
+
+        telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
+
+        let lane_label = lane_id.as_u32().to_string();
+        let dataspace_label = dataspace_id.as_u64().to_string();
+        assert_eq!(
+            metrics
+                .lane_relay_emergency_override_total
+                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), "missing",])
+                .get(),
+            0
+        );
+    }
+
+    #[test]
+    fn lane_relay_emergency_override_metric_skips_when_nexus_disabled() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        let lane_id = LaneId::SINGLE;
+        let dataspace_id = DataSpaceId::GLOBAL;
+        telemetry.set_nexus_enabled(false);
+
+        telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
+
+        let lane_label = lane_id.as_u32().to_string();
+        let dataspace_label = dataspace_id.as_u64().to_string();
+        assert_eq!(
+            metrics
+                .lane_relay_emergency_override_total
+                .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), "missing",])
+                .get(),
+            0
+        );
+    }
+
+    #[test]
     fn amx_metrics_recorded() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -9819,6 +9940,7 @@ mod tests {
             id: dataspace,
             alias: "cbdc".to_string(),
             description: Some("CBDC lane profile".to_string()),
+            fault_tolerance: 1,
         }])
         .expect("dataspace catalog");
         telemetry.set_nexus_catalogs(&LaneCatalog::default(), &dataspace_catalog);
@@ -11772,6 +11894,8 @@ mod tests {
         );
         assert_eq!(metrics.torii_signature_limit_last_count.get(), 5);
         assert_eq!(metrics.torii_signature_limit_max.get(), 3);
+        telemetry.inc_torii_nts_unhealthy_reject();
+        assert_eq!(metrics.torii_nts_unhealthy_reject_total.get(), 1);
         telemetry.inc_torii_multisig_direct_sign_reject();
         assert_eq!(metrics.torii_multisig_direct_sign_reject_total.get(), 1);
         telemetry.inc_multisig_derived_account_detected();
@@ -11795,6 +11919,12 @@ mod tests {
             metrics.torii_signature_limit_last_count.get(),
             5,
             "disabled telemetry must not update the last-count gauge"
+        );
+        telemetry.inc_torii_nts_unhealthy_reject();
+        assert_eq!(
+            metrics.torii_nts_unhealthy_reject_total.get(),
+            1,
+            "disabled telemetry must not record additional NTS rejects"
         );
         telemetry.inc_torii_multisig_direct_sign_reject();
         assert_eq!(

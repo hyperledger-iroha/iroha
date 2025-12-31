@@ -4,6 +4,7 @@
 #[cfg(feature = "dev-telemetry")]
 pub mod dev;
 pub mod futures;
+mod integrity;
 pub mod metrics;
 pub mod privacy;
 mod retry_period;

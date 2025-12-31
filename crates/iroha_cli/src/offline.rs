@@ -1664,7 +1664,6 @@ pub struct OfflineRejectionStatsItem {
 mod tests {
     use super::*;
     use iroha::data_model::{
-        ChainId,
         asset::AssetDefinitionId,
         domain::DomainId,
         offline::{

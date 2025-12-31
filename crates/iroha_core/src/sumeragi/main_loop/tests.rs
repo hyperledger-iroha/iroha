@@ -9,6 +9,7 @@ use std::{
     fs,
     net::SocketAddr,
     num::NonZeroU64,
+    path::PathBuf,
     sync::{Arc, mpsc},
     time::{Duration, Instant, SystemTime},
 };
@@ -37,7 +38,7 @@ use iroha_data_model::{
     domain::DomainId,
     isi::InstructionBox,
     merge::MergeCommitteeSignature,
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
     peer::{Peer, PeerId},
     prelude::{AccountId, Domain, Register, TransactionBuilder},
     sorafs::pin_registry::ManifestDigest,
@@ -58,6 +59,7 @@ use super::{
     vrf::VrfLocalState,
     *,
 };
+use crate::governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::{Metrics, Telemetry};
 use crate::{
@@ -123,13 +125,67 @@ fn pending_session_key(height: u64) -> SessionKey {
     )
 }
 
-fn sample_lane_relay_envelope(height: u64, lane_id: LaneId) -> LaneRelayEnvelope {
-    sample_lane_relay_envelope_with_bitmap(height, lane_id, 0b0000_0001)
+fn execution_qc_with_signers(
+    chain_id: &ChainId,
+    header: &BlockHeader,
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    signers: &[&KeyPair],
+    signers_bitmap: Vec<u8>,
+) -> ExecutionQcRecord {
+    let vote = crate::sumeragi::consensus::ExecVote {
+        block_hash: header.hash(),
+        parent_state_root,
+        post_state_root,
+        height: header.height().get(),
+        view: 0,
+        epoch: 0,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = crate::sumeragi::consensus::bls_preimage::exec_vote(
+        chain_id,
+        crate::sumeragi::consensus::PERMISSIONED_TAG,
+        &vote,
+    );
+    let signatures: Vec<Vec<u8>> = signers
+        .iter()
+        .map(|keypair| {
+            Signature::new(keypair.private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect();
+    let sig_refs: Vec<&[u8]> = signatures.iter().map(|sig| sig.as_slice()).collect();
+    let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
+        .expect("aggregate execution QC signatures");
+    ExecutionQcRecord {
+        subject_block_hash: header.hash(),
+        parent_state_root,
+        post_state_root,
+        height: header.height().get(),
+        view: 0,
+        epoch: 0,
+        signers_bitmap,
+        bls_aggregate_signature: aggregate_signature,
+    }
+}
+
+fn sample_lane_relay_envelope(
+    height: u64,
+    lane_id: LaneId,
+    chain_id: &ChainId,
+    signers: &[&KeyPair],
+    signers_bitmap: u8,
+) -> LaneRelayEnvelope {
+    sample_lane_relay_envelope_with_bitmap(height, lane_id, chain_id, signers, signers_bitmap)
 }
 
 fn sample_lane_relay_envelope_with_bitmap(
     height: u64,
     lane_id: LaneId,
+    chain_id: &ChainId,
+    signers: &[&KeyPair],
     signers_bitmap: u8,
 ) -> LaneRelayEnvelope {
     let header = BlockHeader::new(
@@ -140,15 +196,14 @@ fn sample_lane_relay_envelope_with_bitmap(
         1_700_000_000_000,
         0,
     );
-    let qc = ExecutionQcRecord {
-        subject_block_hash: header.hash(),
-        post_state_root: Hash::new([0xAB; 4]),
-        height,
-        view: 0,
-        epoch: 0,
-        signers_bitmap: vec![signers_bitmap],
-        bls_aggregate_signature: vec![0x11; 48],
-    };
+    let qc = execution_qc_with_signers(
+        chain_id,
+        &header,
+        Hash::new([0xBC; 4]),
+        Hash::new([0xAB; 4]),
+        signers,
+        vec![signers_bitmap],
+    );
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id,
@@ -169,6 +224,35 @@ fn sample_lane_relay_envelope_with_bitmap(
         }],
     };
     LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope")
+}
+
+fn account_id_for_keypair(domain: &str, keypair: &KeyPair) -> AccountId {
+    let domain_id: DomainId = domain.parse().expect("domain id");
+    AccountId::new(domain_id, keypair.public_key().clone())
+}
+
+fn install_lane_manifest_registry(state: &State, lanes: &[(LaneId, DataSpaceId, Vec<AccountId>)]) {
+    let mut statuses = BTreeMap::new();
+    for (lane_id, dataspace_id, validators) in lanes {
+        let rules = GovernanceRules {
+            validators: validators.clone(),
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: *lane_id,
+            alias: format!("lane-{}", lane_id.as_u32()),
+            dataspace: *dataspace_id,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_string()),
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(*lane_id, status);
+    }
+    let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+    state.install_lane_manifests(&registry);
 }
 
 fn seed_npos_epochs(
@@ -952,6 +1036,10 @@ fn test_sumeragi_config() -> SumeragiConfig {
         commit_inflight_timeout: Duration::from_millis(5_000),
         missing_block_signer_fallback_attempts:
             iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+        membership_mismatch_alert_threshold:
+            iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
+        membership_mismatch_fail_closed:
+            iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
         da_max_commitments_per_block: 0,
         da_max_proof_openings_per_block: 0,
         proof_policy: ProofPolicy::Off,
@@ -1269,12 +1357,28 @@ async fn merge_committee_signatures_commit_merge_entry() {
     let actor = &mut harness.actor;
 
     actor.state.nexus.write().enabled = true;
+    let lane_keypairs = vec![
+        harness.key_pairs[0].clone(),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+    ];
+    let lane_validators: Vec<AccountId> = lane_keypairs
+        .iter()
+        .map(|keypair| account_id_for_keypair("validators", keypair))
+        .collect();
+    install_lane_manifest_registry(
+        &actor.state,
+        &[(LaneId::new(0), DataSpaceId::GLOBAL, lane_validators)],
+    );
     let mut topo = actor.state.commit_topology.block();
     topo.clear();
     topo.push(actor.common_config.peer.id().clone());
     topo.commit();
 
-    let envelope = sample_lane_relay_envelope(1, LaneId::new(0));
+    let signers: Vec<&KeyPair> = lane_keypairs.iter().collect();
+    let envelope =
+        sample_lane_relay_envelope(1, LaneId::new(0), &actor.chain_id, &signers, 0b0000_1111);
     actor
         .on_lane_relay_message(super::LaneRelayMessage::Envelope(envelope.clone()))
         .expect("lane relay handled");
@@ -1305,13 +1409,29 @@ async fn merge_committee_accepts_remote_signature() {
     let actor = &mut harness.actor;
 
     actor.state.nexus.write().enabled = true;
+    let lane_keypairs = vec![
+        harness.key_pairs[0].clone(),
+        harness.key_pairs[1].clone(),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+    ];
+    let lane_validators: Vec<AccountId> = lane_keypairs
+        .iter()
+        .map(|keypair| account_id_for_keypair("validators", keypair))
+        .collect();
+    install_lane_manifest_registry(
+        &actor.state,
+        &[(LaneId::new(0), DataSpaceId::GLOBAL, lane_validators)],
+    );
     let mut topo = actor.state.commit_topology.block();
     topo.clear();
     topo.push(actor.common_config.peer.id().clone());
     topo.push(PeerId::new(harness.key_pairs[1].public_key().clone()));
     topo.commit();
 
-    let envelope = sample_lane_relay_envelope_with_bitmap(1, LaneId::new(0), 0b0000_0011);
+    let signers: Vec<&KeyPair> = lane_keypairs.iter().collect();
+    let envelope =
+        sample_lane_relay_envelope(1, LaneId::new(0), &actor.chain_id, &signers, 0b0000_1111);
     actor
         .on_lane_relay_message(super::LaneRelayMessage::Envelope(envelope))
         .expect("lane relay handled");
@@ -6572,7 +6692,7 @@ fn kura_alignment_requires_state_tip_match() {
 }
 use std::num::NonZeroUsize;
 
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 
 fn sample_qc_ref(height: u64, view: u64) -> QcHeaderRef {
     let height_byte = u8::try_from(height).expect("test height fits into u8");
@@ -6623,6 +6743,51 @@ fn membership_view_hash_changes_with_context() {
     assert_ne!(hash_a, hash_c, "hash must differ when roster order changes");
     let hash_d = super::compute_membership_view_hash(&chain_id, 5, 3, 1, &peers);
     assert_ne!(hash_a, hash_d, "hash must differ when view index changes");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn init_collector_plan_broadcasts_membership_advert() {
+    let mut harness = test_actor_harness(3).await;
+    let height = 5;
+    let view = 2;
+    let epoch = harness.actor.current_epoch();
+    let topology =
+        super::network_topology::Topology::new(harness.actor.effective_commit_topology());
+
+    let _ = harness.background_rx.try_iter().count();
+    harness.actor.init_collector_plan(&topology, height, view);
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let advert = posts
+        .into_iter()
+        .find_map(|post| match post {
+            BackgroundPost::Broadcast {
+                msg: BlockMessage::ConsensusParams(advert),
+                ..
+            } => Some(advert),
+            _ => None,
+        })
+        .expect("consensus params broadcast");
+    let expected_k = u16::try_from(harness.actor.config.collectors_k).unwrap_or(u16::MAX);
+    assert_eq!(advert.collectors_k, expected_k);
+    assert_eq!(
+        advert.redundant_send_r,
+        harness.actor.config.collectors_redundant_send_r
+    );
+    let membership = advert.membership.expect("membership payload");
+    assert_eq!(membership.height, height);
+    assert_eq!(membership.view, view);
+    assert_eq!(membership.epoch, epoch);
+    let expected_hash = super::compute_membership_view_hash(
+        &harness.actor.chain_id,
+        height,
+        view,
+        epoch,
+        topology.as_ref(),
+    );
+    assert_eq!(membership.view_hash, Some(expected_hash));
+
+    harness.shutdown.send();
 }
 
 #[test]
@@ -8205,7 +8370,7 @@ fn block_sync_roster_selection_uses_persisted_journal() {
     let (me_peer, me_pop, kp) = bls_peer("127.0.0.1:7080");
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
-    let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
+    let _trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let block_sig = BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
     let roster = vec![me_peer.id().clone()];
     let commit_certificate = CommitCertificate {
@@ -8738,6 +8903,7 @@ fn persist_execution_qc_record_in_wsv_inserts_exec_root_and_qc() {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
     let record = ExecutionQcRecord {
         subject_block_hash: subject,
+        parent_state_root: Hash::prehashed([0x10; 32]),
         post_state_root: Hash::prehashed([0x11; 32]),
         height: 7,
         view: 2,
@@ -8775,6 +8941,7 @@ fn persist_execution_qc_record_in_wsv_overwrites_mismatched_exec_root() {
 
     let record = ExecutionQcRecord {
         subject_block_hash: subject,
+        parent_state_root: Hash::prehashed([0x20; 32]),
         post_state_root: Hash::prehashed([0x22; 32]),
         height: 8,
         view: 1,
@@ -8801,6 +8968,7 @@ fn persist_execution_qc_record_in_wsv_rejects_empty_signatures() {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; 32]));
     let record = ExecutionQcRecord {
         subject_block_hash: subject,
+        parent_state_root: Hash::prehashed([0x21; 32]),
         post_state_root: Hash::prehashed([0x22; 32]),
         height: 4,
         view: 1,
@@ -8824,6 +8992,7 @@ fn persist_execution_qc_record_in_wsv_replaces_placeholder_record() {
         subject,
         ExecutionQcRecord {
             subject_block_hash: subject,
+            parent_state_root: Hash::prehashed([0x00; 32]),
             post_state_root: placeholder_root,
             height: 1,
             view: 0,
@@ -8836,6 +9005,7 @@ fn persist_execution_qc_record_in_wsv_replaces_placeholder_record() {
 
     let updated = ExecutionQcRecord {
         subject_block_hash: subject,
+        parent_state_root: Hash::prehashed([0x54; 32]),
         post_state_root: Hash::prehashed([0x55; 32]),
         height: 1,
         view: 2,
@@ -10531,6 +10701,7 @@ fn block_message_kind_reports_variant() {
     let msg = BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
         collectors_k: 2,
         redundant_send_r: 1,
+        membership: None,
     });
     assert_eq!(Actor::block_message_kind(&msg), "ConsensusParams");
 }
@@ -19011,6 +19182,7 @@ fn dispatch_background_request_post_enqueues() {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
+            membership: None,
         }),
     };
 
@@ -19096,6 +19268,7 @@ fn dispatch_background_request_full_returns_false_without_blocking() {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
+            membership: None,
         }),
         enqueued_at: Instant::now(),
     })
@@ -19108,6 +19281,7 @@ fn dispatch_background_request_full_returns_false_without_blocking() {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
+            membership: None,
         }),
     };
 
@@ -19145,6 +19319,7 @@ fn dispatch_background_request_post_enqueues() {
         msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
+            membership: None,
         }),
     };
 

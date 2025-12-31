@@ -374,7 +374,7 @@ fn init_global_metrics_handle(
     panic_on_duplicate_metrics: bool,
 ) -> Arc<iroha_telemetry::metrics::Metrics> {
     set_duplicate_metrics_panic(panic_on_duplicate_metrics);
-    iroha_telemetry::metrics::global().map_or_else(
+    let metrics = iroha_telemetry::metrics::global().map_or_else(
         || {
             let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
             match iroha_telemetry::metrics::install_global(Arc::clone(&metrics)) {
@@ -383,7 +383,35 @@ fn init_global_metrics_handle(
             }
         },
         Arc::clone,
-    )
+    );
+    let redaction_metrics = Arc::clone(&metrics);
+    iroha_logger::telemetry::set_redaction_audit_hook(Arc::new(move |event| match event {
+        iroha_logger::telemetry::RedactionMetricEvent::Redacted { reason } => {
+            let label = match reason {
+                iroha_logger::telemetry::RedactionReason::Explicit => "explicit",
+                iroha_logger::telemetry::RedactionReason::Keyword => "keyword",
+            };
+            redaction_metrics
+                .telemetry_redaction_total
+                .with_label_values(&[label])
+                .inc();
+        }
+        iroha_logger::telemetry::RedactionMetricEvent::Skipped { reason } => {
+            let label = match reason {
+                iroha_logger::telemetry::RedactionSkipReason::Allowlist => "allowlist",
+                iroha_logger::telemetry::RedactionSkipReason::Disabled => "disabled",
+                iroha_logger::telemetry::RedactionSkipReason::Unsupported => "unsupported",
+            };
+            redaction_metrics
+                .telemetry_redaction_skipped_total
+                .with_label_values(&[label])
+                .inc();
+        }
+        iroha_logger::telemetry::RedactionMetricEvent::Truncated => {
+            redaction_metrics.telemetry_truncation_total.inc();
+        }
+    }));
+    metrics
 }
 
 fn nexus_topology_is_custom(nexus: &iroha_config::parameters::actual::Nexus) -> bool {
@@ -638,6 +666,10 @@ struct NetworkRelay {
     streaming: iroha_core::streaming::StreamingHandle,
     kiso: KisoHandle,
     suppress_pow_broadcast: Arc<AtomicBool>,
+    membership_mismatch_alert_threshold: u32,
+    membership_mismatch_fail_closed: bool,
+    #[cfg(feature = "telemetry")]
+    telemetry: iroha_core::telemetry::Telemetry,
 }
 
 const NETWORK_RELAY_QUEUE_CAP: usize = 1024;
@@ -680,6 +712,82 @@ impl NetworkRelay {
         iroha_logger::debug!("Exiting the network relay");
     }
 
+    fn membership_mismatch_threshold(&self) -> u32 {
+        self.membership_mismatch_alert_threshold.max(1)
+    }
+
+    fn handle_membership_advert(
+        &self,
+        peer: &Peer,
+        advert: &iroha_core::sumeragi::message::ConsensusParamsAdvert,
+    ) {
+        let Some(remote) = advert.membership.as_ref() else {
+            return;
+        };
+        let Some(local) = iroha_core::sumeragi::status::membership_snapshot() else {
+            return;
+        };
+        if remote.height != local.height
+            || remote.view != local.view
+            || remote.epoch != local.epoch
+        {
+            return;
+        }
+        let (Some(local_hash), Some(remote_hash)) = (local.view_hash, remote.view_hash) else {
+            return;
+        };
+        if local_hash == remote_hash {
+            iroha_core::sumeragi::status::clear_membership_mismatch(peer.id());
+            #[cfg(feature = "telemetry")]
+            self.telemetry.clear_membership_mismatch(peer.id());
+            return;
+        }
+
+        let consecutive = iroha_core::sumeragi::status::record_membership_mismatch(
+            peer.id().clone(),
+            local.height,
+            local.view,
+            local.epoch,
+            local_hash,
+            remote_hash,
+        );
+        #[cfg(feature = "telemetry")]
+        self.telemetry
+            .note_membership_mismatch(peer.id(), local.height, local.view);
+        let threshold = self.membership_mismatch_threshold();
+        if consecutive == threshold {
+            iroha_logger::warn!(
+                %peer,
+                height = local.height,
+                view = local.view,
+                epoch = local.epoch,
+                threshold,
+                "membership view hash mismatch detected"
+            );
+        }
+    }
+
+    fn should_drop_consensus_messages(&self, peer: &Peer) -> bool {
+        Self::should_drop_consensus_messages_with_config(
+            self.membership_mismatch_alert_threshold,
+            self.membership_mismatch_fail_closed,
+            peer.id(),
+        )
+    }
+
+    fn should_drop_consensus_messages_with_config(
+        membership_mismatch_alert_threshold: u32,
+        membership_mismatch_fail_closed: bool,
+        peer_id: &iroha_data_model::peer::PeerId,
+    ) -> bool {
+        if !membership_mismatch_fail_closed {
+            return false;
+        }
+        let threshold = membership_mismatch_alert_threshold.max(1);
+        let consecutive = iroha_core::sumeragi::status::membership_mismatch_consecutive(peer_id);
+        consecutive >= threshold && threshold > 0
+    }
+
     async fn handle_message(
         &mut self,
         peer: Peer,
@@ -691,6 +799,18 @@ impl NetworkRelay {
         match msg {
             SumeragiBlock(data) => {
                 let (kind, height, view) = Self::block_message_meta(data.as_ref());
+                if let iroha_core::sumeragi::message::BlockMessage::ConsensusParams(advert) =
+                    data.as_ref()
+                {
+                    self.handle_membership_advert(&peer, advert);
+                } else if self.should_drop_consensus_messages(&peer) {
+                    iroha_logger::warn!(
+                        %peer,
+                        kind,
+                        "dropping consensus block message due to membership mismatch"
+                    );
+                    return;
+                }
                 iroha_logger::info!(
                     %peer,
                     ?height,
@@ -703,6 +823,14 @@ impl NetworkRelay {
             }
             SumeragiControlFlow(data) => {
                 let (kind, height, view) = Self::control_flow_meta(data.as_ref());
+                if self.should_drop_consensus_messages(&peer) {
+                    iroha_logger::warn!(
+                        %peer,
+                        kind,
+                        "dropping consensus control-flow message due to membership mismatch"
+                    );
+                    return;
+                }
                 iroha_logger::info!(
                     %peer,
                     ?height,
@@ -717,6 +845,13 @@ impl NetworkRelay {
                 self.sumeragi.incoming_lane_relay(*envelope);
             }
             MergeCommitteeSignature(signature) => {
+                if self.should_drop_consensus_messages(&peer) {
+                    iroha_logger::warn!(
+                        %peer,
+                        "dropping merge committee signature due to membership mismatch"
+                    );
+                    return;
+                }
                 self.sumeragi.incoming_merge_signature(*signature);
             }
             StreamingControl(frame) => {
@@ -1118,6 +1253,7 @@ impl Iroha {
                 &registry_cfg,
             ));
             queue.install_lane_manifests(&lane_manifests);
+            state.install_lane_manifests(&lane_manifests);
             state
                 .telemetry
                 .set_lane_manifest_registry(Arc::clone(&lane_manifests));
@@ -1127,36 +1263,10 @@ impl Iroha {
                     "governance manifest missing; rejecting transactions routed to this lane until a manifest is provisioned"
                 );
             }
-            #[cfg(feature = "telemetry")]
-            {
-                let queue_task = Arc::clone(&queue);
-                let telemetry_task = state.telemetry.clone();
-                let governance_task = Arc::clone(&governance_catalog);
-                let registry_cfg_task = registry_cfg.clone();
-                tokio::spawn(async move {
-                    queue_task
-                        .watch_lane_manifests_task(
-                            Some(telemetry_task),
-                            governance_task,
-                            registry_cfg_task,
-                        )
-                        .await;
-                });
-            }
-            #[cfg(not(feature = "telemetry"))]
-            {
-                let queue_task = Arc::clone(&queue);
-                let governance_task = Arc::clone(&governance_catalog);
-                let registry_cfg_task = registry_cfg.clone();
-                tokio::spawn(async move {
-                    queue_task
-                        .watch_lane_manifests_task(None, governance_task, registry_cfg_task)
-                        .await;
-                });
-            }
         } else {
             let empty_registry = Arc::new(LaneManifestRegistry::empty());
             queue.install_lane_manifests(&empty_registry);
+            state.install_lane_manifests(&empty_registry);
             state
                 .telemetry
                 .set_lane_manifest_registry(Arc::clone(&empty_registry));
@@ -1746,6 +1856,44 @@ impl Iroha {
         state.chain_id = config.common.chain.clone();
         let state = Arc::new(state);
 
+        if config.nexus.enabled {
+            #[cfg(feature = "telemetry")]
+            {
+                let queue_task = Arc::clone(&queue);
+                let telemetry_task = state.telemetry.clone();
+                let governance_task = Arc::clone(&governance_catalog);
+                let registry_cfg_task = registry_cfg.clone();
+                let state_task = Arc::clone(&state);
+                tokio::spawn(async move {
+                    queue_task
+                        .watch_lane_manifests_task(
+                            Some(telemetry_task),
+                            governance_task,
+                            registry_cfg_task,
+                            Some(state_task),
+                        )
+                        .await;
+                });
+            }
+            #[cfg(not(feature = "telemetry"))]
+            {
+                let queue_task = Arc::clone(&queue);
+                let governance_task = Arc::clone(&governance_catalog);
+                let registry_cfg_task = registry_cfg.clone();
+                let state_task = Arc::clone(&state);
+                tokio::spawn(async move {
+                    queue_task
+                        .watch_lane_manifests_task(
+                            None,
+                            governance_task,
+                            registry_cfg_task,
+                            Some(state_task),
+                        )
+                        .await;
+                });
+            }
+        }
+
         #[cfg(feature = "telemetry")]
         let telemetry = {
             let (metrics_reporter, child) = iroha_core::telemetry::start(
@@ -2026,6 +2174,11 @@ impl Iroha {
                 streaming: streaming.clone(),
                 kiso: kiso.clone(),
                 suppress_pow_broadcast: Arc::clone(&suppress_pow_broadcast),
+                membership_mismatch_alert_threshold: sumeragi_cfg
+                    .membership_mismatch_alert_threshold,
+                membership_mismatch_fail_closed: sumeragi_cfg.membership_mismatch_fail_closed,
+                #[cfg(feature = "telemetry")]
+                telemetry: telemetry.clone(),
             }
             .run(),
         ));
@@ -2166,6 +2319,7 @@ async fn start_telemetry(
                     .attach(MSG_SUBSCRIBE)?;
                 let handle = iroha_telemetry::dev::start_file_output(
                     out_file.resolve_relative_path(),
+                    config.telemetry_integrity.clone(),
                     receiver,
                 )
                 .await
@@ -2190,7 +2344,11 @@ async fn start_telemetry(
             .await
             .change_context(StartError::StartTelemetry)
             .attach(MSG_SUBSCRIBE)?;
-        let handle = iroha_telemetry::ws::start(telemetry_cfg.clone(), receiver)
+        let handle = iroha_telemetry::ws::start(
+            telemetry_cfg.clone(),
+            config.telemetry_integrity.clone(),
+            receiver,
+        )
             .await
             .map_err(|err| {
                 Report::new(StartError::StartTelemetry)
@@ -2472,6 +2630,15 @@ pub enum ConfigError {
     #[cfg(feature = "dev-telemetry")]
     /// Telemetry output path pointed to a directory.
     TelemetryOutFileIsDir,
+    /// Telemetry redaction is required by the selected profile.
+    TelemetryRedactionRequired,
+    /// Telemetry redaction support is missing from this build.
+    TelemetryRedactionUnsupported,
+    /// Telemetry redaction allow-list entry is not approved.
+    TelemetryRedactionAllowlistForbidden {
+        /// Disallowed allow-list entry.
+        field: String,
+    },
     /// Network and Torii addresses conflict.
     SameNetworkAndToriiAddrs,
     /// Invalid directory path supplied in configuration.
@@ -2511,6 +2678,16 @@ impl core::fmt::Display for ConfigError {
             Self::TelemetryOutFileIsDir => {
                 write!(f, "Telemetry output file path is a directory")
             }
+            Self::TelemetryRedactionRequired => {
+                write!(f, "Telemetry redaction must be enabled for this profile")
+            }
+            Self::TelemetryRedactionUnsupported => {
+                write!(f, "Telemetry redaction support is missing from this build")
+            }
+            Self::TelemetryRedactionAllowlistForbidden { field } => write!(
+                f,
+                "Telemetry redaction allow-list entry `{field}` is not approved"
+            ),
             Self::SameNetworkAndToriiAddrs => write!(
                 f,
                 "Torii and Network addresses are the same, but should be different"
@@ -2792,101 +2969,89 @@ pub(crate) fn apply_ivm_acceleration_config(
 #[cfg(test)]
 mod build_line_tests {
     use super::{resolve_build_line_from_env, *};
-    use iroha_config_base::toml::TomlSource;
-    use iroha_crypto::Hash;
+    use iroha_config_base::toml::{TomlSource, Writer};
+    use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
     use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneId, LaneMetadata};
     use std::{io::Write, num::NonZeroU32, path::Path};
     use tempfile::NamedTempFile;
-    use toml::Table;
+    use toml::{Table, Value};
+
+    fn base_config_table() -> Table {
+        let consensus = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let (public_key, private_key) = consensus.into_parts();
+        let streaming = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let genesis = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+
+        let mut table = Table::new();
+        Writer::new(&mut table)
+            .write("chain", "00000000-0000-0000-0000-000000000000")
+            .write("public_key", public_key.to_string())
+            .write("private_key", ExposedPrivateKey(private_key).to_string())
+            .write(["network", "address"], "addr:127.0.0.1:1337#8F78")
+            .write(
+                ["network", "public_address"],
+                "addr:127.0.0.1:1337#8F78",
+            )
+            .write(["torii", "address"], "addr:127.0.0.1:8080#8942")
+            .write(
+                ["streaming", "identity_public_key"],
+                streaming.public_key().to_string(),
+            )
+            .write(
+                ["streaming", "identity_private_key"],
+                ExposedPrivateKey(streaming.private_key().clone()).to_string(),
+            )
+            .write(
+                ["genesis", "public_key"],
+                genesis.public_key().to_string(),
+            );
+        table
+    }
 
     fn minimal_config_table() -> Table {
-        toml::from_str(
-            r#"
-chain = "00000000-0000-0000-0000-000000000000"
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-
-[network]
-address = "addr:127.0.0.1:1337#8F78"
-public_address = "addr:127.0.0.1:1337#8F78"
-
-[torii]
-address = "addr:127.0.0.1:8080#8942"
-
-[genesis]
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-"#,
-        )
-        .expect("minimal config")
+        base_config_table()
     }
 
     pub fn multilane_config_table(enabled: bool) -> Table {
-        toml::from_str(&format!(
-            r#"
-chain = "00000000-0000-0000-0000-000000000000"
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+        fn lane_catalog_entry(index: i64, alias: &str) -> Value {
+            let mut entry = Table::new();
+            entry.insert("index".to_string(), Value::Integer(index));
+            entry.insert("alias".to_string(), Value::String(alias.to_string()));
+            entry.insert("metadata".to_string(), Value::Table(Table::new()));
+            Value::Table(entry)
+        }
 
-[network]
-address = "addr:127.0.0.1:1337#8F78"
-public_address = "addr:127.0.0.1:1337#8F78"
-
-[torii]
-address = "addr:127.0.0.1:8080#8942"
-
-[genesis]
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-
-[nexus]
-enabled = {enabled}
-lane_count = 2
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "core"
-metadata = {{}}
-
-[[nexus.lane_catalog]]
-index = 1
-alias = "zk"
-metadata = {{}}
-"#
-        ))
-        .expect("multilane config")
+        let mut table = base_config_table();
+        Writer::new(&mut table)
+            .write(["nexus", "enabled"], enabled)
+            .write(["nexus", "lane_count"], 2)
+            .write(
+                ["nexus", "lane_catalog"],
+                Value::Array(vec![lane_catalog_entry(0, "core"), lane_catalog_entry(1, "zk")]),
+            );
+        table
     }
 
     fn single_lane_override_config_table() -> Table {
-        toml::from_str(
-            r#"
-chain = "00000000-0000-0000-0000-000000000000"
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+        let mut entry = Table::new();
+        entry.insert("index".to_string(), Value::Integer(0));
+        entry.insert("alias".to_string(), Value::String("custom".to_string()));
+        entry.insert(
+            "description".to_string(),
+            Value::String("lane overrides should be rejected when nexus is disabled".to_string()),
+        );
+        entry.insert("metadata".to_string(), Value::Table(Table::new()));
 
-[network]
-address = "addr:127.0.0.1:1337#8F78"
-public_address = "addr:127.0.0.1:1337#8F78"
-
-[torii]
-address = "addr:127.0.0.1:8080#8942"
-
-[genesis]
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-
-[nexus]
-enabled = false
-lane_count = 1
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "custom"
-description = "lane overrides should be rejected when nexus is disabled"
-"#,
-        )
-        .expect("single-lane override config")
+        let mut table = base_config_table();
+        Writer::new(&mut table)
+            .write(["nexus", "enabled"], false)
+            .write(["nexus", "lane_count"], 1)
+            .write(["nexus", "lane_catalog"], Value::Array(vec![Value::Table(entry)]));
+        table
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "039d3449a1528725faf8c126a43cb638525b08d9d4843e57697a92d999db9467";
+        "4cef7cd2c3b6ae706269643a7cccb6c1730b7fdedf2fda6e5aa789ffc23f7e2f";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
@@ -3249,6 +3414,7 @@ mod accel_tests {
 
     #[test]
     fn accel_config_disables_cuda_parity_holds() {
+        let _simd_guard = ivm::forced_simd_test_lock();
         ivm::reset_cuda_backend_for_tests();
         let accel = iroha_config::parameters::actual::Acceleration {
             enable_simd: true,
@@ -3305,6 +3471,7 @@ mod accel_tests {
 
     #[test]
     fn accel_config_disables_simd_parity_holds() {
+        let _simd_guard = ivm::forced_simd_test_lock();
         let original = ivm::acceleration_config();
         let accel = iroha_config::parameters::actual::Acceleration {
             enable_simd: false,
@@ -3350,6 +3517,7 @@ mod accel_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn accel_config_disables_metal_parity_holds() {
+        let _simd_guard = ivm::forced_simd_test_lock();
         ivm::reset_metal_backend_for_tests();
         if !ivm::metal_available() {
             return;
@@ -3567,6 +3735,52 @@ fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) 
                 Report::new(ConfigError::TelemetryOutFileIsDir)
                     .attach(path.clone().into_attachment().display_path()),
             );
+        }
+    }
+
+    let telemetry_profile = if config.telemetry_enabled {
+        config.telemetry_profile
+    } else {
+        iroha_config::parameters::actual::TelemetryProfile::Disabled
+    };
+    let release_profile = matches!(
+        telemetry_profile,
+        iroha_config::parameters::actual::TelemetryProfile::Operator
+            | iroha_config::parameters::actual::TelemetryProfile::Extended
+            | iroha_config::parameters::actual::TelemetryProfile::Full
+    );
+    if release_profile {
+        if !matches!(
+            config.telemetry_redaction.mode,
+            iroha_config::parameters::actual::TelemetryRedactionMode::Strict
+        ) {
+            emitter.emit(
+                Report::new(ConfigError::TelemetryRedactionRequired).attach(format!(
+                    "telemetry_redaction.mode must be `strict` for profile {telemetry_profile:?}"
+                )),
+            );
+        }
+        if !iroha_logger::telemetry::redaction_supported() {
+            emitter.emit(
+                Report::new(ConfigError::TelemetryRedactionUnsupported)
+                    .attach("telemetry redaction feature not enabled in this build"),
+            );
+        }
+    }
+    if !config.telemetry_redaction.allowlist.is_empty() {
+        let policy = iroha_logger::telemetry::redaction_allowlist_policy();
+        for entry in &config.telemetry_redaction.allowlist {
+            let normalized = iroha_logger::telemetry::normalize_redaction_field(entry);
+            if !policy.contains(&normalized.as_str()) {
+                emitter.emit(
+                    Report::new(ConfigError::TelemetryRedactionAllowlistForbidden {
+                        field: entry.clone(),
+                    })
+                    .attach(format!(
+                        "telemetry_redaction.allowlist entry `{entry}` is not approved"
+                    )),
+                );
+            }
         }
     }
 
@@ -4530,6 +4744,9 @@ async fn run_node(config: Config, genesis: Option<GenesisBlock>) -> ReportResult
         Report::new(MainError::Logger).attach(err)
     })?;
     validate_config(&config).change_context(MainError::Config)?;
+    iroha_logger::telemetry::set_redaction_policy(
+        iroha_logger::telemetry::RedactionPolicy::from_config(&config.telemetry_redaction),
+    );
 
     set_banner_enabled(config.ivm.banner.show);
 
@@ -4669,6 +4886,69 @@ mod tests {
         }
     }
 
+    mod membership_mismatch_relay {
+        use super::*;
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::peer::PeerId;
+
+        fn record_mismatch(peer_id: &PeerId) -> u32 {
+            iroha_core::sumeragi::status::record_membership_mismatch(
+                peer_id.clone(),
+                1,
+                0,
+                0,
+                [1u8; 32],
+                [2u8; 32],
+            )
+        }
+
+        #[test]
+        fn fail_closed_drops_after_threshold() {
+            let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+            iroha_core::sumeragi::status::clear_membership_mismatch(&peer_id);
+
+            let count = record_mismatch(&peer_id);
+            assert_eq!(count, 1);
+            assert!(!NetworkRelay::should_drop_consensus_messages_with_config(
+                2, true, &peer_id
+            ));
+
+            let count = record_mismatch(&peer_id);
+            assert_eq!(count, 2);
+            assert!(NetworkRelay::should_drop_consensus_messages_with_config(
+                2, true, &peer_id
+            ));
+
+            iroha_core::sumeragi::status::clear_membership_mismatch(&peer_id);
+        }
+
+        #[test]
+        fn fail_closed_disabled_does_not_drop() {
+            let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+            iroha_core::sumeragi::status::clear_membership_mismatch(&peer_id);
+
+            record_mismatch(&peer_id);
+            assert!(!NetworkRelay::should_drop_consensus_messages_with_config(
+                1, false, &peer_id
+            ));
+
+            iroha_core::sumeragi::status::clear_membership_mismatch(&peer_id);
+        }
+
+        #[test]
+        fn threshold_clamps_to_one() {
+            let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+            iroha_core::sumeragi::status::clear_membership_mismatch(&peer_id);
+
+            record_mismatch(&peer_id);
+            assert!(NetworkRelay::should_drop_consensus_messages_with_config(
+                0, true, &peer_id
+            ));
+
+            iroha_core::sumeragi::status::clear_membership_mismatch(&peer_id);
+        }
+    }
+
     #[cfg(feature = "telemetry")]
     mod metrics_bootstrap {
         #[allow(unused_imports)]
@@ -4728,8 +5008,11 @@ mod tests {
 
     mod manifest_crypto_checks {
         use super::*;
-        use iroha_config::base::toml::TomlSource;
+        use iroha_config::base::toml::{TomlSource, Writer};
+        use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
         use iroha_genesis::{GenesisBuilder, ManifestCrypto};
+        use iroha_primitives::addr::socket_addr;
+        use toml::Value;
 
         fn sample_manifest() -> RawGenesisTransaction {
             GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
@@ -4737,32 +5020,56 @@ mod tests {
         }
 
         fn sample_config_table() -> toml::Table {
-            toml::toml! {
-                chain = "00000000-0000-0000-0000-000000000000"
-                public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"
-                private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
+            let consensus = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let (public_key, private_key) = consensus.into_parts();
+            let genesis = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let streaming = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let trusted_peers = [
+                socket_addr!(127.0.0.1:1337),
+                socket_addr!(127.0.0.1:1338),
+                socket_addr!(127.0.0.1:1339),
+                socket_addr!(127.0.0.1:1340),
+            ]
+            .into_iter()
+            .map(|addr| {
+                let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+                Value::String(format!("{}@{}", kp.public_key(), addr.to_literal()))
+            })
+            .collect();
 
-                trusted_peers = [
-                  "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B@127.0.0.1:1337",
-                  "ed0120CC25624D62896D3A0BFD8940F928DC2ABF27CC57CEFEB442AA96D9081AAE58A1@127.0.0.1:1338",
-                  "ed0120FACA9E8AA83225CB4D16D67F27DD4F93FC30FFA11ADC1F5C88FD5495ECC91020@127.0.0.1:1339",
-                  "ed01208E351A70B6A603ED285D666B8D689B680865913BA03CE29FB7D13A166C4E7F1F@127.0.0.1:1340",
-                ]
-
-                [network]
-                address = "addr:127.0.0.1:1337#8F78"
-                public_address = "addr:127.0.0.1:1337#8F78"
-
-                [genesis]
-                public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
-                file = "./genesis.signed.nrt"
-
-                [torii]
-                address = "addr:127.0.0.1:8080#8942"
-
-                [logger]
-                format = "pretty"
-            }
+            let mut table = toml::Table::new();
+            Writer::new(&mut table)
+                .write("chain", "00000000-0000-0000-0000-000000000000")
+                .write("public_key", public_key.to_string())
+                .write("private_key", ExposedPrivateKey(private_key).to_string())
+                .write("trusted_peers", Value::Array(trusted_peers))
+                .write(
+                    ["network", "address"],
+                    socket_addr!(127.0.0.1:1337).to_literal(),
+                )
+                .write(
+                    ["network", "public_address"],
+                    socket_addr!(127.0.0.1:1337).to_literal(),
+                )
+                .write(
+                    ["genesis", "public_key"],
+                    genesis.public_key().to_string(),
+                )
+                .write(["genesis", "file"], "./genesis.signed.nrt")
+                .write(
+                    ["torii", "address"],
+                    socket_addr!(127.0.0.1:8080).to_literal(),
+                )
+                .write(
+                    ["streaming", "identity_public_key"],
+                    streaming.public_key().to_string(),
+                )
+                .write(
+                    ["streaming", "identity_private_key"],
+                    ExposedPrivateKey(streaming.private_key().clone()).to_string(),
+                )
+                .write(["logger", "format"], "pretty");
+            table
         }
 
         fn sample_config() -> Config {
@@ -4999,8 +5306,8 @@ mod tests {
             )
             .expect_err("consensus mode mismatch should be detected");
             assert!(
-                format!("{err:?}").contains("consensus_mode"),
-                "error should mention consensus_mode mismatch: {err:?}"
+                format!("{err:?}").contains("consensus_handshake_meta"),
+                "error should mention consensus handshake mismatch: {err:?}"
             );
 
             Ok(())
@@ -5124,7 +5431,7 @@ mod tests {
 
     mod config_integration {
         use assertables::assert_contains;
-        use iroha_crypto::{ExposedPrivateKey, KeyPair};
+        use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
         use iroha_primitives::addr::socket_addr;
         use path_absolutize::Absolutize as _;
 
@@ -5132,7 +5439,9 @@ mod tests {
         use super::*;
 
         fn config_factory(genesis_public_key: &PublicKey) -> toml::Table {
-            let (pubkey, privkey) = KeyPair::random().into_parts();
+            let consensus = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let (pubkey, privkey) = consensus.into_parts();
+            let streaming_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
 
             let mut table = toml::Table::new();
             iroha_config::base::toml::Writer::new(&mut table)
@@ -5155,7 +5464,15 @@ mod tests {
                 )
                 .write(["confidential", "enabled"], true)
                 .write(["confidential", "assume_valid"], false)
-                .write(["genesis", "public_key"], genesis_public_key.to_string());
+                .write(["genesis", "public_key"], genesis_public_key.to_string())
+                .write(
+                    ["streaming", "identity_public_key"],
+                    streaming_keys.public_key().to_string(),
+                )
+                .write(
+                    ["streaming", "identity_private_key"],
+                    ExposedPrivateKey(streaming_keys.private_key().clone()).to_string(),
+                );
             table
         }
 
@@ -5176,8 +5493,7 @@ mod tests {
                         },
                         "instructions": [],
                         "ivm_triggers": [],
-                        "topology": [],
-                        "topology_pop": []
+                        "topology": []
                     }
                 ]
             });
@@ -5245,8 +5561,7 @@ mod tests {
                         },
                         "instructions": [],
                         "ivm_triggers": [],
-                        "topology": [],
-                        "topology_pop": []
+                        "topology": []
                     }
                 ]
             });
@@ -5401,6 +5716,14 @@ mod tests {
                 iroha_config::base::toml::Writer::new(table)
                     .write(["compute", "enabled"], true)
                     .write(
+                        ["compute", "resource_profiles", "cpu-balanced", "max_cycles"],
+                        10_000_000_i64,
+                    )
+                    .write(
+                        ["compute", "resource_profiles", "cpu-balanced", "max_memory_bytes"],
+                        256_i64 * 1024 * 1024,
+                    )
+                    .write(
                         [
                             "compute",
                             "resource_profiles",
@@ -5409,6 +5732,23 @@ mod tests {
                         ],
                         8_i64 * 1024 * 1024,
                     )
+                    .write(
+                        ["compute", "resource_profiles", "cpu-balanced", "max_io_bytes"],
+                        24_i64 * 1024 * 1024,
+                    )
+                    .write(
+                        ["compute", "resource_profiles", "cpu-balanced", "max_egress_bytes"],
+                        12_i64 * 1024 * 1024,
+                    )
+                    .write(
+                        ["compute", "resource_profiles", "cpu-balanced", "allow_gpu_hints"],
+                        true,
+                    )
+                    .write(
+                        ["compute", "resource_profiles", "cpu-balanced", "allow_wasi"],
+                        true,
+                    )
+                    .write(["compute", "default_resource_profile"], "cpu-balanced")
                     .write(["ivm", "memory_budget_profile"], "cpu-balanced")
                     .write(["concurrency", "guest_stack_bytes"], 4_i64 * 1024 * 1024);
             })?;
@@ -5451,6 +5791,46 @@ mod tests {
             assert_contains!(
                 format!("{report:#}"),
                 "validator nodes must enable confidential verification"
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn telemetry_redaction_required_for_release_profiles() -> eyre::Result<()> {
+            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
+                iroha_config::base::toml::Writer::new(table)
+                    .write(["telemetry_redaction", "mode"], "disabled");
+            })?;
+
+            let mut emitter = Emitter::new();
+            validate_config_runtime(&mut emitter, &config);
+            let report = emitter.into_result().expect_err("expected validation errors");
+            assert_contains!(
+                format!("{report:#}"),
+                "Telemetry redaction must be enabled for this profile"
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn telemetry_redaction_allowlist_requires_policy_entry() -> eyre::Result<()> {
+            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
+                iroha_config::base::toml::Writer::new(table).write(
+                    ["telemetry_redaction", "allowlist"],
+                    toml::Value::Array(vec![toml::Value::String(
+                        "session.token".to_string(),
+                    )]),
+                );
+            })?;
+
+            let mut emitter = Emitter::new();
+            validate_config_runtime(&mut emitter, &config);
+            let report = emitter.into_result().expect_err("expected validation errors");
+            assert_contains!(
+                format!("{report:#}"),
+                "Telemetry redaction allow-list entry `session.token` is not approved"
             );
 
             Ok(())

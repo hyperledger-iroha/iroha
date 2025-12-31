@@ -227,8 +227,8 @@ Backpressure & Telemetry
 - See `docs/source/telemetry.md` and the README “Consensus metrics (Sumeragi)” section for metric names and example PromQL.
 
 Consensus Parameter Advert (pinning)
-- At startup, nodes broadcast a compact `ConsensusParams` advert carrying `(collectors_k, redundant_send_r)`.
-- Receivers verify the advert against their effective parameters. Receivers now increment the Prometheus counter `sumeragi_membership_mismatch_total{peer,height,view}` when a mismatch occurs and mark the offending peer in `sumeragi_membership_mismatch_active{peer}` so operators can wire alerts directly. Any mismatch is logged and flagged locally; consensus semantics are unchanged. Effective values are taken from on‑chain `SumeragiParameters` when present (preferred over local config).
+- At startup and when collector plans refresh, nodes broadcast a compact `ConsensusParams` advert carrying `(collectors_k, redundant_send_r)` plus the current membership snapshot `{ height, view, epoch, view_hash }`.
+- Receivers verify the advert against their effective parameters and membership view hash. Mismatches increment the Prometheus counter `sumeragi_membership_mismatch_total{peer,height,view}` and mark the offending peer in `sumeragi_membership_mismatch_active{peer}` so operators can wire alerts directly. Any mismatch is logged and flagged locally; consensus semantics are unchanged. Effective values are taken from on‑chain `SumeragiParameters` when present (preferred over local config).
 
 Configuration (example)
 ```
@@ -246,6 +246,8 @@ da_enabled = true                  # enable DA + RBC; availability evidence trac
 kura_store_retry_interval_ms = 1000 # retry failed kura persistence with exponential backoff
 kura_store_retry_max_attempts = 5   # abort and requeue the block payload after repeated failures
 missing_block_signer_fallback_attempts = 1 # fetch from QC signers this many times, then try full topology
+membership_mismatch_alert_threshold = 1   # consecutive mismatches before alert/fail-closed
+membership_mismatch_fail_closed = false   # drop consensus messages from mismatched peers
 ```
 
 Notes
@@ -687,10 +689,12 @@ and `/v1/sumeragi/telemetry`’s `vrf` section for dashboards.
   Highest/Locked QC telemetry while confirming that late reveals do not mutate the
   active PRF seed (`prf.epoch_seed`).
 - The status payload now includes a deterministic roster hash under
-  `membership { height, view, epoch, view_hash }`. Compare this block across peers—
-  either via `/v1/sumeragi/status` or the Norito payload—to confirm validator
-  alignment before mismatch counters fire. Hashes are derived from `(chain_id,
-  height, view, epoch, ordered_peer_ids)` using Blake2b-256.
+  `membership { height, view, epoch, view_hash }` and the last mismatch context under
+  `membership_mismatch { active_peers, last_peer, last_height, last_view, last_epoch,
+  last_local_hash, last_remote_hash, last_timestamp_ms }`. Compare this block across peers—
+  either via `/v1/sumeragi/status` or the Norito payload—to confirm validator alignment
+  and identify which peer diverged. Hashes are derived from `(chain_id, height, view,
+  epoch, ordered_peer_ids)` using Blake2b-256.
 - Late reveals: validators may submit reveals after the configured window (`vrf_reveal_deadline_offset`) to clear penalties. The actor verifies the reveal against the stored commitment, records it under `late_reveals`, and increments `sumeragi_vrf_reveals_late_total`. Late submissions never remix the epoch seed—only on-time reveals participate in the Blake2b accumulator—but they do remove the validator from the `committed_no_reveal` set. Late entries are persisted in `world.vrf_epochs[*].late_reveals` so operators can audit the height at which the reveal landed.
 
 #### VRF alert thresholds

@@ -55,11 +55,12 @@ pub mod isi {
         isi::{
             bridge, consensus_keys, endorsement,
             error::{InstructionExecutionError, InvalidParameterError, MathError, RepetitionError},
-            governance as gov, smart_contract_code as scode, verifying_keys,
+            governance as gov, nexus, smart_contract_code as scode, verifying_keys,
         },
         name::{self, Name},
         nexus::{
             DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementRecord,
+            LaneRelayEmergencyValidatorSet,
         },
         parameter::Parameter,
         prelude::*,
@@ -8155,6 +8156,103 @@ pub mod isi {
         }
     }
 
+    impl Execute for nexus::SetLaneRelayEmergencyValidators {
+        #[metrics(+"set_lane_relay_emergency_validators")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !has_permission(&state_transaction.world, authority, "CanManagePeers") {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: CanManagePeers".into(),
+                ));
+            }
+            if !state_transaction.nexus.enabled {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "lane relay emergency override requires nexus.enabled=true".into(),
+                ));
+            }
+            if !state_transaction.nexus.lane_relay_emergency.enabled {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "lane relay emergency override requires nexus.lane_relay_emergency.enabled=true"
+                        .into(),
+                ));
+            }
+
+            let required_threshold = state_transaction
+                .nexus
+                .lane_relay_emergency
+                .multisig_threshold;
+            let required_members = state_transaction
+                .nexus
+                .lane_relay_emergency
+                .multisig_members;
+            let Some(policy) = authority.controller().multisig_policy() else {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "lane relay emergency override requires multisig authority (threshold >= {required_threshold}, members >= {required_members})"
+                    )
+                    .into(),
+                ));
+            };
+            if policy.threshold() < required_threshold.get()
+                || policy.members().len() < usize::from(required_members.get())
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "lane relay emergency override requires multisig authority (threshold >= {required_threshold}, members >= {required_members})"
+                    )
+                    .into(),
+                ));
+            }
+
+            let dataspace_id = *self.dataspace_id();
+            if !state_transaction
+                .nexus
+                .dataspace_catalog
+                .entries()
+                .iter()
+                .any(|entry| entry.id == dataspace_id)
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "unknown dataspace id {}",
+                        dataspace_id.as_u64()
+                    )),
+                ));
+            }
+
+            let mut validators = self.validators().clone();
+            validators.sort();
+            validators.dedup();
+            for validator in &validators {
+                state_transaction.world.account(validator)?;
+            }
+
+            if validators.is_empty() {
+                state_transaction
+                    .world
+                    .lane_relay_emergency_validators
+                    .remove(dataspace_id);
+                return Ok(());
+            }
+
+            state_transaction
+                .world
+                .lane_relay_emergency_validators
+                .insert(
+                    dataspace_id,
+                    LaneRelayEmergencyValidatorSet {
+                        validators,
+                        expires_at_height: *self.expires_at_height(),
+                        metadata: self.metadata().clone(),
+                    },
+                );
+            Ok(())
+        }
+    }
+
     impl Execute for Unregister<Domain> {
         #[metrics("unregister_domain")]
         fn execute(
@@ -8622,11 +8720,16 @@ pub mod isi {
     #[cfg(test)]
     mod tests {
         use core::num::NonZeroU64;
-        use std::{collections::BTreeMap, str::FromStr, sync::Arc};
+        use std::{
+            collections::{BTreeMap, BTreeSet},
+            str::FromStr,
+            sync::Arc,
+        };
 
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
         #[allow(unused_imports)]
         use iroha_data_model::{
+            account::{AccountId, MultisigMember, MultisigPolicy},
             bridge::BridgeReceipt,
             confidential::ConfidentialStatus,
             consensus::{
@@ -8634,15 +8737,17 @@ pub mod isi {
                 HsmBinding,
             },
             events::data::{DataEvent, prelude::BridgeEvent},
-            isi::{Grant, consensus_keys, verifying_keys},
+            isi::{Grant, consensus_keys, nexus::SetLaneRelayEmergencyValidators, verifying_keys},
+            metadata::Metadata,
             nexus::{
-                DataSpaceId, DomainEndorsement, DomainEndorsementScope, DomainEndorsementSignature,
-                LaneId,
+                DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
+                DomainEndorsementScope, DomainEndorsementSignature, LaneId,
             },
             permission::Permission,
             proof::{
                 ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
             },
+            query::error::FindError,
             zk::BackendTag,
         };
         use iroha_data_model::{
@@ -8654,7 +8759,7 @@ pub mod isi {
         use iroha_primitives::json::Json;
         #[allow(unused_imports)]
         use iroha_schema::Ident;
-        use iroha_test_samples::ALICE_ID;
+        use iroha_test_samples::{ALICE_ID, gen_account_in};
 
         use super::*;
         use crate::{
@@ -8690,6 +8795,43 @@ pub mod isi {
             Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register ALICE account");
+        }
+
+        fn configure_global_dataspace(stx: &mut StateTransaction<'_, '_>) {
+            stx.nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog");
+        }
+
+        fn grant_manage_peers_permission(stx: &mut StateTransaction<'_, '_>, account: &AccountId) {
+            let permission = Permission::new("CanManagePeers".into(), Json::new(()));
+            stx.world
+                .account_permissions
+                .insert(account.clone(), BTreeSet::from([permission]));
+        }
+
+        fn register_multisig_authority(
+            stx: &mut StateTransaction<'_, '_>,
+            threshold: u16,
+            member_count: usize,
+        ) -> AccountId {
+            let mut members = Vec::with_capacity(member_count);
+            for _ in 0..member_count {
+                let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+                let member = MultisigMember::new(kp.public_key().clone(), 1).expect("member");
+                members.push(member);
+            }
+            let policy = MultisigPolicy::new(threshold, members).expect("multisig policy");
+            let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
+            let multisig_id = AccountId::new_multisig(domain_id, policy);
+            Register::account(Account::new(multisig_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register multisig authority");
+            multisig_id
         }
 
         #[test]
@@ -8777,6 +8919,330 @@ pub mod isi {
                 }
                 other => panic!("unexpected event: {other:?}"),
             }
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_requires_permission() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_global_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+
+            let (validator, _) = gen_account_in("wonderland");
+            Register::account(Account::new(validator.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register validator");
+
+            let err = SetLaneRelayEmergencyValidators {
+                dataspace_id: DataSpaceId::GLOBAL,
+                validators: vec![validator],
+                expires_at_height: None,
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("permission should be required");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::InvariantViolation(msg)
+                    if msg.as_ref() == "not permitted: CanManagePeers"
+            ));
+            assert!(
+                stx.world
+                    .lane_relay_emergency_validators
+                    .get(&DataSpaceId::GLOBAL)
+                    .is_none(),
+                "override must not be stored without permission"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_when_nexus_disabled() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            configure_global_dataspace(&mut stx);
+            stx.nexus.lane_relay_emergency.enabled = true;
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_peers_permission(&mut stx, &authority);
+            stx.nexus.enabled = false;
+
+            let (validator, _) = gen_account_in("wonderland");
+            Register::account(Account::new(validator.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register validator");
+
+            let err = SetLaneRelayEmergencyValidators {
+                dataspace_id: DataSpaceId::GLOBAL,
+                validators: vec![validator],
+                expires_at_height: None,
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("nexus disabled should be rejected");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::InvariantViolation(msg)
+                    if msg.as_ref() == "lane relay emergency override requires nexus.enabled=true"
+            ));
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_when_disabled() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            configure_global_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_peers_permission(&mut stx, &authority);
+
+            let (validator, _) = gen_account_in("wonderland");
+            Register::account(Account::new(validator.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register validator");
+
+            let err = SetLaneRelayEmergencyValidators {
+                dataspace_id: DataSpaceId::GLOBAL,
+                validators: vec![validator],
+                expires_at_height: None,
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("disabled override should be rejected");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::InvariantViolation(msg)
+                    if msg.as_ref()
+                        == "lane relay emergency override requires nexus.lane_relay_emergency.enabled=true"
+            ));
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_requires_multisig_authority() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_global_dataspace(&mut stx);
+            grant_manage_peers_permission(&mut stx, &ALICE_ID);
+
+            let (validator, _) = gen_account_in("wonderland");
+            Register::account(Account::new(validator.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register validator");
+
+            let err = SetLaneRelayEmergencyValidators {
+                dataspace_id: DataSpaceId::GLOBAL,
+                validators: vec![validator],
+                expires_at_height: None,
+                metadata: Metadata::default(),
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("single-signature authority should be rejected");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::InvariantViolation(msg)
+                    if msg
+                        .as_ref()
+                        .starts_with("lane relay emergency override requires multisig authority")
+            ));
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_unknown_dataspace() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_global_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_peers_permission(&mut stx, &authority);
+
+            let (validator, _) = gen_account_in("wonderland");
+            Register::account(Account::new(validator.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register validator");
+
+            let unknown = DataSpaceId::new(42);
+            let err = SetLaneRelayEmergencyValidators {
+                dataspace_id: unknown,
+                validators: vec![validator],
+                expires_at_height: None,
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("unknown dataspace should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("unknown dataspace id"),
+                "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_unknown_validator() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_global_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_peers_permission(&mut stx, &authority);
+
+            let (missing, _) = gen_account_in("wonderland");
+            let err = SetLaneRelayEmergencyValidators {
+                dataspace_id: DataSpaceId::GLOBAL,
+                validators: vec![missing.clone()],
+                expires_at_height: None,
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("unknown validator should be rejected");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::Find(FindError::Account(id)) if id == missing
+            ));
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_inserts_and_deduplicates() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_global_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_peers_permission(&mut stx, &authority);
+
+            let (validator_a, _) = gen_account_in("wonderland");
+            let (validator_b, _) = gen_account_in("wonderland");
+            Register::account(Account::new(validator_a.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register validator_a");
+            Register::account(Account::new(validator_b.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register validator_b");
+
+            SetLaneRelayEmergencyValidators {
+                dataspace_id: DataSpaceId::GLOBAL,
+                validators: vec![
+                    validator_b.clone(),
+                    validator_a.clone(),
+                    validator_b.clone(),
+                ],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect("set emergency validators");
+
+            let record = stx
+                .world
+                .lane_relay_emergency_validators
+                .get(&DataSpaceId::GLOBAL)
+                .expect("override stored");
+            let mut expected = vec![validator_a, validator_b];
+            expected.sort();
+            expected.dedup();
+            assert_eq!(record.validators, expected);
+            assert_eq!(record.expires_at_height, Some(12));
+            assert!(record.metadata.is_empty());
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_clears_on_empty_list() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_global_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_peers_permission(&mut stx, &authority);
+
+            let (validator, _) = gen_account_in("wonderland");
+            Register::account(Account::new(validator.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register validator");
+
+            SetLaneRelayEmergencyValidators {
+                dataspace_id: DataSpaceId::GLOBAL,
+                validators: vec![validator.clone()],
+                expires_at_height: None,
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect("set emergency validators");
+            assert!(
+                stx.world
+                    .lane_relay_emergency_validators
+                    .get(&DataSpaceId::GLOBAL)
+                    .is_some(),
+                "override should be stored before clearing"
+            );
+
+            SetLaneRelayEmergencyValidators {
+                dataspace_id: DataSpaceId::GLOBAL,
+                validators: Vec::new(),
+                expires_at_height: None,
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect("clear emergency validators");
+            assert!(
+                stx.world
+                    .lane_relay_emergency_validators
+                    .get(&DataSpaceId::GLOBAL)
+                    .is_none(),
+                "override should be removed when validators list is empty"
+            );
         }
 
         fn smart_contract_instruction_error_message(err: InstructionExecutionError) -> String {

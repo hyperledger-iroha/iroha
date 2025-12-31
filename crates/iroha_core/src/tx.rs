@@ -31,7 +31,7 @@ use iroha_data_model::{
 };
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
-use iroha_primitives::{json::Json, time::TimeSource};
+use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 
 use crate::{
@@ -317,6 +317,11 @@ pub enum AcceptTransactionFail {
         /// Millisecond Unix timestamp observed during admission.
         now_ms: u128,
     },
+    /// Network time service is unhealthy: {reason}
+    NetworkTimeUnhealthy {
+        /// Health snapshot summary for diagnostics.
+        reason: String,
+    },
     /// The genesis account can only sign transactions in the genesis block
     UnexpectedGenesisAccountSignature,
     /// Chain id doesn't correspond to the id of current blockchain: {0}
@@ -373,6 +378,107 @@ fn heartbeat_marker_value(tx: &SignedTransaction) -> Result<Option<bool>, Transa
     Err(TransactionLimitError {
         reason: "Heartbeat metadata `sumeragi_heartbeat` must be a boolean".into(),
     })
+}
+
+fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
+    let any = instruction.as_any();
+    if let Some(register) = any.downcast_ref::<iroha_data_model::isi::register::RegisterBox>() {
+        if let iroha_data_model::isi::register::RegisterBox::Trigger(register) = register {
+            let trigger = &register.object;
+            return is_time_sensitive_executable(trigger.action().executable());
+        }
+    }
+    if let Some(register) = any.downcast_ref::<
+        iroha_data_model::isi::register::Register<iroha_data_model::trigger::Trigger>,
+    >() {
+        let trigger = &register.object;
+        return is_time_sensitive_executable(trigger.action().executable());
+    }
+    any.is::<iroha_data_model::isi::offline::RegisterOfflineAllowance>()
+        || any.is::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>()
+        || any.is::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>()
+        || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
+        || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
+        || any.is::<iroha_data_model::isi::social::SendToTwitter>()
+        || any.is::<iroha_data_model::isi::repo::RepoInstructionBox>()
+        || any.is::<iroha_data_model::isi::settlement::SettlementInstructionBox>()
+        || any.is::<iroha_data_model::isi::staking::ExitPublicLaneValidator>()
+        || any.is::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>()
+        || any.is::<iroha_data_model::isi::staking::FinalizePublicLaneUnbond>()
+        || any.is::<iroha_data_model::isi::ExecuteTrigger>()
+        || any.is::<iroha_data_model::isi::CustomInstruction>()
+        || any.is::<iroha_data_model::isi::governance::ProposeDeployContract>()
+        || any.is::<iroha_data_model::isi::governance::CastZkBallot>()
+        || any.is::<iroha_data_model::isi::governance::CastPlainBallot>()
+        || any.is::<iroha_data_model::isi::governance::ApproveGovernanceProposal>()
+        || any.is::<iroha_data_model::isi::governance::EnactReferendum>()
+        || any.is::<iroha_data_model::isi::governance::FinalizeReferendum>()
+}
+
+fn is_time_sensitive_executable(executable: &Executable) -> bool {
+    match executable {
+        Executable::Instructions(instructions) => instructions
+            .iter()
+            .any(|instruction| is_time_sensitive_instruction(instruction)),
+        Executable::Ivm(_) => true,
+    }
+}
+
+fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
+    format!(
+        "fallback={} samples_used={} peers_seen={} offset_ms={} confidence_ms={} min_samples_ok={} offset_ok={} confidence_ok={}",
+        status.fallback,
+        status.sample_count,
+        status.peer_count,
+        status.offset_ms,
+        status.confidence_ms,
+        status.health.min_samples_ok,
+        status.health.offset_ok,
+        status.health.confidence_ok
+    )
+}
+
+fn enforce_time_sensitive_with_nts(
+    tx: &SignedTransaction,
+    status: crate::time::NetworkTimeStatus,
+    mode: iroha_config::parameters::actual::NtsEnforcementMode,
+) -> Result<(), AcceptTransactionFail> {
+    if status.health.healthy {
+        return Ok(());
+    }
+    match mode {
+        iroha_config::parameters::actual::NtsEnforcementMode::Warn => {
+            warn!(
+                tx_hash = %tx.hash(),
+                fallback = status.fallback,
+                sample_count = status.sample_count,
+                peer_count = status.peer_count,
+                offset_ms = status.offset_ms,
+                confidence_ms = status.confidence_ms,
+                min_samples_ok = status.health.min_samples_ok,
+                offset_ok = status.health.offset_ok,
+                confidence_ok = status.health.confidence_ok,
+                "NTS unhealthy during time-sensitive admission; allowing transaction"
+            );
+            Ok(())
+        }
+        iroha_config::parameters::actual::NtsEnforcementMode::Reject => {
+            Err(AcceptTransactionFail::NetworkTimeUnhealthy {
+                reason: format_nts_health_reason(&status),
+            })
+        }
+    }
+}
+
+fn enforce_nts_health_for_time_sensitive(
+    tx: &SignedTransaction,
+) -> Result<(), AcceptTransactionFail> {
+    if !is_time_sensitive_executable(tx.instructions()) {
+        return Ok(());
+    }
+    let status = crate::time::now();
+    let mode = crate::time::enforcement_mode();
+    enforce_time_sensitive_with_nts(tx, status, mode)
 }
 
 /// Returns `true` if the transaction is a Sumeragi heartbeat (marker, empty instructions, no attachments).
@@ -574,7 +680,9 @@ impl<'tx> AcceptedTransaction<'tx> {
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<(), AcceptTransactionFail> {
         let now = current_unix_time();
-        Self::validate_with_now(tx, expected_chain_id, max_clock_drift, limits, crypto, now)
+        Self::validate_with_now(tx, expected_chain_id, max_clock_drift, limits, crypto, now)?;
+        enforce_nts_health_for_time_sensitive(tx)?;
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1104,8 +1212,9 @@ impl AcceptedTransaction<'static> {
         time_source: &TimeSource,
     ) -> Result<Self, AcceptTransactionFail> {
         let now = time_source.get_unix_time();
-        Self::validate_with_now(&tx, expected_chain_id, max_clock_drift, limits, crypto, now)
-            .map(|()| Self(Cow::Owned(tx)))
+        Self::validate_with_now(&tx, expected_chain_id, max_clock_drift, limits, crypto, now)?;
+        enforce_nts_health_for_time_sensitive(&tx)?;
+        Ok(Self(Cow::Owned(tx)))
     }
 }
 
@@ -2582,7 +2691,7 @@ pub mod tests {
             },
             trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
         },
-        isi::Log,
+        isi::{InstructionBox, Log},
         metadata::Metadata,
         name::Name,
         nexus::{DataSpaceCatalog, DataSpaceId as TestDataSpaceId, LaneId as TestLaneId},
@@ -2628,6 +2737,7 @@ pub mod tests {
                 id: TestDataSpaceId::new(7),
                 alias: "alpha".to_string(),
                 description: None,
+                fault_tolerance: 1,
             },
         ])
         .expect("valid catalog");
@@ -3209,6 +3319,259 @@ pub mod tests {
             err,
             AcceptTransactionFail::TransactionExpired { .. }
         ));
+    }
+
+    #[test]
+    fn time_sensitive_instruction_detects_governance_and_non_sensitive() {
+        let (authority, _keypair) = gen_account_in("wonderland");
+        let (counterparty, _keypair) = gen_account_in("wonderland");
+        let ballot = iroha_data_model::isi::governance::CastPlainBallot {
+            referendum_id: "ref-1".into(),
+            owner: authority.clone(),
+            amount: 1,
+            duration_blocks: 1,
+            direction: 0,
+        };
+        let ballot_box = InstructionBox::from(ballot);
+        assert!(super::is_time_sensitive_instruction(&ballot_box));
+
+        let agreement_id: iroha_data_model::repo::RepoAgreementId =
+            "repo-1".parse().expect("repo id");
+        let cash_leg = iroha_data_model::repo::RepoCashLeg {
+            asset_definition_id: "usd#wonderland".parse().expect("asset id"),
+            quantity: 1u32.into(),
+        };
+        let collateral_leg = iroha_data_model::repo::RepoCollateralLeg::new(
+            "bond#wonderland".parse().expect("asset id"),
+            1u32.into(),
+        );
+        let governance = iroha_data_model::repo::RepoGovernance::with_defaults(100, 3600);
+        let repo = iroha_data_model::isi::repo::RepoIsi::new(
+            agreement_id.clone(),
+            counterparty.clone(),
+            authority.clone(),
+            None,
+            cash_leg.clone(),
+            collateral_leg.clone(),
+            250,
+            1_700_000_000_000,
+            governance,
+        );
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            repo
+        )));
+        let reverse = iroha_data_model::isi::repo::ReverseRepoIsi::new(
+            agreement_id.clone(),
+            counterparty.clone(),
+            authority.clone(),
+            cash_leg.clone(),
+            collateral_leg.clone(),
+            1_700_000_100_000,
+        );
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            reverse
+        )));
+        let margin_call = iroha_data_model::isi::repo::RepoMarginCallIsi::new(agreement_id.clone());
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            margin_call
+        )));
+
+        let exit = iroha_data_model::isi::staking::ExitPublicLaneValidator {
+            lane_id: TestLaneId::SINGLE,
+            validator: counterparty.clone(),
+            release_at_ms: 1_700_000_000_000,
+        };
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            exit
+        )));
+        let request_id = iroha_crypto::Hash::new("unbond");
+        let unbond = iroha_data_model::isi::staking::SchedulePublicLaneUnbond {
+            lane_id: TestLaneId::SINGLE,
+            validator: counterparty.clone(),
+            staker: counterparty.clone(),
+            request_id,
+            amount: 1u32.into(),
+            release_at_ms: 1_700_000_000_000,
+        };
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            unbond
+        )));
+        let finalize = iroha_data_model::isi::staking::FinalizePublicLaneUnbond {
+            lane_id: TestLaneId::SINGLE,
+            validator: counterparty.clone(),
+            staker: counterparty.clone(),
+            request_id,
+        };
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            finalize
+        )));
+
+        let settlement_id: iroha_data_model::isi::settlement::SettlementId =
+            "settlement-1".parse().expect("settlement id");
+        let dvp = iroha_data_model::isi::settlement::DvpIsi::new(
+            settlement_id.clone(),
+            iroha_data_model::isi::settlement::SettlementLeg::new(
+                "bond#wonderland".parse().expect("asset id"),
+                1u32.into(),
+                counterparty.clone(),
+                authority.clone(),
+            ),
+            iroha_data_model::isi::settlement::SettlementLeg::new(
+                "usd#wonderland".parse().expect("asset id"),
+                1u32.into(),
+                authority.clone(),
+                counterparty.clone(),
+            ),
+            iroha_data_model::isi::settlement::SettlementPlan::default(),
+        );
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            dvp
+        )));
+        let pvp = iroha_data_model::isi::settlement::PvpIsi::new(
+            settlement_id,
+            iroha_data_model::isi::settlement::SettlementLeg::new(
+                "eur#wonderland".parse().expect("asset id"),
+                1u32.into(),
+                counterparty.clone(),
+                authority.clone(),
+            ),
+            iroha_data_model::isi::settlement::SettlementLeg::new(
+                "usd#wonderland".parse().expect("asset id"),
+                1u32.into(),
+                authority.clone(),
+                counterparty.clone(),
+            ),
+            iroha_data_model::isi::settlement::SettlementPlan::default(),
+        );
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            pvp
+        )));
+
+        let trigger_id: iroha_data_model::trigger::TriggerId =
+            "nts-trigger".parse().expect("trigger id");
+        let execute_trigger = iroha_data_model::isi::ExecuteTrigger::new(trigger_id);
+        assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
+            execute_trigger
+        )));
+
+        let log_box = InstructionBox::from(Log::new(Level::INFO, "ok".into()));
+        assert!(!super::is_time_sensitive_instruction(&log_box));
+    }
+
+    #[test]
+    fn time_sensitive_instruction_detects_trigger_registration() {
+        let (authority, _keypair) = gen_account_in("wonderland");
+        let trigger_id: iroha_data_model::trigger::TriggerId =
+            "nts-trigger-reg".parse().expect("trigger id");
+        let exec_trigger_id: iroha_data_model::trigger::TriggerId =
+            "nts-trigger-exec".parse().expect("trigger id");
+        let action = iroha_data_model::trigger::action::Action::new(
+            vec![InstructionBox::from(
+                iroha_data_model::isi::ExecuteTrigger::new(exec_trigger_id),
+            )],
+            iroha_data_model::trigger::action::Repeats::Indefinitely,
+            authority.clone(),
+            iroha_data_model::events::EventFilterBox::ExecuteTrigger(
+                iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new(),
+            ),
+        );
+        let trigger = iroha_data_model::trigger::Trigger::new(trigger_id, action);
+        let register = iroha_data_model::isi::register::Register::trigger(trigger);
+        let boxed = InstructionBox::from(register);
+        assert!(super::is_time_sensitive_instruction(&boxed));
+    }
+
+    #[test]
+    fn time_sensitive_instruction_marks_custom_instruction() {
+        let custom = iroha_data_model::isi::CustomInstruction::new(Json::new("payload"));
+        let boxed = InstructionBox::from(custom);
+        assert!(super::is_time_sensitive_instruction(&boxed));
+    }
+
+    #[test]
+    fn time_sensitive_executable_detects_sensitive_and_safe() {
+        let (authority, _keypair) = gen_account_in("wonderland");
+        let ballot = iroha_data_model::isi::governance::CastPlainBallot {
+            referendum_id: "ref-2".into(),
+            owner: authority,
+            amount: 1,
+            duration_blocks: 1,
+            direction: 0,
+        };
+        let sensitive = Executable::from(vec![InstructionBox::from(ballot)]);
+        assert!(super::is_time_sensitive_executable(&sensitive));
+
+        let safe = Executable::from(vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "ok".into(),
+        ))]);
+        assert!(!super::is_time_sensitive_executable(&safe));
+
+        let ivm = Executable::Ivm(
+            iroha_data_model::transaction::executable::IvmBytecode::from_compiled(vec![0xCA]),
+        );
+        assert!(super::is_time_sensitive_executable(&ivm));
+    }
+
+    #[test]
+    fn nts_enforcement_rejects_time_sensitive_when_unhealthy() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let chain: ChainId = "nts-reject".parse().expect("chain id");
+        let ballot = iroha_data_model::isi::governance::CastPlainBallot {
+            referendum_id: "ref-3".into(),
+            owner: authority.clone(),
+            amount: 1,
+            duration_blocks: 1,
+            direction: 0,
+        };
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions([ballot])
+            .sign(keypair.private_key());
+        let status = crate::time::NetworkTimeStatus {
+            now: std::time::SystemTime::UNIX_EPOCH,
+            offset_ms: 0,
+            confidence_ms: 0,
+            sample_count: 0,
+            peer_count: 0,
+            fallback: true,
+            health: crate::time::NtsHealth {
+                min_samples_ok: false,
+                offset_ok: true,
+                confidence_ok: true,
+                healthy: false,
+            },
+        };
+        let err = super::enforce_time_sensitive_with_nts(
+            &tx,
+            status,
+            iroha_config::parameters::actual::NtsEnforcementMode::Reject,
+        )
+        .expect_err("unhealthy NTS should reject in reject mode");
+        match err {
+            AcceptTransactionFail::NetworkTimeUnhealthy { reason } => {
+                assert!(reason.contains("fallback=true"));
+                assert!(reason.contains("samples_used=0"));
+            }
+            other => panic!("expected NetworkTimeUnhealthy, got {other:?}"),
+        }
+        assert!(
+            super::enforce_time_sensitive_with_nts(
+                &tx,
+                status,
+                iroha_config::parameters::actual::NtsEnforcementMode::Warn,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn nts_enforcement_skips_non_sensitive_transactions() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let chain: ChainId = "nts-skip".parse().expect("chain id");
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "ok".into())])
+            .sign(keypair.private_key());
+        assert!(super::enforce_nts_health_for_time_sensitive(&tx).is_ok());
     }
 
     #[test]

@@ -4,15 +4,46 @@
 lang: ja
 direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a91fc8841580a836c80129942df7f79f5bc5dd5f6a72dccf1394b740d02536a5
 source_last_modified: "2025-11-23T15:30:33.687233+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2025-12-30
 ---
 
-# 翻訳作業中
+---
+slug: /norito/examples/call-transfer-asset
+title: Kotodama からホスト転送を呼び出す
+description: Kotodama のエントリポイントがホストの `transfer_asset` 命令を、インラインのメタデータ検証付きで呼び出せることを示します。
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+Kotodama のエントリポイントがホストの `transfer_asset` 命令を、インラインのメタデータ検証付きで呼び出せることを示します。
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+## 台帳ウォークスルー
+
+- コントラクトの権限者（例: `contract@wonderland`）に転送対象の資産を用意し、権限者に `CanTransfer` ロールまたは同等の権限を付与します。
+- `call_transfer_asset` エントリポイントを呼び出して、コントラクトアカウントから `bob@wonderland` に 5 単位を転送します。オンチェーン自動化がホスト呼び出しをラップする方法を反映しています。
+- `FindAccountAssets` または `iroha_cli assets list --account bob@wonderland` で残高を確認し、イベントを調べてメタデータガードが転送コンテキストを記録したことを確かめます。
+
+## 関連 SDK ガイド
+
+- [Rust SDK クイックスタート](/sdks/rust)
+- [Python SDK クイックスタート](/sdks/python)
+- [JavaScript SDK クイックスタート](/sdks/javascript)
+
+[Kotodama ソースをダウンロード](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
+      account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

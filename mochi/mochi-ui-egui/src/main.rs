@@ -55,6 +55,7 @@ use iroha_data_model::{
         DataSpaceId, LaneId, LaneLifecyclePlan, LaneMetadata, LaneRelayEnvelope,
         LaneStorageProfile, LaneVisibility,
     },
+    parameter::system::SumeragiConsensusMode,
     prelude::{AccountId, Name, Numeric},
     role::RoleId,
     transaction::{SignedTransaction, TransactionBuilder},
@@ -123,7 +124,7 @@ static CLI_OVERRIDES: LazyLock<Mutex<CliOverrides>> =
 #[derive(Debug, Default, Clone)]
 struct CliOverrides {
     data_root: Option<PathBuf>,
-    profile: Option<ProfilePreset>,
+    profile: Option<NetworkProfile>,
     config_path: Option<PathBuf>,
     torii_start: Option<u16>,
     p2p_start: Option<u16>,
@@ -140,13 +141,23 @@ struct CliOverrides {
     sumeragi_da_enabled: Option<bool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedProfileOverride {
+    profile: NetworkProfile,
+    genesis_profile: Option<GenesisProfile>,
+}
+
 impl CliOverrides {
     fn apply_to(&self, mut builder: SupervisorBuilder) -> SupervisorBuilder {
         if let Some(root) = &self.data_root {
             builder = builder.data_root(root.clone());
         }
-        if let Some(profile) = self.profile {
-            builder = builder.profile_preset(profile);
+        if let Some(profile) = self.profile.as_ref() {
+            if let Some(preset) = profile.preset {
+                builder = builder.profile_preset(preset);
+            } else {
+                builder = builder.set_profile(profile.clone());
+            }
         }
         if let Some(port) = self.torii_start {
             builder = builder.torii_base_port(port);
@@ -283,7 +294,8 @@ where
             }
             "--profile" => {
                 let value = next_value_string(&mut iter, "--profile")?;
-                overrides.profile = Some(parse_profile_flag(&value)?);
+                let parsed = parse_profile_override(&value)?;
+                apply_profile_override(&mut overrides, parsed, "--profile")?;
             }
             "--config" => {
                 let value = next_value(&mut iter, "--config")?;
@@ -309,7 +321,15 @@ where
             }
             "--genesis-profile" => {
                 let value = next_value_string(&mut iter, "--genesis-profile")?;
-                overrides.genesis_profile = Some(parse_genesis_profile_flag(&value)?);
+                let profile = parse_genesis_profile_flag(&value)?;
+                if let Some(existing) = overrides.genesis_profile {
+                    if existing != profile {
+                        return Err(CliParseError::new(format!(
+                            "--genesis-profile `{profile}` conflicts with `{existing}`"
+                        )));
+                    }
+                }
+                overrides.genesis_profile = Some(profile);
             }
             "--vrf-seed-hex" => {
                 let value = next_value_string(&mut iter, "--vrf-seed-hex")?;
@@ -418,7 +438,8 @@ fn parse_env_overrides() -> Result<CliOverrides, CliParseError> {
         overrides.data_root = Some(PathBuf::from(root));
     }
     if let Some(profile) = env_value("MOCHI_PROFILE")? {
-        overrides.profile = Some(parse_profile_flag(&profile)?);
+        let parsed = parse_profile_override(&profile)?;
+        apply_profile_override(&mut overrides, parsed, "MOCHI_PROFILE")?;
     }
     if let Some(chain_id) = env_value("MOCHI_CHAIN_ID")? {
         let trimmed = chain_id.trim();
@@ -430,7 +451,15 @@ fn parse_env_overrides() -> Result<CliOverrides, CliParseError> {
         overrides.chain_id = Some(trimmed.to_owned());
     }
     if let Some(profile) = env_value("MOCHI_GENESIS_PROFILE")? {
-        overrides.genesis_profile = Some(parse_genesis_profile_flag(&profile)?);
+        let parsed = parse_genesis_profile_flag(&profile)?;
+        if let Some(existing) = overrides.genesis_profile {
+            if existing != parsed {
+                return Err(CliParseError::new(format!(
+                    "MOCHI_GENESIS_PROFILE `{parsed}` conflicts with `{existing}`"
+                )));
+            }
+        }
+        overrides.genesis_profile = Some(parsed);
     }
     if let Some(seed) = env_value("MOCHI_VRF_SEED_HEX")? {
         overrides.vrf_seed_hex = Some(seed);
@@ -497,11 +526,132 @@ where
         .map_err(|_| CliParseError::new(format!("{flag} value must be valid UTF-8")))
 }
 
-fn parse_profile_flag(value: &str) -> Result<ProfilePreset, CliParseError> {
+fn apply_profile_override(
+    overrides: &mut CliOverrides,
+    parsed: ParsedProfileOverride,
+    source: &str,
+) -> Result<(), CliParseError> {
+    overrides.profile = Some(parsed.profile);
+    if let Some(genesis_profile) = parsed.genesis_profile {
+        if let Some(existing) = overrides.genesis_profile {
+            if existing != genesis_profile {
+                return Err(CliParseError::new(format!(
+                    "{source} genesis_profile `{genesis_profile}` conflicts with `{existing}`"
+                )));
+            }
+        }
+        overrides.genesis_profile = Some(genesis_profile);
+    }
+    Ok(())
+}
+
+fn parse_profile_override(value: &str) -> Result<ParsedProfileOverride, CliParseError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(CliParseError::new("profile value must not be empty"));
+    }
+    if let Some(preset) = parse_profile_preset(trimmed) {
+        return Ok(ParsedProfileOverride {
+            profile: NetworkProfile::from_preset(preset),
+            genesis_profile: None,
+        });
+    }
+    if !trimmed.starts_with('{') && !trimmed.contains('=') {
+        return Err(CliParseError::new(format!(
+            "invalid profile `{trimmed}`; expected preset slug or inline TOML table"
+        )));
+    }
+    let table_literal = if trimmed.starts_with('{') {
+        trimmed.to_owned()
+    } else {
+        format!("{{ {trimmed} }}")
+    };
+    let doc = format!("profile = {table_literal}");
+    let value: toml::Value = toml::from_str(&doc)
+        .map_err(|err| CliParseError::new(format!("invalid profile table `{trimmed}`: {err}")))?;
+    let root = value.as_table().ok_or_else(|| {
+        CliParseError::new(format!(
+            "invalid profile `{trimmed}`; expected an inline TOML table"
+        ))
+    })?;
+    let table = root
+        .get("profile")
+        .and_then(TomlValue::as_table)
+        .ok_or_else(|| {
+            CliParseError::new(format!(
+                "invalid profile `{trimmed}`; expected an inline TOML table"
+            ))
+        })?;
+    parse_profile_table_override(table)
+}
+
+fn parse_profile_table_override(table: &TomlTable) -> Result<ParsedProfileOverride, CliParseError> {
+    let peer_value = table
+        .get("peer_count")
+        .ok_or_else(|| CliParseError::new("profile override missing `peer_count`"))?;
+    let peer_count = parse_profile_peer_count(peer_value)?;
+    let consensus_value = table
+        .get("consensus_mode")
+        .ok_or_else(|| CliParseError::new("profile override missing `consensus_mode`"))?;
+    let consensus_mode = parse_profile_consensus_mode(consensus_value)?;
+    let genesis_profile = table
+        .get("genesis_profile")
+        .and_then(TomlValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.parse().map_err(|err: String| CliParseError::new(err)))
+        .transpose()?;
+
+    if genesis_profile.is_some() && consensus_mode != SumeragiConsensusMode::Npos {
+        return Err(CliParseError::new(
+            "profile override with genesis_profile requires consensus_mode = \"npos\"",
+        ));
+    }
+
+    let profile = NetworkProfile::custom(peer_count, consensus_mode)
+        .map_err(|err| CliParseError::new(format!("invalid profile override: {err}")))?;
+
+    Ok(ParsedProfileOverride {
+        profile,
+        genesis_profile,
+    })
+}
+
+fn parse_profile_peer_count(value: &TomlValue) -> Result<usize, CliParseError> {
+    let raw = value
+        .as_integer()
+        .ok_or_else(|| CliParseError::new("profile override peer_count must be an integer"))?;
+    if raw <= 0 {
+        return Err(CliParseError::new(
+            "profile override peer_count must be greater than zero",
+        ));
+    }
+    let unsigned = u64::try_from(raw).map_err(|_| {
+        CliParseError::new("profile override peer_count exceeds the supported range")
+    })?;
+    usize::try_from(unsigned)
+        .map_err(|_| CliParseError::new("profile override peer_count exceeds the supported range"))
+}
+
+fn parse_profile_consensus_mode(value: &TomlValue) -> Result<SumeragiConsensusMode, CliParseError> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| CliParseError::new("profile override consensus_mode must be a string"))?;
+    let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
+    match normalized.as_str() {
+        "permissioned" | "permissioned-sumeragi" => Ok(SumeragiConsensusMode::Permissioned),
+        "npos" => Ok(SumeragiConsensusMode::Npos),
+        other => Err(CliParseError::new(format!(
+            "profile override consensus_mode `{other}` is not supported"
+        ))),
+    }
+}
+
+fn parse_profile_preset(value: &str) -> Option<ProfilePreset> {
     match value {
-        "single-peer" | "single_peer" | "singlepeer" => Ok(ProfilePreset::SinglePeer),
-        "four-peer-bft" | "four_peer_bft" | "fourpeerbft" => Ok(ProfilePreset::FourPeerBft),
-        other => Err(CliParseError::new(format!("invalid profile `{other}`"))),
+        "single-peer" | "single_peer" | "singlepeer" => Some(ProfilePreset::SinglePeer),
+        "four-peer-bft" | "four_peer_bft" | "fourpeerbft" => Some(ProfilePreset::FourPeerBft),
+        _ => None,
     }
 }
 
@@ -657,8 +807,10 @@ fn print_cli_usage() {
     println!("  mochi [options]");
     println!("Options:");
     println!("  --data-root <path>           Override the supervisor data root.");
-    println!("  --profile <single-peer|four-peer-bft>");
-    println!("                               Choose the supervised topology preset.");
+    println!(
+        "  --profile <single-peer|four-peer-bft|{{ peer_count = 3, consensus_mode = \"permissioned\" }}>"
+    );
+    println!("                               Choose a preset or custom profile table.");
     println!("  --config <path>              Load overrides from a specific config file.");
     println!("  --torii-start <port>         Override the base Torii port.");
     println!("  --p2p-start <port>           Override the base P2P port.");
@@ -1785,6 +1937,7 @@ struct MochiApp {
     settings_torii_port_input: String,
     settings_p2p_port_input: String,
     settings_chain_id_input: String,
+    settings_profile_input: String,
     settings_nexus_enabled: bool,
     settings_nexus_lane_count_input: String,
     settings_nexus_lane_catalog_input: String,
@@ -1825,8 +1978,11 @@ fn prepare_supervisor() -> (
             }
         },
     };
-    let preset = overrides.profile.unwrap_or(ProfilePreset::SinglePeer);
-    let mut builder = SupervisorBuilder::new(preset);
+    let mut builder = if let Some(profile) = overrides.profile.clone() {
+        SupervisorBuilder::with_profile(profile)
+    } else {
+        SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    };
 
     if let Some(cfg) = config.as_ref() {
         builder = cfg.config.apply_to(builder);
@@ -1966,6 +2122,7 @@ impl MochiApp {
             settings_torii_port_input: String::new(),
             settings_p2p_port_input: String::new(),
             settings_chain_id_input: String::new(),
+            settings_profile_input: String::new(),
             settings_nexus_enabled: false,
             settings_nexus_lane_count_input: String::new(),
             settings_nexus_lane_catalog_input: String::new(),
@@ -2086,6 +2243,51 @@ mod cli_tests {
         assert_eq!(
             parsed.overrides.genesis_profile,
             Some(GenesisProfile::Iroha3Dev)
+        );
+    }
+
+    #[test]
+    fn parse_cli_profile_inline_table_sets_custom_profile() {
+        let args = vec![
+            OsString::from("--profile"),
+            OsString::from("{ peer_count = 3, consensus_mode = \"permissioned\" }"),
+        ];
+        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
+        let profile = parsed.overrides.profile.expect("profile override");
+        assert_eq!(profile.preset, None);
+        assert_eq!(profile.topology.peer_count, 3);
+        assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
+    }
+
+    #[test]
+    fn parse_cli_profile_inline_table_sets_genesis_profile() {
+        let args = vec![
+            OsString::from("--profile"),
+            OsString::from(
+                "{ peer_count = 4, consensus_mode = \"npos\", genesis_profile = \"iroha3-dev\" }",
+            ),
+        ];
+        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
+        assert_eq!(
+            parsed.overrides.genesis_profile,
+            Some(GenesisProfile::Iroha3Dev)
+        );
+    }
+
+    #[test]
+    fn parse_cli_profile_genesis_conflict_errors() {
+        let args = vec![
+            OsString::from("--profile"),
+            OsString::from(
+                "{ peer_count = 4, consensus_mode = \"npos\", genesis_profile = \"iroha3-dev\" }",
+            ),
+            OsString::from("--genesis-profile"),
+            OsString::from("iroha3-testus"),
+        ];
+        let err = parse_cli_overrides_from(args).expect_err("conflict should error");
+        assert!(
+            err.to_string().contains("conflicts"),
+            "unexpected error message: {err}"
         );
     }
 
@@ -2217,7 +2419,10 @@ lane_count = 2
         let _guard = cli_env_lock().lock().expect("env lock");
         let _profile = CliEnvGuard::set("MOCHI_PROFILE", "four-peer-bft");
         let overrides = parse_env_overrides().expect("parse env overrides");
-        assert_eq!(overrides.profile, Some(ProfilePreset::FourPeerBft));
+        assert_eq!(
+            overrides.profile,
+            Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft))
+        );
     }
 
     #[test]
@@ -2249,7 +2454,10 @@ lane_count = 2
         .expect("parse CLI");
 
         let merged = merge_overrides(env_overrides, cli.overrides);
-        assert_eq!(merged.profile, Some(ProfilePreset::SinglePeer));
+        assert_eq!(
+            merged.profile,
+            Some(NetworkProfile::from_preset(ProfilePreset::SinglePeer))
+        );
     }
 
     #[cfg(unix)]
@@ -4182,6 +4390,7 @@ impl MochiApp {
                 self.settings_p2p_port_input.clear();
             }
             self.settings_chain_id_input = supervisor.chain_id().to_owned();
+            self.settings_profile_input.clear();
             self.settings_build_binaries = self.configured_build_binaries();
             self.settings_readiness_smoke = self.configured_readiness_smoke();
         } else {
@@ -4189,6 +4398,7 @@ impl MochiApp {
             self.settings_torii_port_input.clear();
             self.settings_p2p_port_input.clear();
             self.settings_chain_id_input.clear();
+            self.settings_profile_input.clear();
             self.settings_build_binaries = self.configured_build_binaries();
             self.settings_readiness_smoke = self.configured_readiness_smoke();
         }
@@ -4414,13 +4624,42 @@ impl MochiApp {
                     .unwrap_or_else(default_config_path),
             });
 
+        let profile_override_input = self.settings_profile_input.trim();
+        let profile_override = if profile_override_input.is_empty() {
+            None
+        } else {
+            let parsed = parse_profile_override(profile_override_input)
+                .map_err(|err| format!("Profile override error: {err}"))?;
+            Some(parsed)
+        };
+
         resolved.config.set_data_root(data_root.clone());
         let current_profile = self
             .supervisor
             .as_ref()
             .map(|supervisor| supervisor.profile().clone())
             .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::SinglePeer));
-        resolved.config.set_profile(Some(current_profile));
+        let effective_profile = if let Some(parsed) = profile_override.as_ref() {
+            if let Some(preset) = parsed.profile.preset {
+                let mut profile = NetworkProfile::from_preset(preset);
+                profile.consensus_mode = current_profile.consensus_mode;
+                profile
+            } else {
+                parsed.profile.clone()
+            }
+        } else {
+            current_profile
+        };
+        resolved.config.set_profile(Some(effective_profile.clone()));
+        if let Some(parsed) = profile_override.as_ref() {
+            if let Some(genesis_profile) = parsed.genesis_profile {
+                resolved.config.set_genesis_profile(Some(genesis_profile));
+            } else if effective_profile.consensus_mode == SumeragiConsensusMode::Permissioned
+                && resolved.config.genesis_profile.is_some()
+            {
+                return Err("Profile override uses permissioned consensus but genesis_profile is configured; clear genesis_profile in config/local.toml or switch to consensus_mode = \"npos\".".to_owned());
+            }
+        }
         resolved.config.set_torii_start(torii_port);
         resolved.config.set_p2p_start(p2p_port);
         resolved.config.set_chain_id(chain_id.clone());
@@ -4877,7 +5116,7 @@ impl MochiApp {
                 for attempt in 0..attempts {
                     match client.apply_lane_lifecycle(&plan).await {
                         Ok(_) => return Ok(()),
-                        Err(err) if attempt + 1 < attempts => {
+                        Err(_err) if attempt + 1 < attempts => {
                             tokio::time::sleep(backoff).await;
                             backoff = (backoff.saturating_mul(2)).min(Duration::from_secs(2));
                         }
@@ -5325,6 +5564,26 @@ impl MochiApp {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.settings_chain_id_input)
                         .hint_text("mochi-local"),
+                );
+                ui.add_space(10.0);
+                if let Some(supervisor) = self.supervisor.as_ref() {
+                    ui.label(format!(
+                        "Current profile: {}",
+                        Self::profile_name(supervisor)
+                    ));
+                } else {
+                    ui.label("Current profile: unavailable");
+                }
+                ui.label(
+                    "Profile override (preset slug or inline TOML table; blank = keep current):",
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings_profile_input).hint_text(
+                        "single-peer | four-peer-bft | { peer_count = 3, consensus_mode = \"permissioned\" }",
+                    ),
+                );
+                ui.small(
+                    "Include genesis_profile for NPoS (e.g., { peer_count = 4, consensus_mode = \"npos\", genesis_profile = \"iroha3-dev\" }).",
                 );
                 ui.add_space(10.0);
                 egui::CollapsingHeader::new("Nexus lanes and DA")
@@ -11132,7 +11391,8 @@ mod tests {
             BlockHeader,
             consensus::{
                 SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
-                SumeragiMembershipStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+                SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+                SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
             },
         },
         da::commitment::DaProofScheme,
@@ -11237,7 +11497,7 @@ mod tests {
     #[test]
     fn cli_profile_override_reconfigures_builder() {
         let overrides = CliOverrides {
-            profile: Some(ProfilePreset::FourPeerBft),
+            profile: Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft)),
             ..Default::default()
         };
         let builder = overrides.apply_to(SupervisorBuilder::new(ProfilePreset::SinglePeer));
@@ -12066,6 +12326,7 @@ mod tests {
                 epoch: 2,
                 view_hash: Some([0xAB; 32]),
             },
+            membership_mismatch: SumeragiMembershipMismatchStatus::default(),
             lane_commitments: vec![SumeragiLaneCommitment {
                 block_height: 10,
                 lane_id: LaneId::new(0),
@@ -13649,6 +13910,8 @@ mod tests {
         app.settings_torii_port_input = "15000".to_owned();
         app.settings_p2p_port_input = "16000".to_owned();
         app.settings_chain_id_input = "custom-chain".to_owned();
+        app.settings_profile_input =
+            "{ peer_count = 3, consensus_mode = \"permissioned\" }".to_owned();
         app.settings_nexus_enabled = true;
         app.settings_nexus_lane_count_input = "2".to_owned();
         app.settings_nexus_lane_catalog_input =
@@ -13687,6 +13950,10 @@ mod tests {
         assert_eq!(bundle.config.torii_start, Some(15000));
         assert_eq!(bundle.config.p2p_start, Some(16000));
         assert_eq!(bundle.config.chain_id.as_deref(), Some("custom-chain"));
+        let profile = bundle.config.profile.as_ref().expect("profile config");
+        assert_eq!(profile.preset, None);
+        assert_eq!(profile.topology.peer_count, 3);
+        assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
         let nexus = bundle.config.nexus.as_ref().expect("nexus config");
         assert_eq!(
             nexus.get("enabled").and_then(TomlValue::as_bool),
@@ -13752,6 +14019,13 @@ mod tests {
         assert_eq!(round_trip.config.torii_start, Some(15000));
         assert_eq!(round_trip.config.p2p_start, Some(16000));
         assert_eq!(round_trip.config.chain_id.as_deref(), Some("custom-chain"));
+        let round_trip_profile = round_trip.config.profile.expect("profile config");
+        assert_eq!(round_trip_profile.preset, None);
+        assert_eq!(round_trip_profile.topology.peer_count, 3);
+        assert_eq!(
+            round_trip_profile.consensus_mode,
+            SumeragiConsensusMode::Permissioned
+        );
         let round_trip_nexus = round_trip.config.nexus.expect("nexus config");
         assert_eq!(
             round_trip_nexus.get("enabled").and_then(TomlValue::as_bool),

@@ -24,6 +24,52 @@ if (enableCycloneDx.get()) {
 }
 
 val hasCycloneDx = enableCycloneDx.get() && plugins.hasPlugin("org.cyclonedx.bom")
+if (hasCycloneDx) {
+    val cycloneTasks = setOf("cyclonedxBom", "cyclonedxDirectBom")
+    tasks.matching { it.name in cycloneTasks }.configureEach {
+        val schemaProperty =
+            javaClass.methods.firstOrNull { method ->
+                method.name == "getSchemaVersion" && method.parameterCount == 0
+            }?.invoke(this)
+        val versionValue =
+            runCatching {
+                val versionClass = javaClass.classLoader.loadClass("org.cyclonedx.Version")
+                versionClass.enumConstants.firstOrNull { constant ->
+                    (constant as? Enum<*>)?.name == "VERSION_15"
+                }
+            }.getOrNull()
+        val providerClass =
+            runCatching { javaClass.classLoader.loadClass("org.gradle.api.provider.Provider") }
+                .getOrNull()
+        val setter =
+            if (schemaProperty != null && versionValue != null) {
+                schemaProperty.javaClass.methods.firstOrNull { method ->
+                    method.name == "set" &&
+                        method.parameterCount == 1 &&
+                        (providerClass == null ||
+                            !providerClass.isAssignableFrom(method.parameterTypes[0])) &&
+                        method.parameterTypes[0].isInstance(versionValue)
+                }
+            } else {
+                null
+            }
+        val applied =
+            if (setter != null && versionValue != null) {
+                runCatching { setter.invoke(schemaProperty, versionValue) }.isSuccess
+            } else {
+                false
+            }
+        if (!applied && schemaProperty != null) {
+            schemaProperty.javaClass.methods
+                .firstOrNull { method ->
+                    method.name == "set" &&
+                        method.parameterCount == 1 &&
+                        method.parameterTypes[0] == String::class.java
+                }
+                ?.let { method -> runCatching { method.invoke(schemaProperty, "1.5") } }
+        }
+    }
+}
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(21))
@@ -108,6 +154,7 @@ val jvmDependencyManifest =
     tasks.register("jvmDependencyManifest") {
         description = "Generates runtime dependency manifest for the JVM artefact."
         group = "verification"
+        val jvmCoordinates = "${project.group}:$jvmArtifactId"
         val manifestOut =
             layout.buildDirectory
                 .file("reports/publishing/${jvmArtifactId}-${sdkVersion.get()}-runtimeClasspath.json")
@@ -123,7 +170,7 @@ val jvmDependencyManifest =
             val rendered =
                 renderDependencyManifest(
                     configurationName = "runtimeClasspath",
-                    coordinates = "${project.group}:$jvmArtifactId",
+                    coordinates = jvmCoordinates,
                     primary = primaryJar,
                     artifacts = runtimeArtifacts,
                 )
@@ -152,6 +199,9 @@ val jvmRuntimeChecksum =
     layout.buildDirectory.file(
         "reports/publishing/${jvmArtifactId}-jvm-${project.version}-runtime.sha256",
     )
+val jvmCoordinates = "${project.group}:$jvmArtifactId:${project.version}"
+val projectRoot = project.rootProject.rootDir.toPath()
+val projectVersion = project.version.toString()
 
 tasks.register("writeJvmRuntimeManifest") {
     description = "Emits runtime manifest + checksum for the JVM artefact."
@@ -181,23 +231,22 @@ tasks.register("writeJvmRuntimeManifest") {
                 "artifact" to
                     mapOf(
                         "type" to "jar",
-                        "coordinates" to "${project.group}:$jvmArtifactId:${project.version}",
-                        "path" to project.rootProject.rootDir.toPath().relativize(jarFile.toPath()).toString(),
-                        "version" to project.version.toString(),
+                        "coordinates" to jvmCoordinates,
+                        "path" to projectRoot.relativize(jarFile.toPath()).toString(),
+                        "version" to projectVersion,
                     ),
                 "checksums" to
                     mapOf(
                         "sha256" to checksum,
                         "file" to
-                            project.rootProject.rootDir
-                                .toPath()
+                            projectRoot
                                 .relativize(jvmRuntimeChecksum.get().asFile.toPath())
                                 .toString(),
                     ),
                 "sbom" to
                     mapOf(
                         "format" to if (hasCycloneDx) "cyclonedx" else "absent",
-                        "path" to project.rootProject.rootDir.toPath().relativize(bomFile.toPath()).toString(),
+                        "path" to projectRoot.relativize(bomFile.toPath()).toString(),
                     ),
             )
         jvmRuntimeManifest.get().asFile.apply {

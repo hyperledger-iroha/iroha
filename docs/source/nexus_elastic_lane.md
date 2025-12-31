@@ -18,7 +18,7 @@ re-deriving the catalog geometry by hand.
 
 ## 1. Prerequisites
 
-1. Governance approval for the lane alias, dataspace, validator set, and settlement policy.
+1. Governance approval for the lane alias, dataspace, validator set, fault tolerance (`f`), and settlement policy.
 2. A finalized validator list (account IDs) and protected namespace list.
 3. Access to the node configuration repository so you can append the generated snippets.
 4. Paths for the lane manifest registry (see `nexus.registry.manifest_directory` and
@@ -70,7 +70,8 @@ plus an optional fourth when encoding is enabled:
 1. `<slug>.manifest.json` — lane manifest containing the validator quorum, protected namespaces, and
    optional runtime-upgrade hook metadata.
 2. `<slug>.catalog.toml` — a TOML snippet with `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]`,
-   and any requested routing rules.
+   and any requested routing rules. Ensure `fault_tolerance` is set on the dataspace entry to size
+   the lane-relay committee (`3f+1`).
 3. `<slug>.summary.json` — audit summary describing the geometry (slug, segments, metadata) plus the
    required rollout steps and the exact `cargo xtask space-directory encode` command (under
    `space_directory_encode.command`). Attach this JSON to the onboarding ticket for evidence.

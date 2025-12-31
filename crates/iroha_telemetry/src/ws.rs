@@ -3,7 +3,7 @@
 use chrono::Utc;
 use eyre::{Result, eyre};
 use futures::{Sink, SinkExt, StreamExt, stream::SplitSink};
-use iroha_config::parameters::actual::Telemetry as Config;
+use iroha_config::parameters::actual::{Telemetry as Config, TelemetryIntegrity};
 use iroha_logger::telemetry::Event as Telemetry;
 use norito::json::Map;
 use tokio::{
@@ -18,6 +18,7 @@ use tokio_tungstenite::{
 };
 use url::Url;
 
+use crate::integrity::ChainState;
 use crate::retry_period::RetryPeriod;
 
 type WebSocketSplitSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
@@ -35,6 +36,7 @@ pub async fn start(
         min_retry_period,
         ..
     }: Config,
+    integrity: TelemetryIntegrity,
     telemetry: broadcast::Receiver<Telemetry>,
 ) -> Result<JoinHandle<()>> {
     iroha_logger::info!(%url, "Starting telemetry");
@@ -47,6 +49,7 @@ pub async fn start(
         WebsocketSinkFactory::new(url),
         RetryPeriod::new(min_retry_period, max_retry_delay_exponent),
         internal_sender,
+        ChainState::new_with_kind(integrity, "ws"),
     );
     let handle = tokio::task::spawn(async move {
         client.run(telemetry, internal_receiver).await;
@@ -61,7 +64,8 @@ struct Client<S, F> {
     retry_period: RetryPeriod,
     internal_sender: mpsc::Sender<InternalMessage>,
     sink: Option<S>,
-    init_msg: Option<Message>,
+    init_payload: Option<Map>,
+    integrity: ChainState,
 }
 
 impl<S, F> Client<S, F>
@@ -75,6 +79,7 @@ where
         sink_factory: F,
         retry_period: RetryPeriod,
         internal_sender: mpsc::Sender<InternalMessage>,
+        integrity: ChainState,
     ) -> Self {
         Self {
             name,
@@ -82,7 +87,8 @@ where
             retry_period,
             internal_sender,
             sink: Some(sink),
-            init_msg: None,
+            init_payload: None,
+            integrity,
         }
     }
 
@@ -119,10 +125,10 @@ where
     }
 
     async fn on_telemetry(&mut self, telemetry: Telemetry) {
-        match prepare_message(&self.name, telemetry) {
-            Ok((msg, msg_kind)) => {
+        match prepare_message(&self.name, telemetry, &mut self.integrity) {
+            Ok((msg, msg_kind, init_payload)) => {
                 if matches!(msg_kind, Some(MessageKind::Initialization)) {
-                    self.init_msg = Some(msg.clone());
+                    self.init_payload = init_payload;
                 }
                 self.send_message(msg).await;
             }
@@ -134,11 +140,15 @@ where
 
     async fn on_reconnect(&mut self) {
         if let Ok(sink) = self.sink_factory.create().await {
-            if let Some(msg) = self.init_msg.as_ref() {
+            if let Some(payload) = self.init_payload.clone() {
                 iroha_logger::debug!("Reconnected telemetry");
                 self.sink = Some(sink);
-                let msg = msg.clone();
-                self.send_message(msg).await;
+                match build_message(&payload, &mut self.integrity) {
+                    Ok(msg) => self.send_message(msg).await,
+                    Err(error) => {
+                        iroha_logger::error!(%error, "Failed to rebuild telemetry init payload");
+                    }
+                }
             } else {
                 // The reconnect is required if sending a message fails.
                 // The first message to be sent is initialization.
@@ -190,7 +200,22 @@ enum InternalMessage {
     Reconnect,
 }
 
-fn prepare_message(name: &str, telemetry: Telemetry) -> Result<(Message, Option<MessageKind>)> {
+fn prepare_message(
+    name: &str,
+    telemetry: Telemetry,
+    integrity: &mut ChainState,
+) -> Result<(Message, Option<MessageKind>, Option<Map>)> {
+    let (payload, msg_kind) = build_payload(name, telemetry)?;
+    let msg = build_message(&payload, integrity)?;
+    let init_payload = if matches!(msg_kind, Some(MessageKind::Initialization)) {
+        Some(payload)
+    } else {
+        None
+    };
+    Ok((msg, msg_kind, init_payload))
+}
+
+fn build_payload(name: &str, telemetry: Telemetry) -> Result<(Map, Option<MessageKind>)> {
     let mut msg_kind: Option<MessageKind> = None;
     let mut msg_field_present = false;
     let mut payload = Map::new();
@@ -228,9 +253,8 @@ fn prepare_message(name: &str, telemetry: Telemetry) -> Result<(Message, Option<
         return Err(eyre!("Failed to read 'msg'"));
     }
 
-    let now = Utc::now();
-
     if matches!(msg_kind, Some(MessageKind::Initialization)) {
+        let now = Utc::now();
         payload.insert("name".into(), name.into());
         payload.insert("chain".into(), "Iroha".into());
         payload.insert("implementation".into(), "".into());
@@ -252,12 +276,19 @@ fn prepare_message(name: &str, telemetry: Telemetry) -> Result<(Message, Option<
         );
         payload.insert("network_id".into(), "".into());
     }
+
+    Ok((payload, msg_kind))
+}
+
+fn build_message(payload: &Map, integrity: &mut ChainState) -> Result<Message> {
+    let now = Utc::now();
     let mut map = Map::new();
     map.insert("id".into(), 0_i32.into());
     map.insert("ts".into(), now.to_rfc3339().into());
-    map.insert("payload".into(), payload.into());
+    map.insert("payload".into(), payload.clone().into());
+    integrity.attach_chain(&mut map)?;
     let msg = Message::Binary(norito::json::to_vec(&map)?.into());
-    Ok((msg, msg_kind))
+    Ok(msg)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -308,12 +339,16 @@ mod tests {
 
     use eyre::{Result, eyre};
     use futures::{Sink, StreamExt};
+    use iroha_config::parameters::actual::TelemetryIntegrity;
     use iroha_logger::telemetry::{Event, Fields};
     use norito::json::{Map, Value};
     use tokio::task::JoinHandle;
     use tokio_tungstenite::tungstenite::{Error, Message};
 
-    use crate::ws::{Client, RetryPeriod, SinkFactory};
+    use crate::{
+        integrity::ChainState,
+        ws::{Client, RetryPeriod, SinkFactory},
+    };
 
     #[test]
     fn prepare_message_fails_on_invalid_hash_fields() {
@@ -325,8 +360,17 @@ mod tests {
                     (field, Value::Bool(true)),
                 ]),
             };
+            let mut integrity = ChainState::new_with_state_path(
+                TelemetryIntegrity {
+                    enabled: true,
+                    state_dir: None,
+                    signing_key: None,
+                    signing_key_id: None,
+                },
+                None,
+            );
             assert!(
-                super::prepare_message("node", telemetry).is_err(),
+                super::prepare_message("node", telemetry, &mut integrity).is_err(),
                 "expected error for field {field}",
             );
         }
@@ -458,6 +502,15 @@ mod tests {
                     },
                     RetryPeriod::new(Duration::from_secs(1), 0),
                     internal_sender,
+                    ChainState::new_with_state_path(
+                        TelemetryIntegrity {
+                            enabled: true,
+                            state_dir: None,
+                            signing_key: None,
+                            signing_key_id: None,
+                        },
+                        None,
+                    ),
                 );
                 tokio::task::spawn(async move {
                     client.run(telemetry_receiver, internal_receiver).await;
@@ -506,7 +559,7 @@ mod tests {
         // The first message is `initialization`
         telemetry_sender.send(system_connected_telemetry()).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
-        {
+        let first_hash = {
             let msg = message_receiver.next().await.unwrap();
             let Message::Binary(bytes) = msg else {
                 panic!("expected binary telemetry frame, got {msg:?}")
@@ -514,6 +567,17 @@ mod tests {
             let map: Map = norito::json::from_slice(&bytes).unwrap();
             assert_eq!(map.get("id"), Some(&Value::Number(0_u64.into())));
             assert!(map.contains_key("ts"));
+            let chain = map.get("chain").and_then(Value::as_object).unwrap();
+            assert_eq!(chain.get("seq").and_then(Value::as_u64), Some(1));
+            assert_eq!(
+                chain.get("prev_hash").and_then(Value::as_str),
+                Some("0000000000000000000000000000000000000000000000000000000000000000")
+            );
+            let first_hash = chain
+                .get("hash")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_string();
             let payload = map.get("payload").unwrap().as_object().unwrap();
             assert_eq!(
                 payload.get("msg"),
@@ -532,7 +596,8 @@ mod tests {
             assert!(payload.contains_key("authority"));
             assert!(payload.contains_key("startup_time"));
             assert!(payload.contains_key("network_id"));
-        }
+            first_hash
+        };
 
         // The second message is `update`
         telemetry_sender.send(system_interval_telemetry(2)).unwrap();
@@ -545,6 +610,12 @@ mod tests {
             let map: Map = norito::json::from_slice(&bytes).unwrap();
             assert_eq!(map.get("id"), Some(&Value::Number(0_u64.into())));
             assert!(map.contains_key("ts"));
+            let chain = map.get("chain").and_then(Value::as_object).unwrap();
+            assert_eq!(chain.get("seq").and_then(Value::as_u64), Some(2));
+            assert_eq!(
+                chain.get("prev_hash").and_then(Value::as_str),
+                Some(first_hash.as_str())
+            );
             assert!(map.contains_key("payload"));
             let payload = map.get("payload").unwrap().as_object().unwrap();
             assert_eq!(

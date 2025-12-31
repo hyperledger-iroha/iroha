@@ -801,6 +801,8 @@ fn minimal_config_snapshot() {
                 kura_store_retry_max_attempts: 5,
                 commit_inflight_timeout: 30s,
                 missing_block_signer_fallback_attempts: 1,
+                membership_mismatch_alert_threshold: 1,
+                membership_mismatch_fail_closed: false,
                 da_max_commitments_per_block: 16,
                 da_max_proof_openings_per_block: 128,
                 proof_policy: Off,
@@ -956,6 +958,11 @@ fn minimal_config_snapshot() {
                     proof_cache_ttl_slots: 1,
                     replay_retention_slots: 128,
                 },
+                lane_relay_emergency: LaneRelayEmergency {
+                    enabled: false,
+                    multisig_threshold: 3,
+                    multisig_members: 5,
+                },
                 lane_catalog: LaneCatalog {
                     lane_count: 1,
                     lanes: [
@@ -1021,6 +1028,7 @@ fn minimal_config_snapshot() {
                             ),
                             alias: "global",
                             description: None,
+                            fault_tolerance: 1,
                         },
                     ],
                 },
@@ -1097,6 +1105,16 @@ fn minimal_config_snapshot() {
             telemetry_enabled: true,
             telemetry_profile: Operator,
             telemetry: None,
+            telemetry_redaction: TelemetryRedaction {
+                mode: Strict,
+                allowlist: [],
+            },
+            telemetry_integrity: TelemetryIntegrity {
+                enabled: true,
+                state_dir: None,
+                signing_key: None,
+                signing_key_id: None,
+            },
             dev_telemetry: DevTelemetry {
                 out_file: None,
                 panic_on_duplicate_metrics: false,
@@ -1606,6 +1624,10 @@ fn minimal_config_snapshot() {
                 smoothing_enabled: false,
                 smoothing_alpha: 0.2,
                 max_adjust_ms_per_min: 50,
+                min_samples: 3,
+                max_offset_ms: 1000,
+                max_confidence_ms: 500,
+                enforcement_mode: Warn,
             },
             accel: Acceleration {
                 enable_simd: true,
@@ -1978,6 +2000,104 @@ fn nexus_lane_overrides_rejected_when_disabled() {
 }
 
 #[test]
+fn nexus_lane_relay_emergency_requires_nexus_enabled() {
+    use iroha_config::parameters::user::{LaneRelayEmergency, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: false,
+        lane_relay_emergency: LaneRelayEmergency {
+            enabled: true,
+            ..LaneRelayEmergency::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter
+        .into_result()
+        .expect_err("lane relay emergency should require nexus.enabled");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(
+        debug,
+        "nexus.lane_relay_emergency.enabled requires nexus.enabled = true"
+    );
+}
+
+#[test]
+fn nexus_lane_relay_emergency_rejects_zero_threshold() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("core".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        lane_relay_emergency: LaneRelayEmergency {
+            enabled: true,
+            multisig_threshold: 0,
+            multisig_members: 5,
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter
+        .into_result()
+        .expect_err("zero threshold must be rejected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(
+        debug,
+        "nexus.lane_relay_emergency.multisig_threshold must be > 0"
+    );
+}
+
+#[test]
+fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("core".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        lane_relay_emergency: LaneRelayEmergency {
+            enabled: true,
+            multisig_threshold: 6,
+            multisig_members: 5,
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter
+        .into_result()
+        .expect_err("threshold above members must be rejected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(
+        debug,
+        "nexus.lane_relay_emergency.multisig_threshold 6 must be <= multisig_members 5"
+    );
+}
+
+#[test]
 fn nexus_profile_template_enables_multilane_defaults() {
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -2023,6 +2143,15 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .collect();
     assert_eq!(dataspace_aliases, ["global", "governance", "zk"]);
     assert_eq!(config.nexus.routing_policy.rules.len(), 2);
+    assert!(
+        !config.nexus.lane_relay_emergency.enabled,
+        "Nexus profile must leave lane relay emergency overrides disabled by default"
+    );
+    assert_eq!(
+        config.nexus.lane_relay_emergency.multisig_threshold.get(),
+        3
+    );
+    assert_eq!(config.nexus.lane_relay_emergency.multisig_members.get(), 5);
 }
 
 #[test]
@@ -2198,6 +2327,7 @@ fn routing_policy_dataspace_resolution() {
             id: Some(1),
             manifest_hash: None,
             description: None,
+            fault_tolerance: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
@@ -2221,6 +2351,39 @@ fn routing_policy_dataspace_resolution() {
         parsed.routing_policy.rules[0].dataspace,
         Some(DataSpaceId::GLOBAL)
     );
+}
+
+#[test]
+fn dataspace_fault_tolerance_zero_rejected() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{DataSpaceDescriptor, LaneDescriptor, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: Some(0),
+        }],
+        ..Nexus::default()
+    };
+
+    let parsed = nexus.parse(&mut emitter);
+    assert!(parsed.is_none(), "fault_tolerance=0 must be rejected");
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "fault_tolerance must be >= 1");
 }
 
 #[test]
@@ -2470,12 +2633,16 @@ fn full_envs_set_is_consumed() {
 
     // Read, complete, and fully parse into the actual config to ensure all
     // env-backed fields (including nested sections) are queried and consumed.
-    ConfigReader::new()
+    let config = ConfigReader::new()
         .with_env(env.clone())
         .read_and_complete::<UserConfig>()
         .expect("should be fine to read user view")
         .parse()
         .expect("should parse into actual config");
+    assert_eq!(
+        config.streaming.key_material.identity().algorithm(),
+        iroha_crypto::Algorithm::Ed25519
+    );
 
     // Ensure every provided variable was consumed by the reader.
     assert_eq!(env.unvisited(), HashSet::new());

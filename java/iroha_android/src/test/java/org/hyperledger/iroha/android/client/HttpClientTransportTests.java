@@ -55,6 +55,7 @@ public final class HttpClientTransportTests {
     submitBuildsToriiRequest();
     submitPropagatesExecutorFailure();
     submitRetriesOnServerError();
+    retryPolicyRecognizesRetryableStatus();
     submitQueuesTransactionsWhenOffline();
     submitQueuesTransactionsWithExportedKey();
     submitReplaysPendingTransactions();
@@ -189,6 +190,24 @@ public final class HttpClientTransportTests {
     final String expectedHash = SignedTransactionHasher.hashHex(transaction);
     assert expectedHash.equals(response.hashHex().orElse(null))
         : "Canonical hash must match SignedTransactionHasher output after retries";
+  }
+
+  private static void retryPolicyRecognizesRetryableStatus() {
+    final RetryPolicy defaultPolicy = RetryPolicy.builder().setMaxAttempts(1).build();
+    assert defaultPolicy.isRetryableStatus(503) : "Server errors should be retryable by default";
+    assert defaultPolicy.isRetryableStatus(429) : "Too many requests should be retryable by default";
+    assert !defaultPolicy.isRetryableStatus(400) : "Client errors should not be retryable";
+
+    final RetryPolicy custom =
+        RetryPolicy.builder()
+            .setMaxAttempts(1)
+            .setRetryOnServerError(false)
+            .setRetryOnTooManyRequests(false)
+            .addRetryStatusCode(418)
+            .build();
+    assert !custom.isRetryableStatus(503) : "Server errors must be disabled by policy";
+    assert !custom.isRetryableStatus(429) : "429 must be disabled by policy";
+    assert custom.isRetryableStatus(418) : "Custom retry codes must be honored";
   }
 
   private static void submitQueuesTransactionsWhenOffline() throws Exception {

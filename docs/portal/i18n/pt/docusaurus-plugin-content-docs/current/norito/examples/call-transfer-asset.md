@@ -4,12 +4,40 @@
 lang: pt
 direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/call-transfer-asset
+title: Invocar transferencia do host a partir de Kotodama
+description: Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-# Tradução em andamento
+Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+## Roteiro do livro razao
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+- Financie a autoridade do contrato (por exemplo `contract@wonderland`) com o ativo que ela transferira e conceda a autoridade o papel `CanTransfer` ou permissao equivalente.
+- Chame o entrypoint `call_transfer_asset` para transferir 5 unidades da conta do contrato para `bob@wonderland`, refletindo como a automacao on-chain pode envolver chamadas do host.
+- Verifique saldos via `FindAccountAssets` ou `iroha_cli assets list --account bob@wonderland` e inspecione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
+
+## Guias de SDK relacionados
+
+- [Quickstart do SDK Rust](/sdks/rust)
+- [Quickstart do SDK Python](/sdks/python)
+- [Quickstart do SDK JavaScript](/sdks/javascript)
+
+[Baixe a fonte Kotodama](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
+      account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

@@ -5,84 +5,72 @@ lang: ur
 direction: rtl
 source: docs/portal/docs/reference/account-address-status.md
 status: complete
-translator: manual
-source_hash: 448093b8efd6e92c8265691d6a4dafcf1d3b9c369cc6ae42ee8ae418b27bc36b
-source_last_modified: "2025-11-08T16:40:11.557769+00:00"
-translation_last_reviewed: 2025-11-14
+generator: scripts/sync_docs_i18n.py
+source_hash: f18b4a15e42363483c4f65945aba2cc208f9a2e59b6f31f143e5dc792d8d9071
+source_last_modified: "2025-11-27T10:35:59.095888+00:00"
+translation_last_reviewed: 2025-12-30
 ---
-
-<div dir="rtl">
 
 ---
 id: account-address-status
-title: اکاؤنٹ ایڈریس کمپلائنس
-description: ADDR‑2 fixture ورک فلو اور یہ کہ SDK ٹیمیں کیسے sync میں رہتی ہیں، کا خلاصہ۔
+title: اکاؤنٹ ایڈریس تعمیل
+description: ADDR-2 fixture ورک فلو کا خلاصہ اور SDK ٹیموں کی ہم آہنگی کیسے برقرار رہتی ہے۔
 ---
 
-canonical ADDR‑2 bundle (`fixtures/account/address_vectors.json`) میں IH58، compressed
-(half/full‑width)، multisignature اور negative fixtures شامل ہیں۔ ہر SDK اور Torii
-surface، اسی JSON پر انحصار کرتی ہے تاکہ codec drift، پروڈکشن تک پہنچنے سے پہلے ہی
-detected ہو جائے۔ یہ صفحہ internal status brief
-(`docs/source/account_address_status.md`، جو root ریپوزٹری میں ہے) کو mirror کرتا ہے،
-تاکہ portal readers کو mono‑repo میں گھومے بغیر ورک فلو کی high‑level تصویر مل سکے۔
+canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) IH58, compressed (half/full width), multisignature, اور negative fixtures کو capture کرتا ہے۔ ہر SDK + Torii surface اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو mirror کرتا ہے تاکہ portal readers بغیر mono-repo میں کھوج لگائے workflow دیکھ سکیں۔
 
-## bundle کو regenerate یا verify کرنا
+## Bundle کو regenerate یا verify کریں
 
 ```bash
-# canonical fixture کو ریفریش کریں (fixtures/account/address_vectors.json لکھتا ہے)
+# Refresh the canonical fixture (writes fixtures/account/address_vectors.json)
 cargo xtask address-vectors --out fixtures/account/address_vectors.json
 
-# اگر committed فائل پرانی ہو تو فوراً فیل ہو
+# Fail fast if the committed file is stale
 cargo xtask address-vectors --verify
 ```
 
 Flags:
 
-- `--stdout` — JSON کو stdout پر emit کرتا ہے، on‑the‑fly inspection کے لیے۔
-- `--out <path>` — آؤٹ پٹ کو کسی اور path پر لکھتا ہے (مثلاً لوکل diff کے لیے)۔
-- `--verify` — working copy کو تازہ generate ہونے والے مواد سے compare کرتا ہے (اسے
-  `--stdout` کے ساتھ combine نہیں کیا جا سکتا)۔
+- `--stdout` — ad-hoc inspection کیلئے JSON کو stdout پر emit کرتا ہے۔
+- `--out <path>` — مختلف path پر لکھتا ہے (مثلا لوکل diff کے وقت)۔
+- `--verify` — working copy کو تازہ generate شدہ content کے ساتھ compare کرتا ہے (`--stdout` کے ساتھ combine نہیں ہو سکتا)۔
 
-CI workflow **Address Vector Drift**، جب بھی fixture، generator یا docs میں تبدیلی ہو،
-`cargo xtask address-vectors --verify` چلاتا ہے تاکہ reviewers کو فوراً alert کیا جا
-سکے۔
+CI workflow **Address Vector Drift** `cargo xtask address-vectors --verify`
+ہر بار چلاتا ہے جب fixture، generator، یا docs بدلیں تاکہ reviewers کو فوراً alert کیا جا سکے۔
 
-## fixture کون consume کرتا ہے؟
+## Fixture کون استعمال کرتا ہے؟
 
 | Surface | Validation |
-|---------|-----------|
+|---------|------------|
 | Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` |
 | Torii (server) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | JavaScript SDK | `javascript/iroha_js/test/address.test.js` |
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-ہر harness، canonical bytes + IH58 + compressed encodings کا round‑trip کرتا ہے اور
-negative cases میں Norito‑style error codes کو fixture کے ساتھ match ہونے پر assert
-کرتا ہے۔
+ہر harness canonical bytes + IH58 + compressed encodings کا round-trip کرتا ہے اور negative cases کیلئے Norito-style error codes کو fixture کے ساتھ match کرتا ہے۔
 
-## Automation چاہیے؟
+## Automation چاہئے؟
 
-release tooling، helper `scripts/account_fixture_helper.py` کے ذریعے fixture refresh کو
-اسکرپٹ کر سکتا ہے، جو canonical bundle کو بغیر copy/paste کے fetch یا verify کرتا ہے:
+Release tooling fixture refreshes کو `scripts/account_fixture_helper.py` کے ذریعے script کر سکتی ہے، جو copy/paste کے بغیر canonical bundle fetch یا verify کرتا ہے:
 
 ```bash
-# کسی custom path پر ڈاؤن لوڈ کریں (ڈیفالٹ fixtures/account/address_vectors.json ہے)
+# Download to a custom path (defaults to fixtures/account/address_vectors.json)
 python3 scripts/account_fixture_helper.py fetch --output path/to/sdk/address_vectors.json
 
-# چیک کریں کہ لوکل کاپی canonical source (HTTPS یا file://) کے برابر ہے
+# Verify that a local copy matches the canonical source (HTTPS or file://)
 python3 scripts/account_fixture_helper.py check --target path/to/sdk/address_vectors.json --quiet
+
+# Emit Prometheus textfile metrics for dashboards/alerts
+python3 scripts/account_fixture_helper.py check \
+  --target path/to/sdk/address_vectors.json \
+  --metrics-out /var/lib/node_exporter/textfile_collector/address_fixture.prom \
+  --metrics-label android
 ```
 
-یہ helper، `--source` override یا `IROHA_ACCOUNT_FIXTURE_URL` env var کو accept کرتا ہے،
-تاکہ SDK CI jobs اپنے پسندیدہ mirror پر نشانہ لگا سکیں۔
+Helper `--source` overrides یا `IROHA_ACCOUNT_FIXTURE_URL` environment variable قبول کرتا ہے تاکہ SDK CI jobs اپنے پسندیدہ mirror کی طرف اشارہ کر سکیں۔ جب `--metrics-out` دیا جاتا ہے تو helper `account_address_fixture_check_status{target="…"}` کے ساتھ canonical SHA-256 digest (`account_address_fixture_remote_info`) لکھتا ہے تاکہ Prometheus textfile collectors اور Grafana dashboard `account_address_fixture_status` ہر surface کی sync ثابت کر سکیں۔ جب کوئی target `0` رپورٹ کرے تو alert کریں۔ multi-surface automation کیلئے wrapper `ci/account_fixture_metrics.sh` استعمال کریں (repeatable `--target label=path[::source]` قبول کرتا ہے) تاکہ on-call teams node-exporter textfile collector کیلئے ایک consolidated `.prom` فائل publish کر سکیں۔
 
-## مکمل brief درکار ہے؟
+## مکمل brief چاہئے؟
 
-ADDR‑2 کمپلائنس کی مکمل تفصیل (owners، monitoring plan، کھلے اقدامات) ریپوزٹری
-کے اندر `docs/source/account_address_status.md` میں موجود ہے، اور اسی کے ساتھ
-Account Structure RFC (`docs/account_structure.md`) بھی ہے۔ اس صفحہ کو ایک تیز
-operational reminder کے طور پر استعمال کریں؛ تفصیلی رہنمائی کے لیے repo docs کی طرف
-رجوع کریں۔
-
-</div>
+ADDR-2 compliance status (owners، monitoring plan، open action items) کی مکمل تفصیل
+ریپوزٹری میں `docs/source/account_address_status.md` کے ساتھ Address Structure RFC (`docs/account_structure.md`) میں موجود ہے۔ اس صفحہ کو quick operational reminder کے طور پر استعمال کریں؛ تفصیلی رہنمائی کیلئے repo docs دیکھیں۔

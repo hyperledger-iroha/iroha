@@ -33,7 +33,7 @@ translator: manual
 
 - `lane_state_root_i`: ブロックで触れた DS ごとの状態ルートに対する Poseidon2-SMT コミットメント。
 - `merge_hint_root_i`: マージレジャー向けロール候補（ドメインタグ `"iroha:merge:candidate:v1\0"`）。
-- `lane_qc_i`: ブロックヘッダーに対するレーン委員会の集約署名。
+- `lane_qc_i`: 実行投票のプレイメージ（ブロックハッシュ、`parent_state_root`、`post_state_root`、height/view/epoch、chain_id、モードタグ）に対するレーン委員会の集約署名。
 
 マージノードは全レーン `i ∈ [0, K)` の最新ティップ `{(B_i, lane_qc_i, merge_hint_root_i)}` を収集します。
 
@@ -100,7 +100,7 @@ merge_qc_digest = blake2b32(
 
 1. トランザクションはレーンごとに決定的スロットへスケジュールされます。
 2. エグゼキュータが `StateBlock` にオーバーレイを適用し、デルタとアーティファクトを生成。
-3. 検証後、レーン委員会がブロックヘッダー（`merge_hint_root` を含む）に署名。タプル `(block_hash, lane_qc_i, merge_hint_root_i)` はレーン最終化済みとみなされます。
+3. 検証後、レーン委員会が実行投票のプレイメージ（ブロックハッシュ、`parent_state_root`、`post_state_root`、height/view/epoch、chain_id、モードタグ）に署名。タプル `(block_hash, lane_qc_i, merge_hint_root_i)` はレーン最終化済みとみなされます。
 4. ライトクライアントは DS 限定証明のためにレーンティップを最終確定として扱えますが、後でマージレジャーと照合するため `merge_hint_root` を記録する必要があります。
 
 ### 3.2 マージレジャーの最終化

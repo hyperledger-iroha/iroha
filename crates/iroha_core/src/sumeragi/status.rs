@@ -21,7 +21,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus::{LaneBlockCommitment, ValidatorIndex},
+        consensus::{LaneBlockCommitment, SumeragiMembershipStatus, ValidatorIndex},
     },
     consensus::{
         CommitCertificate, ConsensusKeyRecord, ValidatorElectionOutcome, ValidatorSetCheckpoint,
@@ -176,6 +176,51 @@ pub struct RbcAbortSnapshot {
     pub last_view: u64,
 }
 
+/// Snapshot of membership mismatch tracking.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MembershipMismatchSnapshot {
+    /// Peers currently flagged for mismatched membership hashes.
+    pub active_peers: Vec<PeerId>,
+    /// Last peer observed with a mismatch (best-effort).
+    pub last_peer: Option<PeerId>,
+    /// Height associated with the last mismatch.
+    pub last_height: u64,
+    /// View associated with the last mismatch.
+    pub last_view: u64,
+    /// Epoch associated with the last mismatch.
+    pub last_epoch: u64,
+    /// Local membership hash observed during the last mismatch.
+    pub last_local_hash: Option<[u8; 32]>,
+    /// Remote membership hash observed during the last mismatch.
+    pub last_remote_hash: Option<[u8; 32]>,
+    /// Milliseconds since UNIX epoch when the last mismatch was recorded.
+    pub last_timestamp_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+struct MembershipMismatchContext {
+    peer: PeerId,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    local_hash: [u8; 32],
+    remote_hash: [u8; 32],
+    timestamp_ms: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct MembershipMismatchState {
+    active: bool,
+    consecutive: u32,
+    last_mismatch: Option<MembershipMismatchContext>,
+}
+
+#[derive(Debug, Default)]
+struct MembershipMismatchRegistry {
+    entries: BTreeMap<PeerId, MembershipMismatchState>,
+    last: Option<MembershipMismatchContext>,
+}
+
 static LEADER_INDEX: AtomicU64 = AtomicU64::new(0);
 static HIGHEST_QC_HEIGHT: AtomicU64 = AtomicU64::new(0);
 static HIGHEST_QC_VIEW: AtomicU64 = AtomicU64::new(0);
@@ -199,6 +244,7 @@ static MEMBERSHIP_HEIGHT: AtomicU64 = AtomicU64::new(0);
 static MEMBERSHIP_VIEW: AtomicU64 = AtomicU64::new(0);
 static MEMBERSHIP_EPOCH: AtomicU64 = AtomicU64::new(0);
 static MEMBERSHIP_VIEW_HASH: OnceLock<Mutex<[u8; 32]>> = OnceLock::new();
+static MEMBERSHIP_MISMATCH_REGISTRY: OnceLock<Mutex<MembershipMismatchRegistry>> = OnceLock::new();
 static MODE_TAG: OnceLock<Mutex<String>> = OnceLock::new();
 static STAGED_MODE_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static STAGED_MODE_ACTIVATION_HEIGHT: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
@@ -1318,6 +1364,122 @@ fn membership_view_hash() -> Option<[u8; 32]> {
         .and_then(|slot| slot.lock().ok().map(|hash| *hash))
 }
 
+/// Snapshot the current membership view hash for mismatch detection.
+pub fn membership_snapshot() -> Option<SumeragiMembershipStatus> {
+    let view_hash = membership_view_hash()?;
+    Some(SumeragiMembershipStatus {
+        height: MEMBERSHIP_HEIGHT.load(Ordering::Relaxed),
+        view: MEMBERSHIP_VIEW.load(Ordering::Relaxed),
+        epoch: MEMBERSHIP_EPOCH.load(Ordering::Relaxed),
+        view_hash: Some(view_hash),
+    })
+}
+
+fn membership_mismatch_registry()
+-> Option<std::sync::MutexGuard<'static, MembershipMismatchRegistry>> {
+    MEMBERSHIP_MISMATCH_REGISTRY
+        .get_or_init(|| Mutex::new(MembershipMismatchRegistry::default()))
+        .lock()
+        .ok()
+}
+
+/// Record a membership hash mismatch for the given peer and return the consecutive count.
+pub fn record_membership_mismatch(
+    peer: PeerId,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    local_hash: [u8; 32],
+    remote_hash: [u8; 32],
+) -> u32 {
+    let now_ms = now_timestamp_ms();
+    let Some(mut registry) = membership_mismatch_registry() else {
+        return 0;
+    };
+    let context = MembershipMismatchContext {
+        peer,
+        height,
+        view,
+        epoch,
+        local_hash,
+        remote_hash,
+        timestamp_ms: now_ms,
+    };
+    let consecutive = {
+        let entry = registry
+            .entries
+            .entry(context.peer.clone())
+            .or_insert_with(MembershipMismatchState::default);
+        entry.active = true;
+        entry.consecutive = entry.consecutive.saturating_add(1).max(1);
+        entry.last_mismatch = Some(context.clone());
+        entry.consecutive
+    };
+    registry.last = Some(context);
+    consecutive
+}
+
+/// Clear any recorded membership mismatch for the given peer.
+pub fn clear_membership_mismatch(peer: &PeerId) {
+    let Some(mut registry) = membership_mismatch_registry() else {
+        return;
+    };
+    registry.entries.remove(peer);
+}
+
+/// Return the consecutive mismatch count for the given peer.
+pub fn membership_mismatch_consecutive(peer: &PeerId) -> u32 {
+    membership_mismatch_registry()
+        .and_then(|registry| registry.entries.get(peer).map(|entry| entry.consecutive))
+        .unwrap_or(0)
+}
+
+/// Snapshot the current membership mismatch registry.
+pub fn membership_mismatch_snapshot() -> MembershipMismatchSnapshot {
+    let Some(registry) = membership_mismatch_registry() else {
+        return MembershipMismatchSnapshot::default();
+    };
+    let active_peers = registry
+        .entries
+        .iter()
+        .filter_map(|(peer, entry)| entry.active.then(|| peer.clone()))
+        .collect();
+    let last = registry.last.clone();
+    MembershipMismatchSnapshot {
+        active_peers,
+        last_peer: last.as_ref().map(|ctx| ctx.peer.clone()),
+        last_height: last.as_ref().map_or(0, |ctx| ctx.height),
+        last_view: last.as_ref().map_or(0, |ctx| ctx.view),
+        last_epoch: last.as_ref().map_or(0, |ctx| ctx.epoch),
+        last_local_hash: last.as_ref().map(|ctx| ctx.local_hash),
+        last_remote_hash: last.as_ref().map(|ctx| ctx.remote_hash),
+        last_timestamp_ms: last.as_ref().map_or(0, |ctx| ctx.timestamp_ms),
+    }
+}
+
+#[cfg(test)]
+/// Reset the membership mismatch registry for unit tests.
+pub fn reset_membership_mismatch_for_tests() {
+    if let Some(mut registry) = membership_mismatch_registry() {
+        registry.entries.clear();
+        registry.last = None;
+    }
+}
+
+#[cfg(test)]
+/// Reset the membership snapshot counters for unit tests.
+pub fn reset_membership_snapshot_for_tests() {
+    MEMBERSHIP_HEIGHT.store(0, Ordering::Relaxed);
+    MEMBERSHIP_VIEW.store(0, Ordering::Relaxed);
+    MEMBERSHIP_EPOCH.store(0, Ordering::Relaxed);
+    MEMBERSHIP_HASH_SET.store(false, Ordering::Relaxed);
+    if let Some(slot) = MEMBERSHIP_VIEW_HASH.get() {
+        if let Ok(mut guard) = slot.lock() {
+            *guard = [0u8; 32];
+        }
+    }
+}
+
 /// Set PRF context (seed/height/view) used for leader selection (best-effort).
 pub fn set_prf_context(seed: [u8; 32], height: u64, view: u64) {
     PRF_HEIGHT.store(height, Ordering::Relaxed);
@@ -2308,6 +2470,8 @@ pub struct StatusSnapshot {
     pub membership_epoch: u64,
     /// Deterministic membership view hash (present once computed).
     pub membership_view_hash: Option<[u8; 32]>,
+    /// Membership mismatch snapshot.
+    pub membership_mismatch: MembershipMismatchSnapshot,
     /// Latest epoch index for which VRF penalties were recorded.
     pub vrf_penalty_epoch: u64,
     /// Count of validators that committed without revealing in the latest epoch snapshot.
@@ -2925,6 +3089,7 @@ pub fn snapshot() -> StatusSnapshot {
         membership_view: MEMBERSHIP_VIEW.load(Ordering::Relaxed),
         membership_epoch: MEMBERSHIP_EPOCH.load(Ordering::Relaxed),
         membership_view_hash: membership_view_hash(),
+        membership_mismatch: membership_mismatch_snapshot(),
         vrf_penalty_epoch: vrf_epoch,
         vrf_non_reveal_total: vrf_non_reveal,
         vrf_no_participation_total: vrf_no_participation,
@@ -4913,6 +5078,66 @@ mod tests {
         assert_eq!(snap.pipeline_conflict_rate_bps, 250);
 
         super::reset_rbc_backlog_stats_for_tests();
+    }
+
+    #[test]
+    fn membership_snapshot_tracks_view_hash() {
+        super::reset_membership_snapshot_for_tests();
+        assert!(super::membership_snapshot().is_none());
+
+        let hash = [0xAB; 32];
+        super::set_membership_view_hash(hash, 42, 7, 3);
+        let snap = super::membership_snapshot().expect("membership snapshot");
+        assert_eq!(snap.height, 42);
+        assert_eq!(snap.view, 7);
+        assert_eq!(snap.epoch, 3);
+        assert_eq!(snap.view_hash, Some(hash));
+
+        super::reset_membership_snapshot_for_tests();
+    }
+
+    #[test]
+    fn membership_mismatch_tracks_active_peers_and_clears() {
+        super::reset_membership_mismatch_for_tests();
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let local_hash = [0x11; 32];
+        let remote_hash = [0x22; 32];
+
+        let count =
+            super::record_membership_mismatch(peer_a.clone(), 10, 1, 2, local_hash, remote_hash);
+        assert_eq!(count, 1);
+        assert_eq!(super::membership_mismatch_consecutive(&peer_a), 1);
+
+        let count =
+            super::record_membership_mismatch(peer_a.clone(), 11, 2, 2, local_hash, remote_hash);
+        assert_eq!(count, 2);
+        assert_eq!(super::membership_mismatch_consecutive(&peer_a), 2);
+
+        let count =
+            super::record_membership_mismatch(peer_b.clone(), 12, 3, 2, local_hash, remote_hash);
+        assert_eq!(count, 1);
+
+        let snap = super::membership_mismatch_snapshot();
+        let active: BTreeSet<_> = snap.active_peers.iter().cloned().collect();
+        assert_eq!(active.len(), 2);
+        assert!(active.contains(&peer_a));
+        assert!(active.contains(&peer_b));
+        assert_eq!(snap.last_peer, Some(peer_b.clone()));
+        assert_eq!(snap.last_height, 12);
+        assert_eq!(snap.last_view, 3);
+        assert_eq!(snap.last_epoch, 2);
+        assert_eq!(snap.last_local_hash, Some(local_hash));
+        assert_eq!(snap.last_remote_hash, Some(remote_hash));
+        assert!(snap.last_timestamp_ms > 0);
+
+        super::clear_membership_mismatch(&peer_a);
+        let snap = super::membership_mismatch_snapshot();
+        assert!(!snap.active_peers.iter().any(|peer| peer == &peer_a));
+        assert_eq!(super::membership_mismatch_consecutive(&peer_a), 0);
+
+        super::clear_membership_mismatch(&peer_b);
+        super::reset_membership_mismatch_for_tests();
     }
 
     #[test]

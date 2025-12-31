@@ -4,14 +4,45 @@
 lang: he
 direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/register-and-mint
+title: רישום דומיין והטבעת נכסים
+description: מדגים יצירת דומיינים עם הרשאה, רישום נכסים והטבעה דטרמיניסטית.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-# בתהליך תרגום
+מדגים יצירת דומיינים עם הרשאה, רישום נכסים והטבעה דטרמיניסטית.
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+## סיור בספר החשבונות
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+- ודאו שחשבון היעד (לדוגמה `alice@wonderland`) קיים, בדומה לשלב ההכנה בכל quickstart של ה-SDK.
+- הפעילו את נקודת הכניסה `register_and_mint` כדי ליצור את הגדרת הנכס ROSE ולהטביע 250 יחידות עבור Alice בעסקה אחת.
+- אמתו יתרות דרך `client.request(FindAccountAssets)` או `iroha_cli assets list --account alice@wonderland` כדי לוודא שההטבעה הצליחה.
+
+## מדריכי SDK קשורים
+
+- [Quickstart של Rust SDK](/sdks/rust)
+- [Quickstart של Python SDK](/sdks/python)
+- [Quickstart של JavaScript SDK](/sdks/javascript)
+
+[הורדת מקור Kotodama](/norito-snippets/register-and-mint.ko)
+
+```text
+// Register a new asset and mint some to the specified account.
+seiyaku RegisterAndMint {
+  kotoage fn register_and_mint() permission(AssetManager) {
+    // name, symbol, quantity (precision or supply depending on host), mintable flag
+    let name = "rose";
+    let symbol = "ROSE";
+    let qty = 1000;      // interpretation depends on data model (example only)
+    let mintable = 1;    // 1 = mintable, 0 = fixed
+    register_asset(name, symbol, qty, mintable);
+
+    // Mint 250 ROSE to Alice
+    let to = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let asset = asset_definition!("rose#wonderland");
+    mint_asset(to, asset, 250);
+  }
+}
+```

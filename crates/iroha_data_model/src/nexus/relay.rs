@@ -10,10 +10,12 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
+    AccountId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
     consensus::ExecutionQcRecord,
     da::commitment::DaCommitmentBundle,
     nexus::{DataSpaceId, LaneId},
+    prelude::Metadata,
 };
 
 /// Relay envelope broadcast by Nexus lanes for merge validation.
@@ -68,6 +70,25 @@ pub struct LaneRelayEvidenceBundle {
     /// Human-readable error detail (best-effort).
     #[norito(default)]
     pub error_message: String,
+}
+
+/// Emergency validator override for a dataspace when lane relay quorum is at risk.
+///
+/// Application of this override is gated by `nexus.lane_relay_emergency.enabled`.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneRelayEmergencyValidatorSet {
+    /// Validators temporarily allowed to satisfy lane relay quorum.
+    pub validators: Vec<AccountId>,
+    /// Optional block height (inclusive) after which the override expires.
+    #[norito(default)]
+    pub expires_at_height: Option<u64>,
+    /// Optional metadata describing why the override was applied.
+    #[norito(default)]
+    pub metadata: Metadata,
 }
 
 /// Quorum parameters used to validate [`LaneRelayEnvelope`] proofs.
@@ -210,6 +231,7 @@ impl LaneRelayEnvelope {
     /// In addition to the checks performed by [`Self::verify`], this surfaces
     /// [`LaneRelayError::MissingExecutionQc`] when the envelope lacks an execution QC,
     /// [`LaneRelayError::InvalidValidatorSet`] for malformed quorum parameters,
+    /// [`LaneRelayError::SignerBitmapLengthMismatch`] when the signer bitmap length does not match the roster size,
     /// [`LaneRelayError::InvalidSignerIndex`] if the signer bitmap references out-of-range validators,
     /// [`LaneRelayError::InsufficientQuorum`] when the bitmap does not satisfy the quorum, and
     /// [`LaneRelayError::AggregateSignatureInvalid`] when the aggregate signature is empty or zeroed.
@@ -221,6 +243,15 @@ impl LaneRelayEnvelope {
             .execution_qc
             .as_ref()
             .ok_or(LaneRelayError::MissingExecutionQc)?;
+        let expected_len = usize::try_from(quorum.validator_count)
+            .unwrap_or(usize::MAX)
+            .div_ceil(8);
+        if qc.signers_bitmap.len() != expected_len {
+            return Err(LaneRelayError::SignerBitmapLengthMismatch {
+                expected: expected_len,
+                actual: qc.signers_bitmap.len(),
+            });
+        }
         let mut observed: u32 = 0;
         for (byte_index, byte) in qc.signers_bitmap.iter().enumerate() {
             if *byte == 0 {
@@ -366,6 +397,14 @@ pub enum LaneRelayError {
     /// Execution QC is missing while quorum validation is requested.
     #[error("execution QC missing for relay envelope")]
     MissingExecutionQc,
+    /// Signer bitmap length does not match expected roster size.
+    #[error("signer bitmap length {actual} does not match expected {expected}")]
+    SignerBitmapLengthMismatch {
+        /// Expected bitmap length in bytes.
+        expected: usize,
+        /// Actual bitmap length in bytes.
+        actual: usize,
+    },
     /// Signer bitmap references a validator outside the roster.
     #[error("signer bitmap references validator {signer} but roster size is {validator_count}")]
     InvalidSignerIndex {
@@ -382,7 +421,7 @@ pub enum LaneRelayError {
         /// Expected minimum quorum.
         expected: u32,
     },
-    /// Aggregate signature bytes are missing or zero.
+    /// Aggregate signature bytes are missing, zeroed, or invalid.
     #[error("aggregate signature missing or invalid for execution QC")]
     AggregateSignatureInvalid,
 }
@@ -445,6 +484,16 @@ impl PartialEq for LaneRelayError {
                 },
             ) => a_observed == b_observed && a_expected == b_expected,
             (
+                SignerBitmapLengthMismatch {
+                    expected: a_expected,
+                    actual: a_actual,
+                },
+                SignerBitmapLengthMismatch {
+                    expected: b_expected,
+                    actual: b_actual,
+                },
+            ) => a_expected == b_expected && a_actual == b_actual,
+            (
                 DataspaceMismatch {
                     expected: a_expected,
                     actual: a_actual,
@@ -493,6 +542,7 @@ impl LaneRelayError {
             LaneRelayError::DaCommitmentHashMismatch => "da_commitment_hash_mismatch",
             LaneRelayError::InvalidValidatorSet { .. } => "invalid_validator_set",
             LaneRelayError::MissingExecutionQc => "missing_execution_qc",
+            LaneRelayError::SignerBitmapLengthMismatch { .. } => "signer_bitmap_length_mismatch",
             LaneRelayError::InvalidSignerIndex { .. } => "invalid_signer_index",
             LaneRelayError::InsufficientQuorum { .. } => "insufficient_quorum",
             LaneRelayError::AggregateSignatureInvalid => "aggregate_signature_invalid",
@@ -547,6 +597,7 @@ mod tests {
     fn qc_with_bitmap(bitmap: Vec<u8>, height: u64, signature: Vec<u8>) -> ExecutionQcRecord {
         ExecutionQcRecord {
             subject_block_hash: sample_header(height, None).hash(),
+            parent_state_root: Hash::new([0xCD; 4]),
             post_state_root: Hash::new([0xAB; 4]),
             height,
             view: 1,
@@ -590,6 +641,24 @@ mod tests {
             LaneRelayError::InvalidSignerIndex {
                 signer: 4,
                 validator_count: 4
+            }
+        );
+    }
+
+    #[test]
+    fn quorum_validation_rejects_bitmap_length_mismatch() {
+        let qc = qc_with_bitmap(vec![0b0000_0011], 4, vec![0xAA; 48]);
+        let envelope = build_envelope(4, Some(qc));
+        let quorum = LaneRelayQuorumContext::new(9, 3).expect("quorum");
+
+        let err = envelope
+            .verify_with_quorum(quorum)
+            .expect_err("bitmap length mismatch");
+        assert_eq!(
+            err,
+            LaneRelayError::SignerBitmapLengthMismatch {
+                expected: 2,
+                actual: 1
             }
         );
     }

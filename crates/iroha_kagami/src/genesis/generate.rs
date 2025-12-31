@@ -444,11 +444,11 @@ impl<T: Write> RunArgs<T> for Args {
             .transpose()
             .wrap_err("invalid --vrf-seed-hex")?;
 
-        let mut consensus_mode = consensus_mode.map_or(
+        let consensus_mode = consensus_mode.map_or(
             SumeragiConsensusMode::Permissioned,
             SumeragiConsensusMode::from,
         );
-        let mut next_consensus_mode = next_consensus_mode.map(SumeragiConsensusMode::from);
+        let next_consensus_mode = next_consensus_mode.map(SumeragiConsensusMode::from);
 
         validate_consensus_cutover(next_consensus_mode, mode_activation_height)?;
 

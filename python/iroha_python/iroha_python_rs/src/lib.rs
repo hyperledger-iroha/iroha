@@ -6630,6 +6630,7 @@ fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
     header.set_da_commitments_hash(Some(da_hash));
     let qc = ExecutionQcRecord {
         subject_block_hash: header.hash(),
+        parent_state_root: Hash::new([0xBA; 4]),
         post_state_root: Hash::new([0xBB; 4]),
         height: header.height().get(),
         view: 1,

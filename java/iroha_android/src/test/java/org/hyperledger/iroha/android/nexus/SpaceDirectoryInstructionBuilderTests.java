@@ -95,7 +95,13 @@ public final class SpaceDirectoryInstructionBuilderTests {
         "fixtures/space_directory/capability/cbdc_wholesale.manifest.json";
     Path path = null;
     final Path[] candidates =
-        new Path[] {Path.of(relative), Path.of("../" + relative), Path.of("../../" + relative)};
+        new Path[] {
+          Path.of(relative),
+          Path.of("../" + relative),
+          Path.of("../../" + relative),
+          Path.of("../../../" + relative),
+          Path.of("../../../../" + relative)
+        };
     for (final Path candidate : candidates) {
       if (Files.exists(candidate)) {
         path = candidate;

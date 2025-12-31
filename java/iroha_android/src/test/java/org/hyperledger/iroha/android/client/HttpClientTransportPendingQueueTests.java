@@ -148,7 +148,8 @@ public final class HttpClientTransportPendingQueueTests {
   }
 
   private static final class RecordingTelemetrySink implements TelemetrySink {
-    private volatile SignalEvent lastSignal;
+    private final java.util.concurrent.ConcurrentLinkedQueue<SignalEvent> signals =
+        new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     @Override
     public void onRequest(final org.hyperledger.iroha.android.telemetry.TelemetryRecord record) {
@@ -171,18 +172,17 @@ public final class HttpClientTransportPendingQueueTests {
 
     @Override
     public void emitSignal(final String signalId, final Map<String, Object> fields) {
-      this.lastSignal = new SignalEvent(signalId, Map.copyOf(Objects.requireNonNull(fields, "fields")));
+      signals.add(new SignalEvent(signalId, Map.copyOf(Objects.requireNonNull(fields, "fields"))));
     }
 
     SignalEvent findSignal(final String id) {
-      final SignalEvent event = lastSignal;
-      if (event == null) {
-        return null;
+      SignalEvent match = null;
+      for (final SignalEvent event : signals) {
+        if (Objects.equals(id, event.id())) {
+          match = event;
+        }
       }
-      if (!Objects.equals(id, event.id())) {
-        return null;
-      }
-      return event;
+      return match;
     }
 
     record SignalEvent(String id, Map<String, Object> fields) {}

@@ -36,6 +36,7 @@ where
 fn execution_qc_record_roundtrip() {
     let record = ExecutionQcRecord {
         subject_block_hash: sample_block_hash(0x10),
+        parent_state_root: sample_hash(0x11),
         post_state_root: sample_hash(0x20),
         height: 42,
         view: 7,

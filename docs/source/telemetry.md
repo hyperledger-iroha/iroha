@@ -41,11 +41,81 @@ Settlement telemetry
 - `iroha_settlement_finality_events_total{kind="dvp|pvp",outcome="success|failure",final_state="none|delivery_only|payment_only|both|primary_only|counter_only"}` — finality counters grouped by settlement kind, execution outcome, and which legs remained committed. DvP reports `delivery_only|payment_only`, PvP reports `primary_only|counter_only`; `none` means both legs rolled back.
 - `iroha_settlement_fx_window_ms{kind="pvp",order,atomicity}` — histogram of observed PvP FX windows (milliseconds between committed legs) labelled by execution order (`delivery_then_payment`/`payment_then_delivery`) and atomicity policy (`all_or_nothing|commit_first_leg|commit_second_leg`).
 
+Network time telemetry
+- `nts_offset_ms` (gauge) — smoothed or raw offset vs local clock.
+- `nts_confidence_ms` (gauge) — MAD confidence bound.
+- `nts_peers_sampled` (gauge) — peers contributing recent samples.
+- `nts_samples_used` (gauge) — samples used after RTT filtering.
+- `nts_fallback` (gauge) — 1 when NTS falls back to local time.
+- `nts_healthy` (gauge) — 1 when health thresholds pass and no fallback.
+- `nts_min_samples_ok` / `nts_offset_ok` / `nts_confidence_ok` (gauges) — per-check health flags.
+- `nts_rtt_ms_bucket{le="..."}` / `nts_rtt_ms_sum` / `nts_rtt_ms_count` — RTT histogram buckets (ms) and aggregates.
+- `torii_nts_unhealthy_reject_total` (counter) — time-sensitive transactions rejected during admission because NTS is unhealthy.
+
+Runbook guidance
+- Alert when `max_over_time(nts_healthy[5m]) == 0` or `max_over_time(nts_fallback[5m]) > 0`; these indicate the time service is unsynchronized or missing samples.
+- Use `nts_min_samples_ok`, `nts_offset_ok`, and `nts_confidence_ok` to pinpoint root cause; check `/v1/time/status` for peer sample and RTT diagnostics.
+- If `enforcement_mode = "reject"`, admission blocks time-sensitive instructions while unhealthy. Switch to `warn` only for temporary operational relief.
+
 Configuration
 - `telemetry_enabled` (default: true): Master kill switch. When set to false, the daemon skips telemetry worker startup, Torii hides `/metrics` and `/status`, and runtime instrumentation is bypassed regardless of profile.
 - `telemetry_profile` (default: `operator`): Capability bundle wiring both Torii routing and runtime sinks. Profiles toggle three capability flags — `metrics`, `expensive_metrics`, and `developer_outputs`. When `telemetry_enabled = false`, the effective profile is forced to `disabled`.
 - `torii.peer_telemetry_urls` (default: empty): Optional list of Torii base URLs used to fetch peer telemetry metadata. When set, Torii uses these URLs instead of deriving targets from P2P peer addresses.
 - Build-time ISI instrumentation: `#[metrics]` counters (`isi{kind="total|success"}`) and timing histograms (`isi_times`) require building `irohad` with `--features expensive-telemetry` (or `iroha_core` `expensive-telemetry`). The runtime still respects `telemetry_enabled` and `telemetry_profile` for exposure.
+
+Telemetry redaction and integrity
+- Redaction is mandatory for `operator`, `extended`, and `full` profiles; startup rejects configs where `telemetry_redaction.mode` is not `strict` or the build lacks the `log-obfuscation` feature.
+- Field-name normalization is case-insensitive and splits punctuation/camelCase/acronyms into snake_case segments for taxonomy and allow-list checks.
+- Sensitive taxonomy is defined by explicit prefixes and keywords (kept in sync with guardrails below).
+- Redacted values are replaced with `[REDACTED]`; string payloads longer than 2048 bytes are truncated and suffixed with `...(truncated)` for deterministic export.
+- `telemetry_redaction.mode` options: `strict` (always redact), `allowlist` (allow-listed entries bypass keyword redaction but explicit prefixes still redact), `disabled` (developer-only). `telemetry_redaction.allowlist` must be a subset of the approved policy below.
+
+Telemetry redaction prefixes:
+<!-- TELEMETRY_REDACTION_PREFIXES_START -->
+```text
+redact
+sensitive
+secret
+pii
+```
+<!-- TELEMETRY_REDACTION_PREFIXES_END -->
+
+Telemetry redaction keywords:
+<!-- TELEMETRY_REDACTION_KEYWORDS_START -->
+```text
+password
+passwd
+passphrase
+secret
+credential
+token
+access_token
+refresh_token
+session_token
+session
+authorization
+cookie
+jwt
+bearer
+api_key
+apikey
+private_key
+privkey
+mnemonic
+seed
+```
+<!-- TELEMETRY_REDACTION_KEYWORDS_END -->
+
+Approved telemetry redaction allowlist (normalized field names):
+<!-- TELEMETRY_REDACTION_ALLOWLIST_START -->
+```text
+(none)
+```
+<!-- TELEMETRY_REDACTION_ALLOWLIST_END -->
+
+- Redaction audit metrics: `telemetry_redaction_total{reason="keyword|explicit"}`, `telemetry_redaction_skipped_total{reason="allowlist|disabled|unsupported"}`, and `telemetry_truncation_total`.
+- Tamper-evident exports: when `telemetry_integrity.enabled = true`, websocket telemetry and dev-telemetry JSON lines include a `chain` object (`seq`, `prev_hash`, `hash`, optional `signature`, `key_id`). `hash` is `blake3(prev_hash || seq || payload_json)` where `payload_json` is the Norito JSON serialization of the record. `signature` is a keyed Blake3 hash when `telemetry_integrity.signing_key_hex` (32-byte hex) is set. Without a persisted state file the chain restarts at sequence 1 on startup.
+- To persist continuity across restarts, set `telemetry_integrity.state_dir` to a writable directory. Each sink writes its own state file (for example, `telemetry_integrity_ws.json` and `telemetry_integrity_dev.json`).
 
 Build-time instrumentation
 - `iroha_core/expensive-telemetry` (enables `iroha_telemetry/metric-instrumentation`) compiles the `#[metrics]` attribute into Prometheus counters and timing histograms.
@@ -924,7 +994,7 @@ Use this checklist when the Norito transport fails SLOs or generates alerts:
 3. Re-run the Norito RPC smoke test (`python/iroha_python/scripts/run_norito_rpc_smoke.sh`) and alert tests (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`).
 4. Capture evidence (Grafana PNGs, config patches, CLI outputs) and attach it to the NRPC-2 runbook ticket plus `status.md` so the roadmap artifact remains auditable.
 
-A new Prometheus counter `sumeragi_membership_mismatch_total{peer,height,view}` and gauge `sumeragi_membership_mismatch_active{peer}` were introduced to detect validator roster divergence.
+A new Prometheus counter `sumeragi_membership_mismatch_total{peer,height,view}` and gauge `sumeragi_membership_mismatch_active{peer}` were introduced to detect validator roster divergence. `/v1/sumeragi/status` now surfaces a `membership_mismatch` block with the active peer list and last mismatch context to speed triage.
 
 The gauges `sumeragi_membership_view_hash`, `sumeragi_membership_height`, `sumeragi_membership_view`, and `sumeragi_membership_epoch` expose the deterministic membership hash together with the `(height, view, epoch)` context. Compare these values across peers to confirm roster alignment without waiting for mismatch alarms.
 
@@ -995,6 +1065,11 @@ snapshot includes the scheduler graph counters (`tx_vertices`, `tx_edges`,
   execution counters sized to the lane.
 - `quarantine_executed` — quarantine fallbacks the lane had to drain during the
   block.
+
+The sister collection `nexus_scheduler_dataspace_teu_status` mirrors the
+per-dataspace backlog view and reports `tx_served` plus the dataspace
+`fault_tolerance` (f) so operators can see the configured lane-relay committee
+sizing (`3f+1`) in the same status payload.
 
 The transaction queue now keeps these snapshots warm in between block commits.
 Routing rules can specify dataspace aliases, so `ConfigLaneRouter` resolves both

@@ -5,81 +5,47 @@ lang: pt
 direction: ltr
 source: docs/portal/docs/reference/address-safety.md
 status: complete
-translator: manual
+generator: scripts/sync_docs_i18n.py
 source_hash: 582a75b7b68e86acd82b36ccacec2691d6552d45bb00e2f6fe5bed1424f2842a
 source_last_modified: "2025-11-06T19:39:18.688464+00:00"
-translation_last_reviewed: 2025-11-14
+translation_last_reviewed: 2025-12-30
 ---
 
 ---
-title: Segurança e acessibilidade de endereços
-description: Requisitos de UX para exibir e compartilhar endereços Iroha com segurança (ADDR-6c).
+title: Seguranca e acessibilidade de enderecos
+description: Requisitos de UX para apresentar e compartilhar enderecos Iroha com seguranca (ADDR-6c).
 ---
 
-Esta página documenta o entregável ADDR‑6c. Aplique estas restrições a wallets,
-exploradores, tooling de SDK e qualquer superfície do portal que renderize ou aceite
-endereços voltados para pessoas. O modelo de dados canônico está em
-`docs/account_structure.md`; a checklist abaixo explica como expor esses formatos sem
-comprometer segurança ou acessibilidade.
+Esta pagina captura o entregavel de documentacao ADDR-6c. Aplique estas restricoes a wallets, explorers, ferramentas de SDK e qualquer superficie do portal que renderize ou aceite enderecos voltados para pessoas. O modelo de dados canonico vive em `docs/account_structure.md`; a checklist abaixo explica como expor esses formatos sem comprometer seguranca ou acessibilidade.
 
 ## Fluxos seguros de compartilhamento
 
-- Faça com que toda ação de copiar/compartilhar use por padrão o endereço IH‑B32. Exiba o
-  domínio resolvido como contexto de suporte para manter a string com checksum em
-  destaque.
-- Ofereça um atalho de “Compartilhar” que inclua o endereço em texto puro e um QR code
-  derivados do mesmo payload. Permita que a pessoa usuária inspecione ambos antes de
-  confirmar.
-- Quando o espaço exigir truncagem (cards pequenos, notificações), mantenha o prefixo
-  legível inicial, use reticências e preserve os últimos 4–6 caracteres para que o
-  “âncora” do checksum sobreviva. Disponibilize um gesto de toque/atalho de teclado para
-  copiar a string completa sem truncagem.
-- Evite dessincronização com o clipboard exibindo um toast de confirmação que mostre
-  exatamente a string IH‑B32 copiada. Quando houver telemetria, conte tentativas de copy
-  versus ações de share para detectar regressões de UX rapidamente.
+- Por padrao, toda acao de copiar/compartilhar deve usar o endereco IH-B32. Exiba o dominio resolvido como contexto de apoio para manter a string com checksum em destaque.
+- Ofereca um atalho de "Compartilhar" que inclua o endereco em texto puro e um QR code derivados do mesmo payload. Permita que a pessoa usuaria inspecione ambos antes de confirmar.
+- Quando o espaco exigir truncagem (cards pequenos, notificacoes), mantenha o prefixo legivel inicial, use reticencias e preserve os ultimos 4-6 caracteres para que a ancora do checksum sobreviva. Disponibilize um gesto de toque/atalho de teclado para copiar a string completa sem truncagem.
+- Evite desincronizacao com o clipboard exibindo um toast de confirmacao que mostre exatamente a string IH-B32 copiada. Quando houver telemetria, conte tentativas de copy versus acoes de share para detectar regressoes de UX rapidamente.
 
 ## Salvaguardas para IME e entrada
 
-- Rejeite entrada non‑ASCII em campos de endereço. Quando surgirem artefatos de IME
-  (full‑width, Kana, marcas de tom), mostre um aviso inline explicando como trocar o
-  teclado para entrada latina antes de tentar novamente.
-- Forneça uma área de paste em texto puro que remova marcas combinatórias e substitua
-  espaços em branco por espaços ASCII antes da validação. Isso evita perda de progresso
-  quando o usuário desativa o IME no meio do fluxo.
-- Fortaleça a validação contra zero‑width joiners, variation selectors e outros code
-  points Unicode “furtivos”. Registre a categoria de code point rejeitada para que suites
-  de fuzzing possam incorporar a telemetria.
+- Rejeite entrada non-ASCII em campos de endereco. Quando surgirem artefatos de IME (full width, Kana, marcas de tom), mostre um aviso inline explicando como trocar o teclado para entrada latina antes de tentar novamente.
+- Forneca uma area de paste em texto puro que remova marcas combinatorias e substitua espacos em branco por espacos ASCII antes da validacao. Isso evita perda de progresso quando o usuario desativa o IME no meio do fluxo.
+- Fortaleca a validacao contra zero-width joiners, variation selectors e outros code points Unicode furtivos. Registre a categoria de code point rejeitada para que suites de fuzzing possam incorporar a telemetria.
 
 ## Expectativas para tecnologias assistivas
 
-- Anote cada bloco de endereço com `aria-label` ou `aria-describedby` que detailhe o
-  prefixo legível e agrupe o payload em blocos de 4–8 caracteres
-  (“ih dash b three two …”). Isso impede que leitores de tela produzam um fluxo
-  ininteligível de caracteres.
-- Anuncie eventos de copy/share bem‑sucedidos por meio de uma live region “polite”.
-  Inclua o destino (clipboard, share sheet, QR) para que a pessoa usuária saiba que a
-  ação foi concluída sem mover o foco.
-- Forneça texto `alt` descritivo para pré‑visualizações de QR (por exemplo,
-  “Endereço IH‑B32 para `<alias>@<domain>` na chain `0x1234`”). Coloque ao lado do canvas
-  do QR um botão “Copiar endereço em texto” para pessoas com baixa visão.
+- Anote cada bloco de endereco com `aria-label` ou `aria-describedby` que detalhe o prefixo legivel e agrupe o payload em blocos de 4-8 caracteres ("ih dash b three two ..."). Isso impede que leitores de tela produzam um fluxo ininteligivel de caracteres.
+- Anuncie eventos de copy/share bem-sucedidos por meio de uma live region "polite". Inclua o destino (clipboard, share sheet, QR) para que a pessoa usuaria saiba que a acao foi concluida sem mover o foco.
+- Forneca texto `alt` descritivo para pre-visualizacoes de QR (por exemplo, "Endereco IH-B32 para `<alias>@<domain>` na chain `0x1234`"). Coloque ao lado do canvas do QR um botao "Copiar endereco em texto" para pessoas com baixa visao.
 
-## Endereços comprimidos exclusivos Sora
+## Enderecos comprimidos somente Sora
 
-- Gating: oculte a string comprimida `snx1…` atrás de uma confirmação explícita. A
-  confirmação deve deixar claro que esse formato só funciona em chains Sora Nexus.
-- Rotulagem: toda ocorrência deve incluir um badge visível “Somente Sora” e um tooltip
-  explicando por que outras redes exigem o formato IH‑B32.
-- Proteções: se o discriminante de chain ativo não for a alocação Nexus, recuse gerar o
-  endereço comprimido e redirecione o usuário de volta para IH‑B32.
-- Telemetria: registre quantas vezes o formato comprimido é solicitado e copiado para que
-  o playbook de incidentes consiga detectar picos de compartilhamento acidental.
+- Gating: oculte a string comprimida `snx1...` atras de uma confirmacao explicita. A confirmacao deve deixar claro que esse formato so funciona em chains Sora Nexus.
+- Rotulagem: toda ocorrencia deve incluir um badge visivel "Somente Sora" e um tooltip explicando por que outras redes exigem o formato IH-B32.
+- Protecoes: se o discriminante de chain ativo nao for a alocacao Nexus, recuse gerar o endereco comprimido e redirecione o usuario de volta para IH-B32.
+- Telemetria: registre quantas vezes o formato comprimido e solicitado e copiado para que o playbook de incidentes consiga detectar picos de compartilhamento acidental.
 
 ## Gates de qualidade
 
-- Estenda testes de UI automatizados (ou suites de acessibilidade em storybook) para
-  garantir que os componentes de endereço exponham o metadata ARIA necessário e que
-  mensagens de rejeição de IME apareçam.
-- Inclua cenários de QA manual para entrada via IME (kana, pinyin), passagem com leitor
-  de tela (VoiceOver/NVDA) e cópia via QR em temas de alto contraste antes de lançar.
-- Torne esses checks visíveis nas checklists de release, juntamente com os testes de
-  paridade IH‑B32, para que regressões continuem bloqueadas até serem corrigidas.
+- Estenda testes de UI automatizados (ou suites de acessibilidade no storybook) para garantir que os componentes de endereco exponham a metadata ARIA necessaria e que mensagens de rejeicao de IME aparecam.
+- Inclua cenarios de QA manual para entrada via IME (kana, pinyin), passagem com leitor de tela (VoiceOver/NVDA) e copia via QR em temas de alto contraste antes de lancar.
+- Torne esses checks visiveis nas checklists de release, juntamente com os testes de paridade IH-B32, para que regressoes continuem bloqueadas ate serem corrigidas.

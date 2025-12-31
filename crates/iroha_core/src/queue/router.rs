@@ -477,6 +477,7 @@ mod tests {
                 id: DataSpaceId::new(7),
                 alias: "alpha".to_string(),
                 description: None,
+                fault_tolerance: 1,
             },
         ])
         .expect("valid dataspace catalog");

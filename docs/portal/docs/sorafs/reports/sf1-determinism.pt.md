@@ -4,15 +4,52 @@
 lang: pt
 direction: ltr
 source: docs/portal/docs/sorafs/reports/sf1-determinism.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cfb6075f6dcbfcbb6ad91da1157b8f1b8929c26e1fa5c322a427d0a385265181
-source_last_modified: "2025-11-18T05:53:43.293602+00:00"
-translation_last_reviewed: null
+source_hash: 4cd9ef613d7c825bd562d2708ed0027f3866ddf031655592820a46aeadad3256
+source_last_modified: "2025-11-13T08:10:42.118544+00:00"
+translation_last_reviewed: 2025-12-30
 ---
 
-# Tradução em andamento
+---
+title: SoraFS SF1 Determinism Dry-Run
+summary: Checklist e digests esperados para validar o perfil chunker canonico `sorafs.sf1@1.0.0`.
+---
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+# SoraFS SF1 Determinism Dry-Run
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+Este relatorio captura o dry-run base para o perfil chunker canonico
+`sorafs.sf1@1.0.0`. Tooling WG deve reexecutar o checklist abaixo ao validar
+refreshes de fixtures ou novos consumer pipelines. Registre o resultado de cada
+comando na tabela para manter um trail auditavel.
+
+## Checklist
+
+| Passo | Comando | Resultado esperado | Notas |
+|------|---------|------------------|-------|
+| 1 | `cargo test -p sorafs_chunker` | Todos os tests passam; o teste de paridade `vectors` tem sucesso. | Confirma que fixtures canonicos compilam e correspondem a implementacao Rust. |
+| 2 | `ci/check_sorafs_fixtures.sh` | O script sai com 0; reporta os digests de manifest abaixo. | Verifica que fixtures regeneram limpo e que as assinaturas permanecem anexadas. |
+| 3 | `cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles` | A entrada `sorafs.sf1@1.0.0` corresponde ao registry descriptor (`profile_id=1`). | Garante que a metadata do registry permanece sincronizada. |
+| 4 | `cargo run --locked -p sorafs_chunker --bin export_vectors` | A regeneracao ocorre sem `--allow-unsigned`; arquivos de manifest e assinatura nao mudam. | Fornece prova de determinismo para limites de chunk e manifests. |
+| 5 | `node scripts/check_sf1_vectors.mjs` | Reporta nenhum diff entre fixtures TypeScript e Rust JSON. | Helper opcional; garantir paridade entre runtimes (script mantido por Tooling WG). |
+
+## Digests esperados
+
+- Chunk digest (SHA3-256): `13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482`
+- `manifest_blake3.json`: `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`
+- `sf1_profile_v1.json`: `23a14fe4bf06a44bc2cc84ad0f287659f62a3ff99e4147e9e7730988d9eb01be`
+- `sf1_profile_v1.ts`: `2bc35d45a9a1e539c4b0e3571817dc57d5a938e954882537379d7abba7b751a1`
+- `sf1_profile_v1.go`: `dcca46978768cca5fdbc5174a35036d5e168cc5e584bba33056b76f316590666`
+- `sf1_profile_v1.rs`: `181f0595284dcbb862db997d1c18564832c157f9e1eaf804f0bf88c846f73d65`
+
+## Sign-Off Log
+
+| Data | Engineer | Resultado do checklist | Notas |
+|------|----------|------------------------|-------|
+| 2026-02-12 | Tooling (LLM) | FAIL | Passo 1: `cargo test -p sorafs_chunker` falha na suite `vectors` porque fixtures ainda publicam o handle legacy `sorafs-sf1` e nao possuem profile aliases/digests (`fixtures/sorafs_chunker/sf1_profile_v1.*`). Passo 2: `ci/check_sorafs_fixtures.sh` aborta - `manifest_signatures.json` ausente no estado do repo (deletado no working tree). Passo 4: `export_vectors` nao consegue verificar assinaturas enquanto o arquivo de manifest estiver ausente. Recomenda-se restaurar fixtures assinadas (ou fornecer a chave do council) e regenerar bindings para que o handle canonico + array de aliases sejam embutidos conforme exigido pelos tests. |
+| 2026-02-12 | Tooling (LLM) | OK | Fixtures regeneradas via `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102...1f`, produzindo handle canonico + alias lists e um manifest digest novo `2084f98010fd59b630fede19fa85d448e066694f77fa41a03c62b867eb5a9e55`. Verificado com `cargo test -p sorafs_chunker` e um `ci/check_sorafs_fixtures.sh` limpo (fixtures preparadas para a verificacao). Passo 5 pendente ate o helper de paridade Node chegar. |
+| 2026-02-20 | Storage Tooling CI | OK | Parliament envelope (`fixtures/sorafs_chunker/manifest_signatures.json`) obtido via `ci/check_sorafs_fixtures.sh`; o script regenerou fixtures, confirmou o manifest digest `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21`, e reexecutou o Rust harness (passos Go/Node executam quando disponiveis) sem diffs. |
+
+Tooling WG deve adicionar uma linha datada apos executar o checklist. Se algum
+passo falhar, abra um issue ligado aqui e inclua detalhes de remediation antes
+de aprovar novos fixtures ou perfis.

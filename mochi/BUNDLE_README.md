@@ -37,6 +37,8 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    genesis presets, set `consensus_mode = "npos"` and include
    `genesis_profile = "iroha3-dev"` in the same table (or set
    `supervisor.genesis_profile` when using presets).
+   CLI runs accept the same presets or an inline profile table via
+   `--profile '{ peer_count = 3, consensus_mode = "permissioned" }'`.
    For multi-lane/Nexus profiles, populate the `[nexus]` and `[sumeragi]`
    sections in `config/local.toml` (or pass `--nexus-config`, `--enable-nexus`,
    and `--enable-da` on the CLI). MOCHI validates `nexus.enabled` against lane
@@ -144,6 +146,8 @@ same paths in their header). Use the Maintenance bar to reset a single lane:
 MOCHI wipes the lane storage, re-applies the lane catalog via Torii, and restarts
 peers as needed. The Lane status panel surfaces DA cursors, relay lag, RBC bytes,
 and relay ingest state per peer so operators can spot lagging lanes quickly.
+The Settings dialog also includes a profile override field that accepts preset
+slugs or inline TOML tables for custom peer counts/consensus modes.
 
 ## Deterministic manifest
 

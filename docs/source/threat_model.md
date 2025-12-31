@@ -1,6 +1,6 @@
 # Hyperledger Iroha v2 Threat Model
 
-_Last reviewed: 2025-11-07 - Next scheduled review: 2026-02-05_
+_Last reviewed: 2025-12-31 - Next scheduled review: 2026-03-31_
 
 Maintenance cadence: Security Working Group with component owners (<=90 days). Every revision is summarised in `status.md` with ticket links for open risks.
 
@@ -148,11 +148,12 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 ### Telemetry and Logging
 
 **Current controls**
-- Structured logging with Norito JSON writers; sensitive fields redacted per logging guidelines (`docs/source/telemetry.md`).
+- Telemetry redaction enforced by default for operator/extended/full profiles with keyword/prefix taxonomy, allow-list gating, and deterministic truncation; redaction metrics exported per `docs/source/telemetry.md`.
+- Tamper-evident telemetry export via hash-chained payloads with optional keyed signatures and key identifiers; applied to websocket and dev-telemetry sinks.
 - Prometheus endpoints served over TLS; scrape tokens configurable in `iroha_config`.
 
 **Outstanding gaps**
-- Formal redaction lint/CI checks and tamper-evident shipping not yet implemented (**see residual risks: Telemetry redaction policy**).
+- None; audit allow-list changes via telemetry redaction guardrails and `status.md` updates.
 
 ### Time and Randomness
 
@@ -176,7 +177,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 | Release-signing key separation | Open | Offline root with threshold signing (tracked via `roadmap.md` Milestone R3 release runbook) | Security WG | 2025-10-31 |
 | Membership registry reconciliation | Open | Enforce view-hash checks and halt on mismatch (`SUM-203` follow-up) | Consensus WG | 2025-10-25 |
 | Pre-auth DoS controls | Open | Connection gating and handshake caps implemented (`preauth_*` config, `torii_pre_auth_reject_total`), continue tuning via follow-up ticket | Torii WG & Core WG | 2025-10-31 |
-| Telemetry redaction policy | Open | Redaction lints and CI checks (see `status.md` — Latest Updates, Nov 28 2025) | Observability WG | 2025-10-20 |
+| Telemetry redaction policy | Closed | Strict redaction + allow-list guard + integrity chain shipped; see `docs/source/telemetry.md`. | Observability WG | 2025-12-31 |
 | Time and NTP hardening | Open | NTS or multi-source bounds (status tracked in `status.md` Time Service section) | Runtime WG & Ops | 2025-11-10 |
 | Membership mismatch telemetry | Open | `sumeragi_membership_mismatch_total` metric landed; wire alerting and operational runbook | Consensus WG | 2025-10-15 |
 | Attachment sanitisation | Open | Design magic-byte sniffing, sandboxing, export guards (align with `docs/source/security_hardening_requirements.md`) | Runtime WG | 2025-11-30 |
