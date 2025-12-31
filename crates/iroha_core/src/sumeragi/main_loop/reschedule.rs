@@ -7,7 +7,7 @@ use super::*;
 impl Actor {
     #[allow(clippy::too_many_lines)]
     pub(super) fn reschedule_stale_pending_blocks(&mut self) -> bool {
-        if self.pending.pending_blocks.is_empty() {
+        if self.active_pending_blocks_len() == 0 {
             return false;
         }
 

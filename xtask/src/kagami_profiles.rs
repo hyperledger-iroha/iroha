@@ -50,6 +50,11 @@ struct PeerMaterial {
 }
 
 type AnyResult<T> = Result<T, Box<dyn Error>>;
+// Ed25519 identity used for streaming control-plane in sample configs.
+const STREAM_ID_PUBLIC: &str =
+    "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
+const STREAM_ID_PRIVATE: &str =
+    "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
 
 pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
     let specs = resolve_requested_profiles(&options.profiles)?;
@@ -266,6 +271,10 @@ public_address = "127.0.0.1:{p2p}"
 [torii]
 address = "0.0.0.0:8080"
 
+[streaming]
+identity_public_key = "{stream_pub}"
+identity_private_key = "{stream_priv}"
+
 [nexus]
 enabled = true
 lane_count = 3
@@ -280,6 +289,8 @@ public_key = "{genesis_pk}"
         trusted_peers = trusted_peers,
         p2p = node.address.split(':').next_back().unwrap_or("1337"),
         genesis_pk = genesis_public_key,
+        stream_pub = STREAM_ID_PUBLIC,
+        stream_priv = STREAM_ID_PRIVATE,
     )
 }
 
@@ -559,6 +570,8 @@ mod tests {
         assert!(rendered.contains(PROFILES[2].chain_id));
         assert!(rendered.contains(peers[0].public_key.as_str()));
         assert!(rendered.contains(&genesis_key.public_key().to_string()));
+        assert!(rendered.contains(STREAM_ID_PUBLIC));
+        assert!(rendered.contains(STREAM_ID_PRIVATE));
     }
 
     #[test]

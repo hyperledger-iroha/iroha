@@ -3889,6 +3889,52 @@ mod evidence_http_tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn pipeline_status_404_falls_back_to_committed_query() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+        };
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot| {
+                store.lock().expect("lock snapshot store").push(snapshot);
+                match snapshot.url.path() {
+                    "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::NOT_FOUND)),
+                    "/query" => {
+                        let response = QueryResponse::Iterable(QueryOutput {
+                            batch: QueryOutputBatchBoxTuple {
+                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
+                            },
+                            remaining_items: 0,
+                            continue_cursor: None,
+                        });
+                        Ok(norito_response(StatusCode::OK, &response))
+                    }
+                    path => Err(eyre::eyre!("unexpected request path: {path}")),
+                }
+            }
+        };
+
+        let result = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let hash =
+                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                    Hash::prehashed([0x11; Hash::LENGTH]),
+                );
+            client.transaction_pipeline_status(hash)
+        });
+
+        let status = result.expect("pipeline status query");
+        assert!(status.is_none());
+
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[1].url.path(), "/query");
+    }
 }
 
 /// Private structure to incapsulate error reporting for HTTP response.
@@ -4667,6 +4713,13 @@ impl Client {
                 Ok(tx_confirmation_status_from_pipeline_payload(&payload))
             }
             StatusCode::NO_CONTENT => Ok(None),
+            StatusCode::NOT_FOUND => {
+                debug!(
+                    %hash,
+                    "pipeline status query returned 404; falling back to committed query"
+                );
+                self.transaction_committed(hash)
+            }
             status => Err(eyre!(
                 "Failed to get pipeline transaction status: {} {}",
                 status,

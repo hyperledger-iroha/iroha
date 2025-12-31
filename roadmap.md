@@ -39,6 +39,9 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 3. **INTEGRATION-TEST-REVALIDATION — Re-run integration tests after Sumeragi drain-order fix** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈺 In Progress, target TBD)
    - [ ] Re-run `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` to confirm the suite completes without timeouts.
    - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly.
+   - [ ] Re-run `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` to confirm localnet tx-status fallbacks no longer emit WARN noise.
+   - [ ] Re-run `cargo test -p integration_tests --test mod -- --nocapture` with `API_ADDRESS`/`PUBLIC_KEY` env overrides set to confirm test-network peers ignore host env config overrides.
+   - [ ] Investigate why `cargo test -p integration_tests --test mod` still hangs (peer task timeouts), capture logs, and identify the gating condition before re-running the suite.
 
 4. **LOCALNET-DEMO-FLOW — Verify training-script localnet bootstrap** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Align consensus rebroadcast cooldowns (RBC/pending/precommit) to on-chain `block_time` with a 200ms floor and 2x base multiplier, keeping payload replays at an additional 2x to avoid queue saturation on 1s targets.

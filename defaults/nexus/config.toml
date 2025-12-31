@@ -34,6 +34,8 @@ envelopes_dir = "defaults/nexus/sorafs_admission"
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 
 [streaming]
+identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"
+identity_private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
 # Advertise support for feedback hints and privacy overlay provider
 feature_bits = 0b11
 

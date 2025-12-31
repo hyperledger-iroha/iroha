@@ -309,9 +309,14 @@ impl Actor {
             self.propose
                 .new_view_tracker
                 .drop_below_view(frame.height, frame.view);
-            if let Some((forced_height, forced_view)) = self.propose.forced_view_after_timeout {
-                if forced_height == frame.height && forced_view < frame.view {
-                    self.propose.forced_view_after_timeout = Some((forced_height, frame.view));
+            match self.propose.forced_view_after_timeout {
+                Some((forced_height, forced_view)) => {
+                    if forced_height == frame.height && forced_view < frame.view {
+                        self.propose.forced_view_after_timeout = Some((forced_height, frame.view));
+                    }
+                }
+                None => {
+                    self.propose.forced_view_after_timeout = Some((frame.height, frame.view));
                 }
             }
             self.maybe_broadcast_new_view(qc_ref, Some(frame.height), Some(frame.view));

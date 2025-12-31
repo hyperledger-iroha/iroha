@@ -2008,6 +2008,8 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn run_worker_iteration_drains_in_priority_order() {
+        status::reset_worker_loop_snapshot_for_tests();
+
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -2030,6 +2032,7 @@ mod tests {
         vote_tx
             .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
             .expect("send prevote");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
         let rbc_chunk = RbcChunk {
             block_hash,
@@ -2042,6 +2045,7 @@ mod tests {
         rbc_chunk_tx
             .send(BlockMessage::RbcChunk(rbc_chunk))
             .expect("send rbc chunk");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::RbcChunks);
 
         let proposal = Proposal {
             header: ConsensusBlockHeader {
@@ -2066,6 +2070,7 @@ mod tests {
         block_payload_tx
             .send(BlockMessage::Proposal(proposal))
             .expect("send proposal");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
 
         block_tx
             .send(BlockMessage::ConsensusParams(
@@ -2075,6 +2080,7 @@ mod tests {
                 },
             ))
             .expect("send consensus params");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Blocks);
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
@@ -2127,6 +2133,8 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn run_worker_iteration_ticks_after_drains() {
+        status::reset_worker_loop_snapshot_for_tests();
+
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -2149,6 +2157,7 @@ mod tests {
         vote_tx
             .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
             .expect("send prevote");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
         let rbc_chunk = RbcChunk {
             block_hash,
@@ -2161,6 +2170,7 @@ mod tests {
         rbc_chunk_tx
             .send(BlockMessage::RbcChunk(rbc_chunk))
             .expect("send rbc chunk");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::RbcChunks);
 
         let proposal = Proposal {
             header: ConsensusBlockHeader {
@@ -2185,6 +2195,7 @@ mod tests {
         block_payload_tx
             .send(BlockMessage::Proposal(proposal))
             .expect("send proposal");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
 
         block_tx
             .send(BlockMessage::ConsensusParams(
@@ -2194,6 +2205,7 @@ mod tests {
                 },
             ))
             .expect("send consensus params");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Blocks);
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
@@ -2235,13 +2247,15 @@ mod tests {
 
         assert_eq!(
             actor.events,
-            vec!["vote", "block", "payload", "rbc", "tick"]
+            vec!["vote", "payload", "rbc", "block", "tick"]
         );
         assert_eq!(actor.tick_calls, 1);
     }
 
     #[test]
     fn run_worker_iteration_polls_commit_results() {
+        status::reset_worker_loop_snapshot_for_tests();
+
         let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -2293,6 +2307,8 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn run_worker_iteration_caps_total_drain_budget() {
+        status::reset_worker_loop_snapshot_for_tests();
+
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -2315,6 +2331,7 @@ mod tests {
         vote_tx
             .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
             .expect("send prevote");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
         let proposal = Proposal {
             header: ConsensusBlockHeader {
@@ -2339,6 +2356,7 @@ mod tests {
         block_payload_tx
             .send(BlockMessage::Proposal(proposal))
             .expect("send proposal");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_millis(5),
@@ -2392,7 +2410,94 @@ mod tests {
     }
 
     #[test]
+    fn run_worker_iteration_drains_rbc_when_votes_hit_cap_but_empty() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        for signer in 0..2u32 {
+            let vote = Vote {
+                phase: Phase::Prevote,
+                block_hash,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                signer,
+                bls_sig: Vec::new(),
+                signature: Vec::new(),
+            };
+            vote_tx
+                .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
+                .expect("send prevote");
+            status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+        }
+
+        let rbc_chunk = RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![1, 2, 3],
+        };
+        rbc_chunk_tx
+            .send(BlockMessage::RbcChunk(rbc_chunk))
+            .expect("send rbc chunk");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::RbcChunks);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 2,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+            sleep: Duration::from_millis(1),
+        };
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_block_drain: now,
+            last_non_vote_drain: now,
+        };
+        let mut actor = RecordingActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.events, vec!["vote", "vote", "rbc"]);
+        assert_eq!(stats.votes_handled, 2);
+        assert_eq!(stats.rbc_chunks_handled, 1);
+        assert!(!stats.vote_rx_budget_exhausted);
+    }
+
+    #[test]
     fn run_worker_iteration_drains_consensus_before_tick() {
+        status::reset_worker_loop_snapshot_for_tests();
+
         let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -2423,6 +2528,7 @@ mod tests {
         consensus_tx
             .send(ControlFlow::NewView(new_view))
             .expect("send new view");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Consensus);
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
@@ -4101,10 +4207,11 @@ fn run_worker_iteration<A: WorkerActor>(
         }
     };
     stats.votes_handled = stats.votes_handled.saturating_add(report.handled);
-    stats.vote_rx_budget_exhausted = report.budget_exhausted;
     status::record_worker_queue_drain(status::WorkerQueueKind::Votes, report.handled);
 
     let post_vote_depths = status::worker_queue_depth_snapshot();
+    // Only flag exhaustion if items remain after draining to avoid starving non-vote traffic.
+    stats.vote_rx_budget_exhausted = report.budget_exhausted && post_vote_depths.vote_rx > 0;
     let block_payload_pending = post_vote_depths.block_payload_rx > 0;
     let rbc_chunk_pending = post_vote_depths.rbc_chunk_rx > 0;
     let block_rx_pending = post_vote_depths.block_rx > 0;
@@ -4159,8 +4266,10 @@ fn run_worker_iteration<A: WorkerActor>(
             }
         };
     stats.block_payloads_handled = stats.block_payloads_handled.saturating_add(report.handled);
-    stats.block_payload_rx_budget_exhausted = report.budget_exhausted;
     status::record_worker_queue_drain(status::WorkerQueueKind::BlockPayload, report.handled);
+    let post_payload_depths = status::worker_queue_depth_snapshot();
+    stats.block_payload_rx_budget_exhausted =
+        report.budget_exhausted && post_payload_depths.block_payload_rx > 0;
 
     let report =
         if !stats.budget_exceeded && remaining_budget > Duration::ZERO && should_drain_non_vote {
@@ -4191,8 +4300,10 @@ fn run_worker_iteration<A: WorkerActor>(
             }
         };
     stats.rbc_chunks_handled = stats.rbc_chunks_handled.saturating_add(report.handled);
-    stats.rbc_chunk_rx_budget_exhausted = report.budget_exhausted;
     status::record_worker_queue_drain(status::WorkerQueueKind::RbcChunks, report.handled);
+    let post_rbc_depths = status::worker_queue_depth_snapshot();
+    stats.rbc_chunk_rx_budget_exhausted =
+        report.budget_exhausted && post_rbc_depths.rbc_chunk_rx > 0;
     if non_vote_drain_attempted {
         loop_state.last_non_vote_drain = Instant::now();
     }
@@ -4247,8 +4358,9 @@ fn run_worker_iteration<A: WorkerActor>(
         }
     };
     stats.blocks_handled = stats.blocks_handled.saturating_add(report.handled);
-    stats.block_rx_budget_exhausted = report.budget_exhausted;
     status::record_worker_queue_drain(status::WorkerQueueKind::Blocks, report.handled);
+    let post_block_depths = status::worker_queue_depth_snapshot();
+    stats.block_rx_budget_exhausted = report.budget_exhausted && post_block_depths.block_rx > 0;
 
     if stats.precommit_votes_handled > 0 {
         iroha_logger::debug!(
@@ -4344,7 +4456,9 @@ fn run_worker_iteration<A: WorkerActor>(
                 }
                 stats.block_payloads_handled =
                     stats.block_payloads_handled.saturating_add(report.handled);
-                stats.block_payload_rx_budget_exhausted |= report.budget_exhausted;
+                let post_payload_depths = status::worker_queue_depth_snapshot();
+                stats.block_payload_rx_budget_exhausted |=
+                    report.budget_exhausted && post_payload_depths.block_payload_rx > 0;
                 post_tick_handled = post_tick_handled.saturating_add(report.handled);
                 status::record_worker_queue_drain(
                     status::WorkerQueueKind::BlockPayload,
@@ -4371,7 +4485,9 @@ fn run_worker_iteration<A: WorkerActor>(
                     stats.budget_exceeded = true;
                 }
                 stats.rbc_chunks_handled = stats.rbc_chunks_handled.saturating_add(report.handled);
-                stats.rbc_chunk_rx_budget_exhausted |= report.budget_exhausted;
+                let post_rbc_depths = status::worker_queue_depth_snapshot();
+                stats.rbc_chunk_rx_budget_exhausted |=
+                    report.budget_exhausted && post_rbc_depths.rbc_chunk_rx > 0;
                 post_tick_handled = post_tick_handled.saturating_add(report.handled);
                 status::record_worker_queue_drain(
                     status::WorkerQueueKind::RbcChunks,
