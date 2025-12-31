@@ -1236,6 +1236,7 @@ impl Actor {
                     && vote.height == height
                     && vote.view == view_idx
                     && vote.epoch == epoch
+                    && self.block_known_locally(vote.block_hash)
             })
             .count();
         if precommit_votes_at_view > 0 {
