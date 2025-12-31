@@ -1433,18 +1433,27 @@ impl Actor {
         &mut self,
         qc: crate::sumeragi::consensus::ExecutionQC,
     ) -> Result<()> {
+        let require_exec_qc = self.config.require_execution_qc
+            || matches!(
+                self.config.proof_policy,
+                ProofPolicy::ExecQcOnly | ProofPolicy::Hybrid
+            )
+            || self.config.require_wsv_exec_qc;
         if let Some(local_view) = self.stale_view(qc.height, qc.view) {
+            let block_known = self.block_known_locally(qc.subject_block_hash);
             let missing_request = self
                 .pending
                 .missing_block_requests
                 .contains_key(&qc.subject_block_hash);
-            if self.block_known_locally(qc.subject_block_hash) || missing_request {
+            if block_known || missing_request || require_exec_qc {
                 debug!(
                     height = qc.height,
                     view = qc.view,
                     local_view,
                     block = %qc.subject_block_hash,
+                    block_known,
                     missing_request,
+                    require_exec_qc,
                     "accepting ExecutionQC for stale view"
                 );
             } else {
@@ -1492,7 +1501,33 @@ impl Actor {
             );
             return Ok(());
         }
+        let topology_len = topology.as_ref().len();
         let subject = qc.subject_block_hash;
+        let parsed_signers = match super::parse_signers_bitmap(
+            &qc.aggregate.signers_bitmap,
+            topology_len,
+            topology_len,
+        ) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                warn!(
+                    height = qc.height,
+                    view = qc.view,
+                    block = %subject,
+                    ?err,
+                    "dropping ExecutionQC: invalid signer bitmap"
+                );
+                return Ok(());
+            }
+        };
+        self.defer_qc_if_block_missing(
+            crate::sumeragi::consensus::Phase::Precommit,
+            subject,
+            qc.height,
+            qc.view,
+            &parsed_signers.voting,
+            &topology,
+        );
         if self.config.require_wsv_exec_qc {
             self.persist_execution_qc(&qc)?;
         }
