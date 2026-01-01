@@ -42,7 +42,8 @@ use iroha_data_model::{
     peer::{Peer, PeerId},
     prelude::{AccountId, Domain, Register, TransactionBuilder},
     sorafs::pin_registry::ManifestDigest,
-    transaction::SignedTransaction,
+    transaction::{SignedTransaction, signed::TransactionResultInner},
+    trigger::DataTriggerSequence,
 };
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
@@ -2500,6 +2501,93 @@ async fn block_sync_update_requests_pending_block_for_missing_qc() {
             .last_sent
             .contains_key(&block.hash()),
         "missing QC should trip fetch throttle"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_caches_qc_before_block_known() {
+    crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let height = 2;
+    let view = 0;
+    let signature_topology =
+        super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("commit topology not empty");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let header = BlockHeader {
+        height: NonZeroU64::new(height).expect("block height must be non-zero"),
+        prev_block_hash: None,
+        merkle_root: None,
+        result_merkle_root: None,
+        da_proof_policies_hash: None,
+        da_commitments_hash: None,
+        da_pin_intents_hash: None,
+        creation_time_ms: 0,
+        view_change_index: u32::try_from(view).expect("view fits u32"),
+        confidential_features: None,
+    };
+    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let block_signature = BlockSignature::new(0, signature);
+    let block = SignedBlock::presigned(block_signature, header, Vec::new());
+
+    let state_view = actor.state.view();
+    let block_signers =
+        super::validated_block_signers(&block, &topology, &state_view, PERMISSIONED_TAG, None)
+            .expect("block signatures valid for block sync");
+    drop(state_view);
+
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block.hash(),
+        height,
+        view,
+        0,
+        vec![0b0000_0111],
+        Phase::Precommit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.cache_block_sync_qc_for_unknown_block(
+        qc,
+        block.hash(),
+        height,
+        view,
+        &topology,
+        &block_signers,
+        false,
+        None,
+    );
+
+    assert!(
+        actor
+            .qc_cache
+            .contains_key(&(Phase::Precommit, block.hash(), height, view, 0)),
+        "QC should be cached before block is known locally"
+    );
+    let record = crate::sumeragi::status::precommit_signers_for(block.hash())
+        .expect("precommit signer record should be stored");
+    let expected: BTreeSet<_> = [0_u32, 1_u32, 2_u32]
+        .into_iter()
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index parses"))
+        .collect();
+    assert_eq!(record.signers, expected);
+    assert!(
+        actor.locked_qc.is_none(),
+        "unknown block should not update locked QC"
     );
 
     harness.shutdown.send();
@@ -21577,6 +21665,34 @@ fn block_with_txs(
     let signature = SignatureOf::from_hash(&private_key, header.hash());
     let block_signature = BlockSignature::new(0, signature);
     SignedBlock::presigned(block_signature, header, txs)
+}
+
+#[test]
+fn block_payload_bytes_ignores_results_and_extra_signatures() {
+    let tx = sample_transaction();
+    let mut block = block_with_txs(2, 0, None, vec![tx]);
+    let baseline = super::proposals::block_payload_bytes(&block);
+
+    let extra_key = KeyPair::random();
+    let (_, extra_private) = extra_key.into_parts();
+    let extra_sig = SignatureOf::from_hash(&extra_private, block.header().hash());
+    block
+        .add_signature(BlockSignature::new(1, extra_sig))
+        .expect("add signature");
+
+    let entry_hashes: Vec<_> = block
+        .transactions_vec()
+        .iter()
+        .map(SignedTransaction::hash_as_entrypoint)
+        .collect();
+    block.set_transaction_results(
+        Vec::new(),
+        &entry_hashes,
+        vec![TransactionResultInner::Ok(DataTriggerSequence::new())],
+    );
+
+    let updated = super::proposals::block_payload_bytes(&block);
+    assert_eq!(baseline, updated);
 }
 
 fn sample_transaction() -> SignedTransaction {

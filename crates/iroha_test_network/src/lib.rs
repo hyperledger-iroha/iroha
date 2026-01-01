@@ -10,7 +10,7 @@ use std::{
     ffi::OsString,
     fs,
     hash::{Hash, Hasher},
-    io::{Read, Seek, SeekFrom},
+    io::{ErrorKind, Read, Seek, SeekFrom},
     iter,
     net::TcpListener,
     num::NonZero,
@@ -190,6 +190,14 @@ fn log_status_warning(gate: &StartupWarnGate, warn_log: impl FnOnce(), debug_log
     } else {
         debug_log();
     }
+}
+
+fn status_error_is_connection_refused(err: &Report) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_err| io_err.kind() == ErrorKind::ConnectionRefused)
+    })
 }
 
 /// Try binding to all provided addresses to detect missing socket permissions early.
@@ -3524,6 +3532,7 @@ impl NetworkPeer {
                     let http_deadline = (status_timeout != Duration::ZERO)
                         .then(|| Instant::now() + status_timeout);
                     let mut http_gate = HttpStartGate::default();
+                    let http_seen = Arc::new(AtomicBool::new(false));
                     if STARTUP_STATUS_WARN_GRACE > Duration::ZERO {
                         tokio::time::sleep(STARTUP_STATUS_WARN_GRACE).await;
                     }
@@ -3536,12 +3545,14 @@ impl NetworkPeer {
                         let storage_min_height = Arc::clone(&storage_min_height);
                         let startup_probe = Arc::clone(&startup_probe);
                         let warn_gate = warn_gate.clone();
+                        let http_seen = Arc::clone(&http_seen);
                         move || {
                             let client = status_client.clone();
                             let storage_dir = storage_dir.clone();
                             let min_height = storage_min_height.load(Ordering::Relaxed);
                             let startup_probe = Arc::clone(&startup_probe);
                             let warn_gate = warn_gate.clone();
+                            let http_seen = Arc::clone(&http_seen);
                             async move {
                                 let status = spawn_blocking(move || client.get_status())
                                     .await
@@ -3553,11 +3564,29 @@ impl NetworkPeer {
                                         Ok((status, StatusSource::Http))
                                     }
                                     Err(err) => {
-                                        log_status_warning(
-                                            &warn_gate,
-                                            || warn!(error = %err, debug = ?err, "get status failed"),
-                                            || debug!(error = %err, debug = ?err, "get status failed"),
-                                        );
+                                        if status_error_is_connection_refused(&err)
+                                            && !http_seen.load(Ordering::Relaxed)
+                                        {
+                                            debug!(
+                                                error = %err,
+                                                debug = ?err,
+                                                "get status failed"
+                                            );
+                                        } else {
+                                            log_status_warning(
+                                                &warn_gate,
+                                                || warn!(
+                                                    error = %err,
+                                                    debug = ?err,
+                                                    "get status failed"
+                                                ),
+                                                || debug!(
+                                                    error = %err,
+                                                    debug = ?err,
+                                                    "get status failed"
+                                                ),
+                                            );
+                                        }
                                         if let Some(snapshot) =
                                             detect_block_height_from_storage(&storage_dir, min_height)
                                         {
@@ -3632,6 +3661,7 @@ impl NetworkPeer {
                     let mut block_height = BlockHeight::from(status);
                     storage_min_height.store(block_height.total, Ordering::Relaxed);
                     if http_gate.on_status(source) {
+                        http_seen.store(true, Ordering::Relaxed);
                         let _ = events_tx.send(PeerLifecycleEvent::ServerStarted);
                         info!(
                             ?status_snapshot,
@@ -3697,6 +3727,7 @@ impl NetworkPeer {
                                     let status = match status {
                                         Ok(status) => {
                                             if http_gate.on_status(StatusSource::Http) {
+                                                http_seen.store(true, Ordering::Relaxed);
                                                 let _ = events_tx.send(PeerLifecycleEvent::ServerStarted);
                                                 info!(
                                                     torii_addr = %torii_addr.as_str(),
@@ -3711,10 +3742,26 @@ impl NetworkPeer {
                                             status
                                         }
                                         Err(err) => {
-                                        if warn_gate.should_warn() {
-                                            warn!(error = %err, debug = ?err, "fallback status poll failed");
+                                        if status_error_is_connection_refused(&err)
+                                            && !http_seen.load(Ordering::Relaxed)
+                                        {
+                                            debug!(
+                                                error = %err,
+                                                debug = ?err,
+                                                "fallback status poll failed"
+                                            );
+                                        } else if warn_gate.should_warn() {
+                                            warn!(
+                                                error = %err,
+                                                debug = ?err,
+                                                "fallback status poll failed"
+                                            );
                                         } else {
-                                            debug!(error = %err, debug = ?err, "fallback status poll failed");
+                                            debug!(
+                                                error = %err,
+                                                debug = ?err,
+                                                "fallback status poll failed"
+                                            );
                                         }
                                         // Fall back to on-disk observation so scenarios can progress even if Torii
                                         // is slow to accept HTTP connections.
@@ -5556,6 +5603,20 @@ mod tests {
         assert!(!gate.should_warn());
         thread::sleep(STARTUP_STATUS_WARN_INTERVAL);
         assert!(gate.should_warn());
+    }
+
+    #[test]
+    fn status_error_is_connection_refused_detects_io_error() {
+        let err = std::io::Error::new(ErrorKind::ConnectionRefused, "refused");
+        let report = Report::from(err);
+        assert!(status_error_is_connection_refused(&report));
+    }
+
+    #[test]
+    fn status_error_is_connection_refused_ignores_other_errors() {
+        let err = std::io::Error::new(ErrorKind::Other, "other");
+        let report = Report::from(err);
+        assert!(!status_error_is_connection_refused(&report));
     }
 
     #[test]

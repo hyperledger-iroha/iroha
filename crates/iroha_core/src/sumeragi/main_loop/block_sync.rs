@@ -531,7 +531,11 @@ impl Actor {
             self.handle_vote(vote);
         }
 
-        let qc_to_apply = if ready_for_qc { incoming_qc } else { None };
+        let qc_to_apply = if ready_for_qc {
+            incoming_qc.take()
+        } else {
+            None
+        };
 
         block_sync_apply_qc_after_block(
             creation_result,
@@ -663,7 +667,135 @@ impl Actor {
                 }
                 Ok(())
             },
-        )
+        )?;
+
+        if creation_ok && !block_known_after_creation {
+            if let Some(qc) = incoming_qc.take() {
+                // Cache the QC so we can reuse it once the block becomes available locally.
+                self.cache_block_sync_qc_for_unknown_block(
+                    qc,
+                    block_hash,
+                    block_height,
+                    block_view,
+                    &topology,
+                    &block_signers,
+                    allow_nonextending_qc,
+                    prf_seed,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Cache a validated precommit QC from block sync when the block payload is not ready yet.
+    pub(super) fn cache_block_sync_qc_for_unknown_block(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view: u64,
+        topology: &super::network_topology::Topology,
+        block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+        allow_nonextending_qc: bool,
+        prf_seed: Option<[u8; 32]>,
+    ) {
+        if topology.as_ref().is_empty() {
+            warn!(
+                height = block_height,
+                view = block_view,
+                "dropping cached block sync QC: empty commit topology"
+            );
+            return;
+        }
+        if qc.subject_block_hash != block_hash {
+            warn!(
+                incoming_hash = %block_hash,
+                qc_hash = %qc.subject_block_hash,
+                "ignoring cached block sync QC that does not match block hash"
+            );
+            return;
+        }
+        if qc.height != block_height {
+            warn!(
+                incoming_hash = %block_hash,
+                height = block_height,
+                qc_height = qc.height,
+                "ignoring cached block sync QC that does not match block height"
+            );
+            return;
+        }
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit) {
+            warn!(
+                incoming_hash = %block_hash,
+                phase = ?qc.phase,
+                "ignoring cached block sync QC with non-precommit phase"
+            );
+            return;
+        }
+        let qc_signers = qc_signer_count(&qc);
+        match tally_qc_against_block_signers(
+            &qc,
+            topology,
+            block_signers,
+            block_view,
+            &self.common_config.chain,
+            self.mode_tag(),
+            prf_seed,
+        ) {
+            Ok(tally) => {
+                crate::sumeragi::status::record_precommit_signers(
+                    crate::sumeragi::status::PrecommitSignerRecord {
+                        block_hash,
+                        height: qc.height,
+                        view: qc.view,
+                        epoch: qc.epoch,
+                        signers: tally.voting_signers.clone(),
+                        bls_aggregate_signature: qc.aggregate.bls_aggregate_signature.clone(),
+                        roster_len: topology.as_ref().len(),
+                    },
+                );
+                self.note_validated_qc_tally(&qc, tally.clone());
+                if !self.process_precommit_qc(&qc, false, allow_nonextending_qc) {
+                    info!(
+                        incoming_hash = %block_hash,
+                        height = block_height,
+                        view = block_view,
+                        "dropping cached block sync QC that conflicts with locked chain"
+                    );
+                    return;
+                }
+                self.qc_cache.insert(
+                    (
+                        qc.phase,
+                        qc.subject_block_hash,
+                        qc.height,
+                        qc.view,
+                        qc.epoch,
+                    ),
+                    qc,
+                );
+                debug!(
+                    incoming_hash = %block_hash,
+                    signers = tally.voting_signers.len(),
+                    qc_signers,
+                    "cached block sync QC before block payload is ready"
+                );
+            }
+            Err(err) => {
+                record_qc_validation_error(self.telemetry_handle(), &err);
+                warn!(
+                    ?err,
+                    reason = qc_validation_reason(&err),
+                    incoming_hash = %block_hash,
+                    height = block_height,
+                    view = block_view,
+                    qc_signers,
+                    block_signers = block_signers.len(),
+                    "dropping cached block sync QC after validation failure"
+                );
+            }
+        }
     }
 
     pub(super) fn handle_fetch_pending_block(
