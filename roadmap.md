@@ -41,6 +41,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [ ] Re-run `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` to confirm localnet tx-status fallbacks no longer emit WARN noise.
    - [ ] Re-run `cargo test -p integration_tests --test mod -- --nocapture` with `API_ADDRESS`/`PUBLIC_KEY` env overrides set to confirm test-network peers ignore host env config overrides.
    - [ ] Re-run `cargo test -p integration_tests --test mod` after the payload-hash stabilization fix (strip results/extra signatures from DA/RBC payload bytes); attempt 2025-12-31 timed out after 5m with pipeline event failures, peers waiting for block 1, and status endpoint connection refused—confirm the gating condition is resolved.
+   - [ ] Re-run `cargo test -p integration_tests --test mod` after stabilizing NPoS PRF seed handling (seed fixed within epoch + next-epoch record persisted at rollover) to confirm event/connected-peers suites no longer hang.
 
 4. **LOCALNET-DEMO-FLOW — Verify training-script localnet bootstrap** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Align consensus rebroadcast cooldowns (RBC/pending/precommit) to on-chain `block_time` with a 200ms floor and 2x base multiplier, keeping payload replays at an additional 2x to avoid queue saturation on 1s targets.

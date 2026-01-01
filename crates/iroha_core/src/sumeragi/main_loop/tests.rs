@@ -14132,6 +14132,60 @@ async fn leader_index_for_uses_height_prf_seed() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn on_block_commit_persists_new_epoch_seed_record() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.vrf_commit_deadline_offset = 0;
+    consensus_cfg.vrf_reveal_deadline_offset = 0;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let epoch_len = 2u64;
+    let seed_epoch0 = [0x11; 32];
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        let mut npos_params =
+            iroha_data_model::parameter::system::SumeragiNposParameters::default();
+        npos_params.epoch_length_blocks = epoch_len;
+        npos_params.epoch_seed = seed_epoch0;
+        npos_params.evidence_horizon_blocks = 0;
+        params.custom.insert(
+            iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
+            npos_params.into_custom_parameter(),
+        );
+        block.commit();
+    }
+    if let Some(manager) = actor.epoch_manager.as_mut() {
+        manager.set_params(epoch_len, 0, 0);
+    }
+
+    actor
+        .on_block_commit(epoch_len)
+        .expect("commit at epoch boundary");
+
+    let (current_epoch, current_seed) = actor
+        .epoch_manager
+        .as_ref()
+        .map(|manager| (manager.epoch(), manager.seed()))
+        .expect("epoch manager present");
+    assert_eq!(current_epoch, 1);
+
+    let view = actor.state.view();
+    let record = view
+        .world()
+        .vrf_epochs()
+        .get(&current_epoch)
+        .expect("new epoch record should exist");
+    assert_eq!(record.seed, current_seed);
+    assert!(!record.finalized, "new epoch record should be in-progress");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn maybe_broadcast_new_view_emits_control_flow() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

@@ -399,6 +399,7 @@ pub struct VrfEpochRecord {
     /// Epoch index.
     pub epoch: u64,
     /// Deterministic seed driving PRF-based collector/leader selection for this epoch.
+    /// The seed is fixed at epoch start; reveals are mixed to derive the next epoch seed.
     pub seed: [u8; 32],
     /// Length of an epoch in blocks (configuration snapshot).
     pub epoch_length: u64,

@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Stabilized NPoS PRF seed tracking by aligning epoch seeds with on-chain parameters, keeping the seed fixed within an epoch, and persisting a seed-only record for the next epoch at rollover; added unit coverage and refreshed Sumeragi VRF docs (en/ja/he).
 - Suppressed early Torii `/status` connection-refused warnings in the test-network watcher until HTTP is reachable; added unit coverage for connection-refused detection.
 - Canonicalized block payload hashing to strip execution results and extra signatures so DA/RBC payload hashes stay stable across validation; added unit test `block_payload_bytes_ignores_results_and_extra_signatures`.
 - Cached block-sync precommit QCs when block payloads are not ready yet so lagging peers can reuse them once the block lands; added `block_sync_caches_qc_before_block_known` unit coverage.

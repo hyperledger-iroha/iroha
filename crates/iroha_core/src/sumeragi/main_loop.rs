@@ -4097,6 +4097,8 @@ impl Actor {
                 );
                 if let Some(record) = last_epoch_record.as_ref() {
                     em.restore_from_record(record);
+                } else {
+                    em.set_epoch_seed(super::latest_epoch_seed(&view));
                 }
                 apply_roster_indices_to_manager(&mut em, roster_len, initial_indices);
                 let seed = em.seed();
