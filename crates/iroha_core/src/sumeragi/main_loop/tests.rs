@@ -8712,6 +8712,9 @@ fn block_sync_update_omits_roster_artifacts_without_metadata() {
 
 #[test]
 fn validate_commit_certificate_roster_accepts_valid_cert() {
+    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let block_hash =
@@ -8729,8 +8732,13 @@ fn validate_commit_certificate_roster_accepts_valid_cert() {
         signatures: vec![block_sig],
     };
 
-    let roster =
-        super::validate_commit_certificate_roster(&cert, block_hash).expect("valid cert roster");
+    let roster = super::validate_commit_certificate_roster(
+        &cert,
+        block_hash,
+        iroha_config::parameters::actual::ConsensusMode::Permissioned,
+        &state.view(),
+    )
+    .expect("valid cert roster");
     assert_eq!(roster, vec![peer]);
 }
 
@@ -11319,10 +11327,11 @@ async fn commit_topology_change_clears_pending_consensus_state() {
     let block = sample_block(2, 0, None);
     let payload_hash = Hash::prehashed([0x22; 32]);
     let block_hash = block.hash();
-    harness.actor.pending.pending_blocks.insert(
-        block_hash,
-        PendingBlock::new(block, payload_hash, 2, 0),
-    );
+    harness
+        .actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, PendingBlock::new(block, payload_hash, 2, 0));
     harness.actor.vote_log.insert(
         (Phase::Prevote, 2, 0, 0, 0),
         crate::sumeragi::consensus::Vote {
@@ -16654,15 +16663,42 @@ fn block_sync_quorum_allows_missing_block_request_with_sparse_signatures() {
     let block_height = 5;
     let local_height = 5;
     assert!(
-        super::block_sync_quorum_available(1, 3, false, false, block_height, local_height),
+        super::block_sync_quorum_available(
+            1,
+            3,
+            false,
+            false,
+            false,
+            false,
+            block_height,
+            local_height
+        ),
         "validated sparse payload should be accepted to allow voting/recovery"
     );
     assert!(
-        super::block_sync_quorum_available(1, 3, false, true, block_height, local_height),
+        super::block_sync_quorum_available(
+            1,
+            3,
+            false,
+            false,
+            false,
+            true,
+            block_height,
+            local_height
+        ),
         "missing-block request should allow sparse block sync updates to proceed"
     );
     assert!(
-        super::block_sync_quorum_available(1, 3, true, false, block_height, local_height),
+        super::block_sync_quorum_available(
+            1,
+            3,
+            false,
+            true,
+            false,
+            false,
+            block_height,
+            local_height
+        ),
         "candidate QC should satisfy quorum even with few block signatures"
     );
     assert!(
@@ -16671,13 +16707,24 @@ fn block_sync_quorum_allows_missing_block_request_with_sparse_signatures() {
             3,
             false,
             false,
+            false,
+            false,
             block_height.saturating_add(1),
             local_height
         ),
         "sparse signatures should be allowed when catching up to a higher block height"
     );
     assert!(
-        !super::block_sync_quorum_available(0, 3, false, false, block_height, local_height),
+        !super::block_sync_quorum_available(
+            0,
+            3,
+            false,
+            false,
+            false,
+            false,
+            block_height,
+            local_height
+        ),
         "zero commit-role signatures must still be rejected"
     );
 }

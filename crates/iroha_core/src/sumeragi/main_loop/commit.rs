@@ -52,6 +52,7 @@ pub(super) struct CommitWork {
     pub(super) commit_topology: Vec<PeerId>,
     pub(super) signature_topology: Vec<PeerId>,
     pub(super) qc_signers: Option<BTreeSet<ValidatorIndex>>,
+    pub(super) allow_quorum_bypass: bool,
     pub(super) persist_required: bool,
     pub(super) events_sender: crate::EventsSender,
 }
@@ -140,6 +141,7 @@ pub(super) fn execute_commit_work(
         commit_topology,
         signature_topology,
         qc_signers,
+        allow_quorum_bypass,
         persist_required,
         events_sender,
         ..
@@ -163,7 +165,7 @@ pub(super) fn execute_commit_work(
     .and_then(|(valid_block, state_block)| {
         let commit_result = match qc_signers.as_ref() {
             None => valid_block.commit(&topology),
-            Some(signers) => valid_block.commit_with_signers(&topology, signers, false),
+            Some(signers) => valid_block.commit_with_signers(&topology, signers, allow_quorum_bypass),
         };
         commit_result
             .unpack(|event| pipeline_events.push(event))
@@ -473,6 +475,7 @@ impl Actor {
                             commit_topology: inflight.commit_topology.clone(),
                             signature_topology: inflight.signature_topology.clone(),
                             qc_signers: inflight.qc_signers.clone(),
+                            allow_quorum_bypass: inflight.allow_quorum_bypass,
                             persist_required,
                             events_sender: self.events_sender.clone(),
                         };
@@ -583,6 +586,7 @@ impl Actor {
             commit_topology,
             signature_topology,
             qc_signers,
+            allow_quorum_bypass,
             post_commit_qc,
             ..
         } = inflight;
@@ -598,8 +602,8 @@ impl Actor {
 
         let topology = super::network_topology::Topology::new(signature_topology);
         let min_votes_for_commit = topology.min_votes_for_commit();
-        let qc_vote_count = qc_signers.as_ref().map(BTreeSet::len);
-        let has_qc_quorum = qc_signers.is_some();
+        let quorum_signer_count = qc_signers.as_ref().map(BTreeSet::len);
+        let has_quorum_signers = qc_signers.is_some();
 
         let mut pending_opt = Some(pending);
 
@@ -619,46 +623,48 @@ impl Actor {
                 let persist_required = !pending.kura_persisted;
                 pending.mark_kura_persisted();
                 self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
-                let qc_key = (
-                    crate::sumeragi::consensus::Phase::Precommit,
-                    block_hash,
-                    pending_height,
-                    pending_view,
-                    lock.epoch,
-                );
-                if !self.qc_cache.contains_key(&qc_key) {
-                    if let Some(signers) = qc_signers.as_ref() {
-                        let aggregate_signature = match super::aggregate_vote_signatures(
-                            &self.vote_log,
-                            crate::sumeragi::consensus::Phase::Precommit,
-                            block_hash,
-                            pending_height,
-                            pending_view,
-                            lock.epoch,
-                            signers,
-                        ) {
-                            Ok(signature) => signature,
-                            Err(err) => {
-                                warn!(
-                                    ?err,
-                                    height = pending_height,
-                                    view = pending_view,
-                                    block = %block_hash,
-                                    "failed to aggregate precommit signatures for cached QC"
-                                );
-                                Vec::new()
+                if !allow_quorum_bypass {
+                    let qc_key = (
+                        crate::sumeragi::consensus::Phase::Precommit,
+                        block_hash,
+                        pending_height,
+                        pending_view,
+                        lock.epoch,
+                    );
+                    if !self.qc_cache.contains_key(&qc_key) {
+                        if let Some(signers) = qc_signers.as_ref() {
+                            let aggregate_signature = match super::aggregate_vote_signatures(
+                                &self.vote_log,
+                                crate::sumeragi::consensus::Phase::Precommit,
+                                block_hash,
+                                pending_height,
+                                pending_view,
+                                lock.epoch,
+                                signers,
+                            ) {
+                                Ok(signature) => signature,
+                                Err(err) => {
+                                    warn!(
+                                        ?err,
+                                        height = pending_height,
+                                        view = pending_view,
+                                        block = %block_hash,
+                                        "failed to aggregate precommit signatures for cached QC"
+                                    );
+                                    Vec::new()
+                                }
+                            };
+                            if let Some(derived_qc) = super::derive_block_sync_qc_from_signers(
+                                block_hash,
+                                pending_height,
+                                pending_view,
+                                lock.epoch,
+                                topology.as_ref().len(),
+                                signers,
+                                aggregate_signature,
+                            ) {
+                                self.qc_cache.insert(qc_key, derived_qc);
                             }
-                        };
-                        if let Some(derived_qc) = super::derive_block_sync_qc_from_signers(
-                            block_hash,
-                            pending_height,
-                            pending_view,
-                            lock.epoch,
-                            topology.as_ref().len(),
-                            signers,
-                            aggregate_signature,
-                        ) {
-                            self.qc_cache.insert(qc_key, derived_qc);
                         }
                     }
                 }
@@ -1040,7 +1046,7 @@ impl Actor {
                 let quorum_timeout = self.quorum_timeout(da_enabled);
 
                 if commit_signatures_missing
-                    && !has_qc_quorum
+                    && !has_quorum_signers
                     && missing_quorum_stale(
                         pending_age,
                         quorum_timeout,
@@ -1110,15 +1116,15 @@ impl Actor {
                         self.execution_qc_cache.remove(&block_hash);
                         block_hash_to_clean = Some(block_hash);
                         emit_pipeline_events_now = true;
-                    } else if has_qc_quorum {
+                    } else if has_quorum_signers {
                         warn!(
                             height = pending_height,
                             view = pending_view,
                             block = ?block_hash,
-                            qc_votes = qc_vote_count.unwrap_or(0),
+                            quorum_signers = quorum_signer_count.unwrap_or(0),
                             min_votes = min_votes_for_commit,
                             ?error,
-                            "Failed to commit block with QC quorum; requeueing payload and triggering view change"
+                            "Failed to commit block after quorum signatures; requeueing payload and triggering view change"
                         );
                         let proposer_idx = u32::try_from(topology.leader_index()).unwrap_or(0);
                         let proposal = Self::build_consensus_proposal(
@@ -1212,6 +1218,7 @@ impl Actor {
 
         if let Some(hash) = block_hash_to_clean {
             self.clean_rbc_sessions_for_block(hash, pending_height);
+            self.commit_votes.retain(|(h, _, _, _, _), _| *h != hash);
         }
         if let Some((pending, age, min_votes, vote_count, quorum_timeout)) = reschedule_quorum {
             self.reschedule_pending_quorum_block(
@@ -1232,6 +1239,8 @@ impl Actor {
         if committed {
             // Commit finished; drop any RBC state for the committed block to avoid replaying READY/DELIVER.
             self.clean_rbc_sessions_for_block(block_hash, pending_height);
+            self.commit_votes
+                .retain(|(h, _, _, _, _), _| *h != block_hash);
             if let Some(witness) = exec_witness_to_emit {
                 self.emit_exec_artifacts(block_hash, pending_height, pending_view, witness);
             }
@@ -1479,7 +1488,8 @@ impl Actor {
                 .map(|peer| peer.public_key().algorithm()),
             "pending block signatures snapshot"
         );
-        let mut topology = super::network_topology::Topology::new(commit_topology.clone());
+        let canonical_topology = super::network_topology::Topology::new(commit_topology.clone());
+        let mut topology = canonical_topology.clone();
         iroha_logger::info!(
             topology_len = topology.as_ref().len(),
             min_votes = topology.min_votes_for_commit(),
@@ -1506,73 +1516,93 @@ impl Actor {
         }
         let signature_topology = topology.as_ref().to_vec();
 
-        let mut cached_qc = cached_qc_for(
-            &self.qc_cache,
-            crate::sumeragi::consensus::Phase::Precommit,
-            block_hash,
-            pending_height,
-            pending_view,
-        );
-        if let Some(qc) = cached_qc.as_ref() {
-            if let Some(lock) = self.locked_qc {
-                let candidate = crate::sumeragi::consensus::QcHeaderRef {
-                    phase: crate::sumeragi::consensus::Phase::Precommit,
-                    subject_block_hash: qc.subject_block_hash,
-                    height: qc.height,
-                    view: qc.view,
-                    epoch: qc.epoch,
+        let mut allow_quorum_bypass = false;
+        let mut quorum_signers: Option<BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> = None;
+        let signature_commit_ready = match self.consensus_mode {
+            ConsensusMode::Permissioned => {
+                crate::block::ValidBlock::is_commit(&pending.block, &topology).is_ok()
+            }
+            ConsensusMode::Npos => {
+                let prf_seed = {
+                    let view = self.state.view();
+                    Some(super::npos_seed_for_height(&view, pending_height))
                 };
-                let extends_locked =
-                    qc_extends_locked_with_lookup(lock, candidate, |hash, lookup_height| {
-                        if hash == block_hash && lookup_height == pending_height {
-                            pending.block.header().prev_block_hash()
-                        } else {
-                            self.parent_hash_for(hash, lookup_height)
-                        }
-                    });
-                if !extends_locked {
+                let state_view = self.state.view();
+                let validated_signers = match super::validated_block_signers(
+                    &pending.block,
+                    &canonical_topology,
+                    &state_view,
+                    self.mode_tag(),
+                    prf_seed,
+                ) {
+                    Ok(signers) => signers,
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            height = pending_height,
+                            view = pending_view,
+                            block = %block_hash,
+                            "skipping commit: invalid block signatures"
+                        );
+                        BTreeSet::new()
+                    }
+                };
+                let leader_signed = topology
+                    .filter_signatures_by_roles(
+                        &[super::network_topology::Role::Leader],
+                        pending.block.signatures(),
+                    )
+                    .next()
+                    .is_some();
+                if !leader_signed {
                     warn!(
                         height = pending_height,
                         view = pending_view,
                         block = %block_hash,
-                        locked_height = lock.height,
-                        locked_hash = %lock.subject_block_hash,
-                        qc_height = qc.height,
-                        qc_view = qc.view,
-                        "ignoring cached precommit QC that does not extend locked chain"
+                        "skipping commit: leader signature missing"
                     );
-                    let qc_key = (
-                        qc.phase,
-                        qc.subject_block_hash,
-                        qc.height,
-                        qc.view,
-                        qc.epoch,
-                    );
-                    self.qc_cache.remove(&qc_key);
-                    cached_qc = None;
+                    false
+                } else {
+                    let mut signer_peers = BTreeSet::new();
+                    for signer in &validated_signers {
+                        let Ok(idx) = usize::try_from(*signer) else {
+                            continue;
+                        };
+                        let Some(peer) = topology.as_ref().get(idx) else {
+                            continue;
+                        };
+                        signer_peers.insert(peer.clone());
+                    }
+                    match super::stake_quorum_reached_for_peers(
+                        &state_view,
+                        &commit_topology,
+                        &signer_peers,
+                    ) {
+                        Ok(true) => {
+                            allow_quorum_bypass = true;
+                            quorum_signers = Some(validated_signers);
+                            true
+                        }
+                        Ok(false) => false,
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                height = pending_height,
+                                view = pending_view,
+                                block = %block_hash,
+                                "skipping commit: failed to compute stake quorum"
+                            );
+                            false
+                        }
+                    }
                 }
             }
-        }
-        let qc_tally = cached_qc.as_ref().and_then(|qc| {
-            self.validated_qc_tally_for_commit(qc, &block_signers, pending_view, &topology)
-                .map(|tally| (tally.voting_len(), tally))
-        });
-        let qc_vote_count = qc_tally.as_ref().map(|(count, _)| *count);
-        let signature_commit_ready =
-            crate::block::ValidBlock::is_commit(&pending.block, &topology).is_ok();
-        let qc_signers = qc_tally.as_ref().and_then(|(count, tally)| {
-            if *count >= min_votes_for_commit {
-                Some(tally.voting_signers.clone())
-            } else {
-                None
-            }
-        });
-        let has_qc_quorum = qc_signers.is_some();
-        let can_commit = signature_commit_ready || has_qc_quorum || topology.as_ref().len() == 1;
+        };
+        let can_commit = signature_commit_ready || topology.as_ref().len() == 1;
         if !can_commit {
             let pending_age = pending.age();
             let quorum_timeout = self.quorum_timeout(da_enabled);
-            let vote_count = qc_vote_count.unwrap_or(0);
+            let vote_count = block_signers.len();
             let now = Instant::now();
             let reschedule_backoff = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
             debug!(
@@ -1621,9 +1651,10 @@ impl Actor {
             height = pending_height,
             view = pending_view,
             block = %block_hash,
-            vote_count = qc_vote_count.unwrap_or(0),
+            signatures = block_signers.len(),
             min_votes = min_votes_for_commit,
-            "committing with precommit QC quorum"
+            mode = ?self.consensus_mode,
+            "committing with signature quorum"
         );
 
         let id = self.commit.next_id();
@@ -1633,7 +1664,8 @@ impl Actor {
             block: pending.block.clone(),
             commit_topology: commit_topology.clone(),
             signature_topology: signature_topology.clone(),
-            qc_signers: qc_signers.clone(),
+            qc_signers: quorum_signers.clone(),
+            allow_quorum_bypass,
             persist_required,
             events_sender: self.events_sender.clone(),
         };
@@ -1644,7 +1676,8 @@ impl Actor {
             pending,
             commit_topology,
             signature_topology,
-            qc_signers,
+            qc_signers: quorum_signers,
+            allow_quorum_bypass,
             block_signers,
             post_commit_qc,
             enqueue_time: now,
@@ -1701,6 +1734,8 @@ impl Actor {
         self.qc_cache
             .retain(|(_, hash, _, _, _), _| hash != &block_hash);
         self.execution_qc_cache.remove(&block_hash);
+        self.commit_votes
+            .retain(|(hash, _, _, _, _), _| *hash != block_hash);
         self.propose.proposal_cache.pop_hint(height, view);
         self.propose.proposal_cache.pop_proposal(height, view);
         self.proposals_seen.remove(&(height, view));
@@ -1738,6 +1773,8 @@ impl Actor {
         if let Some(pending) = self.pending.pending_blocks.remove(&invalid_hash) {
             self.clean_rbc_sessions_for_block(invalid_hash, pending.height);
         }
+        self.commit_votes
+            .retain(|(hash, _, _, _, _), _| *hash != invalid_hash);
         if let Some(ev) = evidence {
             if let Err(err) = self.handle_evidence(*ev) {
                 warn!(
@@ -1839,6 +1876,9 @@ impl Actor {
         let _ = self.drain_commit_results();
         let now = Instant::now();
         let _ = self.abort_inflight_commit_if_timed_out(now);
+        // B-Chain commit certificates are authoritative; QC pipeline is retained only for
+        // telemetry/backfill and is not required for commit liveness.
+        let enable_qc_pipeline = false;
         let quorum_timeout = self.commit_quorum_timeout();
         let da_enabled = self.runtime_da_enabled();
         // DA can stall while peers hydrate missing payloads; give extra slack before aborting.
@@ -1879,7 +1919,7 @@ impl Actor {
         }
         self.pending.last_commit_pipeline_run = now;
         let should_rebuild_qcs = now.saturating_duration_since(self.last_qc_rebuild) >= cooldown;
-        if should_rebuild_qcs {
+        if enable_qc_pipeline && should_rebuild_qcs {
             self.last_qc_rebuild = now;
             self.rebuild_qcs_from_cached_votes(&commit_topology);
         }
@@ -2016,6 +2056,7 @@ impl Actor {
 
             let mut emit_availability = false;
             let mut ready_for_commit: Option<crate::sumeragi::consensus::QcHeaderRef> = None;
+            let mut emit_commit_vote = false;
             let mut emit_precommit = false;
             let mut abort_due_to_kura = false;
             let mut replay_msg: Option<BlockMessage> = None;
@@ -2030,6 +2071,9 @@ impl Actor {
             self.pending
                 .pending_processing_parent
                 .set(pending.block.header().prev_block_hash());
+            if !pending.commit_vote_sent {
+                emit_commit_vote = true;
+            }
 
             if da_enabled {
                 // When AvailabilityQCs arrive before the block payload is delivered, they are
@@ -2153,7 +2197,7 @@ impl Actor {
                 );
                 abort_due_to_kura = true;
             } else if kura_ready {
-                if !pending.precommit_vote_sent {
+                if enable_qc_pipeline && !pending.precommit_vote_sent {
                     emit_precommit = true;
                 }
                 let qc_header = crate::sumeragi::consensus::QcHeaderRef {
@@ -2672,28 +2716,31 @@ impl Actor {
             let gate_da_enabled = gate.da_enabled;
             record_da_gate_telemetry(self.telemetry_handle(), &gate);
 
-            let has_precommit_qc = qc_cache_for_subject(&self.qc_cache, hash).any(|qc| {
-                matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit)
-                    && qc.height == pending_height
-                    && qc.view == pending_view
-            });
-            if !has_precommit_qc && pending.precommit_rebroadcast_due(now, rebroadcast_cooldown) {
-                let rebroadcasted = self.rebroadcast_block_votes(
-                    crate::sumeragi::consensus::Phase::Precommit,
-                    hash,
-                    pending_height,
-                    pending_view,
-                );
-                if rebroadcasted > 0 {
-                    pending.mark_precommit_rebroadcast(now);
-                    iroha_logger::info!(
-                        height = pending_height,
-                        view = pending_view,
-                        block = %hash,
-                        rebroadcasted,
-                        cooldown_ms = rebroadcast_cooldown.as_millis(),
-                        "rebroadcasting cached precommit votes to unblock commit quorum"
+            if enable_qc_pipeline {
+                let has_precommit_qc = qc_cache_for_subject(&self.qc_cache, hash).any(|qc| {
+                    matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit)
+                        && qc.height == pending_height
+                        && qc.view == pending_view
+                });
+                if !has_precommit_qc && pending.precommit_rebroadcast_due(now, rebroadcast_cooldown)
+                {
+                    let rebroadcasted = self.rebroadcast_block_votes(
+                        crate::sumeragi::consensus::Phase::Precommit,
+                        hash,
+                        pending_height,
+                        pending_view,
                     );
+                    if rebroadcasted > 0 {
+                        pending.mark_precommit_rebroadcast(now);
+                        iroha_logger::info!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = %hash,
+                            rebroadcasted,
+                            cooldown_ms = rebroadcast_cooldown.as_millis(),
+                            "rebroadcasting cached precommit votes to unblock commit quorum"
+                        );
+                    }
                 }
             }
 
@@ -2722,7 +2769,13 @@ impl Actor {
             }
 
             let finalize_start = Instant::now();
-            if emit_precommit {
+            if emit_commit_vote {
+                if self.emit_commit_vote(hash, pending_height, pending_view, current_epoch, &topology)
+                {
+                    pending.commit_vote_sent = true;
+                }
+            }
+            if enable_qc_pipeline && emit_precommit {
                 let parent_hash = pending.block.header().prev_block_hash();
                 if self.emit_precommit_vote(
                     hash,
@@ -3193,6 +3246,371 @@ impl Actor {
             });
         }
         true
+    }
+
+    pub(super) fn emit_commit_vote(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        topology: &super::network_topology::Topology,
+    ) -> bool {
+        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
+            let view = self.state.view();
+            Some(super::npos_seed_for_height(&view, height))
+        } else {
+            None
+        };
+        let signature_topology =
+            topology_for_view(topology, height, view, self.mode_tag(), prf_seed);
+        let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
+            warn!(
+                height,
+                view,
+                block = ?block_hash,
+                topology_len = signature_topology.as_ref().len(),
+                "skipping commit vote: local peer not present in view-aligned topology"
+            );
+            return false;
+        };
+        let vote_key = (block_hash, height, view, epoch, local_idx);
+        if self.commit_votes.contains_key(&vote_key) {
+            debug!(
+                height,
+                view,
+                block = ?block_hash,
+                signer = local_idx,
+                "skipping commit vote: already voted for this round"
+            );
+            return false;
+        }
+        let conflicting_vote = self.commit_votes.values().find(|vote| {
+            vote.height == height
+                && vote.view == view
+                && vote.epoch == epoch
+                && vote.signature.index() == u64::from(local_idx)
+                && vote.block_hash != block_hash
+        });
+        if let Some(conflict) = conflicting_vote {
+            warn!(
+                height,
+                view,
+                epoch,
+                block = ?block_hash,
+                previous_block = ?conflict.block_hash,
+                signer = local_idx,
+                "skipping commit vote: local validator already voted for a different block"
+            );
+            return false;
+        }
+        let signature = iroha_data_model::block::BlockSignature::new(
+            u64::from(local_idx),
+            iroha_crypto::SignatureOf::from_hash(
+                self.common_config.key_pair.private_key(),
+                block_hash,
+            ),
+        );
+        let vote = crate::sumeragi::consensus::CommitVote {
+            block_hash,
+            height,
+            view,
+            epoch,
+            signature: signature.clone(),
+        };
+        self.commit_votes.insert(vote_key, vote.clone());
+        if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) {
+            if let Err(err) = pending.block.add_signature(signature) {
+                debug!(
+                    ?err,
+                    height,
+                    view,
+                    block = ?block_hash,
+                    signer = local_idx,
+                    "failed to attach local commit signature to pending block"
+                );
+            }
+        }
+        let proxy_tail_idx = signature_topology.proxy_tail_index();
+        let proxy_tail = match signature_topology.as_ref().get(proxy_tail_idx) {
+            Some(peer) => peer,
+            None => {
+                warn!(
+                    height,
+                    view,
+                    block = ?block_hash,
+                    topology_len = signature_topology.as_ref().len(),
+                    "skipping commit vote: proxy tail index out of bounds"
+                );
+                return false;
+            }
+        };
+        let local_peer = self.common_config.peer.id();
+        if proxy_tail == local_peer {
+            let _ = self.handle_commit_vote(vote);
+            return true;
+        }
+        self.schedule_background(BackgroundRequest::Post {
+            peer: proxy_tail.clone(),
+            msg: BlockMessage::CommitVote(vote),
+        });
+        true
+    }
+
+    pub(super) fn handle_commit_vote(
+        &mut self,
+        vote: crate::sumeragi::consensus::CommitVote,
+    ) -> Result<()> {
+        let commit_topology = self.effective_commit_topology();
+        if commit_topology.is_empty() {
+            warn!(
+                height = vote.height,
+                view = vote.view,
+                block = %vote.block_hash,
+                "dropping commit vote: empty commit topology"
+            );
+            return Ok(());
+        }
+        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
+            let view = self.state.view();
+            Some(super::npos_seed_for_height(&view, vote.height))
+        } else {
+            None
+        };
+        let base_topology = super::network_topology::Topology::new(commit_topology.clone());
+        let signature_topology =
+            topology_for_view(&base_topology, vote.height, vote.view, self.mode_tag(), prf_seed);
+        let proxy_tail_idx = signature_topology.proxy_tail_index();
+        let Some(proxy_tail) = signature_topology.as_ref().get(proxy_tail_idx) else {
+            warn!(
+                height = vote.height,
+                view = vote.view,
+                block = %vote.block_hash,
+                topology_len = signature_topology.as_ref().len(),
+                "dropping commit vote: proxy tail index out of bounds"
+            );
+            return Ok(());
+        };
+        let local_peer = self.common_config.peer.id();
+        if proxy_tail != local_peer {
+            trace!(
+                height = vote.height,
+                view = vote.view,
+                block = %vote.block_hash,
+                local = %local_peer,
+                proxy_tail = %proxy_tail,
+                "ignoring commit vote on non-proxy tail"
+            );
+            return Ok(());
+        }
+        let signer_idx_usize = match usize::try_from(vote.signature.index()) {
+            Ok(idx) => idx,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    signer = vote.signature.index(),
+                    "dropping commit vote: signer index overflow"
+                );
+                return Ok(());
+            }
+        };
+        let Some(signer_peer) = signature_topology.as_ref().get(signer_idx_usize) else {
+            warn!(
+                height = vote.height,
+                view = vote.view,
+                block = %vote.block_hash,
+                signer = signer_idx_usize,
+                roster_len = signature_topology.as_ref().len(),
+                "dropping commit vote: signer out of bounds"
+            );
+            return Ok(());
+        };
+        if let Err(err) = vote
+            .signature
+            .signature()
+            .verify_hash(signer_peer.public_key(), vote.block_hash)
+        {
+            warn!(
+                ?err,
+                height = vote.height,
+                view = vote.view,
+                block = %vote.block_hash,
+                signer = signer_idx_usize,
+                "dropping commit vote: signature invalid"
+            );
+            return Ok(());
+        }
+        let signer_idx = match crate::sumeragi::consensus::ValidatorIndex::try_from(
+            vote.signature.index(),
+        ) {
+            Ok(idx) => idx,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    signer = vote.signature.index(),
+                    "dropping commit vote: signer index exceeds ValidatorIndex"
+                );
+                return Ok(());
+            }
+        };
+        let vote_key = (vote.block_hash, vote.height, vote.view, vote.epoch, signer_idx);
+        self.commit_votes.entry(vote_key).or_insert_with(|| vote.clone());
+        if let Some(pending) = self.pending.pending_blocks.get_mut(&vote.block_hash) {
+            if let Err(err) = pending.block.add_signature(vote.signature.clone()) {
+                debug!(
+                    ?err,
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    signer = signer_idx,
+                    "failed to attach commit signature to pending block"
+                );
+            }
+        }
+        let signers =
+            self.commit_vote_signers_for(vote.block_hash, vote.height, vote.view, vote.epoch);
+        let has_quorum =
+            self.commit_vote_quorum_reached(&signers, &signature_topology, &commit_topology);
+        if !has_quorum {
+            return Ok(());
+        }
+        let Some(pending) = self.pending.pending_blocks.get(&vote.block_hash) else {
+            warn!(
+                height = vote.height,
+                view = vote.view,
+                block = %vote.block_hash,
+                "commit quorum reached but block payload missing; awaiting block sync"
+            );
+            return Ok(());
+        };
+        let cert = Self::synthesize_commit_certificate(
+            self.state.as_ref(),
+            &pending.block,
+            &commit_topology,
+            self.mode_tag(),
+            prf_seed,
+            vote.epoch,
+            self.consensus_mode,
+        );
+        let Some(cert) = cert else {
+            warn!(
+                height = vote.height,
+                view = vote.view,
+                block = %vote.block_hash,
+                "commit quorum reached but failed to synthesize commit certificate"
+            );
+            return Ok(());
+        };
+        super::status::record_commit_certificate(cert.clone());
+        let mut update = super::message::BlockSyncUpdate::from(&pending.block);
+        update.commit_certificate = Some(cert.clone());
+        self.broadcast_block_sync_update(update, &commit_topology);
+        self.apply_commit_certificate(
+            &cert,
+            &commit_topology,
+            vote.block_hash,
+            vote.height,
+            vote.view,
+        );
+        Ok(())
+    }
+
+    fn commit_vote_signers_for(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+    ) -> BTreeSet<crate::sumeragi::consensus::ValidatorIndex> {
+        self.commit_votes
+            .iter()
+            .filter_map(|(key, _)| {
+                if key.0 == block_hash && key.1 == height && key.2 == view && key.3 == epoch {
+                    Some(key.4)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn commit_vote_quorum_reached(
+        &self,
+        signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+        signature_topology: &super::network_topology::Topology,
+        roster: &[PeerId],
+    ) -> bool {
+        match self.consensus_mode {
+            ConsensusMode::Permissioned => signers.len() >= signature_topology.min_votes_for_commit(),
+            ConsensusMode::Npos => {
+                let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+                let mut signer_peers = BTreeSet::new();
+                for signer in signers {
+                    let Ok(idx) = usize::try_from(*signer) else {
+                        return false;
+                    };
+                    let Some(peer) = signature_topology.as_ref().get(idx) else {
+                        return false;
+                    };
+                    if !roster_set.contains(peer) {
+                        return false;
+                    }
+                    signer_peers.insert(peer.clone());
+                }
+                let view = self.state.view();
+                super::stake_quorum_reached_for_peers(&view, roster, &signer_peers)
+                    .unwrap_or(false)
+            }
+        }
+    }
+
+    fn apply_commit_certificate(
+        &mut self,
+        cert: &CommitCertificate,
+        roster: &[PeerId],
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) {
+        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
+            let view_state = self.state.view();
+            Some(super::npos_seed_for_height(&view_state, height))
+        } else {
+            None
+        };
+        let signature_topology =
+            super::signature_topology_for_roster(roster, height, view, self.mode_tag(), prf_seed);
+        let mapped = map_commit_certificate_signatures(cert, &signature_topology);
+        if mapped.is_empty() {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                "commit certificate signatures did not map to view topology"
+            );
+            return;
+        }
+        let Some(pending) = self.pending.pending_blocks.remove(&block_hash) else {
+            return;
+        };
+        let mut pending = pending;
+        for sig in mapped {
+            let _ = pending.block.add_signature(sig);
+        }
+        let qc_header = crate::sumeragi::consensus::QcHeaderRef {
+            phase: crate::sumeragi::consensus::Phase::Precommit,
+            subject_block_hash: block_hash,
+            height,
+            view,
+            epoch: cert.epoch,
+        };
+        let _ = self.finalize_pending_block(qc_header, pending, None);
     }
 
     pub(super) fn rebroadcast_block_votes(
@@ -5102,6 +5520,30 @@ impl Actor {
             None
         }
     }
+}
+
+fn map_commit_certificate_signatures(
+    cert: &CommitCertificate,
+    signature_topology: &super::network_topology::Topology,
+) -> Vec<iroha_data_model::block::BlockSignature> {
+    let roster = &cert.validator_set;
+    let mut mapped = BTreeSet::new();
+    for sig in &cert.signatures {
+        let Ok(idx) = usize::try_from(sig.index()) else {
+            continue;
+        };
+        let Some(peer) = roster.get(idx) else {
+            continue;
+        };
+        let Some(view_idx) = signature_topology.position(peer.public_key()) else {
+            continue;
+        };
+        mapped.insert(iroha_data_model::block::BlockSignature::new(
+            view_idx as u64,
+            sig.signature().clone(),
+        ));
+    }
+    mapped.into_iter().collect()
 }
 
 #[cfg(test)]

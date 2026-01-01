@@ -1,18 +1,43 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w3/log.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 3863fc4d8f6b1358d34e413af6a6be984bcd6b9b9df8e2d8acf4fac32abae52e
 source_last_modified: "2025-11-20T12:45:58.005633+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-01
 ---
 
-# Traducción en curso
+---
+id: preview-feedback-w3-log
+title: Log de invitaciones beta W3
+sidebar_label: Log W3
+description: Linea de tiempo para la ola de invitaciones de preview 2026-02-18.
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+Los eventos registrados abajo se reflejan en `artifacts/docs_portal_preview/feedback_log.json`
+y se resumen en `preview-20260218-summary.json` / `preview-20260218-digest.md`.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+| Timestamp (UTC) | Evento | Destinatario | Notas |
+| --- | --- | --- | --- |
+| 2026-02-18 14:00 | invite-sent | finance-beta-01 | Cohorte piloto de finanzas |
+| 2026-02-18 14:08 | acknowledged | finance-beta-01 |  |
+| 2026-02-21 10:22 | feedback-submitted | finance-beta-01 | docs-preview/20260218#1 |
+| 2026-02-28 17:00 | access-revoked | finance-beta-01 |  |
+| 2026-02-18 14:05 | invite-sent | observability-ops-02 | Preparacion de observabilidad |
+| 2026-02-18 14:20 | acknowledged | observability-ops-02 |  |
+| 2026-02-23 09:45 | feedback-submitted | observability-ops-02 | docs-preview/20260218#2 |
+| 2026-02-23 11:15 | issue-opened | observability-ops-02 | DOCS-SORA-Preview-20260218 |
+| 2026-02-28 17:05 | access-revoked | observability-ops-02 |  |
+| 2026-02-18 14:10 | invite-sent | partner-sdk-03 | Ola de partner SDK |
+| 2026-02-19 08:30 | acknowledged | partner-sdk-03 |  |
+| 2026-02-24 16:10 | feedback-submitted | partner-sdk-03 | docs-preview/20260218#3 |
+| 2026-02-28 17:10 | access-revoked | partner-sdk-03 |  |
+| 2026-02-18 14:15 | invite-sent | ecosystem-advocate-04 | Advocate de ecosistema |
+| 2026-02-18 14:50 | acknowledged | ecosystem-advocate-04 |  |
+| 2026-02-26 12:35 | feedback-submitted | ecosystem-advocate-04 | docs-preview/20260218#4 |
+| 2026-02-28 17:15 | access-revoked | ecosystem-advocate-04 |  |
+
+Usa `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01`
+para regenerar el digest y los datos del portal al actualizar este log.

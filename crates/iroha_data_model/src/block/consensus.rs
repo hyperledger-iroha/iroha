@@ -186,6 +186,21 @@ pub struct Vote {
     pub signature: Vec<u8>,
 }
 
+/// Commit vote carrying a block signature for B-Chain-style finalization.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct CommitVote {
+    /// Hash of the block being committed.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Block height of the subject.
+    pub height: Height,
+    /// View number of the vote.
+    pub view: View,
+    /// Epoch index for `NPoS`; 0 in permissioned.
+    pub epoch: u64,
+    /// Block header signature by the voting validator (includes the validator index).
+    pub signature: crate::block::BlockSignature,
+}
+
 /// Data availability acknowledgement vote.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct AvailableVote {

@@ -62,6 +62,8 @@ pub enum BlockMessage {
     ProposalHint(#[skip_try_from] ProposalHint),
     /// Full proposal header + payload hash. Used for on-wire parent/HighestQC checks.
     Proposal(#[skip_try_from] super::consensus::Proposal),
+    /// Commit vote carrying a block header signature.
+    CommitVote(#[skip_try_from] super::consensus::CommitVote),
 }
 
 /// Control-flow signals exchanged between peers (pacemaker frames).

@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Added a Sumeragi actor-model refactor plan with staged tasks in `roadmap.md`.
 - Resolved merge conflict in `status.md` and merged latest updates from both branches.
 - Completed SEC-TORII-OPERATOR-AUTH: WebAuthn/mTLS operator auth with enrollment/login flow, session tokens, mTLS gating, operator endpoint protection, telemetry, and updated OpenAPI/docs/tests.
 - Tests: `CARGO_TARGET_DIR=target-codex cargo test --workspace` (fails: `integration_tests` sandbox tests require loopback binds; `build_network_*` and `serialized_network_*` panic on denied `127.0.0.1:30000`).
@@ -198,3 +199,14 @@
 - Translated preview reviewer onboarding across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the portal observability guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the portal security hardening checklist across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the public preview invite playbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal incident runbooks across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W0 preview feedback digest across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W1 partner preflight plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W1 partner feedback summary across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W1 feedback and telemetry log across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W2 community intake plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W2 community feedback summary across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W3 beta feedback summary across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W3 beta invite log across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS publishing and monitoring guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).

@@ -3896,10 +3896,7 @@ impl NetworkPeer {
                     }
                 }
             };
-            if timeout(PEER_SHUTDOWN_TIMEOUT, drain_aborted)
-                .await
-                .is_err()
-            {
+            if timeout(PEER_SHUTDOWN_TIMEOUT, drain_aborted).await.is_err() {
                 warn!("timed out waiting for aborted peer tasks; continuing shutdown");
             }
         }
