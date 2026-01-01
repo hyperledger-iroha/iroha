@@ -1549,15 +1549,22 @@ async fn repo_agreements_respect_address_format() -> Result<()> {
     // Issue the repo agreement after genesis to avoid initial-executor restrictions. Some
     // environments may not ship repo instructions; skip gracefully if the binary rejects them.
     let repo_instruction_box: InstructionBox = RepoInstructionBox::from(repo_instruction).into();
-    if let Err(err) = network
-        .client()
-        .submit_blocking::<InstructionBox>(repo_instruction_box)
-    {
-        eprintln!("Skipping repo address_format coverage: {err}");
-        return Ok(());
+    let mut client = network.client();
+    client.transaction_status_timeout = Duration::from_secs(30);
+    if let Err(err) = client.submit_blocking::<InstructionBox>(repo_instruction_box) {
+        let err_msg = err.to_string();
+        if err_msg.contains("transaction confirmation")
+            || err_msg.contains("fallback status check failed")
+        {
+            eprintln!(
+                "Repo agreement confirmation incomplete ({err}); validating via block height."
+            );
+        } else {
+            eprintln!("Skipping repo address_format coverage: {err}");
+            return Ok(());
+        }
     }
     network.ensure_blocks(2).await?;
-    let client = network.client();
 
     let http = http_client();
     let base = client.torii_url.clone();

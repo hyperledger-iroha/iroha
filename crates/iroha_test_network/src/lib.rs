@@ -3884,12 +3884,20 @@ impl NetworkPeer {
         if timeout(PEER_SHUTDOWN_TIMEOUT, join_all).await.is_err() {
             warn!("timed out waiting for peer tasks; aborting remaining tasks");
             run.tasks.abort_all();
-            while let Some(res) = run.tasks.join_next().await {
-                if let Err(err) = res
-                    && err.is_panic()
-                {
-                    warn!(error = %err, "aborted task panicked during shutdown");
+            let drain_aborted = async {
+                while let Some(res) = run.tasks.join_next().await {
+                    if let Err(err) = res
+                        && err.is_panic()
+                    {
+                        warn!(error = %err, "aborted task panicked during shutdown");
+                    }
                 }
+            };
+            if timeout(PEER_SHUTDOWN_TIMEOUT, drain_aborted)
+                .await
+                .is_err()
+            {
+                warn!("timed out waiting for aborted peer tasks; continuing shutdown");
             }
         }
     }
