@@ -11,6 +11,7 @@ use std::{
     fs::OpenOptions,
     io::{self, Read, Write},
     sync::Once,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use color_eyre::{Result, eyre::Context};
@@ -35,6 +36,21 @@ const LOCK_FILE: &str = concat!(
 #[derive(JsonSerialize, JsonDeserialize, Default)]
 struct LockContent {
     ports_in_use: BTreeSet<u16>,
+}
+
+fn randomized_port_start() -> u16 {
+    let range = u64::from(PORT_RANGE_PREFERRED_END - PORT_RANGE_START + 1);
+    if range == 0 {
+        return PORT_RANGE_START;
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let pid = u128::from(std::process::id());
+    let seed = now ^ (pid << 32);
+    let offset = u64::try_from(seed % u128::from(range)).unwrap_or(0);
+    PORT_RANGE_START.saturating_add(offset as u16)
 }
 
 impl LockContent {
@@ -115,9 +131,8 @@ impl AllocatedPort {
 
         static START_UNIQUE_PORT: Once = Once::new();
         START_UNIQUE_PORT.call_once(|| {
-            // Bias toward ports below the typical ephemeral range to reduce collisions with
-            // background client sockets while staying above privileged ports.
-            let _ = unique_port::set_port_index(PORT_RANGE_START);
+            // Randomize the starting port to reduce collisions across overlapping test runs.
+            let _ = unique_port::set_port_index(randomized_port_start());
         });
 
         let mut lock = fslock::LockFile::open(LOCK_FILE).expect("path is valid");
@@ -283,5 +298,12 @@ mod tests {
             "allocated port should avoid OS ephemeral range; got {}",
             port.0
         );
+    }
+
+    #[test]
+    fn randomized_port_start_is_within_preferred_range() {
+        let start = randomized_port_start();
+        assert!(start >= PORT_RANGE_START);
+        assert!(start <= PORT_RANGE_PREFERRED_END);
     }
 }

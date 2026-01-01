@@ -196,9 +196,28 @@ pub(super) fn detect_proposal_mismatch(
 }
 
 /// Canonicalize block payload encoding before hashing to avoid layout drift from Norito’s adaptive
-/// encode heuristics.
+/// encode heuristics. Strip execution results and non-leader signatures so the payload hash stays
+/// stable across validation and signature collection.
 pub(super) fn block_payload_bytes(block: &SignedBlock) -> Vec<u8> {
-    block.encode_versioned()
+    let mut header = block.header();
+    header.result_merkle_root = None;
+    let leader_sig = block
+        .signatures()
+        .find(|sig| sig.index() == 0)
+        .cloned()
+        .or_else(|| block.signatures().next().cloned());
+    let Some(signature) = leader_sig else {
+        return block.encode_versioned();
+    };
+    let mut sanitized = SignedBlock::presigned_with_da(
+        signature,
+        header,
+        block.transactions_vec().clone(),
+        block.da_commitments().cloned(),
+    );
+    sanitized.set_da_proof_policies(block.da_proof_policies().cloned());
+    sanitized.set_da_pin_intents(block.da_pin_intents().cloned());
+    sanitized.encode_versioned()
 }
 
 fn parent_hash_from_header(header: &BlockHeader) -> HashOf<BlockHeader> {
