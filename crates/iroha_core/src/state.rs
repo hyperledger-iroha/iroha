@@ -15242,11 +15242,14 @@ mod replay_validation_tests {
 
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
+            name::Name,
             parameter::system::{Parameter, SumeragiNposParameters},
             peer::PeerId,
         };
         use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisPeerPop};
-        use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+        use iroha_test_samples::{
+            SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
+        };
 
         let chain_id = ChainId::from("iroha:test:npos-replay");
         let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -15286,13 +15289,19 @@ mod replay_validation_tests {
         ];
 
         let executor_path = super::permission_cache_tests::ensure_executor_bytecode(&temp_dir);
-        let genesis_block =
+        let (user_id, user_keypair) = gen_account_in("wonderland");
+        let mut genesis_builder =
             GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
                 .set_topology(topology.as_ref().to_owned())
                 .set_topology_pop(pops)
-                .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()))
-                .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-                .expect("genesis");
+                .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
+        genesis_builder = genesis_builder
+            .domain("wonderland".parse::<Name>().expect("domain id"))
+            .account(user_keypair.public_key().clone())
+            .finish_domain();
+        let genesis_block = genesis_builder
+            .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+            .expect("genesis");
         let genesis_signed = genesis_block.0.clone();
 
         let kura = Kura::blank_kura_for_testing();
@@ -15315,12 +15324,12 @@ mod replay_validation_tests {
         kura.store_block(Arc::clone(&genesis_arc))
             .expect("store genesis");
 
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+        let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
             .with_instructions([Log::new(
                 iroha_logger::Level::INFO,
                 "npos replay".to_owned(),
             )])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            .sign(user_keypair.private_key());
         let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let signer = if leader_index == 0 {
             peer_a.private_key()

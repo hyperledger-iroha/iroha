@@ -1739,9 +1739,12 @@ impl Network {
             .join(", ")
     }
 
-    /// Get a client for a random peer in the network
+    /// Get a client for the first peer in the network.
     pub fn client(&self) -> Client {
-        self.peer().client()
+        self.peers
+            .first()
+            .expect("there is at least one peer")
+            .client()
     }
 
     /// Chain ID of the network
@@ -7110,6 +7113,18 @@ exit 0
             let port: u16 = port_str.parse().unwrap();
             assert_eq!(port, peer.api_address().port());
         }
+    }
+
+    #[test]
+    fn network_client_uses_first_peer() {
+        let network = NetworkBuilder::new().with_peers(3).build();
+        let expected = network
+            .peers()
+            .first()
+            .expect("network has peers")
+            .torii_url();
+        let client = network.client();
+        assert_eq!(client.torii_url.as_str(), expected);
     }
 
     #[test]

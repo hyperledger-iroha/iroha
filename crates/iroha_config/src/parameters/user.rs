@@ -6298,6 +6298,7 @@ pub struct SumeragiDebugRbc {
     pub duplicate_inits: bool,
     /// Force RBC DELIVER quorum to 1 for deterministic recovery tests.
     #[config(default)]
+    #[norito(default)]
     pub force_deliver_quorum_one: bool,
     /// Corrupt witness ACK payloads when debug mode is enabled.
     #[config(default)]
