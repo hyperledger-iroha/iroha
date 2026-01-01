@@ -11308,6 +11308,75 @@ async fn new_view_tracker_resets_on_commit_topology_change() {
     assert!(harness.actor.propose.forced_view_after_timeout.is_none());
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn commit_topology_change_clears_pending_consensus_state() {
+    let mut harness = test_actor_harness(4).await;
+    let current_roster = harness.actor.effective_commit_topology();
+    harness
+        .actor
+        .refresh_commit_topology_state(HashOf::new(&current_roster));
+
+    let block = sample_block(2, 0, None);
+    let payload_hash = Hash::prehashed([0x22; 32]);
+    let block_hash = block.hash();
+    harness.actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, 2, 0),
+    );
+    harness.actor.vote_log.insert(
+        (Phase::Prevote, 2, 0, 0, 0),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Prevote,
+            block_hash,
+            height: 2,
+            view: 0,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        },
+    );
+    harness.actor.exec_vote_log.insert(
+        (2, 0, 0, 0),
+        crate::sumeragi::consensus::ExecVote {
+            block_hash,
+            parent_state_root: Hash::prehashed([0x33; 32]),
+            post_state_root: Hash::prehashed([0x44; 32]),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+        },
+    );
+    harness
+        .actor
+        .rbc
+        .session_rosters
+        .insert(session_key(), current_roster.clone());
+
+    assert!(!harness.actor.pending.pending_blocks.is_empty());
+    assert!(!harness.actor.vote_log.is_empty());
+    assert!(!harness.actor.exec_vote_log.is_empty());
+    assert!(!harness.actor.rbc.session_rosters.is_empty());
+
+    let mut changed_roster = current_roster.clone();
+    changed_roster.pop();
+    harness
+        .actor
+        .install_elected_roster(&changed_roster)
+        .expect("roster install should succeed");
+    harness
+        .actor
+        .on_block_commit_for_tests(1)
+        .expect("commit hook should run");
+
+    assert!(harness.actor.pending.pending_blocks.is_empty());
+    assert!(harness.actor.vote_log.is_empty());
+    assert!(harness.actor.exec_vote_log.is_empty());
+    assert!(harness.actor.rbc.session_rosters.is_empty());
+}
+
 #[test]
 fn new_view_signature_accepts_matching_sender() {
     let chain = ChainId::from("iroha:test:new-view");

@@ -1,6 +1,9 @@
 # Status
 
 ## Latest Updates
+- Stabilized `iroha_test_network::Network::client()` to use the first peer deterministically, avoiding event-stream hangs from random peer selection in integration tests.
+- Cleared pending consensus caches on commit-topology changes so stale votes/RBC sessions do not stall after peer membership updates; added unit test `commit_topology_change_clears_pending_consensus_state`.
+- Tests: `cargo test -p iroha_core commit_topology_change_clears_pending_consensus_state -- --nocapture` (timed out after 2m; target test passed; warnings in `crates/iroha_core/src/state.rs` about unused variables).
 - Replayed Kura blocks now rotate topology using the effective consensus mode and NPoS PRF seed so restart validation matches leader selection; added replay unit coverage.
 - Wired `sumeragi.debug.rbc.force_deliver_quorum_one` through config and RBC deliver quorum gating; added unit coverage and refreshed the Sumeragi DA docs to note the override in large-payload scenarios.
 - Stabilized NPoS PRF seed tracking by aligning epoch seeds with on-chain parameters, keeping the seed fixed within an epoch, and persisting a seed-only record for the next epoch at rollover; added unit coverage and refreshed Sumeragi VRF docs (en/ja/he).
