@@ -2,7 +2,7 @@
 
 ## Latest Updates
 - Completed SEC-TORII-OPERATOR-AUTH: WebAuthn/mTLS operator auth with enrollment/login flow, session tokens, mTLS gating, operator endpoint protection, telemetry, and updated OpenAPI/docs/tests.
-- Tests: `cargo test --workspace` (fails: rustc could not create target incremental/fingerprint outputs under `target/debug`, e.g., `signature_batch_determinism` and `scheduler_telemetry`).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test --workspace` (fails: `integration_tests` sandbox tests require loopback binds; `build_network_*` and `serialized_network_*` panic on denied `127.0.0.1:30000`).
 - Completed SEC-UPGRADE-PROVENANCE: runtime upgrade manifests now carry SBOM/SLSA provenance and signer metadata, governance config enforces trusted signer thresholds, admission rejects missing/invalid provenance with telemetry/error codes, and docs/tests refreshed.
 - Tests: `cargo test -p iroha pipeline_status_404_falls_back_to_committed_query`, `cargo test -p iroha_core runtime_upgrade_admission`.
 - Routed RBC READY/DELIVER through the vote queue and drained RBC chunks ahead of payloads in the Sumeragi worker loop to prevent consensus stalls under heavy payloads; updated unit coverage and confirmed `sumeragi_rbc_da_large_payload_four_peers`.
