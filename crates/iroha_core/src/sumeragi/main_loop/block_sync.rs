@@ -91,8 +91,13 @@ impl Actor {
             );
             return Ok(());
         }
-        let persisted_roster =
-            persisted_roster_for_block(self.state.as_ref(), &self.kura, block_height, block_hash);
+        let persisted_roster = persisted_roster_for_block(
+            self.state.as_ref(),
+            &self.kura,
+            self.consensus_mode,
+            block_height,
+            block_hash,
+        );
         let cert_hint = commit_certificate.as_ref();
         let checkpoint_hint = validator_checkpoint.as_ref();
         let Some(selection) = select_block_sync_roster(
@@ -105,6 +110,7 @@ impl Actor {
             self.state.as_ref(),
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
+            self.consensus_mode,
             self.mode_tag(),
             requested_missing_block,
         ) else {
@@ -292,14 +298,42 @@ impl Actor {
         });
         let original_candidate_qc = candidate_qc.clone();
 
+        let commit_cert_present = selection.commit_certificate.is_some();
         let candidate_qc_present = candidate_qc.is_some();
         let candidate_qc_signers = candidate_qc.as_ref().map(qc_signer_count);
         let block_signer_count = block_signers.len();
+        let signature_quorum_met = match self.consensus_mode {
+            ConsensusMode::Permissioned => block_signer_count >= commit_quorum,
+            ConsensusMode::Npos => {
+                let signature_topology = super::topology_for_view(
+                    &topology,
+                    block_height,
+                    block_view,
+                    self.mode_tag(),
+                    prf_seed,
+                );
+                let mut signer_peers = BTreeSet::new();
+                for signer in &block_signers {
+                    let Ok(idx) = usize::try_from(*signer) else {
+                        continue;
+                    };
+                    let Some(peer) = signature_topology.as_ref().get(idx) else {
+                        continue;
+                    };
+                    signer_peers.insert(peer.clone());
+                }
+                let state_view = self.state.view();
+                super::stake_quorum_reached_for_peers(&state_view, &selection.roster, &signer_peers)
+                    .unwrap_or(false)
+            }
+        };
         let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         if !block_sync_quorum_available(
             block_signer_count,
             commit_quorum,
+            signature_quorum_met,
             candidate_qc_present,
+            commit_cert_present,
             requested_missing_block,
             block_height,
             local_height,
@@ -431,7 +465,14 @@ impl Actor {
         let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
         let allow_nonextending_qc = selection.commit_certificate.is_some()
             || commit_certificate.as_ref().is_some_and(|cert| {
-                super::validate_commit_certificate_roster(cert, block_hash).is_ok()
+                let state_view = self.state.view();
+                super::validate_commit_certificate_roster(
+                    cert,
+                    block_hash,
+                    self.consensus_mode,
+                    &state_view,
+                )
+                .is_ok()
             })
             || incoming_qc_validated;
         if incoming_qc.is_none() && block_signer_count < commit_quorum && !requested_missing_block {
@@ -507,6 +548,17 @@ impl Actor {
                     view = block_view,
                     block = %block_hash,
                     "dropping block sync update: block not accepted locally"
+                );
+            }
+        }
+        if creation_ok && block_known_after_creation {
+            if let Some(cert) = selection.commit_certificate.as_ref() {
+                self.apply_commit_certificate(
+                    cert,
+                    &selection.roster,
+                    block_hash,
+                    block_height,
+                    block_view,
                 );
             }
         }

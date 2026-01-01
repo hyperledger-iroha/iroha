@@ -22,11 +22,11 @@ use iroha_config::parameters::actual::{
 #[cfg(test)]
 use iroha_crypto::HashOf;
 pub use iroha_data_model::block::consensus::{
-    AvailableVote, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
-    EvidencePayload, ExecKv, ExecVote, ExecWitness, ExecWitnessMsg, ExecutionQC, Height, NPOS_TAG,
-    NewView, NposGenesisParams, PERMISSIONED_TAG, PROTO_VERSION, Phase, Proposal, Qc, QcAggregate,
-    QcHeaderRef, RbcChunk, RbcDeliver, RbcInit, RbcReady, Reconfig, ValidatorIndex, View, Vote,
-    VrfCommit, VrfReveal, WitnessAvailAck, WitnessAvailQC,
+    AvailableVote, CommitVote, ConsensusBlockHeader, ConsensusGenesisParams, Evidence,
+    EvidenceKind, EvidencePayload, ExecKv, ExecVote, ExecWitness, ExecWitnessMsg, ExecutionQC,
+    Height, NPOS_TAG, NewView, NposGenesisParams, PERMISSIONED_TAG, PROTO_VERSION, Phase,
+    Proposal, Qc, QcAggregate, QcHeaderRef, RbcChunk, RbcDeliver, RbcInit, RbcReady, Reconfig,
+    ValidatorIndex, View, Vote, VrfCommit, VrfReveal, WitnessAvailAck, WitnessAvailQC,
 };
 use iroha_data_model::prelude::*;
 

@@ -20,8 +20,6 @@ use tokio::{
 #[allow(clippy::too_many_lines)]
 async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     const PIPELINE_TIME: Duration = Duration::from_secs(2);
-    const SYNC_TIMEOUT: Duration = Duration::from_secs(60);
-    const TX_TIMEOUT: Duration = Duration::from_secs(30);
 
     // Given a network
     let builder = NetworkBuilder::new()
@@ -38,6 +36,8 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     else {
         return Ok(());
     };
+    let sync_timeout = network.sync_timeout();
+    let tx_timeout = sync_timeout;
     let client = network.client();
 
     let (account, _account_keypair) = gen_account_in("domain");
@@ -57,17 +57,17 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
                     .map(|_| ())
             }
         },
-        TX_TIMEOUT,
+        tx_timeout,
         "network_stable_after_add_and_after_remove_peer register bootstrap",
     )
     .await?;
 
     // When assets are minted
-    mint(&client, &asset_def, &account, numeric!(100), TX_TIMEOUT).await?;
+    mint(&client, &asset_def, &account, numeric!(100), tx_timeout).await?;
     if ensure_blocks_or_skip(
         &network,
         3,
-        SYNC_TIMEOUT,
+        sync_timeout,
         stringify!(network_stable_after_add_and_after_remove_peer),
     )
     .await?
@@ -89,14 +89,14 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     submit_blocking_or_skip(
         client.clone(),
         register_peer,
-        TX_TIMEOUT,
+        tx_timeout,
         "network_stable_after_add_and_after_remove_peer register_peer",
     )
     .await?;
     if ensure_blocks_or_skip(
         &network,
         4,
-        SYNC_TIMEOUT,
+        sync_timeout,
         stringify!(network_stable_after_add_and_after_remove_peer),
     )
     .await?
@@ -121,7 +121,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     }
     network.add_peer(&new_peer);
     let sync_result = timeout(
-        SYNC_TIMEOUT,
+        sync_timeout,
         new_peer.once_block_with(BlockHeight::predicate_non_empty(4)),
     )
     .await
@@ -140,7 +140,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     }
     // Then the new peer should already have the mint result.
     let new_peer_asset = match sandbox::handle_result(
-        wait_for_asset(&new_peer_client, &account, &asset_def, SYNC_TIMEOUT).await,
+        wait_for_asset(&new_peer_client, &account, &asset_def, sync_timeout).await,
         stringify!(network_stable_after_add_and_after_remove_peer),
     )? {
         Some(value) => value,
@@ -152,19 +152,19 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     submit_blocking_or_skip(
         client.clone(),
         Unregister::peer(new_peer_id),
-        TX_TIMEOUT,
+        tx_timeout,
         "network_stable_after_add_and_after_remove_peer unregister_peer",
     )
     .await?;
     // blocks=6
     network.remove_peer(&new_peer);
     // We can mint without an error.
-    mint(&client, &asset_def, &account, numeric!(200), TX_TIMEOUT).await?;
+    mint(&client, &asset_def, &account, numeric!(200), tx_timeout).await?;
     // Assets are increased on the main network.
     if ensure_blocks_or_skip(
         &network,
         6,
-        SYNC_TIMEOUT,
+        sync_timeout,
         stringify!(network_stable_after_add_and_after_remove_peer),
     )
     .await?
@@ -184,7 +184,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     // But not on the unregistered peer's network.
     sleep(PIPELINE_TIME * 5).await;
     let unregistered_asset = match sandbox::handle_result(
-        wait_for_asset(&new_peer_client, &account, &asset_def, SYNC_TIMEOUT).await,
+        wait_for_asset(&new_peer_client, &account, &asset_def, sync_timeout).await,
         stringify!(network_stable_after_add_and_after_remove_peer),
     )? {
         Some(value) => value,

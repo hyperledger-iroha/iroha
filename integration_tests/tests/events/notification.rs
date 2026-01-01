@@ -3,7 +3,8 @@
 use eyre::Result;
 use futures_util::StreamExt;
 use integration_tests::sandbox;
-use iroha::data_model::prelude::*;
+use iroha::data_model::{ValidationFail, prelude::*, query::error::FindError};
+use iroha_data_model::isi::error::InstructionExecutionError;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use tokio::{task::spawn_blocking, time::timeout};
@@ -75,10 +76,10 @@ async fn trigger_completion_success_should_produce_event() -> Result<()> {
 }
 
 #[tokio::test]
-async fn trigger_completion_failure_should_produce_event() -> Result<()> {
+async fn trigger_completion_failure_reports_error() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(trigger_completion_failure_should_produce_event),
+        stringify!(trigger_completion_failure_reports_error),
     )
     .await?
     else {
@@ -104,21 +105,32 @@ async fn trigger_completion_failure_should_produce_event() -> Result<()> {
     spawn_blocking(move || client.submit(register_trigger)).await??;
     network.ensure_blocks(2).await?;
 
-    let mut events = network
-        .client()
-        .listen_for_events_async([TriggerCompletedEventFilter::new()
-            .for_trigger(trigger_id.clone())
-            .for_outcome(TriggerCompletedOutcomeType::Failure)])
-        .await?;
-
     let call_trigger = ExecuteTrigger::new(trigger_id);
     let client = network.client();
-    spawn_blocking(move || {
-        client.submit(Instruction::into_instruction_box(Box::new(call_trigger)))
-    })
-    .await??;
-
-    let _ = timeout(network.sync_timeout(), events.next()).await?;
+    let err = spawn_blocking(move || client.submit_blocking(call_trigger))
+        .await?
+        .expect_err("should immediately result in error");
+    if let Some(FindError::Domain(_)) = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<FindError>())
+    {
+        // ok
+    } else if let Some(InstructionExecutionError::Find(FindError::Domain(_))) = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<InstructionExecutionError>())
+    {
+        // ok
+    } else if let Some(ValidationFail::NotPermitted(msg)) = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ValidationFail>())
+    {
+        assert!(
+            msg.contains("execute_called_trigger"),
+            "unexpected NotPermitted message: {msg}"
+        );
+    } else {
+        return Err(err);
+    }
 
     Ok(())
 }

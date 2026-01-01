@@ -113,6 +113,16 @@ Unless stated otherwise, roadmap items call out which release line they affect.
     - [x] Resolve merge-conflict markers in `crates/iroha_core/src/zk.rs` that currently break builds/tests.
     - [x] Update ZK docs/configs to reflect the expanded fixture set and supported test circuits.
 
+11. **SUMERAGI-ACTOR-REFACTOR — Replace ad-hoc worker loop with a deterministic actor model** (Consensus/Sumeragi, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈳 Not Started, target TBD)
+    - [ ] Document the current worker loop/queue topology, ordering rules, backpressure behavior, and determinism constraints; capture known failure modes and desired invariants.
+    - [ ] Define a new message envelope with explicit priority classes and deterministic tie-breakers; map `BlockMessage`, `ControlFlow`, RBC, lane relay, and background requests to priority tiers.
+    - [ ] Implement a single scheduling layer (priority mailbox + bounded budgets) that replaces multi-queue draining while preventing starvation and preserving deterministic processing.
+    - [ ] Move background network posting into a dedicated worker with backpressure + metrics; remove inline-send fallback paths from the actor loop.
+    - [ ] Replace mutexed dedup caches with bounded LRU/TTL structures partitioned by message kind; add eviction metrics and duplicate-suppression tests.
+    - [ ] Split `Actor` state into explicit subcomponents with minimal shared mutable state (commit, propose/pacemaker, DA/RBC, VRF, merge/lane relay) and unit-testable interfaces.
+    - [ ] Add deterministic replay tests: given a fixed message trace, the scheduler produces identical state transitions and outputs across runs; include saturation and fairness scenarios.
+    - [ ] Update `docs/source/sumeragi.md`, `/v1/sumeragi/status` telemetry notes, and `status.md`/`roadmap.md` migration guidance to reflect the new actor model.
+
 13. **QUERY-DSL-IMPLEMENTATION — Replace lightweight query DSL stubs** (Data Model/Core/SDK, Line: Shared, Owner: Data Model WG, Priority: Medium, Status: 🈴 Completed, target TBD)
     - [x] Implement real predicate/projection semantics for `query::dsl` and `query::dsl_fast`.
     - [x] Ensure Norito serialization captures predicate payloads and remains backward compatible.

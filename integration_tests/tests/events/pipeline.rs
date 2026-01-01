@@ -75,29 +75,29 @@ async fn test_with_instruction_and_status(
     // Then
     let event_timeout = network.sync_timeout();
     timeout(event_timeout, async move {
-        let Some(first) = events.next().await else {
-            return Err(eyre!("transaction event stream closed (queued)"));
-        };
-        let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = first? else {
-            return Err(eyre!("expected transaction event (queued)"));
-        };
-        if *event.status() != TransactionStatus::Queued {
-            return Err(eyre!("expected queued status, got {:?}", event.status()));
+        let mut saw_queued = false;
+        loop {
+            let Some(next) = events.next().await else {
+                return Err(eyre!("transaction event stream closed"));
+            };
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
+                return Err(eyre!("expected transaction event"));
+            };
+            match event.status() {
+                TransactionStatus::Queued => {
+                    saw_queued = true;
+                }
+                status if status == should_be => {
+                    if !saw_queued {
+                        return Err(eyre!("expected queued status before final"));
+                    }
+                    return Ok(());
+                }
+                status => {
+                    return Err(eyre!("unexpected transaction status, got {:?}", status));
+                }
+            }
         }
-
-        let Some(second) = events.next().await else {
-            return Err(eyre!("transaction event stream closed (final)"));
-        };
-        let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = second? else {
-            return Err(eyre!("expected transaction event (final)"));
-        };
-        if event.status() != should_be {
-            return Err(eyre!(
-                "unexpected transaction status, got {:?}",
-                event.status()
-            ));
-        }
-        Ok(())
     })
     .await
     .wrap_err_with(|| format!("{context}: timed out waiting for pipeline events"))??;
@@ -130,21 +130,26 @@ async fn applied_block_must_be_available_in_kura() -> Result<()> {
 
     // Wait for the transaction pipeline to advance to Approved (committed)
     timeout(network.sync_timeout(), async move {
-        // Queued
-        let EventBox::Pipeline(PipelineEventBox::Transaction(ev1)) =
-            events.next().await.unwrap().unwrap()
-        else {
-            panic!("Expected transaction event (Queued)");
-        };
-        assert_eq!(*ev1.status(), TransactionStatus::Queued);
-
-        // Final status
-        let EventBox::Pipeline(PipelineEventBox::Transaction(ev2)) =
-            events.next().await.unwrap().unwrap()
-        else {
-            panic!("Expected transaction event (final)");
-        };
-        assert_eq!(ev2.status(), &TransactionStatus::Approved);
+        let mut saw_queued = false;
+        loop {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) =
+                events.next().await.unwrap().unwrap()
+            else {
+                panic!("Expected transaction event");
+            };
+            match event.status() {
+                TransactionStatus::Queued => {
+                    saw_queued = true;
+                }
+                TransactionStatus::Approved => {
+                    assert!(saw_queued, "expected queued status before approved status");
+                    break;
+                }
+                status => {
+                    panic!("unexpected transaction status: {status:?}");
+                }
+            }
+        }
     })
     .await?;
 

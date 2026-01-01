@@ -54,6 +54,7 @@ pub(super) struct PendingBlock {
     pub(super) last_gate_satisfied: Option<da::GateSatisfaction>,
     pub(super) inserted_at: Instant,
     pub(super) precommit_vote_sent: bool,
+    pub(super) commit_vote_sent: bool,
     pub(super) validation_status: ValidationStatus,
     pub(super) kura_retry_attempts: u32,
     pub(super) next_kura_retry: Option<Instant>,
@@ -78,6 +79,7 @@ impl PendingBlock {
             last_gate_satisfied: None,
             inserted_at: Instant::now(),
             precommit_vote_sent: false,
+            commit_vote_sent: false,
             validation_status: ValidationStatus::Pending,
             kura_retry_attempts: 0,
             next_kura_retry: None,
@@ -122,6 +124,7 @@ impl PendingBlock {
         if !replacing_same_subject {
             self.inserted_at = Instant::now();
             self.precommit_vote_sent = false;
+            self.commit_vote_sent = false;
             self.last_gate_satisfied = None;
             self.reset_kura_retry();
             self.kura_persisted = false;
@@ -182,6 +185,7 @@ impl PendingBlock {
         self.last_gate_satisfied = None;
         self.availability_qc_view = None;
         self.precommit_vote_sent = false;
+        self.commit_vote_sent = false;
         self.availability_vote_sent = false;
         self.last_precommit_rebroadcast = None;
     }
