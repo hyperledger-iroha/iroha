@@ -3,13 +3,13 @@
 
 use std::{borrow::Cow, collections::BTreeSet};
 
+use iroha_config::parameters::actual::RuntimeUpgradeProvenanceMode;
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
 use iroha_core::{
     prelude::World,
     state::{State, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_config::parameters::actual::RuntimeUpgradeProvenanceMode;
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     isi::error::{InstructionExecutionError, InvalidParameterError},

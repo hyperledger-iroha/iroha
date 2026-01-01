@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
@@ -64,7 +62,7 @@ Estos comandos se basan en respuestas respaldadas por Norito, por lo que el filt
 
 ## 2. Registra una definicion de activo
 
-Crea un nuevo activo infinitamente acuñable llamado `coffee` dentro del dominio
+Crea un nuevo activo infinitamente acunable llamado `coffee` dentro del dominio
 `wonderland`:
 
 ```sh
@@ -72,7 +70,7 @@ iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-El CLI imprime el hash de la transaccion enviada (por ejemplo, `0x5f…`). Guardalo para consultar el estado mas tarde.
+El CLI imprime el hash de la transaccion enviada (por ejemplo, `0x5f...`). Guardalo para consultar el estado mas tarde.
 
 ## 3. Acuna unidades en la cuenta del operador
 
@@ -144,11 +142,11 @@ coincidiran siempre que apuntes a la misma red y defaults.
 
 ## Enlaces de paridad con SDK
 
-- [Rust SDK quickstart](../sdks/rust) — demuestra como registrar instrucciones,
+- [Rust SDK quickstart](../sdks/rust) - demuestra como registrar instrucciones,
   enviar transacciones y consultar estado desde Rust.
-- [Python SDK quickstart](../sdks/python) — muestra las mismas operaciones de register/mint
+- [Python SDK quickstart](../sdks/python) - muestra las mismas operaciones de register/mint
   con helpers JSON respaldados por Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) — cubre solicitudes Torii,
+- [JavaScript SDK quickstart](../sdks/javascript) - cubre solicitudes Torii,
   helpers de gobernanza y wrappers de queries tipados.
 
 Ejecuta primero el recorrido del CLI, luego repite el escenario con tu SDK

@@ -61,9 +61,30 @@ translator: manual
     - `iroha sumeragi evidence count --summary`
     - `iroha sumeragi evidence submit --evidence-hex <hex>` (או `--evidence-hex-file <path>`)
 
+## אימות מפעיל (WebAuthn/mTLS)
+
+- `POST /v1/operator/auth/registration/options`
+  - מחזיר אפשרויות רישום WebAuthn (`publicKey`) לצורך רישום אישור ראשוני.
+- `POST /v1/operator/auth/registration/verify`
+  - מאמת את מטען ה-attestation של WebAuthn ושומר את אישור המפעיל.
+- `POST /v1/operator/auth/login/options`
+  - מחזיר אפשרויות אימות WebAuthn (`publicKey`) להתחברות מפעיל.
+- `POST /v1/operator/auth/login/verify`
+  - מאמת את ה-assertion של WebAuthn ומחזיר טוקן סשן למפעיל.
+- כותרות:
+  - `x-iroha-operator-session`: טוקן סשן לנקודות קצה מפעיל (מונפק ב login verify).
+  - `x-iroha-operator-token`: טוקן bootstrap (מותר כאשר `torii.operator_auth.token_fallback` מאפשר).
+  - `x-api-token`: נדרש כאשר `torii.require_api_token = true` או `torii.operator_auth.token_source = "api"`.
+  - `x-forwarded-client-cert`: נדרש כאשר `torii.operator_auth.require_mtls = true` (מוגדר ע"י ingress proxy).
+- תהליך רישום:
+  1. קריאה ל-registration options עם טוקן bootstrap (מותר רק לפני רישום האישור הראשון כאשר `token_fallback = "bootstrap"`).
+  2. הריצו `navigator.credentials.create` בממשק המפעיל ושלחו את ה-attestation ל-registration verify.
+  3. קראו ל-login options ואז ל-login verify כדי לקבל `x-iroha-operator-session`.
+  4. שלחו `x-iroha-operator-session` עם נקודות הקצה של המפעיל.
+
 הערות
 - הנקודות הללו מספקות מבט לוקאלי לצומת (בחלקו בזיכרון) ואינן משפיעות על הקונצנזוס או על התמPersistnc.
-- בהתאם לתצורת Torii, ייתכן שהגישה מוגנת בטוקני API ובמגבלות קצב.
+- בהתאם לתצורת Torii, ייתכן שהגישה מוגנת בטוקני API, אימות מפעיל (WebAuthn/mTLS) ובמגבלות קצב.
 
 ## קטעי CLI לניטור (bash)
 

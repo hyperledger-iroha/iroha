@@ -1,11 +1,12 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/portal/docs/reference/address-safety.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+---
+
+---
 title: Seguranca e acessibilidade de enderecos
 description: Requisitos de UX para apresentar e compartilhar enderecos Iroha com seguranca (ADDR-6c).
 ---

@@ -56,9 +56,9 @@
 //! - `app_api_https` (off by default): enables HTTPS webhook delivery using rustls
 //! - `app_api_wss` (off by default): enables WebSocket/WebSocket Secure webhook delivery
 mod api_version;
+mod operator_auth;
 #[cfg(feature = "push")]
 mod push;
-mod operator_auth;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
     use norito::json::{self, JsonSerialize, Value};
@@ -6890,7 +6890,7 @@ async fn handler_bridge_finality_proof(
     let key = rate_limit_key(
         &headers,
         None,
-        "/v1/bridge/finality/:height",
+        "/v1/bridge/finality/{height}",
         app.api_token_enforced(),
     );
     rate_limit_requests(&app, &key).await?;
@@ -6928,7 +6928,7 @@ async fn handler_bridge_finality_bundle(
     let key = rate_limit_key(
         &headers,
         None,
-        "/v1/bridge/finality/bundle/:height",
+        "/v1/bridge/finality/bundle/{height}",
         app.api_token_enforced(),
     );
     rate_limit_requests(&app, &key).await?;
@@ -10719,7 +10719,10 @@ impl Torii {
                 operator_auth::enforce_operator_auth,
             );
             let operator_router = Router::new()
-                .route(&format!("{}/*tail", uri::STATUS), get(handler_status_tail))
+                .route(
+                    &format!("{}/{{*tail}}", uri::STATUS),
+                    get(handler_status_tail),
+                )
                 // Telemetry-gated Sumeragi endpoints (runtime gate inside handlers)
                 .route("/v1/sumeragi/rbc", get(handler_rbc_status))
                 .route(
@@ -10763,7 +10766,7 @@ impl Torii {
             router
                 .route(uri::STATUS, get(routing::telemetry_not_implemented))
                 .route(
-                    &format!("{}/*rest", uri::STATUS),
+                    &format!("{}/{{*rest}}", uri::STATUS),
                     get(routing::telemetry_not_implemented),
                 )
                 .route(
@@ -10942,11 +10945,11 @@ impl Torii {
                     get(handler_sumeragi_commit_certificates),
                 )
                 .route(
-                    "/v1/bridge/finality/:height",
+                    "/v1/bridge/finality/{height}",
                     get(handler_bridge_finality_proof),
                 )
                 .route(
-                    "/v1/bridge/finality/bundle/:height",
+                    "/v1/bridge/finality/bundle/{height}",
                     get(handler_bridge_finality_bundle),
                 )
                 .route(
@@ -12337,9 +12340,7 @@ impl Torii {
                 config.data_dir.clone(),
                 telemetry.clone(),
             )
-            .unwrap_or_else(|err| {
-                panic!("invalid torii.operator_auth configuration: {err}")
-            }),
+            .unwrap_or_else(|err| panic!("invalid torii.operator_auth configuration: {err}")),
         );
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]

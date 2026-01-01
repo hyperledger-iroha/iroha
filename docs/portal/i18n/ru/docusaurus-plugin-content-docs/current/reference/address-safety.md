@@ -1,11 +1,12 @@
-<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
-
 ---
 lang: ru
 direction: ltr
 source: docs/portal/docs/reference/address-safety.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+---
+
+---
 title: Безопасность и доступность адресов
 description: UX-требования для безопасного отображения и передачи адресов Iroha (ADDR-6c).
 ---

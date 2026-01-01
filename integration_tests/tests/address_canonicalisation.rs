@@ -26,6 +26,14 @@ use reqwest::Client;
 
 type SurfaceSpec<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
 
+fn http_client() -> Client {
+    Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .expect("http client should build")
+}
+
 fn extract_account_ids(value: &norito::json::Value) -> Vec<String> {
     value
         .as_object()
@@ -293,7 +301,7 @@ async fn accounts_listing_emits_ih58_identifiers() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let http = Client::new();
+    let http = http_client();
     let url = network
         .client()
         .torii_url
@@ -344,7 +352,7 @@ async fn accounts_query_accepts_ih58_filter_literals() -> Result<()> {
         r#"{{"filter":{{"op":"eq","args":["id","{expected}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
 
-    let http = Client::new();
+    let http = http_client();
     let url = network
         .client()
         .torii_url
@@ -386,7 +394,7 @@ async fn accounts_listing_filter_accepts_compressed_literals() -> Result<()> {
 
     let literal = compressed_alice_literal();
     let filter = format!(r#"{{"op":"eq","args":["id","{literal}"]}}"#);
-    let http = Client::new();
+    let http = http_client();
     let mut url = network
         .client()
         .torii_url
@@ -435,7 +443,7 @@ async fn accounts_query_accepts_compressed_filter_literals() -> Result<()> {
         r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
 
-    let http = Client::new();
+    let http = http_client();
     let url = network
         .client()
         .torii_url
@@ -476,7 +484,7 @@ async fn accounts_listing_supports_compressed_response() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let http = Client::new();
+    let http = http_client();
     let url = network
         .client()
         .torii_url
@@ -520,7 +528,7 @@ async fn accounts_query_supports_compressed_response() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let body = r#"{"filter":null,"sort":[],"pagination":{"limit":8,"offset":0},"fetch_size":null,"select":null,"address_format":"compressed"}"#;
-    let http = Client::new();
+    let http = http_client();
     let url = network
         .client()
         .torii_url
@@ -561,7 +569,7 @@ async fn accounts_listing_rejects_unknown_address_format() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let http = Client::new();
+    let http = http_client();
     let url = network
         .client()
         .torii_url
@@ -594,7 +602,7 @@ async fn account_path_endpoints_accept_compressed_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = compressed_alice_literal();
-    let http = Client::new();
+    let http = http_client();
 
     let surfaces: [SurfaceSpec; 3] = [
         (&["assets"], &[("limit", "4")]),
@@ -639,7 +647,7 @@ async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let literal = local8_literal();
-    let http = Client::new();
+    let http = http_client();
     let surfaces: [SurfaceSpec; 3] = [
         (&["assets"], &[("limit", "4")]),
         (&["transactions"], &[("limit", "4")]),
@@ -687,7 +695,7 @@ async fn account_path_endpoints_reject_public_key_literals_when_strict() -> Resu
     network.ensure_blocks(1).await?;
 
     let literal = public_key_literal();
-    let http = Client::new();
+    let http = http_client();
     let surfaces: [SurfaceSpec; 3] = [
         (&["assets"], &[("limit", "4")]),
         (&["transactions"], &[("limit", "4")]),
@@ -734,7 +742,7 @@ async fn asset_holders_get_supports_compressed_response() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let http = Client::new();
+    let http = http_client();
     let url = network
         .client()
         .torii_url
@@ -782,7 +790,7 @@ async fn asset_holders_query_accepts_compressed_filter_literals() -> Result<()> 
         r#"{{"filter":{{"op":"eq","args":["account_id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"address_format":null}}"#
     );
 
-    let http = Client::new();
+    let http = http_client();
     let url = network
         .client()
         .torii_url
@@ -827,7 +835,7 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let http = Client::new();
+    let http = http_client();
     let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
     let account_address = SAMPLE_GENESIS_ACCOUNT_ID
         .to_account_address()
@@ -926,7 +934,7 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let http = Client::new();
+    let http = http_client();
     let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
     let account_address = SAMPLE_GENESIS_ACCOUNT_ID
         .to_account_address()
@@ -1014,7 +1022,7 @@ async fn explorer_transactions_respect_address_format_preferences() -> Result<()
     };
     network.ensure_blocks(1).await?;
 
-    let http = Client::new();
+    let http = http_client();
     let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
     let account_address = SAMPLE_GENESIS_ACCOUNT_ID
         .to_account_address()
@@ -1146,7 +1154,7 @@ async fn explorer_instructions_respect_address_format_preferences() -> Result<()
     };
     network.ensure_blocks(1).await?;
 
-    let http = Client::new();
+    let http = http_client();
     let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
     let account_address = SAMPLE_GENESIS_ACCOUNT_ID
         .to_account_address()
@@ -1277,7 +1285,7 @@ async fn explorer_account_qr_defaults_to_ih58() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let http = Client::new();
+    let http = http_client();
     let canonical_literal = ALICE_ID.to_string();
     let url = explorer_account_qr_url(&network.client().torii_url, &canonical_literal);
     let resp = http
@@ -1353,7 +1361,7 @@ async fn explorer_account_qr_supports_compressed_literals() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let http = Client::new();
+    let http = http_client();
     let canonical_literal = ALICE_ID.to_string();
     let compressed_literal = compressed_alice_literal();
     let mut url = explorer_account_qr_url(&network.client().torii_url, &canonical_literal);
@@ -1411,7 +1419,7 @@ async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
-    let http = Client::new();
+    let http = http_client();
     let url = network
         .client()
         .torii_url
@@ -1454,7 +1462,7 @@ async fn accounts_query_rejects_public_key_filter_literals_when_strict() -> Resu
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
-    let http = Client::new();
+    let http = http_client();
     let url = network
         .client()
         .torii_url
@@ -1551,7 +1559,7 @@ async fn repo_agreements_respect_address_format() -> Result<()> {
     network.ensure_blocks(2).await?;
     let client = network.client();
 
-    let http = Client::new();
+    let http = http_client();
     let base = client.torii_url.clone();
     let ih58_alice = ALICE_ID.to_string();
     let ih58_bob = BOB_ID.to_string();
@@ -1723,7 +1731,7 @@ async fn kaigi_endpoints_respect_address_format_preferences() -> Result<()> {
     };
 
     let client = network.client();
-    let http = Client::new();
+    let http = http_client();
     let base = &client.torii_url;
 
     let summary_url = base.join("/v1/kaigi/relays")?;
@@ -1885,7 +1893,7 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
     };
 
     let base = client.torii_url.clone();
-    let http = Client::new();
+    let http = http_client();
 
     let default_url = base
         .join("/v1/offline/allowances?limit=4")
@@ -1974,7 +1982,7 @@ async fn offline_allowances_query_respects_address_format_hint() -> Result<()> {
     };
 
     let base = client.torii_url.clone();
-    let http = Client::new();
+    let http = http_client();
     let url = base
         .join("/v1/offline/allowances/query")
         .expect("offline allowances query url");

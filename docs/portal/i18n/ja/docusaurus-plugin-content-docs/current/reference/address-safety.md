@@ -1,11 +1,12 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/docs/reference/address-safety.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+---
+
+---
 title: アドレスの安全性とアクセシビリティ
 description: Iroha アドレスを安全に表示・共有するための UX 要件 (ADDR-6c)。
 ---
