@@ -602,6 +602,8 @@ The commit/reveal ingestion path is synchronous and deterministic:
 - The main-loop actor (`handle_vrf_commit`/`handle_vrf_reveal`) checks the local
   epoch, window, and commitment binding, then snapshots the in-progress epoch
   state into WSV (`world.vrf_epochs`) for durability and observability.
+- The PRF seed stays fixed for the current epoch; snapshots update participation
+  only and do not change leader/collector selection until the next epoch boundary.
 
 When the epoch boundary is reached (block height multiple of
 `epoch_length_blocks`), the actor:

@@ -28,6 +28,8 @@ impl Actor {
         );
         if let Some(record) = last_epoch_record.as_ref() {
             manager.restore_from_record(record);
+        } else {
+            manager.set_epoch_seed(super::latest_epoch_seed(&view));
         }
         let roster_len = self.effective_commit_topology().len();
         let indices = compute_roster_indices_from_topology(

@@ -4650,6 +4650,17 @@ impl Actor {
             let late_reveals_total = snapshot.late_reveals.len();
 
             self.persist_vrf_snapshot(snapshot, true, election_outcome.clone())?;
+            if let Some(manager) = self.epoch_manager.as_ref() {
+                let new_epoch = manager.epoch();
+                let record_exists = {
+                    let view = self.state.view();
+                    view.world().vrf_epochs().get(&new_epoch).is_some()
+                };
+                if !record_exists {
+                    let seed_snapshot = manager.snapshot_current_epoch(roster_len_hint, height);
+                    self.persist_vrf_snapshot(seed_snapshot, false, None)?;
+                }
+            }
 
             epoch_report::update(epoch_report::VrfPenaltiesReport {
                 epoch,

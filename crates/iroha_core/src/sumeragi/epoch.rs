@@ -1,10 +1,10 @@
 //! Epoch manager for `NPoS` Sumeragi.
 //!
-//! Maintains deterministic per-epoch randomness `S_e` derived from the
-//! previous epoch seed and the set of validator VRF reveals observed in the
-//! current epoch. The resulting entropy drives PRF-based leader and collector
-//! selection while also tracking commit/reveal participation for penalty
-//! reporting.
+//! Maintains deterministic per-epoch PRF seed `S_e`, fixed at epoch start and
+//! derived at epoch boundaries from the prior epoch seed plus the reveals
+//! observed during that epoch. The seed stays stable within an epoch so leader
+//! and collector selection is deterministic across peers, while the manager
+//! still tracks commit/reveal participation for penalties.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -86,9 +86,15 @@ impl EpochManager {
         self.epoch
     }
 
-    /// Current per-epoch seed `S_e` including the mixed-in reveals observed in this epoch.
+    /// Current per-epoch PRF seed `S_e`, fixed at epoch start.
+    /// Reveals are mixed into the next epoch seed at rollover.
     pub fn seed(&self) -> [u8; 32] {
-        self.current_entropy()
+        self.seed
+    }
+
+    /// Override the per-epoch seed used for leader/collector selection.
+    pub fn set_epoch_seed(&mut self, seed: [u8; 32]) {
+        self.seed = seed;
     }
 
     /// Advance to the next epoch by evolving the seed deterministically from collected reveals.
@@ -624,6 +630,52 @@ mod tests {
         em.on_block_commit(10);
         let penalties = em.take_last_penalties().unwrap();
         assert!(penalties.1.is_empty(), "late reveal should clear penalties");
+    }
+
+    #[test]
+    fn seed_stays_stable_within_epoch() {
+        let chain = ChainId::from("iroha:test:epoch_seed_stable");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+
+        let reveal = [0xAA; 32];
+        let commit: [u8; 32] = iroha_crypto::Hash::new(reveal).into();
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commit,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        let seed_before = em.seed();
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                5,
+                VrfReveal {
+                    epoch: 0,
+                    reveal,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(em.seed(), seed_before);
+
+        em.on_block_commit(10);
+        assert_ne!(em.seed(), seed_before);
+    }
+
+    #[test]
+    fn set_epoch_seed_overrides_initial_seed() {
+        let chain = ChainId::from("iroha:test:epoch_seed_override");
+        let mut em = EpochManager::new_from_chain(&chain);
+        let seed = [0x22; 32];
+        em.set_epoch_seed(seed);
+        assert_eq!(em.seed(), seed);
     }
 
     #[test]
