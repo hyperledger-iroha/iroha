@@ -794,6 +794,7 @@ fn minimal_config_snapshot() {
                 debug_rbc_drop_every_nth_chunk: None,
                 debug_rbc_shuffle_chunks: false,
                 debug_rbc_duplicate_inits: false,
+                debug_rbc_force_deliver_quorum_one: false,
                 debug_rbc_corrupt_witness_ack: false,
                 debug_rbc_corrupt_ready_signature: false,
                 debug_rbc_drop_validator_mask: 0,

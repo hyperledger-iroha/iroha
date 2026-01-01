@@ -5693,8 +5693,7 @@ async fn handler_subscription_ws(
     // Subscribe before upgrade to buffer events emitted during the WS handshake.
     let events_rx = app.events.subscribe();
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-        if let Err(error) =
-            routing::event::handle_events_stream_with_receiver(events_rx, ws).await
+        if let Err(error) = routing::event::handle_events_stream_with_receiver(events_rx, ws).await
         {
             iroha_logger::error!(%error, "Failure during event streaming");
         }

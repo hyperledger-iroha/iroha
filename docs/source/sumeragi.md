@@ -257,6 +257,7 @@ Notes
 - RBC sessions snapshot the commit topology at INIT and reuse it for READY/DELIVER validation and rebroadcasts so roster changes do not invalidate in-flight availability evidence.
 - Persisted RBC sessions include the roster snapshot so restarts validate READY/DELIVER against the original topology even if the live roster changes.
 - Vote/QC signature checks use the roster snapshot tied to the block when available, falling back to the live commit topology so roster changes do not invalidate late votes or QCs.
+- When the commit topology changes at block commit, the node clears pending consensus caches (pending blocks, vote logs, RBC sessions, DA bundles) so stale votes from the old roster cannot stall the pipeline.
 - Parameters `BlockTimeMs` / `CommitTimeMs` are controlled on‑chain via `SumeragiParameter` and affect pacing but not semantics.
 - DA-enabled runs derive the quorum timeout as `3 * (block_time + 4 * commit_time)` to leave headroom for RBC/AvailabilityQC propagation on slower hosts.
 - Availability timeouts use `2 * max(quorum_timeout, 2s)` in DA mode to tolerate payload hydration before logging/rebroadcast; consensus does not reschedule on DA evidence.
@@ -602,6 +603,8 @@ The commit/reveal ingestion path is synchronous and deterministic:
 - The main-loop actor (`handle_vrf_commit`/`handle_vrf_reveal`) checks the local
   epoch, window, and commitment binding, then snapshots the in-progress epoch
   state into WSV (`world.vrf_epochs`) for durability and observability.
+- The PRF seed stays fixed for the current epoch; snapshots update participation
+  only and do not change leader/collector selection until the next epoch boundary.
 
 When the epoch boundary is reached (block height multiple of
 `epoch_length_blocks`), the actor:

@@ -999,6 +999,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
         debug_rbc_drop_every_nth_chunk: None,
         debug_rbc_shuffle_chunks: false,
         debug_rbc_duplicate_inits: false,
+        debug_rbc_force_deliver_quorum_one: false,
         debug_rbc_corrupt_witness_ack: false,
         debug_rbc_corrupt_ready_signature: false,
         debug_rbc_drop_validator_mask: 0,
@@ -11307,6 +11308,75 @@ async fn new_view_tracker_resets_on_commit_topology_change() {
     assert!(harness.actor.propose.forced_view_after_timeout.is_none());
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn commit_topology_change_clears_pending_consensus_state() {
+    let mut harness = test_actor_harness(4).await;
+    let current_roster = harness.actor.effective_commit_topology();
+    harness
+        .actor
+        .refresh_commit_topology_state(HashOf::new(&current_roster));
+
+    let block = sample_block(2, 0, None);
+    let payload_hash = Hash::prehashed([0x22; 32]);
+    let block_hash = block.hash();
+    harness.actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, 2, 0),
+    );
+    harness.actor.vote_log.insert(
+        (Phase::Prevote, 2, 0, 0, 0),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Prevote,
+            block_hash,
+            height: 2,
+            view: 0,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        },
+    );
+    harness.actor.exec_vote_log.insert(
+        (2, 0, 0, 0),
+        crate::sumeragi::consensus::ExecVote {
+            block_hash,
+            parent_state_root: Hash::prehashed([0x33; 32]),
+            post_state_root: Hash::prehashed([0x44; 32]),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+        },
+    );
+    harness
+        .actor
+        .rbc
+        .session_rosters
+        .insert(session_key(), current_roster.clone());
+
+    assert!(!harness.actor.pending.pending_blocks.is_empty());
+    assert!(!harness.actor.vote_log.is_empty());
+    assert!(!harness.actor.exec_vote_log.is_empty());
+    assert!(!harness.actor.rbc.session_rosters.is_empty());
+
+    let mut changed_roster = current_roster.clone();
+    changed_roster.pop();
+    harness
+        .actor
+        .install_elected_roster(&changed_roster)
+        .expect("roster install should succeed");
+    harness
+        .actor
+        .on_block_commit_for_tests(1)
+        .expect("commit hook should run");
+
+    assert!(harness.actor.pending.pending_blocks.is_empty());
+    assert!(harness.actor.vote_log.is_empty());
+    assert!(harness.actor.exec_vote_log.is_empty());
+    assert!(harness.actor.rbc.session_rosters.is_empty());
+}
+
 #[test]
 fn new_view_signature_accepts_matching_sender() {
     let chain = ChainId::from("iroha:test:new-view");
@@ -14129,6 +14199,60 @@ async fn leader_index_for_uses_height_prf_seed() {
         Some(&expected_peer),
         "leader should match height-based seed selection"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn on_block_commit_persists_new_epoch_seed_record() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.vrf_commit_deadline_offset = 0;
+    consensus_cfg.vrf_reveal_deadline_offset = 0;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let epoch_len = 2u64;
+    let seed_epoch0 = [0x11; 32];
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        let mut npos_params =
+            iroha_data_model::parameter::system::SumeragiNposParameters::default();
+        npos_params.epoch_length_blocks = epoch_len;
+        npos_params.epoch_seed = seed_epoch0;
+        npos_params.evidence_horizon_blocks = 0;
+        params.custom.insert(
+            iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
+            npos_params.into_custom_parameter(),
+        );
+        block.commit();
+    }
+    if let Some(manager) = actor.epoch_manager.as_mut() {
+        manager.set_params(epoch_len, 0, 0);
+    }
+
+    actor
+        .on_block_commit(epoch_len)
+        .expect("commit at epoch boundary");
+
+    let (current_epoch, current_seed) = actor
+        .epoch_manager
+        .as_ref()
+        .map(|manager| (manager.epoch(), manager.seed()))
+        .expect("epoch manager present");
+    assert_eq!(current_epoch, 1);
+
+    let view = actor.state.view();
+    let record = view
+        .world()
+        .vrf_epochs()
+        .get(&current_epoch)
+        .expect("new epoch record should exist");
+    assert_eq!(record.seed, current_seed);
+    assert!(!record.finalized, "new epoch record should be in-progress");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -23073,7 +23197,7 @@ fn rbc_deliver_quorum_matches_topology_commit_quorum() {
         let topology = super::network_topology::Topology::new(peers);
         let expected = topology.min_votes_for_commit();
         assert_eq!(
-            Actor::rbc_deliver_quorum(&topology),
+            Actor::rbc_deliver_quorum_with_debug(&topology, false),
             expected,
             "topology len {} should use commit quorum",
             topology.as_ref().len()
@@ -23087,7 +23211,16 @@ fn rbc_deliver_quorum_deduplicates_peers() {
     let topology =
         super::network_topology::Topology::new(vec![peer.clone(), peer.clone(), peer.clone()]);
     assert_eq!(topology.as_ref().len(), 1);
-    assert_eq!(Actor::rbc_deliver_quorum(&topology), 1);
+    assert_eq!(Actor::rbc_deliver_quorum_with_debug(&topology, false), 1);
+}
+
+#[test]
+fn rbc_deliver_quorum_forced_to_one() {
+    let peers: Vec<_> = (0..4)
+        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .collect();
+    let topology = super::network_topology::Topology::new(peers);
+    assert_eq!(Actor::rbc_deliver_quorum_with_debug(&topology, true), 1);
 }
 
 #[test]

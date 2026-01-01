@@ -193,6 +193,7 @@ translator: manual
 הזרימה:
 - Torii מקבל `POST /v1/sumeragi/vrf/commit` / `/reveal` (Norito JSON עם `epoch`, `signer`, `*_hex`), מאמת ושולח ל-`SumeragiHandle`.
 - `handle_vrf_commit`/`reveal` מאמתות חלונות ותנאים, ומעודכנות נשמרות ב-`world.vrf_epochs`.
+- ה-seed של האפוק נשאר קבוע; הסנאפשוטים מעדכנים רק השתתפות ולא משנים בחירת לידר/אספנים עד מעבר אפוק.
 
 במעבר אפוק:
 1. חישוב קנסות (`committed_no_reveal`, `no_participation`).
