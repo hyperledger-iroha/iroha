@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Suppressed early Torii `/status` connection-refused warnings in the test-network watcher until HTTP is reachable; added unit coverage for connection-refused detection.
 - Canonicalized block payload hashing to strip execution results and extra signatures so DA/RBC payload hashes stay stable across validation; added unit test `block_payload_bytes_ignores_results_and_extra_signatures`.
 - Cached block-sync precommit QCs when block payloads are not ready yet so lagging peers can reuse them once the block lands; added `block_sync_caches_qc_before_block_known` unit coverage.
 - Tests: `cargo test -p iroha_core block_sync_caches_qc_before_block_known` (timed out after ~2m but target test passed), `cargo test -p integration_tests --test mod` (timed out after 5m; pipeline event tests failed with peers waiting for block 1 and status endpoint connection refused).
