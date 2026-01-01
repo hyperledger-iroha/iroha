@@ -1,10 +1,15 @@
 # Status
 
 ## Latest Updates
+- Resolved merge conflict in `status.md` and merged latest updates from both branches.
 - Completed SEC-TORII-OPERATOR-AUTH: WebAuthn/mTLS operator auth with enrollment/login flow, session tokens, mTLS gating, operator endpoint protection, telemetry, and updated OpenAPI/docs/tests.
 - Tests: `CARGO_TARGET_DIR=target-codex cargo test --workspace` (fails: `integration_tests` sandbox tests require loopback binds; `build_network_*` and `serialized_network_*` panic on denied `127.0.0.1:30000`).
 - Completed SEC-UPGRADE-PROVENANCE: runtime upgrade manifests now carry SBOM/SLSA provenance and signer metadata, governance config enforces trusted signer thresholds, admission rejects missing/invalid provenance with telemetry/error codes, and docs/tests refreshed.
 - Tests: `cargo test -p iroha pipeline_status_404_falls_back_to_committed_query`, `cargo test -p iroha_core runtime_upgrade_admission`.
+- Suppressed early Torii `/status` connection-refused warnings in the test-network watcher until HTTP is reachable; added unit coverage for connection-refused detection.
+- Canonicalized block payload hashing to strip execution results and extra signatures so DA/RBC payload hashes stay stable across validation; added unit test `block_payload_bytes_ignores_results_and_extra_signatures`.
+- Cached block-sync precommit QCs when block payloads are not ready yet so lagging peers can reuse them once the block lands; added `block_sync_caches_qc_before_block_known` unit coverage.
+- Tests: `cargo test -p iroha_core block_sync_caches_qc_before_block_known` (timed out after ~2m but target test passed), `cargo test -p integration_tests --test mod` (timed out after 5m; pipeline event tests failed with peers waiting for block 1 and status endpoint connection refused).
 - Routed RBC READY/DELIVER through the vote queue and drained RBC chunks ahead of payloads in the Sumeragi worker loop to prevent consensus stalls under heavy payloads; updated unit coverage and confirmed `sumeragi_rbc_da_large_payload_four_peers`.
 - Fixed QC roster selection to prefer persisted snapshots for committed heights after peer removal, avoiding signer-out-of-bounds validation failures; added unit coverage.
 - Forced Sora profile detection merges to override streaming identity keys with deterministic Ed25519 values (even when config layers supply BLS) and added unit coverage to prevent parse warnings.

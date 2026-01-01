@@ -5653,8 +5653,12 @@ async fn handler_subscription_ws(
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, Error> {
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        // Subscribe before upgrade to buffer events emitted during the WS handshake.
+        let events_rx = app.events.subscribe();
         return Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-            if let Err(error) = routing::event::handle_events_stream(app.events.clone(), ws).await {
+            if let Err(error) =
+                routing::event::handle_events_stream_with_receiver(events_rx, ws).await
+            {
                 iroha_logger::error!(%error, "Failure during event streaming");
             }
         }))
@@ -5686,8 +5690,12 @@ async fn handler_subscription_ws(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    // Subscribe before upgrade to buffer events emitted during the WS handshake.
+    let events_rx = app.events.subscribe();
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-        if let Err(error) = routing::event::handle_events_stream(app.events.clone(), ws).await {
+        if let Err(error) =
+            routing::event::handle_events_stream_with_receiver(events_rx, ws).await
+        {
             iroha_logger::error!(%error, "Failure during event streaming");
         }
     }))

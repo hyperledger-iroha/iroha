@@ -35556,8 +35556,17 @@ pub mod event {
     /// received through the `stream`
     #[iroha_futures::telemetry_future]
     pub async fn handle_events_stream(events: EventsSender, stream: WebSocket) -> eyre::Result<()> {
+        handle_events_stream_with_receiver(events.subscribe(), stream).await
+    }
+
+    /// Subscribe a pre-registered receiver to the event stream, ensuring buffered events
+    /// emitted during the WebSocket upgrade are not dropped.
+    #[iroha_futures::telemetry_future]
+    pub async fn handle_events_stream_with_receiver(
+        mut events_rx: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
+        stream: WebSocket,
+    ) -> eyre::Result<()> {
         let mut stream = WebSocketNorito(stream);
-        let mut events_rx = events.subscribe();
         let init_and_subscribe = async {
             let mut consumer = event::Consumer::new(&mut stream).await?;
             subscribe_forever(&mut events_rx, &mut consumer).await
@@ -36622,5 +36631,121 @@ pub fn handle_server_version(
     match format {
         crate::utils::ResponseFormat::Norito => NoritoBody(version).into_response(),
         crate::utils::ResponseFormat::Json => JsonBody(version).into_response(),
+    }
+}
+
+#[cfg(all(test, feature = "ws_integration_tests"))]
+mod event_stream_tests {
+    use std::{io::ErrorKind, sync::Arc};
+
+    use axum::{Router, extract::ws::WebSocketUpgrade, routing::get};
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use iroha_core::EventsSender;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        events::{
+            EventBox, EventFilterBox,
+            pipeline::{PipelineEventBox, TransactionEvent, TransactionEventFilter, TransactionStatus},
+            stream::{EventMessage, EventSubscriptionRequest},
+        },
+        nexus::{DataSpaceId, LaneId},
+        transaction::SignedTransaction,
+    };
+    use norito::codec::{DecodeAll as _, Encode as _};
+    use tokio::{net::TcpListener, sync::Mutex};
+
+    use super::event::handle_events_stream_with_receiver;
+
+    #[tokio::test]
+    async fn ws_stream_receives_buffered_events() {
+        let events: EventsSender = tokio::sync::broadcast::channel(16).0;
+        let hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x11; Hash::LENGTH],
+        ));
+        let queued_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
+            hash,
+            block_height: None,
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::new(0),
+            status: TransactionStatus::Queued,
+        }));
+
+        let rx_holder = Arc::new(Mutex::new(Some(events.subscribe())));
+        events
+            .send(queued_event)
+            .expect("receiver should be subscribed");
+
+        let app = Router::new().route(
+            "/ws",
+            get({
+                let rx_holder = Arc::clone(&rx_holder);
+                move |ws: WebSocketUpgrade| {
+                    let rx_holder = Arc::clone(&rx_holder);
+                    async move {
+                        ws.on_upgrade(move |ws| async move {
+                            let mut guard = rx_holder.lock().await;
+                            let rx = guard.take().expect("event receiver already used");
+                            let _ = handle_events_stream_with_receiver(rx, ws).await;
+                        })
+                    }
+                }
+            }),
+        );
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("tcp bind failed: {err}"),
+        };
+        let addr = listener.local_addr().expect("listener addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("axum server");
+        });
+
+        let (mut ws_stream, _resp) = match tokio_tungstenite::connect_async(format!(
+            "ws://{addr}/ws"
+        ))
+        .await
+        {
+            Ok(pair) => pair,
+            Err(tokio_tungstenite::tungstenite::Error::Io(io_err))
+                if io_err.kind() == ErrorKind::PermissionDenied =>
+            {
+                return;
+            }
+            Err(err) => panic!("ws connect failed: {err}"),
+        };
+
+        let sub = EventSubscriptionRequest(vec![EventFilterBox::Pipeline(
+            TransactionEventFilter::default().for_hash(hash).into(),
+        )]);
+        let sub_bytes = sub.encode();
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                sub_bytes.into(),
+            ))
+            .await
+            .expect("send subscription");
+
+        let mut got_event = None;
+        while let Some(msg) = ws_stream.next().await {
+            let msg = msg.expect("ws message");
+            if let tokio_tungstenite::tungstenite::Message::Binary(bytes) = msg {
+                let mut slice: &[u8] = bytes.as_ref();
+                let event_msg =
+                    EventMessage::decode_all(&mut slice).expect("decode event message");
+                let event_box: EventBox = event_msg.into();
+                if let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event_box {
+                    got_event = Some(event);
+                    break;
+                }
+            }
+        }
+
+        let event = got_event.expect("transaction event");
+        assert_eq!(event.hash(), &hash);
+        assert_eq!(event.status(), &TransactionStatus::Queued);
     }
 }
