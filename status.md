@@ -80,6 +80,11 @@
 - Refreshed the Norito streaming translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Refreshed the Norito Try-It console translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Refreshed the Norito streaming roadmap translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the docs portal preview integrity plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito-RPC adoption schedule across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito-RPC overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the preview host exposure guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the preview invite flow across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus operations runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus settlement FAQ across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus default lane quickstart across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
@@ -183,3 +188,7 @@
 - Translated the SoraFS orchestrator tuning guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS orchestrator ops runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Normalized trybuild-generated `Cargo.toml` paths for `norito_derive` UI tests to use relative paths so target-codex artifacts avoid developer-specific absolute paths.
+- Translated the preview invite tracker across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated preview reviewer onboarding across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal observability guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal security hardening checklist across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).

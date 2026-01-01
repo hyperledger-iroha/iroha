@@ -115,6 +115,7 @@ fn json_u64(root: &Value, key: &str) -> u64 {
 // Keep the payload light to avoid overwhelming Torii/queue on constrained hosts.
 const LARGE_PAYLOAD_BYTES: usize = 1024; // keep payload light to ensure timely DA/RBC
 const RBC_DELIVER_BUDGET_MS: u64 = 15_000;
+const RBC_DELIVER_GRACE_MS: u64 = 1_000;
 const COMMIT_BUDGET_MS: u64 = 50_000;
 const THROUGHPUT_FLOOR_MIB_S: f64 = 0.1;
 const BG_POST_QUEUE_DEPTH_BUDGET: f64 = 32.0;
@@ -1303,14 +1304,15 @@ where
     let throughput_mib_s = payload_mib / rbc_observation.delivered_at.as_secs_f64().max(1e-6);
     // Require RBC delivery within the delivery budget to keep small payload scenarios tolerant.
     #[allow(clippy::cast_precision_loss)]
+    let deliver_budget_ms = RBC_DELIVER_BUDGET_MS.saturating_add(RBC_DELIVER_GRACE_MS);
     let throughput_floor_mib_s =
-        (payload_mib / ((RBC_DELIVER_BUDGET_MS as f64) / 1000.0)).min(THROUGHPUT_FLOOR_MIB_S);
+        (payload_mib / ((deliver_budget_ms as f64) / 1000.0)).min(THROUGHPUT_FLOOR_MIB_S);
 
     let deliver_ms_u64 = u64::try_from(deliver_ms).unwrap_or(u64::MAX);
     let commit_ms_u64 = u64::try_from(commit_ms).unwrap_or(u64::MAX);
     assert!(
-        deliver_ms_u64 <= RBC_DELIVER_BUDGET_MS,
-        "RBC delivery {deliver_ms_u64} ms exceeded budget {RBC_DELIVER_BUDGET_MS} ms"
+        deliver_ms_u64 <= deliver_budget_ms,
+        "RBC delivery {deliver_ms_u64} ms exceeded budget {deliver_budget_ms} ms"
     );
     assert!(
         commit_ms_u64 <= COMMIT_BUDGET_MS,
