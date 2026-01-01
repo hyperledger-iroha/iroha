@@ -36645,7 +36645,9 @@ mod event_stream_tests {
     use iroha_data_model::{
         events::{
             EventBox, EventFilterBox,
-            pipeline::{PipelineEventBox, TransactionEvent, TransactionEventFilter, TransactionStatus},
+            pipeline::{
+                PipelineEventBox, TransactionEvent, TransactionEventFilter, TransactionStatus,
+            },
             stream::{EventMessage, EventSubscriptionRequest},
         },
         nexus::{DataSpaceId, LaneId},
@@ -36699,24 +36701,19 @@ mod event_stream_tests {
         };
         let addr = listener.local_addr().expect("listener addr");
         tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("axum server");
+            axum::serve(listener, app).await.expect("axum server");
         });
 
-        let (mut ws_stream, _resp) = match tokio_tungstenite::connect_async(format!(
-            "ws://{addr}/ws"
-        ))
-        .await
-        {
-            Ok(pair) => pair,
-            Err(tokio_tungstenite::tungstenite::Error::Io(io_err))
-                if io_err.kind() == ErrorKind::PermissionDenied =>
-            {
-                return;
-            }
-            Err(err) => panic!("ws connect failed: {err}"),
-        };
+        let (mut ws_stream, _resp) =
+            match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
+                Ok(pair) => pair,
+                Err(tokio_tungstenite::tungstenite::Error::Io(io_err))
+                    if io_err.kind() == ErrorKind::PermissionDenied =>
+                {
+                    return;
+                }
+                Err(err) => panic!("ws connect failed: {err}"),
+            };
 
         let sub = EventSubscriptionRequest(vec![EventFilterBox::Pipeline(
             TransactionEventFilter::default().for_hash(hash).into(),
@@ -36734,8 +36731,7 @@ mod event_stream_tests {
             let msg = msg.expect("ws message");
             if let tokio_tungstenite::tungstenite::Message::Binary(bytes) = msg {
                 let mut slice: &[u8] = bytes.as_ref();
-                let event_msg =
-                    EventMessage::decode_all(&mut slice).expect("decode event message");
+                let event_msg = EventMessage::decode_all(&mut slice).expect("decode event message");
                 let event_box: EventBox = event_msg.into();
                 if let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event_box {
                     got_event = Some(event);

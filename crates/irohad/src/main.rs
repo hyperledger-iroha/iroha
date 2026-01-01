@@ -1196,6 +1196,7 @@ impl Iroha {
                         &mut state,
                         &topology,
                         block_count.0,
+                        config.sumeragi.consensus_mode,
                     )
                     .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
                 }

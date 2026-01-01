@@ -4519,7 +4519,7 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn on_block_commit(&mut self, height: u64) -> Result<()> {
+    pub(super) fn on_block_commit(&mut self, height: u64) -> Result<()> {
         self.propose.new_view_tracker.prune(height);
         self.broadcast_new_views.retain(|(h, _), _| *h > height);
         self.propose.forced_view_after_timeout = self
@@ -4537,10 +4537,11 @@ impl Actor {
         let commit_topology = self.effective_commit_topology();
         let commit_topology_hash = HashOf::new(&commit_topology);
         if self.refresh_commit_topology_state(commit_topology_hash) {
+            self.reset_consensus_state_for_roster_change();
             debug!(
                 height,
                 roster_len = commit_topology.len(),
-                "commit topology changed; cleared NEW_VIEW tracking state"
+                "commit topology changed; cleared consensus caches"
             );
         }
         let committed_block = usize::try_from(height)
@@ -4650,6 +4651,17 @@ impl Actor {
             let late_reveals_total = snapshot.late_reveals.len();
 
             self.persist_vrf_snapshot(snapshot, true, election_outcome.clone())?;
+            if let Some(manager) = self.epoch_manager.as_ref() {
+                let new_epoch = manager.epoch();
+                let record_exists = {
+                    let view = self.state.view();
+                    view.world().vrf_epochs().get(&new_epoch).is_some()
+                };
+                if !record_exists {
+                    let seed_snapshot = manager.snapshot_current_epoch(roster_len_hint, height);
+                    self.persist_vrf_snapshot(seed_snapshot, false, None)?;
+                }
+            }
 
             epoch_report::update(epoch_report::VrfPenaltiesReport {
                 epoch,
@@ -4925,6 +4937,39 @@ impl Actor {
         self.broadcast_new_views.clear();
         self.propose.forced_view_after_timeout = None;
         true
+    }
+
+    fn reset_consensus_state_for_roster_change(&mut self) {
+        self.pending.pending_blocks.clear();
+        self.pending.pending_replay_last_sent.clear();
+        self.pending.availability_rebroadcast_last_sent.clear();
+        self.pending.missing_block_requests.clear();
+        self.pending.pending_processing.set(None);
+        self.pending.pending_processing_parent.set(None);
+        self.vote_log.clear();
+        self.exec_vote_log.clear();
+        self.qc_cache.clear();
+        self.qc_signer_tally.clear();
+        self.execution_qc_cache.clear();
+        self.voting_block = None;
+        self.proposals_seen.clear();
+        self.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
+        self.reset_collector_state();
+        self.propose.last_empty_child_attempt = None;
+        self.rbc.pending.clear();
+        self.rbc.sessions.clear();
+        self.rbc.session_rosters.clear();
+        self.rbc.payload_rebroadcast_last_sent.clear();
+        self.rbc.ready_rebroadcast_last_sent.clear();
+        self.rbc.persisted_full_sessions.clear();
+        self.rbc.status_handle.clear();
+        self.da.da_bundles.clear();
+        self.da.da_pin_bundles.clear();
+        self.da.sealed_commitments.clear();
+        self.da.sealed_pin_intents.clear();
+        self.payload_rebroadcast_log.clear();
+        self.block_sync_rebroadcast_log.clear();
+        self.block_sync_fetch_log.clear();
     }
 
     #[cfg(test)]

@@ -15032,6 +15032,7 @@ mod block_proof_tests {
 
 /// Replay blocks from the local Kura store into the provided [`State`], rebuilding world state
 /// when a snapshot is unavailable.
+/// Uses the configured consensus mode as a fallback when resolving topology rotation.
 ///
 /// # Errors
 /// Returns an error if block retrieval or application fails.
@@ -15041,7 +15042,9 @@ pub fn replay_blocks_from_kura(
     state: &mut State,
     topology: &crate::sumeragi::network_topology::Topology,
     block_count: usize,
+    fallback_consensus_mode: iroha_config::parameters::actual::ConsensusMode,
 ) -> Result<()> {
+    use iroha_config::parameters::actual::ConsensusMode;
     use std::num::NonZeroUsize;
 
     if block_count == 0 {
@@ -15070,11 +15073,31 @@ pub fn replay_blocks_from_kura(
         iroha_logger::debug!(height, hash = %block_arc.hash(), "replaying block from Kura");
         let signed_block = (*block_arc).clone();
         let mut block_topology = topology.clone();
-        let view = signed_block.header().view_change_index();
-        if view > 0 {
-            let view_usize = usize::try_from(view)
-                .map_err(|_| eyre!("view_change_index {view} exceeds platform limits"))?;
-            block_topology.nth_rotation(view_usize);
+        let view = u64::from(signed_block.header().view_change_index());
+        let height = signed_block.header().height().get();
+        let (effective_mode, prf_seed) = {
+            let view = state.view();
+            let mode = crate::sumeragi::effective_consensus_mode(&view, fallback_consensus_mode);
+            let seed = match mode {
+                ConsensusMode::Permissioned => None,
+                ConsensusMode::Npos => Some(crate::sumeragi::npos_seed_for_height(&view, height)),
+            };
+            (mode, seed)
+        };
+        match effective_mode {
+            ConsensusMode::Permissioned => {
+                if view > 0 {
+                    let view_usize = usize::try_from(view)
+                        .map_err(|_| eyre!("view_change_index {view} exceeds platform limits"))?;
+                    block_topology.nth_rotation(view_usize);
+                }
+            }
+            ConsensusMode::Npos => {
+                if let Some(seed) = prf_seed {
+                    let leader = block_topology.leader_index_prf(seed, height, view);
+                    block_topology.rotate_preserve_view_to_front(leader);
+                }
+            }
         }
         let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
         let validation = ValidBlock::validate_keep_voting_block(
@@ -15161,6 +15184,7 @@ pub fn replay_blocks_from_kura(
 mod replay_validation_tests {
     use std::sync::Arc;
 
+    use iroha_config::parameters::actual::ConsensusMode;
     use iroha_data_model::{
         ChainId,
         block::SignedBlock,
@@ -15206,11 +15230,127 @@ mod replay_validation_tests {
             iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
         ]);
 
-        let result = replay_blocks_from_kura(&kura, &mut state, &topology, 1);
+        let result =
+            replay_blocks_from_kura(&kura, &mut state, &topology, 1, ConsensusMode::Permissioned);
         assert!(
             result.is_err(),
             "corrupted genesis should be rejected during replay"
         );
+    }
+
+    #[test]
+    fn replay_rotates_topology_for_npos_prf_leader() {
+        use std::borrow::Cow;
+
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::{
+            name::Name,
+            parameter::system::{Parameter, SumeragiNposParameters},
+            peer::PeerId,
+        };
+        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisPeerPop};
+        use iroha_test_samples::{
+            SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
+        };
+
+        let chain_id = ChainId::from("iroha:test:npos-replay");
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+
+        let peer_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peers = vec![
+            PeerId::new(peer_a.public_key().clone()),
+            PeerId::new(peer_b.public_key().clone()),
+        ];
+        let topology = crate::sumeragi::network_topology::Topology::new(peers);
+
+        let height = 2;
+        let view = 0u64;
+        let seed = (1u8..=255)
+            .map(|byte| [byte; 32])
+            .find(|candidate| topology.leader_index_prf(*candidate, height, view) != 0)
+            .expect("seed should select non-zero leader index");
+        let leader_index = topology.leader_index_prf(seed, height, view);
+        assert_ne!(leader_index, 0, "leader rotation must be exercised");
+
+        let mut npos_params = SumeragiNposParameters::default();
+        npos_params.epoch_seed = seed;
+        npos_params.epoch_length_blocks = 10;
+
+        let pops = vec![
+            GenesisPeerPop {
+                public_key: peer_a.public_key().clone(),
+                pop: iroha_crypto::bls_normal_pop_prove(peer_a.private_key())
+                    .expect("generate pop a"),
+            },
+            GenesisPeerPop {
+                public_key: peer_b.public_key().clone(),
+                pop: iroha_crypto::bls_normal_pop_prove(peer_b.private_key())
+                    .expect("generate pop b"),
+            },
+        ];
+
+        let executor_path = super::permission_cache_tests::ensure_executor_bytecode(&temp_dir);
+        let (user_id, user_keypair) = gen_account_in("wonderland");
+        let mut genesis_builder =
+            GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
+                .set_topology(topology.as_ref().to_owned())
+                .set_topology_pop(pops)
+                .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
+        genesis_builder = genesis_builder
+            .domain("wonderland".parse::<Name>().expect("domain id"))
+            .account(user_keypair.public_key().clone())
+            .finish_domain();
+        let genesis_block = genesis_builder
+            .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+            .expect("genesis");
+        let genesis_signed = genesis_block.0.clone();
+
+        let kura = Kura::blank_kura_for_testing();
+        let live_query = crate::query::store::LiveQueryStore::start_test();
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let world = World::with(
+            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+            [Account::new(genesis_id.clone()).build(&genesis_id)],
+            [],
+        );
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), live_query, chain_id.clone());
+        {
+            let mut params_block = state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let genesis_arc = Arc::new(genesis_signed.clone());
+        kura.store_block(Arc::clone(&genesis_arc))
+            .expect("store genesis");
+
+        let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
+            .with_instructions([Log::new(
+                iroha_logger::Level::INFO,
+                "npos replay".to_owned(),
+            )])
+            .sign(user_keypair.private_key());
+        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let signer = if leader_index == 0 {
+            peer_a.private_key()
+        } else {
+            peer_b.private_key()
+        };
+        let new_block = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, Some(&genesis_signed))
+            .sign(signer)
+            .unpack(|_| {});
+        let signed_block: SignedBlock = new_block.into();
+
+        let block_arc = Arc::new(signed_block);
+        kura.store_block(Arc::clone(&block_arc))
+            .expect("store block");
+
+        replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Npos)
+            .expect("replay should validate prf leader");
+        assert_eq!(state.view().height(), 2);
     }
 }
 
@@ -15487,7 +15627,7 @@ mod permission_cache_tests {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn ensure_executor_bytecode(temp_dir: &tempfile::TempDir) -> String {
+    pub(super) fn ensure_executor_bytecode(temp_dir: &tempfile::TempDir) -> String {
         use std::path::PathBuf;
         const LITERAL_HEADER_LEN: usize = 4 + 12;
 
@@ -15636,7 +15776,7 @@ mod permission_cache_tests {
             base::WithOrigin,
             kura::InitMode,
             parameters::{
-                actual::{Kura as Config, LaneConfig},
+                actual::{ConsensusMode, Kura as Config, LaneConfig},
                 defaults::kura::BLOCKS_IN_MEMORY,
             },
         };
@@ -15897,8 +16037,14 @@ mod permission_cache_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
-        replay_blocks_from_kura(&kura, &mut state, &topology, recorded_blocks.len())
-            .expect("replay stored blocks");
+        replay_blocks_from_kura(
+            &kura,
+            &mut state,
+            &topology,
+            recorded_blocks.len(),
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay stored blocks");
         {
             let latest_hash = state
                 .view()
@@ -16016,8 +16162,14 @@ mod permission_cache_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
-        replay_blocks_from_kura(&kura, &mut state, &topology, recorded_blocks.len())
-            .expect("replay stored blocks after revoke");
+        replay_blocks_from_kura(
+            &kura,
+            &mut state,
+            &topology,
+            recorded_blocks.len(),
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay stored blocks after revoke");
         {
             let state_view = state.view();
             let world_view = state_view.world();
@@ -16131,8 +16283,14 @@ mod permission_cache_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
-        replay_blocks_from_kura(&kura, &mut state, &topology, recorded_blocks.len())
-            .expect("replay stored blocks after role grant");
+        replay_blocks_from_kura(
+            &kura,
+            &mut state,
+            &topology,
+            recorded_blocks.len(),
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay stored blocks after role grant");
 
         let latest_hash = state
             .view()
@@ -16233,8 +16391,14 @@ mod permission_cache_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
-        replay_blocks_from_kura(&kura, &mut state, &topology, recorded_blocks.len())
-            .expect("replay stored blocks after role revoke");
+        replay_blocks_from_kura(
+            &kura,
+            &mut state,
+            &topology,
+            recorded_blocks.len(),
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay stored blocks after role revoke");
 
         let latest_hash = state
             .view()

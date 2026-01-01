@@ -4081,6 +4081,7 @@ impl Actor {
                 .iter()
                 .last()
                 .map(|(_, record)| record.clone());
+            let epoch_seed = super::latest_epoch_seed(&view);
             drop(view);
             let roster_len = commit_topology.len();
             let initial_indices = compute_roster_indices_from_topology(
@@ -4097,6 +4098,8 @@ impl Actor {
                 );
                 if let Some(record) = last_epoch_record.as_ref() {
                     em.restore_from_record(record);
+                } else {
+                    em.set_epoch_seed(epoch_seed);
                 }
                 apply_roster_indices_to_manager(&mut em, roster_len, initial_indices);
                 let seed = em.seed();
@@ -5566,8 +5569,22 @@ impl Actor {
         Some(deliver)
     }
 
-    fn rbc_deliver_quorum(topology: &super::network_topology::Topology) -> usize {
-        topology.min_votes_for_commit()
+    fn rbc_deliver_quorum_with_debug(
+        topology: &super::network_topology::Topology,
+        force_quorum_one: bool,
+    ) -> usize {
+        if force_quorum_one {
+            1
+        } else {
+            topology.min_votes_for_commit()
+        }
+    }
+
+    fn rbc_deliver_quorum(&self, topology: &super::network_topology::Topology) -> usize {
+        Self::rbc_deliver_quorum_with_debug(
+            topology,
+            self.config.debug_rbc_force_deliver_quorum_one,
+        )
     }
 
     fn stale_view(&self, height: u64, view: u64) -> Option<u64> {
@@ -5930,7 +5947,7 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
-        let required = Self::rbc_deliver_quorum(&topology);
+        let required = self.rbc_deliver_quorum(&topology);
         if session.ready_signatures.len() < required {
             iroha_logger::info!(
                 height = key.1,

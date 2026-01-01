@@ -6,6 +6,12 @@
 - Tests: `CARGO_TARGET_DIR=target-codex cargo test --workspace` (fails: `integration_tests` sandbox tests require loopback binds; `build_network_*` and `serialized_network_*` panic on denied `127.0.0.1:30000`).
 - Completed SEC-UPGRADE-PROVENANCE: runtime upgrade manifests now carry SBOM/SLSA provenance and signer metadata, governance config enforces trusted signer thresholds, admission rejects missing/invalid provenance with telemetry/error codes, and docs/tests refreshed.
 - Tests: `cargo test -p iroha pipeline_status_404_falls_back_to_committed_query`, `cargo test -p iroha_core runtime_upgrade_admission`.
+- Stabilized `iroha_test_network::Network::client()` to use the first peer deterministically, avoiding event-stream hangs from random peer selection in integration tests.
+- Cleared pending consensus caches on commit-topology changes so stale votes/RBC sessions do not stall after peer membership updates; added unit test `commit_topology_change_clears_pending_consensus_state`.
+- Tests: `cargo test -p iroha_core commit_topology_change_clears_pending_consensus_state -- --nocapture` (timed out after 2m; target test passed; warnings in `crates/iroha_core/src/state.rs` about unused variables).
+- Replayed Kura blocks now rotate topology using the effective consensus mode and NPoS PRF seed so restart validation matches leader selection; added replay unit coverage.
+- Wired `sumeragi.debug.rbc.force_deliver_quorum_one` through config and RBC deliver quorum gating; added unit coverage and refreshed the Sumeragi DA docs to note the override in large-payload scenarios.
+- Stabilized NPoS PRF seed tracking by aligning epoch seeds with on-chain parameters, keeping the seed fixed within an epoch, and persisting a seed-only record for the next epoch at rollover; added unit coverage and refreshed Sumeragi VRF docs (en/ja/he).
 - Suppressed early Torii `/status` connection-refused warnings in the test-network watcher until HTTP is reachable; added unit coverage for connection-refused detection.
 - Canonicalized block payload hashing to strip execution results and extra signatures so DA/RBC payload hashes stay stable across validation; added unit test `block_payload_bytes_ignores_results_and_extra_signatures`.
 - Cached block-sync precommit QCs when block payloads are not ready yet so lagging peers can reuse them once the block lands; added `block_sync_caches_qc_before_block_known` unit coverage.
