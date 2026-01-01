@@ -4519,7 +4519,7 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn on_block_commit(&mut self, height: u64) -> Result<()> {
+    pub(super) fn on_block_commit(&mut self, height: u64) -> Result<()> {
         self.propose.new_view_tracker.prune(height);
         self.broadcast_new_views.retain(|(h, _), _| *h > height);
         self.propose.forced_view_after_timeout = self

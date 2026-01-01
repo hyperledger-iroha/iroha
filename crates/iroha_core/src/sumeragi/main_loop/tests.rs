@@ -999,6 +999,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
         debug_rbc_drop_every_nth_chunk: None,
         debug_rbc_shuffle_chunks: false,
         debug_rbc_duplicate_inits: false,
+        debug_rbc_force_deliver_quorum_one: false,
         debug_rbc_corrupt_witness_ack: false,
         debug_rbc_corrupt_ready_signature: false,
         debug_rbc_drop_validator_mask: 0,
@@ -23127,7 +23128,7 @@ fn rbc_deliver_quorum_matches_topology_commit_quorum() {
         let topology = super::network_topology::Topology::new(peers);
         let expected = topology.min_votes_for_commit();
         assert_eq!(
-            Actor::rbc_deliver_quorum(&topology),
+            Actor::rbc_deliver_quorum_with_debug(&topology, false),
             expected,
             "topology len {} should use commit quorum",
             topology.as_ref().len()
@@ -23141,7 +23142,16 @@ fn rbc_deliver_quorum_deduplicates_peers() {
     let topology =
         super::network_topology::Topology::new(vec![peer.clone(), peer.clone(), peer.clone()]);
     assert_eq!(topology.as_ref().len(), 1);
-    assert_eq!(Actor::rbc_deliver_quorum(&topology), 1);
+    assert_eq!(Actor::rbc_deliver_quorum_with_debug(&topology, false), 1);
+}
+
+#[test]
+fn rbc_deliver_quorum_forced_to_one() {
+    let peers: Vec<_> = (0..4)
+        .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+        .collect();
+    let topology = super::network_topology::Topology::new(peers);
+    assert_eq!(Actor::rbc_deliver_quorum_with_debug(&topology, true), 1);
 }
 
 #[test]

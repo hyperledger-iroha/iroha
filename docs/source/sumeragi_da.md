@@ -79,15 +79,21 @@ scheduled workflow `.github/workflows/sumeragi-da-nightly.yml` uploads the
 entire run directory (summaries, metrics, Markdown report) so operators can
 inspect results directly from GitHub Actions.
 
+These scenarios enable `sumeragi.debug.rbc.force_deliver_quorum_one = true` so
+RBC DELIVER is emitted after the first READY, keeping the throughput checks
+focused on payload transport. Leave the knob disabled in production to preserve
+the full 2f+1 READY quorum.
+
 ## Expected baselines
 
-With the default `sumeragi.rbc_chunk_max_bytes = 64&nbsp;KiB` and the 10.5&nbsp;MiB
-instruction (11 010 048 bytes) the following invariants hold:
+With the default `sumeragi.rbc_chunk_max_bytes = 64&nbsp;KiB`, the 10.5&nbsp;MiB
+instruction (11 010 048 bytes), and `force_deliver_quorum_one` enabled, the
+following invariants hold:
 
 | Scenario | Chunk count | READY threshold | Per-peer counters | Timing budgets |
 | --- | --- | --- | --- | --- |
-| Four peers | 168 chunks (all required) | ≥3 READY votes (2f&nbsp;+&nbsp;1 for *f* = 1) | `payload_bytes_delivered_total ≥ 11 010 048`, `deliver_broadcasts_total = 1`, `ready_broadcasts_total = 1` | `commit_ms` and `rbc_deliver_ms` should stay within `commit_time_ms` (default `4000`) |
-| Six peers | 168 chunks | ≥4 READY votes (2f&nbsp;+&nbsp;1 for *f* = 2) | Same counters as above | Same budgets as above |
+| Four peers | 168 chunks (all required) | READY votes ≥1 (debug override; normal ≥3 for *f* = 1) | `payload_bytes_delivered_total ≥ 11 010 048`, `deliver_broadcasts_total = 1`, `ready_broadcasts_total = 1` | `commit_ms` and `rbc_deliver_ms` should stay within `commit_time_ms` (default `4000`) |
+| Six peers | 168 chunks | READY votes ≥1 (debug override; normal ≥4 for *f* = 2) | Same counters as above | Same budgets as above |
 
 Staying within the 4&nbsp;s commit window implies an average throughput of at
 least ≈2.7&nbsp;MiB/s for the payload. Operators should alert if delivery latency

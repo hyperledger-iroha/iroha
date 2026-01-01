@@ -36,12 +36,13 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 3. **INTEGRATION-TEST-REVALIDATION — Re-run integration tests after Sumeragi drain-order fix** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈺 In Progress, target TBD)
    - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_four_peers -- --nocapture` to confirm DA large-payload RBC flow completes after READY/DELIVER queue routing.
+   - [ ] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_six_peers -- --nocapture` after wiring `sumeragi.debug.rbc.force_deliver_quorum_one` to confirm the 6-peer large-payload scenario stays within delivery budgets.
    - [ ] Re-run `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` to confirm the suite completes without timeouts (blocked in sandbox: loopback binds denied; rerun outside sandbox).
    - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly (currently fails to compile: missing `parent_state_root` in `integration_tests/tests/nexus/cross_lane.rs`).
    - [ ] Re-run `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` to confirm localnet tx-status fallbacks no longer emit WARN noise.
    - [ ] Re-run `cargo test -p integration_tests --test mod -- --nocapture` with `API_ADDRESS`/`PUBLIC_KEY` env overrides set to confirm test-network peers ignore host env config overrides.
    - [ ] Re-run `cargo test -p integration_tests --test mod` after the payload-hash stabilization fix (strip results/extra signatures from DA/RBC payload bytes); attempt 2025-12-31 timed out after 5m with pipeline event failures, peers waiting for block 1, and status endpoint connection refused—confirm the gating condition is resolved.
-   - [ ] Re-run `cargo test -p integration_tests --test mod` after stabilizing NPoS PRF seed handling (seed fixed within epoch + next-epoch record persisted at rollover) to confirm event/connected-peers suites no longer hang.
+   - [ ] Re-run `cargo test -p integration_tests --test mod` after stabilizing NPoS PRF seed handling (seed fixed within epoch + next-epoch record persisted at rollover + replay PRF rotation) to confirm event/connected-peers suites no longer hang.
 
 4. **LOCALNET-DEMO-FLOW — Verify training-script localnet bootstrap** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Align consensus rebroadcast cooldowns (RBC/pending/precommit) to on-chain `block_time` with a 200ms floor and 2x base multiplier, keeping payload replays at an additional 2x to avoid queue saturation on 1s targets.

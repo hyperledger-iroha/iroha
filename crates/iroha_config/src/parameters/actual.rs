@@ -3232,6 +3232,8 @@ pub struct Sumeragi {
     pub debug_rbc_shuffle_chunks: bool,
     /// Broadcast a duplicate RBC init/chunk set for the next view (adversarial testing).
     pub debug_rbc_duplicate_inits: bool,
+    /// Force RBC DELIVER quorum to 1 (adversarial testing).
+    pub debug_rbc_force_deliver_quorum_one: bool,
     /// Corrupt witness availability acknowledgements emitted by this node (adversarial testing).
     pub debug_rbc_corrupt_witness_ack: bool,
     /// Corrupt RBC READY signatures emitted by this node (adversarial testing).
