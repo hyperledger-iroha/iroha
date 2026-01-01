@@ -51,14 +51,16 @@ cargo test -p integration_tests \
 
 כל ריצה מדפיסה שורות עם הקידומת `sumeragi_da_summary::<scenario>::{...}` כך שאוטומציה תוכל ללכוד את ה-JSON. ניתן להגדיר `SUMERAGI_DA_ARTIFACT_DIR=/path/to/dir` כדי לשמור את הסיכומים והסנאפשוטים של Prometheus לכל peer. הסקריפט `scripts/run_sumeragi_da.py` מפעיל אוטומטית את ההגדרה בהרצות הלילה ומפיק `sumeragi-da-report.md` באמצעות `cargo run -p build-support --bin sumeragi_da_report`. תהליך הלילה `.github/workflows/sumeragi-da-nightly.yml` מעלה את כל תיקיית הריצה (סיכומים, מדדים, דו״ח Markdown) ל-GitHub Actions כדי שהמפעילים יוכלו לעיין בתוצאות.
 
+התרחישים מפעילים `sumeragi.debug.rbc.force_deliver_quorum_one = true` כך שה‑DELIVER יוצא לאחר READY ראשון. בסביבת ייצור יש להשאיר זאת כבוי כדי לשמור על קוורום READY מלא (2f+1).
+
 ## קווי בסיס צפויים
 
-עם `sumeragi.rbc_chunk_max_bytes = 64 KiB` והוראה בגודל 10.5 MiB (11 010 048 בייט) מתקיימים התנאים הבאים:
+עם `sumeragi.rbc_chunk_max_bytes = 64 KiB`, הוראה בגודל 10.5 MiB (11 010 048 בייט), ובהנחה ש‑`force_deliver_quorum_one` פעיל, מתקיימים התנאים הבאים:
 
 | תרחיש | מספר צ׳אנקים | סף READY | מונים לכל peer | תקציבי זמן |
 | --- | --- | --- | --- | --- |
-| ארבעה פירים | 168 צ׳אנקים (כולם נדרשים) | READY ≥3 (‏2f+1 עבור ‎f=1) | `payload_bytes_delivered_total ≥ 11 010 048`, ‏`deliver_broadcasts_total = 1`, ‏`ready_broadcasts_total = 1` | `commit_ms` ו-`rbc_deliver_ms` צריכים להישאר בתוך `commit_time_ms` (ברירת מחדל `4000`) |
-| שישה פירים | 168 צ׳אנקים | READY ≥4 (‏2f+1 עבור ‎f=2) | זהה לעיל | זהה לעיל |
+| ארבעה פירים | 168 צ׳אנקים (כולם נדרשים) | READY ≥1 (דיבוג כפוי; רגיל ≥3 עבור ‎f=1) | `payload_bytes_delivered_total ≥ 11 010 048`, ‏`deliver_broadcasts_total = 1`, ‏`ready_broadcasts_total = 1` | `commit_ms` ו-`rbc_deliver_ms` צריכים להישאר בתוך `commit_time_ms` (ברירת מחדל `4000`) |
+| שישה פירים | 168 צ׳אנקים | READY ≥1 (דיבוג כפוי; רגיל ≥4 עבור ‎f=2) | זהה לעיל | זהה לעיל |
 
 השארה במקטע הקומיט של 4 שניות מחייבת קצב אפקטיבי של ≥≈2.7 MiB/s. מומלץ להתריע כשזמן ה-DELIVER מתקרב ל-`commit_time_ms`, כאשר הקצב יורד מתחת לסף או כאשר המונים לכל peer מתפצלים (אות לכפיית יתר או צ׳אנקים חסרים).
 

@@ -5543,6 +5543,7 @@ impl Sumeragi {
             drop_every_nth_chunk,
             shuffle_chunks,
             duplicate_inits,
+            force_deliver_quorum_one,
             corrupt_witness_ack,
             corrupt_ready_signature,
             drop_validator_mask,
@@ -5756,6 +5757,7 @@ impl Sumeragi {
             debug_rbc_drop_every_nth_chunk: drop_every_nth_chunk,
             debug_rbc_shuffle_chunks: shuffle_chunks,
             debug_rbc_duplicate_inits: duplicate_inits,
+            debug_rbc_force_deliver_quorum_one: force_deliver_quorum_one,
             debug_rbc_corrupt_witness_ack: corrupt_witness_ack,
             debug_rbc_corrupt_ready_signature: corrupt_ready_signature,
             debug_rbc_drop_validator_mask: drop_validator_mask,
@@ -6294,6 +6296,9 @@ pub struct SumeragiDebugRbc {
     /// Broadcast duplicate RBC init frames for debug scenarios.
     #[config(default)]
     pub duplicate_inits: bool,
+    /// Force RBC DELIVER quorum to 1 for deterministic recovery tests.
+    #[config(default)]
+    pub force_deliver_quorum_one: bool,
     /// Corrupt witness ACK payloads when debug mode is enabled.
     #[config(default)]
     pub corrupt_witness_ack: bool,

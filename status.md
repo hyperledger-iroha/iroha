@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Replayed Kura blocks now rotate topology using the effective consensus mode and NPoS PRF seed so restart validation matches leader selection; added replay unit coverage.
+- Wired `sumeragi.debug.rbc.force_deliver_quorum_one` through config and RBC deliver quorum gating; added unit coverage and refreshed the Sumeragi DA docs to note the override in large-payload scenarios.
 - Stabilized NPoS PRF seed tracking by aligning epoch seeds with on-chain parameters, keeping the seed fixed within an epoch, and persisting a seed-only record for the next epoch at rollover; added unit coverage and refreshed Sumeragi VRF docs (en/ja/he).
 - Suppressed early Torii `/status` connection-refused warnings in the test-network watcher until HTTP is reachable; added unit coverage for connection-refused detection.
 - Canonicalized block payload hashing to strip execution results and extra signatures so DA/RBC payload hashes stay stable across validation; added unit test `block_payload_bytes_ignores_results_and_extra_signatures`.

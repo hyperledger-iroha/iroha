@@ -1846,7 +1846,7 @@ impl Actor {
             }
             return Ok(());
         }
-        let deliver_quorum = Self::rbc_deliver_quorum(&topology);
+        let deliver_quorum = self.rbc_deliver_quorum(&topology);
         let (ignored, first_deliver, delivered_bytes, invalidate, defer_reason) = {
             let session = self
                 .rbc
