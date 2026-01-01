@@ -1,11 +1,12 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/docs/reference/address-safety.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+---
+
+---
 title: בטיחות ונגישות כתובות
 description: דרישות UX להצגה ושיתוף בטוח של כתובות Iroha (ADDR-6c).
 ---

@@ -1414,7 +1414,8 @@ impl Default for RuntimeUpgradeProvenancePolicy {
             require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
             require_slsa: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA,
             trusted_signers: BTreeSet::new(),
-            signature_threshold: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
+            signature_threshold:
+                defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
         }
     }
 }
@@ -4015,8 +4016,7 @@ impl Default for ToriiOperatorAuth {
             token_fallback,
             token_source,
             tokens: defaults::torii::operator_auth::tokens(),
-            rate_per_minute: defaults::torii::operator_auth::RATE_PER_MIN
-                .and_then(NonZeroU32::new),
+            rate_per_minute: defaults::torii::operator_auth::RATE_PER_MIN.and_then(NonZeroU32::new),
             burst: defaults::torii::operator_auth::BURST.and_then(NonZeroU32::new),
             lockout: OperatorAuthLockout::default(),
             webauthn: None,

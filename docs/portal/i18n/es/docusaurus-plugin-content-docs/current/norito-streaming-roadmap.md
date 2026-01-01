@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
@@ -15,7 +13,7 @@ El siguiente backlog recoge los elementos de trabajo a corto plazo que el Stream
 [
   {
     "id": "NSC-28b",
-    "title": "Enforce ±10ms A/V sync tolerance",
+    "title": "Enforce 10ms A/V sync tolerance",
     "owner": "Streaming Runtime TL",
     "priority": "streaming runtime",
     "status": "planning",

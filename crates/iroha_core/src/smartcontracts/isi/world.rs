@@ -3606,9 +3606,10 @@ pub mod isi {
         _state_transaction
             .telemetry
             .record_runtime_upgrade_provenance_rejection(reason);
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            format!("runtime_upgrade_provenance:{}", reason.as_label()),
-        ))
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(format!(
+            "runtime_upgrade_provenance:{}",
+            reason.as_label()
+        )))
         .into()
     }
 
@@ -3684,8 +3685,7 @@ pub mod isi {
                     trusted_signers.insert(provenance.signer.clone());
                 }
             }
-            if policy.signature_threshold > 0
-                && trusted_signers.len() < policy.signature_threshold
+            if policy.signature_threshold > 0 && trusted_signers.len() < policy.signature_threshold
             {
                 return Err(runtime_upgrade_provenance_error(
                     RuntimeUpgradeProvenanceError::SignatureThresholdNotMet,

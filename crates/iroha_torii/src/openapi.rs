@@ -121,9 +121,7 @@ fn tags_section() -> Value {
     operator_auth.insert("name".into(), Value::String("OperatorAuth".to_owned()));
     operator_auth.insert(
         "description".into(),
-        Value::String(
-            "Operator WebAuthn bootstrap and session issuance endpoints.".to_owned(),
-        ),
+        Value::String("Operator WebAuthn bootstrap and session issuance endpoints.".to_owned()),
     );
 
     let mut transactions = Map::new();
@@ -6616,7 +6614,10 @@ fn operator_auth_registration_options_operation() -> Map {
     );
     responses.insert(
         "401".to_owned(),
-        json_response("Authentication required or invalid.", error_schema_reference()),
+        json_response(
+            "Authentication required or invalid.",
+            error_schema_reference(),
+        ),
     );
     responses.insert(
         "403".to_owned(),
@@ -6627,7 +6628,10 @@ fn operator_auth_registration_options_operation() -> Map {
     );
     responses.insert(
         "429".to_owned(),
-        json_response("Operator auth rate limited or locked out.", error_schema_reference()),
+        json_response(
+            "Operator auth rate limited or locked out.",
+            error_schema_reference(),
+        ),
     );
 
     let mut operation = Map::new();
@@ -6642,8 +6646,7 @@ fn operator_auth_registration_options_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Issues WebAuthn registration options. Requires operator bootstrap auth."
-                .to_string(),
+            "Issues WebAuthn registration options. Requires operator bootstrap auth.".to_string(),
         ),
     );
     operation.insert(
@@ -6671,7 +6674,10 @@ fn operator_auth_registration_verify_operation() -> Map {
     );
     responses.insert(
         "401".to_owned(),
-        json_response("Authentication required or invalid.", error_schema_reference()),
+        json_response(
+            "Authentication required or invalid.",
+            error_schema_reference(),
+        ),
     );
     responses.insert(
         "403".to_owned(),
@@ -6682,7 +6688,10 @@ fn operator_auth_registration_verify_operation() -> Map {
     );
     responses.insert(
         "429".to_owned(),
-        json_response("Operator auth rate limited or locked out.", error_schema_reference()),
+        json_response(
+            "Operator auth rate limited or locked out.",
+            error_schema_reference(),
+        ),
     );
 
     let mut operation = Map::new();
@@ -6723,7 +6732,10 @@ fn operator_auth_login_options_operation() -> Map {
     );
     responses.insert(
         "401".to_owned(),
-        json_response("Authentication required or invalid.", error_schema_reference()),
+        json_response(
+            "Authentication required or invalid.",
+            error_schema_reference(),
+        ),
     );
     responses.insert(
         "403".to_owned(),
@@ -6734,11 +6746,17 @@ fn operator_auth_login_options_operation() -> Map {
     );
     responses.insert(
         "409".to_owned(),
-        json_response("No operator credentials enrolled.", error_schema_reference()),
+        json_response(
+            "No operator credentials enrolled.",
+            error_schema_reference(),
+        ),
     );
     responses.insert(
         "429".to_owned(),
-        json_response("Operator auth rate limited or locked out.", error_schema_reference()),
+        json_response(
+            "Operator auth rate limited or locked out.",
+            error_schema_reference(),
+        ),
     );
 
     let mut operation = Map::new();
@@ -6779,7 +6797,10 @@ fn operator_auth_login_verify_operation() -> Map {
     );
     responses.insert(
         "401".to_owned(),
-        json_response("Authentication required or invalid.", error_schema_reference()),
+        json_response(
+            "Authentication required or invalid.",
+            error_schema_reference(),
+        ),
     );
     responses.insert(
         "403".to_owned(),
@@ -6790,7 +6811,10 @@ fn operator_auth_login_verify_operation() -> Map {
     );
     responses.insert(
         "429".to_owned(),
-        json_response("Operator auth rate limited or locked out.", error_schema_reference()),
+        json_response(
+            "Operator auth rate limited or locked out.",
+            error_schema_reference(),
+        ),
     );
 
     let mut operation = Map::new();

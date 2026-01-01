@@ -5650,8 +5650,7 @@ impl Telemetry {
         reason: &'static str,
     ) {
         if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .inc_torii_operator_auth(action, result, reason);
+            self.metrics.inc_torii_operator_auth(action, result, reason);
         }
     }
 

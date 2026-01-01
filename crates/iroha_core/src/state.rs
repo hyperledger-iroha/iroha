@@ -13828,28 +13828,28 @@ impl<'state> StateBlock<'state> {
 
     fn record_da_shard_cursor_issue(
         &self,
-        reason: &'static str,
-        lane_id: LaneId,
-        shard_id: u32,
-        block_height: u64,
-        lag_blocks: i64,
+        _reason: &'static str,
+        _lane_id: LaneId,
+        _shard_id: u32,
+        _block_height: u64,
+        _lag_blocks: i64,
     ) {
         #[cfg(feature = "telemetry")]
         {
             self.telemetry.record_da_shard_cursor_event(
-                reason,
-                lane_id.as_u32(),
-                shard_id,
-                block_height,
+                _reason,
+                _lane_id.as_u32(),
+                _shard_id,
+                _block_height,
             );
-            record_da_shard_cursor_lag(self.telemetry, lane_id.as_u32(), shard_id, lag_blocks);
+            record_da_shard_cursor_lag(self.telemetry, _lane_id.as_u32(), _shard_id, _lag_blocks);
         }
     }
 
-    fn record_da_shard_cursor_lag_ok(&self, lane_id: LaneId, shard_id: u32) {
+    fn record_da_shard_cursor_lag_ok(&self, _lane_id: LaneId, _shard_id: u32) {
         #[cfg(feature = "telemetry")]
         {
-            record_da_shard_cursor_lag(self.telemetry, lane_id.as_u32(), shard_id, 0);
+            record_da_shard_cursor_lag(self.telemetry, _lane_id.as_u32(), _shard_id, 0);
         }
     }
 

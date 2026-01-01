@@ -1,11 +1,12 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/portal/docs/reference/address-safety.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+---
+
+---
 title: Address safety اور accessibility
 description: Iroha addresses کو محفوظ انداز میں پیش کرنے اور شیئر کرنے کیلئے UX requirements (ADDR-6c).
 ---

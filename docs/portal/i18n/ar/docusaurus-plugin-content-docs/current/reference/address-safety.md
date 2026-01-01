@@ -1,11 +1,12 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/portal/docs/reference/address-safety.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+---
+
+---
 title: سلامة العناوين واتاحة الوصول
 description: متطلبات UX لعرض ومشاركة عناوين Iroha بأمان (ADDR-6c).
 ---

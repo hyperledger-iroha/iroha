@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
@@ -15,7 +13,7 @@ Le backlog suivant capture les elements de travail a court terme que le Streamin
 [
   {
     "id": "NSC-28b",
-    "title": "Enforce ±10ms A/V sync tolerance",
+    "title": "Enforce 10ms A/V sync tolerance",
     "owner": "Streaming Runtime TL",
     "priority": "streaming runtime",
     "status": "planning",

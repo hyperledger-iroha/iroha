@@ -102,6 +102,31 @@
 # query_store_capacity = 128
 # query_store_capacity_per_user = 128
 
+[torii.operator_auth]
+# enabled = false
+# require_mtls = false
+# token_fallback = "bootstrap"
+# token_source = "operator"
+# tokens = []
+# rate_per_minute = 30
+# burst = 10
+# lockout_failures = 5
+# lockout_window_secs = 300
+# lockout_duration_secs = 900
+
+[torii.operator_auth.webauthn]
+# enabled = true
+# rp_id = "example.com"
+# rp_name = "Iroha Operator"
+# origins = ["https://example.com"]
+# user_id = "operator"
+# user_name = "operator"
+# user_display_name = "Iroha Operator"
+# challenge_ttl_secs = 120
+# session_ttl_secs = 900
+# require_user_verification = true
+# allowed_algorithms = ["es256", "ed25519"]
+
 ## Network Time Service (NTS)
 ## Provides a robust network time estimate for timers and diagnostics.
 ## Does not affect consensus acceptance rules; block header timestamps remain the source of truth.

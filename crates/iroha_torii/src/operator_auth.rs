@@ -17,12 +17,12 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ciborium::{de::from_reader, value::Value as CborValue};
 use dashmap::DashMap;
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _, VerifyingKey as Ed25519Key};
-use p256::ecdsa::{signature::Verifier as _, Signature as P256Signature, VerifyingKey as P256Key};
-use rand::rand_core::TryRngCore as _;
+use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
+use rand::TryRngCore as _;
 use sha2::{Digest as _, Sha256};
 use url::Url;
 
@@ -32,8 +32,7 @@ use iroha_config::parameters::actual::{
 };
 
 use crate::{
-    JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value,
-    limits,
+    JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value, limits,
     routing::MaybeTelemetry,
 };
 
@@ -274,12 +273,11 @@ impl IntoResponse for OperatorAuthError {
     }
 }
 
-fn operator_auth_error_response(
-    status: StatusCode,
-    code: &'static str,
-    message: &str,
-) -> Response {
-    let payload = json_object(vec![json_entry("code", code), json_entry("message", message)]);
+fn operator_auth_error_response(status: StatusCode, code: &'static str, message: &str) -> Response {
+    let payload = json_object(vec![
+        json_entry("code", code),
+        json_entry("message", message),
+    ]);
     let mut resp = JsonBody(payload).into_response();
     *resp.status_mut() = status;
     resp
@@ -420,14 +418,11 @@ impl LockoutTracker {
             return false;
         };
         let now = Instant::now();
-        let mut entry = self
-            .entries
-            .entry(key.to_string())
-            .or_insert(FailureEntry {
-                failures: 0,
-                window_start: now,
-                locked_until: None,
-            });
+        let mut entry = self.entries.entry(key.to_string()).or_insert(FailureEntry {
+            failures: 0,
+            window_start: now,
+            locked_until: None,
+        });
         if entry.locked_until.is_some() {
             return true;
         }
@@ -448,7 +443,6 @@ impl LockoutTracker {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct OperatorAuth {
     enabled: bool,
     require_mtls: bool,
@@ -743,7 +737,10 @@ impl OperatorAuth {
             )]),
         );
         if !exclude_credentials.is_empty() {
-            public_key.insert("excludeCredentials".into(), json_value(&exclude_credentials));
+            public_key.insert(
+                "excludeCredentials".into(),
+                json_value(&exclude_credentials),
+            );
         }
 
         self.record_success(ctx, ACTION_REGISTER_OPTIONS, "ok");
@@ -753,7 +750,7 @@ impl OperatorAuth {
         )]))
     }
 
-    pub(crate) fn webauthn_finish_registration(
+    fn webauthn_finish_registration(
         &self,
         ctx: &AuthContext,
         payload: &norito::json::Value,
@@ -766,30 +763,28 @@ impl OperatorAuth {
             self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
             err
         })?;
-        let client = parse_client_data(&input.client_data_json, "webauthn.create").map_err(
-            |err| {
+        let client =
+            parse_client_data(&input.client_data_json, "webauthn.create").map_err(|err| {
                 self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
                 err
-            },
-        )?;
-        let _challenge_entry =
-            self.take_challenge(&client.challenge, ChallengeKind::Registration)
-                .map_err(|err| {
-                    self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-                    err
-                })?;
+            })?;
+        let _challenge_entry = self
+            .take_challenge(&client.challenge, ChallengeKind::Registration)
+            .map_err(|err| {
+                self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
+                err
+            })?;
         if !origin_allowed(&client.origin, &policy.origins) {
             let err = OperatorAuthError::origin_denied();
             self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
             return Err(err);
         }
-        let attestation =
-            parse_attestation_object(&input.attestation_object).map_err(|err| {
-                self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-                err
-            })?;
-        let auth_data = parse_auth_data_registration(&attestation.auth_data, policy)
-            .map_err(|err| {
+        let attestation = parse_attestation_object(&input.attestation_object).map_err(|err| {
+            self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
+            err
+        })?;
+        let auth_data =
+            parse_auth_data_registration(&attestation.auth_data, policy).map_err(|err| {
                 self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
                 err
             })?;
@@ -806,12 +801,10 @@ impl OperatorAuth {
             sign_count: auth_data.sign_count,
             created_at_ms,
         };
-        let total = self
-            .upsert_credential(credential)
-            .map_err(|err| {
-                self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-                err
-            })?;
+        let total = self.upsert_credential(credential).map_err(|err| {
+            self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
+            err
+        })?;
         self.record_success(ctx, ACTION_REGISTER_VERIFY, "ok");
         Ok(RegistrationOutcome {
             credential_id: encode_b64url(&auth_data.credential_id),
@@ -875,7 +868,7 @@ impl OperatorAuth {
         )]))
     }
 
-    pub(crate) fn webauthn_finish_authentication(
+    fn webauthn_finish_authentication(
         &self,
         ctx: &AuthContext,
         payload: &norito::json::Value,
@@ -903,12 +896,11 @@ impl OperatorAuth {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
             return Err(err);
         }
-        let auth_data = parse_auth_data_assertion(&input.authenticator_data, policy).map_err(
-            |err| {
+        let auth_data =
+            parse_auth_data_assertion(&input.authenticator_data, policy).map_err(|err| {
                 self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
                 err
-            },
-        )?;
+            })?;
         let mut credentials = self
             .credentials
             .write()
@@ -923,16 +915,20 @@ impl OperatorAuth {
         };
         let credential = credentials.get_mut(pos).expect("position valid");
         let client_hash = Sha256::digest(&input.client_data_json);
-        let mut signed_bytes = Vec::with_capacity(
-            input.authenticator_data.len() + client_hash.as_slice().len(),
-        );
+        let mut signed_bytes =
+            Vec::with_capacity(input.authenticator_data.len() + client_hash.as_slice().len());
         signed_bytes.extend_from_slice(&input.authenticator_data);
         signed_bytes.extend_from_slice(&client_hash);
-        verify_signature(credential.alg, &credential.public_key, &signed_bytes, &input.signature)
-            .map_err(|err| {
-                self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-                err
-            })?;
+        verify_signature(
+            credential.alg,
+            &credential.public_key,
+            &signed_bytes,
+            &input.signature,
+        )
+        .map_err(|err| {
+            self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
+            err
+        })?;
         if credential.sign_count != 0
             && auth_data.sign_count != 0
             && auth_data.sign_count <= credential.sign_count
@@ -1010,17 +1006,15 @@ impl OperatorAuth {
 
     fn check_token(&self, headers: &HeaderMap) -> TokenCheck {
         match self.token_source {
-            OperatorTokenSource::OperatorTokens => {
-                operator_token(headers)
-                    .map(|token| {
-                        if self.operator_tokens.contains(token) {
-                            TokenCheck::Valid(TokenKind::Operator)
-                        } else {
-                            TokenCheck::Invalid
-                        }
-                    })
-                    .unwrap_or(TokenCheck::Missing)
-            }
+            OperatorTokenSource::OperatorTokens => operator_token(headers)
+                .map(|token| {
+                    if self.operator_tokens.contains(token) {
+                        TokenCheck::Valid(TokenKind::Operator)
+                    } else {
+                        TokenCheck::Invalid
+                    }
+                })
+                .unwrap_or(TokenCheck::Missing),
             OperatorTokenSource::ApiTokens => api_token(headers)
                 .map(|token| {
                     if self.api_tokens.contains(token) {
@@ -1108,12 +1102,14 @@ impl OperatorAuth {
     }
 }
 
-struct RegistrationOutcome {
+/// Result of a successful WebAuthn registration ceremony.
+pub(crate) struct RegistrationOutcome {
     credential_id: String,
     credentials_total: usize,
 }
 
-struct SessionOutcome {
+/// Result of a successful WebAuthn authentication ceremony.
+pub(crate) struct SessionOutcome {
     session_token: String,
     expires_in_secs: u64,
     credential_id: String,
@@ -1263,8 +1259,7 @@ fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err.to_string()),
     };
-    let value: norito::json::Value =
-        norito::json::from_str(&raw).map_err(|err| err.to_string())?;
+    let value: norito::json::Value = norito::json::from_str(&raw).map_err(|err| err.to_string())?;
     let obj = value
         .as_object()
         .ok_or_else(|| "credentials payload must be a JSON object".to_string())?;
@@ -1373,10 +1368,12 @@ fn persist_credentials(
     Ok(())
 }
 
-fn parse_registration_payload(payload: &norito::json::Value) -> Result<RegistrationInput, OperatorAuthError> {
-    let obj = payload
-        .as_object()
-        .ok_or_else(|| OperatorAuthError::invalid_payload("credential payload must be an object"))?;
+fn parse_registration_payload(
+    payload: &norito::json::Value,
+) -> Result<RegistrationInput, OperatorAuthError> {
+    let obj = payload.as_object().ok_or_else(|| {
+        OperatorAuthError::invalid_payload("credential payload must be an object")
+    })?;
     let id = obj
         .get("rawId")
         .and_then(|value| value.as_str())
@@ -1401,10 +1398,12 @@ fn parse_registration_payload(payload: &norito::json::Value) -> Result<Registrat
     })
 }
 
-fn parse_assertion_payload(payload: &norito::json::Value) -> Result<AssertionInput, OperatorAuthError> {
-    let obj = payload
-        .as_object()
-        .ok_or_else(|| OperatorAuthError::invalid_payload("credential payload must be an object"))?;
+fn parse_assertion_payload(
+    payload: &norito::json::Value,
+) -> Result<AssertionInput, OperatorAuthError> {
+    let obj = payload.as_object().ok_or_else(|| {
+        OperatorAuthError::invalid_payload("credential payload must be an object")
+    })?;
     let id = obj
         .get("rawId")
         .and_then(|value| value.as_str())
@@ -1434,13 +1433,9 @@ fn parse_assertion_payload(payload: &norito::json::Value) -> Result<AssertionInp
     })
 }
 
-fn parse_client_data(
-    bytes: &[u8],
-    expected_type: &str,
-) -> Result<ClientData, OperatorAuthError> {
-    let value: norito::json::Value = norito::json::from_slice(bytes).map_err(|_| {
-        OperatorAuthError::invalid_payload("clientDataJSON must be valid JSON")
-    })?;
+fn parse_client_data(bytes: &[u8], expected_type: &str) -> Result<ClientData, OperatorAuthError> {
+    let value: norito::json::Value = norito::json::from_slice(bytes)
+        .map_err(|_| OperatorAuthError::invalid_payload("clientDataJSON must be valid JSON"))?;
     let obj = value.as_object().ok_or_else(|| {
         OperatorAuthError::invalid_payload("clientDataJSON must be a JSON object")
     })?;
@@ -1507,11 +1502,8 @@ fn parse_auth_data_registration(
             "authenticatorData missing attested credential data",
         ));
     }
-    let sign_count = u32::from_be_bytes(
-        auth_data[33..37]
-            .try_into()
-            .expect("slice length verified"),
-    );
+    let sign_count =
+        u32::from_be_bytes(auth_data[33..37].try_into().expect("slice length verified"));
     let mut offset = 37 + 16;
     let credential_len = u16::from_be_bytes(
         auth_data[offset..offset + 2]
@@ -1526,9 +1518,8 @@ fn parse_auth_data_registration(
     }
     let credential_id = auth_data[offset..offset + credential_len].to_vec();
     offset += credential_len;
-    let cose_value: CborValue = from_reader(&auth_data[offset..]).map_err(|_| {
-        OperatorAuthError::invalid_payload("credential public key must be CBOR")
-    })?;
+    let cose_value: CborValue = from_reader(&auth_data[offset..])
+        .map_err(|_| OperatorAuthError::invalid_payload("credential public key must be CBOR"))?;
     let cose_key = parse_cose_key(&cose_value, &policy.allowed_algorithms)?;
     Ok(AuthDataRegistration {
         credential_id,
@@ -1557,11 +1548,8 @@ fn parse_auth_data_assertion(
     if policy.require_user_verification && flags & FLAG_USER_VERIFIED == 0 {
         return Err(OperatorAuthError::user_verification_required());
     }
-    let sign_count = u32::from_be_bytes(
-        auth_data[33..37]
-            .try_into()
-            .expect("slice length verified"),
-    );
+    let sign_count =
+        u32::from_be_bytes(auth_data[33..37].try_into().expect("slice length verified"));
     Ok(AuthDataAssertion { sign_count })
 }
 
@@ -1622,9 +1610,8 @@ fn verify_signature(
             let encoded = p256::EncodedPoint::from_bytes(public_key).map_err(|_| {
                 OperatorAuthError::invalid_payload("invalid ES256 public key encoding")
             })?;
-            let verifying_key = P256Key::from_encoded_point(&encoded).map_err(|_| {
-                OperatorAuthError::invalid_payload("invalid ES256 public key")
-            })?;
+            let verifying_key = P256Key::from_encoded_point(&encoded)
+                .map_err(|_| OperatorAuthError::invalid_payload("invalid ES256 public key"))?;
             let sig = P256Signature::from_der(signature)
                 .map_err(|_| OperatorAuthError::signature_invalid())?;
             verifying_key
@@ -1650,9 +1637,8 @@ fn verify_signature(
 
 fn cbor_int(value: &CborValue) -> Result<i128, OperatorAuthError> {
     match value {
-        CborValue::Integer(value) => i128::try_from(value.clone()).map_err(|_| {
-            OperatorAuthError::invalid_payload("invalid COSE integer encoding")
-        }),
+        CborValue::Integer(value) => i128::try_from(value.clone())
+            .map_err(|_| OperatorAuthError::invalid_payload("invalid COSE integer encoding")),
         _ => Err(OperatorAuthError::invalid_payload(
             "COSE value must be an integer",
         )),
@@ -1672,7 +1658,10 @@ fn expect_cbor_value<'a>(
         .ok_or_else(|| OperatorAuthError::invalid_payload("missing COSE key entry"))
 }
 
-fn expect_cbor_bytes(map: &[(CborValue, CborValue)], key: &str) -> Result<Vec<u8>, OperatorAuthError> {
+fn expect_cbor_bytes(
+    map: &[(CborValue, CborValue)],
+    key: &str,
+) -> Result<Vec<u8>, OperatorAuthError> {
     map.iter()
         .find(|(candidate, _)| matches!(candidate, CborValue::Text(text) if text == key))
         .and_then(|(_, value)| match value {
@@ -1699,7 +1688,11 @@ pub(crate) async fn enforce_operator_auth(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<Response, std::convert::Infallible> {
-    if let Err(err) = app.operator_auth.authorize_operator_endpoint(req.headers()).await {
+    if let Err(err) = app
+        .operator_auth
+        .authorize_operator_endpoint(req.headers())
+        .await
+    {
         return Ok(err.into_response());
     }
     Ok(next.run(req).await)
@@ -1726,7 +1719,9 @@ pub(crate) async fn handle_operator_register_verify(
         .operator_auth
         .authorize_bootstrap(&headers, ACTION_REGISTER_VERIFY)
         .await?;
-    let outcome = app.operator_auth.webauthn_finish_registration(&ctx, &payload)?;
+    let outcome = app
+        .operator_auth
+        .webauthn_finish_registration(&ctx, &payload)?;
     let response = json_object(vec![
         json_entry("status", "ok"),
         json_entry("credential_id", outcome.credential_id),
@@ -1756,7 +1751,9 @@ pub(crate) async fn handle_operator_login_verify(
         .operator_auth
         .authorize_login(&headers, ACTION_LOGIN_VERIFY)
         .await?;
-    let outcome = app.operator_auth.webauthn_finish_authentication(&ctx, &payload)?;
+    let outcome = app
+        .operator_auth
+        .webauthn_finish_authentication(&ctx, &payload)?;
     let response = json_object(vec![
         json_entry("status", "ok"),
         json_entry("session_token", outcome.session_token),
@@ -1773,14 +1770,14 @@ mod tests {
     use axum::http::HeaderValue;
     use ciborium::ser::into_writer;
     use ed25519_dalek::Signer as _;
-    use p256::ecdsa::{SigningKey, signature::Signer as _};
-    use rand::rngs::OsRng;
+    use p256::{
+        ecdsa::{SigningKey, signature::Signer as _},
+        elliptic_curve::rand_core::OsRng,
+    };
 
     use super::*;
 
-    fn base_webauthn_config(
-        algorithms: Vec<OperatorWebAuthnAlgorithm>,
-    ) -> OperatorWebAuthnConfig {
+    fn base_webauthn_config(algorithms: Vec<OperatorWebAuthnAlgorithm>) -> OperatorWebAuthnConfig {
         OperatorWebAuthnConfig {
             rp_id: "example.com".to_owned(),
             rp_name: "Iroha Operator".to_owned(),
@@ -1896,8 +1893,14 @@ mod tests {
         let y = point.y().expect("y coordinate").to_vec();
         let map = vec![
             (CborValue::Integer(1.into()), CborValue::Integer(2.into())),
-            (CborValue::Integer(3.into()), CborValue::Integer((-7).into())),
-            (CborValue::Integer((-1).into()), CborValue::Integer(1.into())),
+            (
+                CborValue::Integer(3.into()),
+                CborValue::Integer((-7).into()),
+            ),
+            (
+                CborValue::Integer((-1).into()),
+                CborValue::Integer(1.into()),
+            ),
             (CborValue::Integer((-2).into()), CborValue::Bytes(x)),
             (CborValue::Integer((-3).into()), CborValue::Bytes(y)),
         ];
@@ -1995,16 +1998,12 @@ mod tests {
         let credential_id = random_bytes(16);
         let policy = auth.webauthn_policy().expect("policy");
         let cose_key = build_cose_key_es256(&signing_key);
-        let auth_data =
-            build_auth_data_registration(policy, &credential_id, &cose_key, 1);
+        let auth_data = build_auth_data_registration(policy, &credential_id, &cose_key, 1);
         let client_data_json =
             build_client_data(&challenge, "https://example.com", "webauthn.create");
         let attestation_object = build_attestation_object(auth_data);
-        let payload = build_registration_payload(
-            &credential_id,
-            &client_data_json,
-            &attestation_object,
-        );
+        let payload =
+            build_registration_payload(&credential_id, &client_data_json, &attestation_object);
         let outcome = auth
             .webauthn_finish_registration(&ctx, &payload)
             .expect("registration");
@@ -2028,12 +2027,11 @@ mod tests {
         let client_data_json =
             build_client_data(&login_challenge, "https://example.com", "webauthn.get");
         let client_hash = Sha256::digest(&client_data_json);
-        let mut signed_bytes = Vec::with_capacity(
-            assertion_auth_data.len() + client_hash.as_slice().len(),
-        );
+        let mut signed_bytes =
+            Vec::with_capacity(assertion_auth_data.len() + client_hash.as_slice().len());
         signed_bytes.extend_from_slice(&assertion_auth_data);
         signed_bytes.extend_from_slice(&client_hash);
-        let signature = signing_key.sign(&signed_bytes);
+        let signature: p256::ecdsa::Signature = signing_key.sign(&signed_bytes);
         let payload = build_assertion_payload(
             &credential_id,
             &client_data_json,
@@ -2063,16 +2061,12 @@ mod tests {
         let signing_key = SigningKey::random(&mut OsRng);
         let credential_id = random_bytes(16);
         let cose_key = build_cose_key_es256(&signing_key);
-        let auth_data =
-            build_auth_data_registration(policy, &credential_id, &cose_key, 1);
+        let auth_data = build_auth_data_registration(policy, &credential_id, &cose_key, 1);
         let client_data_json =
             build_client_data(&challenge, "https://example.com", "webauthn.create");
         let attestation_object = build_attestation_object(auth_data);
-        let payload = build_registration_payload(
-            &credential_id,
-            &client_data_json,
-            &attestation_object,
-        );
+        let payload =
+            build_registration_payload(&credential_id, &client_data_json, &attestation_object);
         let outcome = auth
             .webauthn_finish_registration(&ctx, &payload)
             .expect("rollover registration");
@@ -2159,9 +2153,18 @@ mod tests {
         let public_key = signing_key.verifying_key().to_bytes();
         let map = vec![
             (CborValue::Integer(1.into()), CborValue::Integer(1.into())),
-            (CborValue::Integer(3.into()), CborValue::Integer((-8).into())),
-            (CborValue::Integer((-1).into()), CborValue::Integer(6.into())),
-            (CborValue::Integer((-2).into()), CborValue::Bytes(public_key.to_vec())),
+            (
+                CborValue::Integer(3.into()),
+                CborValue::Integer((-8).into()),
+            ),
+            (
+                CborValue::Integer((-1).into()),
+                CborValue::Integer(6.into()),
+            ),
+            (
+                CborValue::Integer((-2).into()),
+                CborValue::Bytes(public_key.to_vec()),
+            ),
         ];
         let cose_key = CborValue::Map(map);
         let parsed = parse_cose_key(&cose_key, &[OperatorWebAuthnAlgorithm::Ed25519])
@@ -2186,12 +2189,14 @@ mod tests {
         let headers = HeaderMap::new();
         let err = handle_operator_register_options(State(app.clone()), headers.clone())
             .await
-            .expect_err("register options disabled");
+            .err()
+            .expect("register options disabled");
         assert_eq!(err.code, "operator_auth_disabled");
 
         let err = handle_operator_login_options(State(app.clone()), headers.clone())
             .await
-            .expect_err("login options disabled");
+            .err()
+            .expect("login options disabled");
         assert_eq!(err.code, "operator_auth_disabled");
     }
 

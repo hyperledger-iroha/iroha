@@ -2,9 +2,9 @@
 
 ## Latest Updates
 - Completed SEC-TORII-OPERATOR-AUTH: WebAuthn/mTLS operator auth with enrollment/login flow, session tokens, mTLS gating, operator endpoint protection, telemetry, and updated OpenAPI/docs/tests.
-- Tests: not run (not requested).
+- Tests: `cargo test --workspace` (fails: rustc could not create target incremental/fingerprint outputs under `target/debug`, e.g., `signature_batch_determinism` and `scheduler_telemetry`).
 - Completed SEC-UPGRADE-PROVENANCE: runtime upgrade manifests now carry SBOM/SLSA provenance and signer metadata, governance config enforces trusted signer thresholds, admission rejects missing/invalid provenance with telemetry/error codes, and docs/tests refreshed.
-- Tests: `cargo test -p iroha pipeline_status_404_falls_back_to_committed_query` (passes; existing unused-variable warnings in `crates/iroha_core/src/state.rs`).
+- Tests: `cargo test -p iroha pipeline_status_404_falls_back_to_committed_query`, `cargo test -p iroha_core runtime_upgrade_admission`.
 - Routed RBC READY/DELIVER through the vote queue and drained RBC chunks ahead of payloads in the Sumeragi worker loop to prevent consensus stalls under heavy payloads; updated unit coverage and confirmed `sumeragi_rbc_da_large_payload_four_peers`.
 - Fixed QC roster selection to prefer persisted snapshots for committed heights after peer removal, avoiding signer-out-of-bounds validation failures; added unit coverage.
 - Forced Sora profile detection merges to override streaming identity keys with deterministic Ed25519 values (even when config layers supply BLS) and added unit coverage to prevent parse warnings.
@@ -62,6 +62,19 @@
 - Translated the Norito NFT flow example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Refreshed the Sora Nexus overview and portal reference index translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the portal intro translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the portal publishing checklist translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the address safety & accessibility translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Torii app API parity audit translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the account address compliance translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito codec reference translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito overview translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito quickstart translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito getting started translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito ledger walkthrough translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito streaming translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito Try-It console translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito streaming roadmap translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus operations runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus settlement FAQ across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the Sora Nexus default lane quickstart across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).

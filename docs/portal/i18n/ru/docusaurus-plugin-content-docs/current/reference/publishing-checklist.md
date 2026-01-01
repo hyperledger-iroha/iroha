@@ -1,11 +1,12 @@
 ---
-
----
 lang: ru
 direction: ltr
 source: docs/portal/docs/reference/publishing-checklist.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+---
+
+---
 title: Чек‑лист публикации портала
 description: Шаги проверки перед обновлением портала документации Iroha.
 ---

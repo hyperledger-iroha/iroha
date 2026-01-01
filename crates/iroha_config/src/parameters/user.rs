@@ -1522,10 +1522,8 @@ impl json::JsonDeserialize for RuntimeUpgradeProvenanceMode {
 }
 
 fn default_runtime_upgrade_provenance_mode() -> RuntimeUpgradeProvenanceMode {
-    RuntimeUpgradeProvenanceMode::from_str(
-        defaults::governance::RUNTIME_UPGRADE_PROVENANCE_MODE,
-    )
-    .expect("invalid runtime upgrade provenance mode default")
+    RuntimeUpgradeProvenanceMode::from_str(defaults::governance::RUNTIME_UPGRADE_PROVENANCE_MODE)
+        .expect("invalid runtime upgrade provenance mode default")
 }
 
 /// Runtime-upgrade provenance policy (user view).
@@ -1590,7 +1588,8 @@ impl Default for RuntimeUpgradeProvenance {
             mode: default_runtime_upgrade_provenance_mode(),
             require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
             require_slsa: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA,
-            signature_threshold: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
+            signature_threshold:
+                defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
             trusted_signers: Vec::new(),
         }
     }
@@ -11759,7 +11758,9 @@ impl ToriiOperatorAuth {
             None
         };
         if self.enabled && webauthn.is_none() {
-            panic!("torii.operator_auth.webauthn.enabled must be true when operator auth is enabled");
+            panic!(
+                "torii.operator_auth.webauthn.enabled must be true when operator auth is enabled"
+            );
         }
         actual::ToriiOperatorAuth {
             enabled: self.enabled,
