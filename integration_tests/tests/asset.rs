@@ -345,7 +345,8 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     // Given
     let account_id = ALICE_ID.clone();
     let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
-    let asset_definition = AssetDefinition::numeric(asset_definition_id.clone());
+    let asset_definition =
+        AssetDefinition::new(asset_definition_id.clone(), NumericSpec::fractional(3));
     let create_asset = Register::asset_definition(asset_definition);
 
     let builder = quiet_network_builder();

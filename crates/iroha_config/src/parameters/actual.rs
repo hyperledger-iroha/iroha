@@ -3921,6 +3921,16 @@ pub struct Torii {
     pub attachments_per_tenant_max_count: u64,
     /// Maximum aggregate attachment bytes retained per tenant (0 = unlimited).
     pub attachments_per_tenant_max_bytes: u64,
+    /// Allowed MIME types for attachment payloads (post-sniff).
+    pub attachments_allowed_mime_types: Vec<String>,
+    /// Maximum expanded bytes allowed when decompressing attachments.
+    pub attachments_max_expanded_bytes: u64,
+    /// Maximum nested archive depth allowed when decompressing attachments.
+    pub attachments_max_archive_depth: u32,
+    /// Execution mode for attachment sanitization.
+    pub attachments_sanitizer_mode: AttachmentSanitizerMode,
+    /// Attachment sanitization timeout (milliseconds).
+    pub attachments_sanitize_timeout_ms: u64,
     /// Enable background ZK prover worker (non-consensus, app-facing only).
     pub zk_prover_enabled: bool,
     /// Scan period for the background prover worker (seconds).
@@ -3973,6 +3983,26 @@ pub struct Torii {
     pub webhook: Webhook,
     /// Push notification delivery configuration.
     pub push: Push,
+}
+
+/// Execution mode for attachment sanitization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentSanitizerMode {
+    /// Run the sanitizer inside the Torii process.
+    InProcess,
+    /// Run the sanitizer in a dedicated subprocess.
+    Subprocess,
+}
+
+impl AttachmentSanitizerMode {
+    /// Render a stable label for config and telemetry.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::InProcess => "in_process",
+            Self::Subprocess => "subprocess",
+        }
+    }
 }
 
 /// Operator authentication configuration for Torii operator endpoints.

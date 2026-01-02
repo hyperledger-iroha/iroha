@@ -8,9 +8,10 @@ use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 
 pub use crate::block::consensus::{
-    SumeragiBlockSyncRosterStatus, SumeragiConsensusCapsStatus, SumeragiMembershipMismatchStatus,
-    SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiStatusWire,
-    SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+    SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus, SumeragiCommitQuorumStatus,
+    SumeragiConsensusCapsStatus, SumeragiMembershipMismatchStatus, SumeragiPeerKeyPolicyStatus,
+    SumeragiQcEntry, SumeragiQcSnapshot, SumeragiStatusWire, SumeragiViewChangeCauseStatus,
+    SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
 };
 use crate::prelude::*;
 

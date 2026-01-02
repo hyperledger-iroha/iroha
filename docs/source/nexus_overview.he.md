@@ -1,12 +1,19 @@
-<!-- Hebrew translation for docs/source/nexus_overview.md -->
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
 ---
 lang: he
 direction: rtl
 source: docs/source/nexus_overview.md
-status: draft
+status: complete
 translator: LLM (Codex)
+translation_last_reviewed: 2026-01-01
 ---
+
+<div dir="rtl">
+
+<!-- תרגום עברי עבור docs/source/nexus_overview.md -->
 
 # סקירת Nexus והקשר למפעילים
 
@@ -75,3 +82,5 @@ translator: LLM (Codex)
 - **רנבוק/ניהול אירועים:** `docs/source/nexus_operations.md`
 
 יש לעדכן את הסקירה יחד עם פריט הרודמפ NX-14 בכל פעם שמתווספים סוגי נתיבים חדשים, תזרימי ממשל או שינויים מהותיים במסמכי הייחוס.
+
+</div>

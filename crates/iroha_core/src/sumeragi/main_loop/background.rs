@@ -46,19 +46,22 @@ pub(super) fn dispatch_background_request(
             },
         ),
     };
+    let request_from_post = |post| match post {
+        BackgroundPost::Post { peer, msg, .. } => BackgroundRequest::Post { peer, msg },
+        BackgroundPost::PostControlFlow { peer, frame, .. } => {
+            BackgroundRequest::PostControlFlow { peer, frame }
+        }
+        BackgroundPost::Broadcast { msg, .. } => BackgroundRequest::Broadcast { msg },
+        BackgroundPost::BroadcastControlFlow { frame, .. } => {
+            BackgroundRequest::BroadcastControlFlow { frame }
+        }
+    };
 
     let Some(tx) = tx_opt else {
         trace!(kind, "dropping background request: no worker attached");
-        return Err(Box::new(match post {
-            BackgroundPost::Post { peer, msg, .. } => BackgroundRequest::Post { peer, msg },
-            BackgroundPost::PostControlFlow { peer, frame, .. } => {
-                BackgroundRequest::PostControlFlow { peer, frame }
-            }
-            BackgroundPost::Broadcast { msg, .. } => BackgroundRequest::Broadcast { msg },
-            BackgroundPost::BroadcastControlFlow { frame, .. } => {
-                BackgroundRequest::BroadcastControlFlow { frame }
-            }
-        }));
+        super::status::record_bg_post_drop(kind);
+        telemetry.inc_bg_post_drop(kind);
+        return Err(Box::new(request_from_post(post)));
     };
 
     match tx.try_send(post) {
@@ -72,33 +75,29 @@ pub(super) fn dispatch_background_request(
         }
         Err(mpsc::TrySendError::Full(post)) => {
             telemetry.inc_bg_post_overflow(kind);
-            trace!(
-                kind,
-                "background post queue full; falling back to inline send"
-            );
-            Err(Box::new(match post {
-                BackgroundPost::Post { peer, msg, .. } => BackgroundRequest::Post { peer, msg },
-                BackgroundPost::PostControlFlow { peer, frame, .. } => {
-                    BackgroundRequest::PostControlFlow { peer, frame }
+            trace!(kind, "background post queue full; applying backpressure");
+            match tx.send(post) {
+                Ok(()) => {
+                    telemetry.inc_bg_post_enqueued(kind);
+                    if let Some(peer) = peer_for_metrics.as_ref() {
+                        telemetry.inc_post_to_peer(peer);
+                        telemetry.inc_bg_post_queue_depth_for_peer(peer);
+                    }
+                    Ok(())
                 }
-                BackgroundPost::Broadcast { msg, .. } => BackgroundRequest::Broadcast { msg },
-                BackgroundPost::BroadcastControlFlow { frame, .. } => {
-                    BackgroundRequest::BroadcastControlFlow { frame }
+                Err(mpsc::SendError(post)) => {
+                    iroha_logger::warn!(kind, "background post channel disconnected");
+                    super::status::record_bg_post_drop(kind);
+                    telemetry.inc_bg_post_drop(kind);
+                    Err(Box::new(request_from_post(post)))
                 }
-            }))
+            }
         }
         Err(mpsc::TrySendError::Disconnected(post)) => {
             iroha_logger::warn!(kind, "background post channel disconnected");
-            Err(Box::new(match post {
-                BackgroundPost::Post { peer, msg, .. } => BackgroundRequest::Post { peer, msg },
-                BackgroundPost::PostControlFlow { peer, frame, .. } => {
-                    BackgroundRequest::PostControlFlow { peer, frame }
-                }
-                BackgroundPost::Broadcast { msg, .. } => BackgroundRequest::Broadcast { msg },
-                BackgroundPost::BroadcastControlFlow { frame, .. } => {
-                    BackgroundRequest::BroadcastControlFlow { frame }
-                }
-            }))
+            super::status::record_bg_post_drop(kind);
+            telemetry.inc_bg_post_drop(kind);
+            Err(Box::new(request_from_post(post)))
         }
     }
 }
@@ -140,95 +139,45 @@ pub(super) fn dispatch_background_request(
             },
         ),
     };
+    let request_from_post = |post| match post {
+        BackgroundPost::Post { peer, msg, .. } => BackgroundRequest::Post { peer, msg },
+        BackgroundPost::PostControlFlow { peer, frame, .. } => {
+            BackgroundRequest::PostControlFlow { peer, frame }
+        }
+        BackgroundPost::Broadcast { msg, .. } => BackgroundRequest::Broadcast { msg },
+        BackgroundPost::BroadcastControlFlow { frame, .. } => {
+            BackgroundRequest::BroadcastControlFlow { frame }
+        }
+    };
 
     let Some(tx) = tx_opt else {
         trace!(kind, "dropping background request: no worker attached");
-        return Err(Box::new(match post {
-            BackgroundPost::Post { peer, msg, .. } => BackgroundRequest::Post { peer, msg },
-            BackgroundPost::PostControlFlow { peer, frame, .. } => {
-                BackgroundRequest::PostControlFlow { peer, frame }
-            }
-            BackgroundPost::Broadcast { msg, .. } => BackgroundRequest::Broadcast { msg },
-            BackgroundPost::BroadcastControlFlow { frame, .. } => {
-                BackgroundRequest::BroadcastControlFlow { frame }
-            }
-        }));
+        super::status::record_bg_post_drop(kind);
+        return Err(Box::new(request_from_post(post)));
     };
 
     match tx.try_send(post) {
         Ok(()) => Ok(()),
         Err(mpsc::TrySendError::Full(post)) => {
-            trace!(
-                kind,
-                "background post queue full; falling back to inline send"
-            );
-            Err(Box::new(match post {
-                BackgroundPost::Post { peer, msg, .. } => BackgroundRequest::Post { peer, msg },
-                BackgroundPost::PostControlFlow { peer, frame, .. } => {
-                    BackgroundRequest::PostControlFlow { peer, frame }
+            trace!(kind, "background post queue full; applying backpressure");
+            match tx.send(post) {
+                Ok(()) => Ok(()),
+                Err(mpsc::SendError(post)) => {
+                    iroha_logger::warn!(kind, "background post channel disconnected");
+                    super::status::record_bg_post_drop(kind);
+                    Err(Box::new(request_from_post(post)))
                 }
-                BackgroundPost::Broadcast { msg, .. } => BackgroundRequest::Broadcast { msg },
-                BackgroundPost::BroadcastControlFlow { frame, .. } => {
-                    BackgroundRequest::BroadcastControlFlow { frame }
-                }
-            }))
+            }
         }
         Err(mpsc::TrySendError::Disconnected(post)) => {
             iroha_logger::warn!(kind, "background post channel disconnected");
-            Err(Box::new(match post {
-                BackgroundPost::Post { peer, msg, .. } => BackgroundRequest::Post { peer, msg },
-                BackgroundPost::PostControlFlow { peer, frame, .. } => {
-                    BackgroundRequest::PostControlFlow { peer, frame }
-                }
-                BackgroundPost::Broadcast { msg, .. } => BackgroundRequest::Broadcast { msg },
-                BackgroundPost::BroadcastControlFlow { frame, .. } => {
-                    BackgroundRequest::BroadcastControlFlow { frame }
-                }
-            }))
+            super::status::record_bg_post_drop(kind);
+            Err(Box::new(request_from_post(post)))
         }
     }
 }
 
 impl Actor {
-    pub(super) fn send_background_immediate(&self, request: BackgroundRequest) {
-        match request {
-            BackgroundRequest::Post { peer, msg } => {
-                #[cfg(feature = "telemetry")]
-                self.telemetry.inc_post_to_peer(&peer);
-                let post = Post {
-                    data: crate::NetworkMessage::SumeragiBlock(Box::new(msg)),
-                    peer_id: peer,
-                    priority: Priority::High,
-                };
-                self.network.post(post);
-            }
-            BackgroundRequest::PostControlFlow { peer, frame } => {
-                #[cfg(feature = "telemetry")]
-                self.telemetry.inc_post_to_peer(&peer);
-                let post = Post {
-                    data: crate::NetworkMessage::SumeragiControlFlow(Box::new(frame)),
-                    peer_id: peer,
-                    priority: Priority::High,
-                };
-                self.network.post(post);
-            }
-            BackgroundRequest::Broadcast { msg } => {
-                let broadcast = Broadcast {
-                    data: crate::NetworkMessage::SumeragiBlock(Box::new(msg)),
-                    priority: Priority::High,
-                };
-                self.network.broadcast(broadcast);
-            }
-            BackgroundRequest::BroadcastControlFlow { frame } => {
-                let broadcast = Broadcast {
-                    data: crate::NetworkMessage::SumeragiControlFlow(Box::new(frame)),
-                    priority: Priority::High,
-                };
-                self.network.broadcast(broadcast);
-            }
-        }
-    }
-
     pub(super) fn rebroadcast_highest_pending_block(&mut self, now: Instant) {
         let Some((hash, block, height, view)) = self
             .pending

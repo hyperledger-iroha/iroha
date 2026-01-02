@@ -16,12 +16,13 @@ use iroha_data_model::{
             EvidencePayload, EvidenceRecord, ExecKv, ExecVote, ExecWitness, ExecWitnessMsg,
             ExecutionQC, LaneBlockCommitment, LaneSettlementReceipt, NewView, NposGenesisParams,
             Phase, Proposal, Qc, QcAggregate, QcHeaderRef, RbcChunk, RbcDeliver, RbcInit, RbcReady,
-            Reconfig, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
-            SumeragiConsensusCapsStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
-            SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
-            SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
-            SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
-            SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+            Reconfig, SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus,
+            SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+            SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
+            SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
+            SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+            SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
+            SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
             SumeragiRbcEvictedSession, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
             SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
             SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
@@ -550,6 +551,8 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         } else {
             None
         },
+        commit_certificate: rng_commit_certificate_status(rng),
+        commit_quorum: rng_commit_quorum_status(rng),
         view_change_proof_accepted_total: rng.next_u64(),
         view_change_proof_stale_total: rng.next_u64(),
         view_change_proof_rejected_total: rng.next_u64(),
@@ -559,6 +562,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
             commit_failure_total: rng.next_u64(),
             quorum_timeout_total: rng.next_u64(),
             da_gate_total: rng.next_u64(),
+            censorship_evidence_total: rng.next_u64(),
             missing_payload_total: rng.next_u64(),
             missing_qc_total: rng.next_u64(),
             validation_reject_total: rng.next_u64(),
@@ -571,6 +575,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
             last_commit_failure_timestamp_ms: rng.next_u64(),
             last_quorum_timeout_timestamp_ms: rng.next_u64(),
             last_da_gate_timestamp_ms: rng.next_u64(),
+            last_censorship_evidence_timestamp_ms: rng.next_u64(),
             last_missing_payload_timestamp_ms: rng.next_u64(),
             last_missing_qc_timestamp_ms: rng.next_u64(),
             last_validation_reject_timestamp_ms: rng.next_u64(),
@@ -1040,6 +1045,33 @@ fn rng_commit_inflight_status(rng: &mut DeterministicRng) -> SumeragiCommitInfli
     }
 }
 
+fn rng_commit_quorum_status(rng: &mut DeterministicRng) -> SumeragiCommitQuorumStatus {
+    SumeragiCommitQuorumStatus {
+        height: rng.next_u64(),
+        view: rng.next_u64(),
+        block_hash: rng.next_bool().then(|| rng_block_hash(rng)),
+        signatures_present: rng.next_u64(),
+        signatures_counted: rng.next_u64(),
+        signatures_set_b: rng.next_u64(),
+        signatures_required: rng.next_u64(),
+        last_updated_ms: rng.next_u64(),
+    }
+}
+
+fn rng_commit_certificate_status(rng: &mut DeterministicRng) -> SumeragiCommitCertificateStatus {
+    SumeragiCommitCertificateStatus {
+        height: rng.next_u64(),
+        view: rng.next_u64(),
+        epoch: rng.next_u64(),
+        block_hash: rng.next_bool().then(|| rng_block_hash(rng)),
+        validator_set_hash: rng
+            .next_bool()
+            .then(|| HashOf::<Vec<PeerId>>::from_untyped_unchecked(rng_hash(rng))),
+        validator_set_len: rng.next_u64(),
+        signatures_total: rng.next_u64(),
+    }
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn sumeragi_wire_status_roundtrip() {
@@ -1077,6 +1109,27 @@ fn sumeragi_wire_status_roundtrip() {
         locked_qc_height: 14,
         locked_qc_view: 5,
         locked_qc_subject: None,
+        commit_certificate: SumeragiCommitCertificateStatus {
+            height: 12,
+            view: 4,
+            epoch: 1,
+            block_hash: Some(sample_block_hash(0x91)),
+            validator_set_hash: Some(HashOf::<Vec<PeerId>>::from_untyped_unchecked(
+                Hash::prehashed([0x92; Hash::LENGTH]),
+            )),
+            validator_set_len: 4,
+            signatures_total: 3,
+        },
+        commit_quorum: SumeragiCommitQuorumStatus {
+            height: 12,
+            view: 4,
+            block_hash: Some(sample_block_hash(0x93)),
+            signatures_present: 4,
+            signatures_counted: 3,
+            signatures_set_b: 1,
+            signatures_required: 4,
+            last_updated_ms: 456,
+        },
         view_change_proof_accepted_total: 9,
         view_change_proof_stale_total: 10,
         view_change_proof_rejected_total: 11,
@@ -1086,6 +1139,7 @@ fn sumeragi_wire_status_roundtrip() {
             commit_failure_total: 1,
             quorum_timeout_total: 2,
             da_gate_total: 3,
+            censorship_evidence_total: 7,
             missing_payload_total: 4,
             missing_qc_total: 5,
             validation_reject_total: 6,
@@ -1094,6 +1148,7 @@ fn sumeragi_wire_status_roundtrip() {
             last_commit_failure_timestamp_ms: 10,
             last_quorum_timeout_timestamp_ms: 11,
             last_da_gate_timestamp_ms: 12,
+            last_censorship_evidence_timestamp_ms: 16,
             last_missing_payload_timestamp_ms: 13,
             last_missing_qc_timestamp_ms: 14,
             last_validation_reject_timestamp_ms: 15,

@@ -91,10 +91,25 @@ impl Actor {
             );
             return Ok(());
         }
+        let (consensus_mode, mode_tag, prf_seed) = {
+            let view = self.state.view();
+            let consensus_mode = super::effective_consensus_mode_for_height(
+                &view,
+                block_height,
+                self.config.consensus_mode,
+            );
+            let mode_tag = match consensus_mode {
+                ConsensusMode::Permissioned => PERMISSIONED_TAG,
+                ConsensusMode::Npos => NPOS_TAG,
+            };
+            let prf_seed = matches!(consensus_mode, ConsensusMode::Npos)
+                .then(|| super::npos_seed_for_height(&view, block_height));
+            (consensus_mode, mode_tag, prf_seed)
+        };
         let persisted_roster = persisted_roster_for_block(
             self.state.as_ref(),
             &self.kura,
-            self.consensus_mode,
+            consensus_mode,
             block_height,
             block_hash,
         );
@@ -110,8 +125,8 @@ impl Actor {
             self.state.as_ref(),
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
-            self.consensus_mode,
-            self.mode_tag(),
+            consensus_mode,
+            mode_tag,
             requested_missing_block,
         ) else {
             let roster_snapshot = self
@@ -149,8 +164,12 @@ impl Actor {
             "block sync roster selected"
         );
         let topology = super::network_topology::Topology::new(selection.roster.clone());
-        if let Some(cert) = selection.commit_certificate.clone() {
-            super::status::record_commit_certificate(cert);
+        if let Some(cert) = selection.commit_certificate.as_ref() {
+            super::status::record_commit_certificate(cert.clone());
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.set_commit_certificate_summary(cert);
+            }
         }
         if let Some(checkpoint) = selection.checkpoint.clone() {
             super::status::record_validator_checkpoint(checkpoint);
@@ -180,16 +199,9 @@ impl Actor {
             self.kura.write_roster_metadata(&sidecar);
         }
         let had_incoming_qc = incoming_qc.is_some();
-        let prf_seed = if self.mode_tag() == NPOS_TAG {
-            let state_view = self.state.view();
-            Some(super::npos_seed_for_height(&state_view, block_height))
-        } else {
-            None
-        };
         let block_signers = {
             let state_view = self.state.view();
-            match validated_block_signers(&block, &topology, &state_view, self.mode_tag(), prf_seed)
-            {
+            match validated_block_signers(&block, &topology, &state_view, mode_tag, prf_seed) {
                 Ok(signers) => signers,
                 Err(err) => {
                     super::status::inc_block_sync_drop_invalid_signatures();
@@ -241,7 +253,7 @@ impl Actor {
                 &block_signers,
                 block_view,
                 &self.common_config.chain,
-                self.mode_tag(),
+                mode_tag,
                 prf_seed,
             ) {
                 Ok(_) => Some(qc),
@@ -302,14 +314,14 @@ impl Actor {
         let candidate_qc_present = candidate_qc.is_some();
         let candidate_qc_signers = candidate_qc.as_ref().map(qc_signer_count);
         let block_signer_count = block_signers.len();
-        let signature_quorum_met = match self.consensus_mode {
+        let signature_quorum_met = match consensus_mode {
             ConsensusMode::Permissioned => block_signer_count >= commit_quorum,
             ConsensusMode::Npos => {
                 let signature_topology = super::topology_for_view(
                     &topology,
                     block_height,
                     block_view,
-                    self.mode_tag(),
+                    mode_tag,
                     prf_seed,
                 );
                 let mut signer_peers = BTreeSet::new();
@@ -373,7 +385,7 @@ impl Actor {
                 &block_signers,
                 block_view,
                 &self.common_config.chain,
-                self.mode_tag(),
+                mode_tag,
                 prf_seed,
             ) {
                 Ok(_) => Some(qc.clone()),
@@ -413,7 +425,7 @@ impl Actor {
                     &block_signers,
                     block_view,
                     &self.common_config.chain,
-                    self.mode_tag(),
+                    mode_tag,
                     prf_seed,
                 )
                 .ok()
@@ -441,14 +453,14 @@ impl Actor {
                     &topology,
                     qc.height,
                     qc.view,
-                    self.mode_tag(),
+                    mode_tag,
                     prf_seed,
                 );
                 if super::qc_aggregate_consistent(
                     &qc,
                     &signature_topology,
                     &self.common_config.chain,
-                    self.mode_tag(),
+                    mode_tag,
                 ) {
                     let qc_signers = qc_signer_count(&qc);
                     info!(
@@ -469,7 +481,7 @@ impl Actor {
                 super::validate_commit_certificate_roster(
                     cert,
                     block_hash,
-                    self.consensus_mode,
+                    consensus_mode,
                     &state_view,
                 )
                 .is_ok()
@@ -634,7 +646,7 @@ impl Actor {
                     &block_signers,
                     block_view,
                     &self.common_config.chain,
-                    self.mode_tag(),
+                    mode_tag,
                     prf_seed,
                 ) {
                     Ok(tally) => {
@@ -672,18 +684,6 @@ impl Actor {
                             ),
                             qc.clone(),
                         );
-                        if let Some(pending) =
-                            self.pending.pending_blocks.remove(&qc.subject_block_hash)
-                        {
-                            let qc_header = crate::sumeragi::consensus::QcHeaderRef {
-                                phase: crate::sumeragi::consensus::Phase::Precommit,
-                                subject_block_hash: qc.subject_block_hash,
-                                height: qc.height,
-                                view: qc.view,
-                                epoch: qc.epoch,
-                            };
-                            let _ = self.finalize_pending_block(qc_header, pending, None);
-                        }
                         if let Some(highest) = self.highest_qc {
                             self.maybe_broadcast_new_view(highest, None, None);
                         }
@@ -732,6 +732,7 @@ impl Actor {
                     &topology,
                     &block_signers,
                     allow_nonextending_qc,
+                    mode_tag,
                     prf_seed,
                 );
             }
@@ -750,6 +751,7 @@ impl Actor {
         topology: &super::network_topology::Topology,
         block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
         allow_nonextending_qc: bool,
+        mode_tag: &str,
         prf_seed: Option<[u8; 32]>,
     ) {
         if topology.as_ref().is_empty() {
@@ -792,7 +794,7 @@ impl Actor {
             block_signers,
             block_view,
             &self.common_config.chain,
-            self.mode_tag(),
+            mode_tag,
             prf_seed,
         ) {
             Ok(tally) => {
@@ -858,6 +860,7 @@ impl Actor {
         let peer = request.requester;
 
         if let Some(inflight) = self
+            .subsystems
             .commit
             .inflight
             .as_ref()
@@ -871,7 +874,7 @@ impl Actor {
                 block,
                 self.state.as_ref(),
                 self.kura.as_ref(),
-                self.mode_tag(),
+                self.config.consensus_mode,
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
             );
@@ -910,7 +913,7 @@ impl Actor {
                 block,
                 self.state.as_ref(),
                 self.kura.as_ref(),
-                self.mode_tag(),
+                self.config.consensus_mode,
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
             );
@@ -950,7 +953,7 @@ impl Actor {
                     block,
                     self.state.as_ref(),
                     self.kura.as_ref(),
-                    self.mode_tag(),
+                    self.config.consensus_mode,
                     self.common_config.trusted_peers.value(),
                     self.common_config.peer.id(),
                 );

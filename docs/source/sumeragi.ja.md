@@ -13,7 +13,7 @@ translator: manual
 残りの移行タスクを詳細に把握したい場合は、[`sumeragi_npos_task_breakdown.md`](sumeragi_npos_task_breakdown.md) を参照してください。
 
 ### 概要
-- **役割とローテーション**: ソート済みトポロジはピアを `Leader`、`ValidatingPeer`、`ProxyTail`、`SetBValidator` の役割に分割します。各コミット後、集合 A（`min_votes_for_commit()` で決まる先頭ピア群）は左に 1 つ回転します。ビュー変更ではリーダーを進めるためトポロジ全体を回転させます。`network_topology.rs` の `rotated_for_epoch_height(epoch, height)` が `(epoch, height)` に基づく監査しやすい決定論的ローテーションを定義しています。
+- **役割とローテーション**: ソート済みトポロジはピアを `Leader`、`ValidatingPeer`、`ProxyTail`、`SetBValidator` の役割に分割します。各コミット後、集合 A（`min_votes_for_commit()` で決まる先頭ピア群）は `hash(prev_block_hash) mod min_votes_for_commit()` だけ左に回転します。ビュー変更ではリーダーを進めるためトポロジ全体を回転させます。`network_topology.rs` の `rotated_for_prev_block_hash(prev_hash)` が前ブロックハッシュに基づく監査しやすい決定論的ローテーションを定義しています。
 - **K コレクターモード**: 各高さに対し、トポロジは `proxy_tail_index()`（含む）から始まる連続領域として K 個のコレクターを決定論的に選びます（巻き戻りなし）。リーダーは決して含まれません。K=1 にすると従来の単一コレクター（プロキシテール）構成と一致します。
 - **First-QC-wins**: 指定コレクター（プロキシテールを含む）が正当な Precommit QC を組み立てた場合、それを公表できます。ピアは同じ `(height, hash)` に対して最初に受信した正当な QC を採用し、遅れて届いた重複は破棄します。ブロックコミットはこれらの QC だけで判断されます。
 
@@ -118,7 +118,7 @@ translator: manual
 
 ### トポロジ
 - `Topology` 構造体は ordered ピアリストと役割算出ロジックを保持します。
-- `Topology::rotated_for_epoch_height` は `(epoch, height)` に基づく決定論的ローテーションを提供し、監査と再現性を保証します。
+- `Topology::rotated_for_prev_block_hash` は前ブロックハッシュに基づく決定論的ローテーションを提供し、監査と再現性を保証します。
 - `TopologySegment` は特定レンジのピアをイテレータ形式で扱える軽量ビューです。
 
 ### コレクター選定

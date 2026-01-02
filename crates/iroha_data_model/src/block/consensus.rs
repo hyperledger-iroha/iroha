@@ -19,6 +19,7 @@ use crate::{
     fastpq::{FastpqTransitionBatch, TransferTranscriptBundle},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
+    transaction::TransactionSubmissionReceipt,
 };
 
 /// Wire protocol version for consensus messages defined here.
@@ -320,6 +321,8 @@ pub enum EvidenceKind {
     InvalidProposal = 3,
     /// Same (height, view) execution vote on different post-state roots
     DoubleExecVote = 4,
+    /// Transaction censorship proof (submission receipts).
+    Censorship = 5,
 }
 
 /// Evidence payloads.
@@ -354,6 +357,13 @@ pub enum EvidencePayload {
         v1: ExecVote,
         /// Second observed execution vote.
         v2: ExecVote,
+    },
+    /// Evidence that a transaction was submitted but not proposed/committed.
+    Censorship {
+        /// Transaction hash referenced by the receipts.
+        tx_hash: HashOf<crate::transaction::SignedTransaction>,
+        /// Signed submission receipts from validators.
+        receipts: Vec<TransactionSubmissionReceipt>,
     },
 }
 
@@ -998,6 +1008,9 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
     #[norito(default)]
     pub da_gate_total: u64,
+    /// Total view changes triggered after censorship evidence reaches quorum.
+    #[norito(default)]
+    pub censorship_evidence_total: u64,
     /// Total view changes triggered after missing payloads exceeded dwell.
     #[norito(default)]
     pub missing_payload_total: u64,
@@ -1023,6 +1036,9 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
     #[norito(default)]
     pub last_da_gate_timestamp_ms: u64,
+    /// Milliseconds since UNIX epoch when a censorship-evidence cause was last recorded.
+    #[norito(default)]
+    pub last_censorship_evidence_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a missing-payload cause was last recorded.
     #[norito(default)]
     pub last_missing_payload_timestamp_ms: u64,
@@ -1325,6 +1341,72 @@ pub struct SumeragiCommitInflightStatus {
     pub resume_queue_depths: SumeragiWorkerQueueDepths,
 }
 
+/// Latest commit-quorum signature tally exposed by `/v1/sumeragi/status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiCommitQuorumStatus {
+    /// Block height associated with the tally.
+    #[norito(default)]
+    pub height: u64,
+    /// View associated with the tally.
+    #[norito(default)]
+    pub view: u64,
+    /// Block hash associated with the tally.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub block_hash: Option<HashOf<BlockHeader>>,
+    /// Total signatures present on the block.
+    #[norito(default)]
+    pub signatures_present: u64,
+    /// Signatures counted toward the commit quorum.
+    #[norito(default)]
+    pub signatures_counted: u64,
+    /// Signatures contributed by set-B validators.
+    #[norito(default)]
+    pub signatures_set_b: u64,
+    /// Required commit quorum size.
+    #[norito(default)]
+    pub signatures_required: u64,
+    /// Timestamp (ms since UNIX epoch) when the tally was recorded.
+    #[norito(default)]
+    pub last_updated_ms: u64,
+}
+
+/// Latest commit certificate summary exposed by `/v1/sumeragi/status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiCommitCertificateStatus {
+    /// Block height certified by the commit certificate.
+    #[norito(default)]
+    pub height: u64,
+    /// View associated with the commit certificate.
+    #[norito(default)]
+    pub view: u64,
+    /// Epoch associated with the commit certificate.
+    #[norito(default)]
+    pub epoch: u64,
+    /// Block hash certified by the commit certificate.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub block_hash: Option<HashOf<BlockHeader>>,
+    /// Stable hash of the validator set that produced the certificate.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub validator_set_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Number of validators in the recorded set.
+    #[norito(default)]
+    pub validator_set_len: u64,
+    /// Total signatures attached to the certificate.
+    #[norito(default)]
+    pub signatures_total: u64,
+}
+
 /// Compact Norito payload returned by Torii for `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -1390,6 +1472,12 @@ pub struct SumeragiStatusWire {
     /// `LockedQC` subject block hash when available.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub locked_qc_subject: Option<HashOf<BlockHeader>>,
+    /// Latest commit certificate summary (best-effort).
+    #[norito(default)]
+    pub commit_certificate: SumeragiCommitCertificateStatus,
+    /// Latest commit quorum signature tally (best-effort).
+    #[norito(default)]
+    pub commit_quorum: SumeragiCommitQuorumStatus,
     /// Total view-change proofs accepted (advanced the proof chain).
     #[norito(default)]
     pub view_change_proof_accepted_total: u64,
@@ -2136,6 +2224,29 @@ mod tests {
         };
         let bytes = ev.encode();
         let dec = Evidence::decode(&mut &bytes[..]).expect("decode evidence");
+        assert_eq!(ev, dec);
+    }
+
+    #[test]
+    fn censorship_evidence_roundtrip_codec() {
+        let key_pair = KeyPair::random();
+        let payload = crate::transaction::TransactionSubmissionReceiptPayload {
+            tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
+            submitted_at_ms: 10,
+            submitted_at_height: 2,
+            signer: key_pair.public_key().clone(),
+        };
+        let receipt = crate::transaction::TransactionSubmissionReceipt::sign(payload, &key_pair);
+        let tx_hash = receipt.payload.tx_hash;
+        let ev = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship {
+                tx_hash,
+                receipts: vec![receipt],
+            },
+        };
+        let bytes = ev.encode();
+        let dec = Evidence::decode(&mut &bytes[..]).expect("decode censorship evidence");
         assert_eq!(ev, dec);
     }
 

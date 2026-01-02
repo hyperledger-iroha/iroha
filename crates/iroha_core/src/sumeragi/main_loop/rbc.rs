@@ -773,6 +773,8 @@ impl Actor {
     pub(super) fn apply_rbc_session_plan(&mut self, plan: RbcSessionPlan) -> Result<()> {
         let key = plan.key;
         if self
+            .subsystems
+            .da_rbc
             .rbc
             .sessions
             .insert(key, plan.session.clone())
@@ -860,7 +862,7 @@ impl Actor {
         block: &SignedBlock,
         payload_hash: Hash,
     ) -> Result<()> {
-        if self.rbc.sessions.contains_key(&key) {
+        if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             return Ok(());
         }
 
@@ -883,10 +885,10 @@ impl Actor {
             }
         };
 
-        self.rbc.sessions.insert(key, session);
+        self.subsystems.da_rbc.rbc.sessions.insert(key, session);
         self.record_rbc_session_roster(key, self.effective_commit_topology());
         self.flush_pending_rbc(key)?;
-        if let Some(session) = self.rbc.sessions.get(&key).cloned() {
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
         }
@@ -903,12 +905,12 @@ impl Actor {
         payload_bytes: &[u8],
         payload_hash: Hash,
     ) -> Result<()> {
-        let Some(mut session) = self.rbc.sessions.remove(&key) else {
+        let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
         };
         if session.delivered_payload_matches(&payload_hash) {
             // Restore the session before returning so future RBC traffic can reuse it.
-            self.rbc.sessions.insert(key, session);
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
 
@@ -962,7 +964,7 @@ impl Actor {
         if invalidated {
             self.clear_pending_rbc(&key);
         }
-        self.rbc.sessions.insert(key, session);
+        self.subsystems.da_rbc.rbc.sessions.insert(key, session);
         if should_update_status {
             self.publish_rbc_backlog_snapshot();
         }
@@ -985,7 +987,7 @@ impl Actor {
     /// Attempt to reconstruct the full block payload for an RBC session once delivery is complete.
     /// Returns `None` if the session is incomplete or missing chunk data.
     fn rbc_session_payload_bytes(&self, key: &SessionKey) -> Option<Vec<u8>> {
-        let session = self.rbc.sessions.get(key)?;
+        let session = self.subsystems.da_rbc.rbc.sessions.get(key)?;
         if !session.delivered || session.received_chunks() != session.total_chunks() {
             return None;
         }
@@ -1012,6 +1014,8 @@ impl Actor {
         };
         let payload_hash = Hash::new(&payload);
         if let Some(expected) = self
+            .subsystems
+            .da_rbc
             .rbc
             .sessions
             .get(&key)
@@ -1099,7 +1103,7 @@ impl Actor {
             return false;
         };
         let key = Self::session_key(block_hash, height, view);
-        if self.rbc.sessions.contains_key(&key) || self.block_known_locally(*block_hash) {
+        if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) || self.block_known_locally(*block_hash) {
             debug!(
                 height,
                 view,
@@ -1158,7 +1162,7 @@ impl Actor {
             return Ok(());
         }
         self.record_rbc_session_roster(key, self.effective_commit_topology());
-        if let Some(mut session) = self.rbc.sessions.remove(&key) {
+        if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
             if let Some(expected_hash) = session.payload_hash() {
                 if expected_hash != init.payload_hash {
                     warn!(
@@ -1198,10 +1202,10 @@ impl Actor {
                 _ => {}
             }
             session.epoch = init.epoch;
-            self.rbc.sessions.insert(key, session);
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             self.flush_pending_rbc(key)?;
             self.maybe_emit_rbc_ready(key)?;
-            if let Some(session) = self.rbc.sessions.get(&key).cloned() {
+            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
                 self.update_rbc_status_entry(key, &session, false);
                 self.persist_rbc_session(key, &session);
             }
@@ -1226,13 +1230,13 @@ impl Actor {
                 return Ok(());
             }
         };
-        if self.rbc.sessions.insert(key, session).is_some() {
+        if self.subsystems.da_rbc.rbc.sessions.insert(key, session).is_some() {
             warn!(?key, "replacing existing RBC session on init");
         }
         // Apply any messages that arrived before INIT once the session exists.
         self.flush_pending_rbc(key)?;
         self.maybe_emit_rbc_ready(key)?;
-        if let Some(session) = self.rbc.sessions.get(&key).cloned() {
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
         }
@@ -1273,7 +1277,7 @@ impl Actor {
         }
         let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
         let (ready_sent_before, became_complete) =
-            if let Some(session) = self.rbc.sessions.get_mut(&key) {
+            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
                 let ready_sent_before = session.sent_ready;
                 let was_complete = session.total_chunks() != 0
                     && session.received_chunks() == session.total_chunks();
@@ -1339,18 +1343,20 @@ impl Actor {
                 return Ok(());
             };
         self.maybe_emit_rbc_ready(key)?;
-        if let Some(session) = self.rbc.sessions.get(&key).cloned() {
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
             if session.total_chunks() != 0
                 && session.received_chunks() == session.total_chunks()
-                && self.rbc.pending.contains_key(&key)
+                && self.subsystems.da_rbc.rbc.pending.contains_key(&key)
             {
                 self.flush_pending_rbc(key)?;
             }
         }
         self.publish_rbc_backlog_snapshot();
         let ready_sent_after = self
+            .subsystems
+            .da_rbc
             .rbc
             .sessions
             .get(&key)
@@ -1384,7 +1390,7 @@ impl Actor {
         let key = Self::session_key(&ready.block_hash, ready.height, ready.view);
         let ready_sender = ready.sender;
         let ready_view = ready.view;
-        if !self.rbc.sessions.contains_key(&key) {
+        if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             let max_bytes = self.pending_rbc_caps().1;
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
                 let pending = self.pending_rbc_slot(key);
@@ -1432,21 +1438,16 @@ impl Actor {
             return Ok(());
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, ready.height))
-        } else {
-            None
-        };
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(ready.height);
         let signature_topology = super::topology_for_view(
             &topology,
             ready.height,
             ready.view,
-            self.mode_tag(),
+            mode_tag,
             prf_seed,
         );
         let local_idx = self.local_validator_index_for_topology(&signature_topology);
-        if let Some(session) = self.rbc.sessions.get(&key) {
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
             if let Some(existing) = session
                 .ready_signatures
                 .iter()
@@ -1467,7 +1468,7 @@ impl Actor {
             &ready,
             &signature_topology,
             &self.common_config.chain,
-            self.mode_tag(),
+            mode_tag,
         ) {
             let outcome = self.record_invalid_signature(
                 InvalidSigKind::RbcReady,
@@ -1502,6 +1503,8 @@ impl Actor {
         let ready_senders_after: Vec<u32>;
         let recorded_ready = {
             let session = self
+                .subsystems
+                .da_rbc
                 .rbc
                 .sessions
                 .get_mut(&key)
@@ -1549,20 +1552,24 @@ impl Actor {
                 "RBC READY conflict detected; marking session invalid"
             );
         }
-        if let Some(session) = self.rbc.sessions.get(&key).cloned() {
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
         }
-        if self.rbc.pending.contains_key(&key) {
+        if self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
             self.flush_pending_rbc(key)?;
         }
         let delivered_before = self
+            .subsystems
+            .da_rbc
             .rbc
             .sessions
             .get(&key)
             .is_some_and(|session| session.delivered);
         self.maybe_emit_rbc_deliver(key)?;
         let delivered_after = self
+            .subsystems
+            .da_rbc
             .rbc
             .sessions
             .get(&key)
@@ -1595,6 +1602,8 @@ impl Actor {
             );
         } else {
             let session_invalid = self
+                .subsystems
+                .da_rbc
                 .rbc
                 .sessions
                 .get(&key)
@@ -1743,7 +1752,7 @@ impl Actor {
             return Ok(());
         }
         let key = Self::session_key(&deliver.block_hash, deliver.height, deliver.view);
-        if !self.rbc.sessions.contains_key(&key) {
+        if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             let max_bytes = self.pending_rbc_caps().1;
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
                 let pending = self.pending_rbc_slot(key);
@@ -1787,20 +1796,15 @@ impl Actor {
             return Ok(());
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, deliver.height))
-        } else {
-            None
-        };
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(deliver.height);
         let signature_topology = super::topology_for_view(
             &topology,
             deliver.height,
             deliver.view,
-            self.mode_tag(),
+            mode_tag,
             prf_seed,
         );
-        if let Some(session) = self.rbc.sessions.get(&key) {
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
             if session.delivered
                 && session.deliver_sender == Some(deliver.sender)
                 && session
@@ -1821,7 +1825,7 @@ impl Actor {
             &deliver,
             &signature_topology,
             &self.common_config.chain,
-            self.mode_tag(),
+            mode_tag,
         ) {
             let outcome = self.record_invalid_signature(
                 InvalidSigKind::RbcDeliver,
@@ -1849,6 +1853,8 @@ impl Actor {
         let deliver_quorum = self.rbc_deliver_quorum(&topology);
         let (ignored, first_deliver, delivered_bytes, invalidate, defer_reason) = {
             let session = self
+                .subsystems
+                .da_rbc
                 .rbc
                 .sessions
                 .get_mut(&key)
@@ -1900,7 +1906,7 @@ impl Actor {
         if invalidate {
             self.clear_pending_rbc(&key);
         }
-        if let Some(session) = self.rbc.sessions.get(&key).cloned() {
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
         }
@@ -1917,7 +1923,7 @@ impl Actor {
                 }
             }
         }
-        if self.rbc.sessions.contains_key(&key) {
+        if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             self.record_phase_sample(PipelinePhase::Commit, deliver.height, deliver.view);
         }
         // If the block header never arrived (missed `BlockCreated`), rebuild it from the delivered
@@ -1930,8 +1936,8 @@ impl Actor {
     }
 
     pub(super) fn ensure_rbc_chunk_store(&mut self) -> bool {
-        if self.rbc.chunk_store.is_none() {
-            let cfg = match self.rbc.store_cfg.as_ref() {
+        if self.subsystems.da_rbc.rbc.chunk_store.is_none() {
+            let cfg = match self.subsystems.da_rbc.rbc.store_cfg.as_ref() {
                 Some(cfg) => cfg.clone(),
                 None => return false,
             };
@@ -1955,7 +1961,7 @@ impl Actor {
                         max_bytes = cfg.max_bytes,
                         "initialised RBC chunk store using deferred configuration"
                     );
-                    self.rbc
+                    self.subsystems.da_rbc.rbc
                         .status_handle
                         .configure(Some(rbc_status::StoreConfig {
                             dir: cfg.dir.clone(),
@@ -1968,13 +1974,13 @@ impl Actor {
                         bytes: 0,
                     };
                     let mut removed_acc = Vec::new();
-                    for (&session_key, session) in &self.rbc.sessions {
+                    for (&session_key, session) in &self.subsystems.da_rbc.rbc.sessions {
                         let session_roster = self.rbc_session_roster(session_key);
                         match store.persist_session(
                             session_key,
                             session,
                             &self.chain_hash,
-                            &self.rbc.manifest,
+                            &self.subsystems.da_rbc.rbc.manifest,
                             session_roster.as_slice(),
                         ) {
                             Ok(outcome) => {
@@ -1998,7 +2004,7 @@ impl Actor {
                     }
                     self.update_rbc_store_pressure(last_pressure);
                     self.publish_rbc_backlog_snapshot();
-                    self.rbc.chunk_store = Some(store);
+                    self.subsystems.da_rbc.rbc.chunk_store = Some(store);
                 }
                 Err(err) => {
                     trace!(
@@ -2011,7 +2017,7 @@ impl Actor {
             }
         }
 
-        self.rbc.chunk_store.is_some()
+        self.subsystems.da_rbc.rbc.chunk_store.is_some()
     }
 
     pub(super) fn persist_rbc_session(&mut self, key: SessionKey, session: &RbcSession) {
@@ -2022,7 +2028,7 @@ impl Actor {
         if session.received_chunks() < total_chunks {
             return;
         }
-        if self.rbc.persisted_full_sessions.contains(&key) {
+        if self.subsystems.da_rbc.rbc.persisted_full_sessions.contains(&key) {
             return;
         }
         if !self.ensure_rbc_chunk_store() {
@@ -2034,6 +2040,8 @@ impl Actor {
         }
 
         let store = self
+            .subsystems
+            .da_rbc
             .rbc
             .chunk_store
             .as_ref()
@@ -2044,13 +2052,13 @@ impl Actor {
             key,
             session,
             &self.chain_hash,
-            &self.rbc.manifest,
+            &self.subsystems.da_rbc.rbc.manifest,
             session_roster.as_slice(),
         ) {
             Ok(outcome) => {
                 self.handle_rbc_store_evictions(&outcome.removed);
                 self.update_rbc_store_pressure(outcome.pressure);
-                self.rbc.persisted_full_sessions.insert(key);
+                self.subsystems.da_rbc.rbc.persisted_full_sessions.insert(key);
             }
             Err(err) => {
                 warn!(?err, "failed to persist RBC session snapshot");
@@ -2063,9 +2071,9 @@ impl Actor {
             return;
         }
         for key in removed {
-            let existed = self.rbc.sessions.remove(key).is_some();
+            let existed = self.subsystems.da_rbc.rbc.sessions.remove(key).is_some();
             self.clear_rbc_session_roster(key);
-            self.rbc.status_handle.remove(key);
+            self.subsystems.da_rbc.rbc.status_handle.remove(key);
             if existed {
                 debug!(
                     block_hash = ?key.0,
@@ -2121,7 +2129,7 @@ impl Actor {
             lane_backlog: session.lane_backlog_entries(),
             dataspace_backlog: session.dataspace_backlog_entries(),
         };
-        self.rbc.status_handle.update(summary, SystemTime::now());
+        self.subsystems.da_rbc.rbc.status_handle.update(summary, SystemTime::now());
     }
 
     pub(super) fn session_key(
@@ -2139,8 +2147,8 @@ impl Actor {
         let caps = self.pending_rbc_caps();
         let ttl = self.config.rbc_pending_ttl;
         Self::update_rbc_backlog_snapshot(
-            &self.rbc.sessions,
-            &self.rbc.pending,
+            &self.subsystems.da_rbc.rbc.sessions,
+            &self.subsystems.da_rbc.rbc.pending,
             caps,
             ttl,
             telemetry_ref,

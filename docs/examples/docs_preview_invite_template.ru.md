@@ -6,55 +6,51 @@ status: complete
 translator: manual
 source_hash: 6c819c8d2a9517f1235a66a4661efd061a166ea89c953fd599e102b3cfd9157b
 source_last_modified: "2025-11-10T18:08:48.050596+00:00"
-translation_last_reviewed: 2025-11-14
+translation_last_reviewed: 2026-01-01
 ---
 
-<!-- Русский перевод docs/examples/docs_preview_invite_template.md (Docs Portal Preview Invite Template) -->
+# Приглашение на превью портала docs (шаблон)
 
-# Шаблон приглашения на просмотр портала документации
-
-Используйте этот шаблон, когда отправляете ревьюерам инструкции по доступу к preview
-портала. Замените плейсхолдеры (`<...>`) актуальными значениями, приложите descriptor +
-archive, указанные в письме, и сохраните финальный текст в соответствующем intake‑тикете.
+Используйте этот шаблон при отправке инструкций доступа к превью для ревьюеров. Замените
+плейсхолдеры (`<...>`) актуальными значениями, приложите артефакты descriptor +
+archive, указанные в сообщении, и сохраните финальный текст в соответствующем intake-тикете.
 
 ```text
-Subject: [DOCS-SORA] docs portal preview <preview_tag> invite for <reviewer/org>
+Тема: [DOCS-SORA] приглашение на превью портала docs <preview_tag> для <reviewer/org>
 
-Hi <name>,
+Здравствуйте <name>,
 
-Thanks for volunteering to review the docs portal ahead of GA. You are cleared
-for wave <wave_id>. Please follow the steps below before browsing the preview:
+Спасибо, что согласились помочь с обзором портала docs перед GA. Вы допущены к волне
+<wave_id>. Пожалуйста, выполните шаги ниже перед просмотром превью:
 
-1. Download the verified artefacts from CI or SoraFS:
+1. Скачайте проверенные артефакты из CI или SoraFS:
    - Descriptor: <descriptor_url> (`sha256:<descriptor_sha256>`)
    - Archive: <archive_url> (`sha256:<archive_sha256>`)
-2. Run the checksum gate:
+2. Запустите gate проверки checksum:
 
-   ./docs/portal/scripts/preview_verify.sh \
-     --descriptor <path-to-descriptor> \
-     --archive <path-to-archive> \
-     --build-dir <path-to-extracted-build>
+   ./docs/portal/scripts/preview_verify.sh      --descriptor <path-to-descriptor>      --archive <path-to-archive>      --build-dir <path-to-extracted-build>
 
-3. Serve the preview with checksum enforcement enabled:
+3. Запустите превью с включенным enforcement checksum:
 
    DOCS_RELEASE_TAG=<preview_tag> npm run --prefix docs/portal serve
 
-4. Read the acceptable-use, security, and observability notes:
+4. Ознакомьтесь с заметками по acceptable-use, security и observability:
    - docs/portal/docs/devportal/security-hardening.md
    - docs/portal/docs/devportal/observability.md
    - docs/portal/docs/devportal/reviewer-onboarding.md
 
-5. File feedback via <request_ticket> and tag each finding with `<preview_tag>`.
+5. Отправляйте feedback через <request_ticket> и помечайте каждое замечание тегом
+   `<preview_tag>`.
 
-Support is available on <contact_channel>. Incident or security issues must be
-reported immediately via <incident_channel>. If you need Torii API tokens,
-request them through the ticket—never reuse production credentials.
+Поддержка доступна в <contact_channel>. Инциденты или вопросы безопасности нужно
+немедленно сообщать через <incident_channel>. Если нужны токены Torii API, запросите их
+через тикет; никогда не переиспользуйте production credentials.
 
-Preview access expires on <end_date> unless extended in writing. We log
-checksums and invite metadata for governance; let us know when you have finished
-so we can offboard you cleanly.
+Доступ к превью истекает <end_date>, если не будет продлен письменно. Мы логируем
+checksums и метаданные приглашения для governance; сообщите, когда закончите,
+чтобы мы могли корректно снять доступ.
 
-Thanks again for helping us stabilise the portal!
+Спасибо еще раз за помощь в стабилизации портала!
 
-— DOCS-SORA team
+- Команда DOCS-SORA
 ```

@@ -819,7 +819,7 @@ impl NetworkRelay {
                     kind,
                     "relay received sumeragi block message"
                 );
-                self.sumeragi.incoming_block_message(*data);
+                let _ = self.sumeragi.try_incoming_block_message(*data);
             }
             SumeragiControlFlow(data) => {
                 let (kind, height, view) = Self::control_flow_meta(data.as_ref());
@@ -839,10 +839,12 @@ impl NetworkRelay {
                     kind,
                     "relay received sumeragi control-flow message"
                 );
-                self.sumeragi.incoming_consensus_control_flow_message(*data);
+                let _ = self
+                    .sumeragi
+                    .try_incoming_consensus_control_flow_message(*data);
             }
             LaneRelay(envelope) => {
-                self.sumeragi.incoming_lane_relay(*envelope);
+                let _ = self.sumeragi.try_incoming_lane_relay(*envelope);
             }
             MergeCommitteeSignature(signature) => {
                 if self.should_drop_consensus_messages(&peer) {
@@ -852,7 +854,7 @@ impl NetworkRelay {
                     );
                     return;
                 }
-                self.sumeragi.incoming_merge_signature(*signature);
+                let _ = self.sumeragi.try_incoming_merge_signature(*signature);
             }
             StreamingControl(frame) => {
                 if let Err(err) = self.streaming.process_control_frame(&peer, frame.as_ref()) {
@@ -949,6 +951,7 @@ impl NetworkRelay {
             PrevoteQC(qc) => ("PrevoteQC", Some(qc.0.height), Some(qc.0.view)),
             PrecommitVote(vote) => ("PrecommitVote", Some(vote.0.height), Some(vote.0.view)),
             PrecommitQC(qc) => ("PrecommitQC", Some(qc.0.height), Some(qc.0.view)),
+            CommitVote(vote) => ("CommitVote", Some(vote.height), Some(vote.view)),
             VrfCommit(_) => ("VrfCommit", None, None),
             VrfReveal(_) => ("VrfReveal", None, None),
             ExecVote(vote) => ("ExecVote", Some(vote.height), Some(vote.view)),
@@ -1926,115 +1929,115 @@ impl Iroha {
         );
         supervisor.monitor(child);
 
-        // Background poster worker for lower-priority Sumeragi frames; votes/proposals/block-created bypass inline.
-        let background_post_tx = if config.sumeragi.debug_disable_background_worker {
-            None
+        // Background poster worker for Sumeragi frames; debug_disable_background_worker forces a
+        // synchronous queue (capacity 0) to stress backpressure without inline sends.
+        let background_post_cap = if config.sumeragi.debug_disable_background_worker {
+            iroha_logger::warn!("forcing synchronous Sumeragi background post queue");
+            0
         } else {
-            let (bg_tx, bg_rx) =
-                std::sync::mpsc::sync_channel::<iroha_core::sumeragi::BackgroundPost>(256);
-            {
-                let network_for_worker = network.clone();
-                #[cfg(feature = "telemetry")]
-                let telemetry_for_worker = telemetry.clone();
-                std::thread::Builder::new()
-                    .name("sumeragi-post".to_string())
-                    .spawn(move || {
-                        while let Ok(task) = bg_rx.recv() {
-                            match task {
-                                iroha_core::sumeragi::BackgroundPost::Post {
-                                    peer,
-                                    msg,
-                                    enqueued_at,
-                                } => {
-                                    #[cfg(feature = "telemetry")]
-                                    telemetry_for_worker.note_consensus_message_sent(&msg);
-                                    let post = iroha_p2p::Post {
-                                        data: iroha_core::NetworkMessage::SumeragiBlock(Box::new(
-                                            msg,
-                                        )),
-                                        peer_id: peer.clone(),
-                                        priority: iroha_p2p::Priority::High,
-                                    };
-                                    network_for_worker.post(post);
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        telemetry_for_worker.dec_bg_post_queue_depth();
-                                        telemetry_for_worker
-                                            .dec_bg_post_queue_depth_for_peer(&peer);
-                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
-                                        telemetry_for_worker.observe_bg_post_age_ms("Post", age_ms);
-                                    }
+            256
+        };
+        let (bg_tx, bg_rx) =
+            std::sync::mpsc::sync_channel::<iroha_core::sumeragi::BackgroundPost>(
+                background_post_cap,
+            );
+        {
+            let network_for_worker = network.clone();
+            #[cfg(feature = "telemetry")]
+            let telemetry_for_worker = telemetry.clone();
+            std::thread::Builder::new()
+                .name("sumeragi-post".to_string())
+                .spawn(move || {
+                    while let Ok(task) = bg_rx.recv() {
+                        match task {
+                            iroha_core::sumeragi::BackgroundPost::Post {
+                                peer,
+                                msg,
+                                enqueued_at,
+                            } => {
+                                #[cfg(feature = "telemetry")]
+                                telemetry_for_worker.note_consensus_message_sent(&msg);
+                                let post = iroha_p2p::Post {
+                                    data: iroha_core::NetworkMessage::SumeragiBlock(Box::new(
+                                        msg,
+                                    )),
+                                    peer_id: peer.clone(),
+                                    priority: iroha_p2p::Priority::High,
+                                };
+                                network_for_worker.post(post);
+                                #[cfg(feature = "telemetry")]
+                                {
+                                    telemetry_for_worker.dec_bg_post_queue_depth();
+                                    telemetry_for_worker.dec_bg_post_queue_depth_for_peer(&peer);
+                                    let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
+                                    telemetry_for_worker.observe_bg_post_age_ms("Post", age_ms);
                                 }
-                                iroha_core::sumeragi::BackgroundPost::PostControlFlow {
-                                    peer,
-                                    frame,
-                                    enqueued_at,
-                                } => {
-                                    let post = iroha_p2p::Post {
-                                        data: iroha_core::NetworkMessage::SumeragiControlFlow(
-                                            Box::new(frame),
-                                        ),
-                                        peer_id: peer.clone(),
-                                        priority: iroha_p2p::Priority::High,
-                                    };
-                                    network_for_worker.post(post);
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        telemetry_for_worker.dec_bg_post_queue_depth();
-                                        telemetry_for_worker
-                                            .dec_bg_post_queue_depth_for_peer(&peer);
-                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
-                                        telemetry_for_worker
-                                            .observe_bg_post_age_ms("PostControlFlow", age_ms);
-                                    }
+                            }
+                            iroha_core::sumeragi::BackgroundPost::PostControlFlow {
+                                peer,
+                                frame,
+                                enqueued_at,
+                            } => {
+                                let post = iroha_p2p::Post {
+                                    data: iroha_core::NetworkMessage::SumeragiControlFlow(Box::new(
+                                        frame,
+                                    )),
+                                    peer_id: peer.clone(),
+                                    priority: iroha_p2p::Priority::High,
+                                };
+                                network_for_worker.post(post);
+                                #[cfg(feature = "telemetry")]
+                                {
+                                    telemetry_for_worker.dec_bg_post_queue_depth();
+                                    telemetry_for_worker.dec_bg_post_queue_depth_for_peer(&peer);
+                                    let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
+                                    telemetry_for_worker
+                                        .observe_bg_post_age_ms("PostControlFlow", age_ms);
                                 }
-                                iroha_core::sumeragi::BackgroundPost::Broadcast {
-                                    msg,
-                                    enqueued_at,
-                                } => {
-                                    #[cfg(feature = "telemetry")]
-                                    telemetry_for_worker.note_consensus_message_sent(&msg);
-                                    let b = iroha_p2p::Broadcast {
-                                        data: iroha_core::NetworkMessage::SumeragiBlock(Box::new(
-                                            msg,
-                                        )),
-                                        priority: iroha_p2p::Priority::High,
-                                    };
-                                    network_for_worker.broadcast(b);
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        telemetry_for_worker.dec_bg_post_queue_depth();
-                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
-                                        telemetry_for_worker
-                                            .observe_bg_post_age_ms("Broadcast", age_ms);
-                                    }
+                            }
+                            iroha_core::sumeragi::BackgroundPost::Broadcast {
+                                msg,
+                                enqueued_at,
+                            } => {
+                                #[cfg(feature = "telemetry")]
+                                telemetry_for_worker.note_consensus_message_sent(&msg);
+                                let b = iroha_p2p::Broadcast {
+                                    data: iroha_core::NetworkMessage::SumeragiBlock(Box::new(msg)),
+                                    priority: iroha_p2p::Priority::High,
+                                };
+                                network_for_worker.broadcast(b);
+                                #[cfg(feature = "telemetry")]
+                                {
+                                    telemetry_for_worker.dec_bg_post_queue_depth();
+                                    let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
+                                    telemetry_for_worker.observe_bg_post_age_ms("Broadcast", age_ms);
                                 }
-                                iroha_core::sumeragi::BackgroundPost::BroadcastControlFlow {
-                                    frame,
-                                    enqueued_at,
-                                } => {
-                                    let b = iroha_p2p::Broadcast {
-                                        data: iroha_core::NetworkMessage::SumeragiControlFlow(
-                                            Box::new(frame),
-                                        ),
-                                        priority: iroha_p2p::Priority::High,
-                                    };
-                                    network_for_worker.broadcast(b);
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        telemetry_for_worker.dec_bg_post_queue_depth();
-                                        let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
-                                        telemetry_for_worker
-                                            .observe_bg_post_age_ms("BroadcastControlFlow", age_ms);
-                                    }
+                            }
+                            iroha_core::sumeragi::BackgroundPost::BroadcastControlFlow {
+                                frame,
+                                enqueued_at,
+                            } => {
+                                let b = iroha_p2p::Broadcast {
+                                    data: iroha_core::NetworkMessage::SumeragiControlFlow(Box::new(
+                                        frame,
+                                    )),
+                                    priority: iroha_p2p::Priority::High,
+                                };
+                                network_for_worker.broadcast(b);
+                                #[cfg(feature = "telemetry")]
+                                {
+                                    telemetry_for_worker.dec_bg_post_queue_depth();
+                                    let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
+                                    telemetry_for_worker
+                                        .observe_bg_post_age_ms("BroadcastControlFlow", age_ms);
                                 }
                             }
                         }
-                    })
-                    .expect("spawn sumeragi-post worker");
-            }
-            Some(bg_tx)
-        };
+                    }
+                })
+                .expect("spawn sumeragi-post worker");
+        }
+        let background_post_tx = Some(bg_tx);
 
         #[cfg(feature = "telemetry")]
         let torii_telemetry =
@@ -3901,6 +3904,9 @@ fn resolve_build_line_from_env(env_value: Option<String>, bin_name: &str) -> Bui
 }
 
 fn main() {
+    if let Some(exit_code) = iroha_torii::zk_attachments::sanitizer_process_exit_code_from_env() {
+        std::process::exit(exit_code);
+    }
     let build_line = resolve_build_line();
     if let Err(report) = run_main(build_line) {
         eprintln!("{report:?}");

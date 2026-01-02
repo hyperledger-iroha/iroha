@@ -65,8 +65,8 @@
   "moderation": {
     "off_topic": false,
     "tags": [
-      "needs-translation"
+      "needs-follow-up"
     ],
-    "notes": "Pending Japanese translation; otherwise ready for publication."
+    "notes": "Awaiting KYC completion for remaining restitution; otherwise ready for publication."
   }
 }

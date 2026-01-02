@@ -392,6 +392,9 @@ exhaustion.
   (ticket) and escalate if the rate persists across multiple windows.
 - Latency: `histogram_quantile(0.95, sum(rate(torii_zk_prover_latency_ms_bucket[5m])) by (le))`
   exceeding `torii.zk_prover_max_scan_millis` for >15 minutes.
+- Sanitizer rejects: `increase(torii_attachment_reject_total[10m]) > 0` to catch
+  unsupported types, expansion limits, or malformed payloads; correlate with
+  `histogram_quantile(0.95, sum(rate(torii_attachment_sanitize_ms_bucket[5m])) by (le))`.
 
 **Triage outline**
 1. Inspect `torii_zk_prover_pending`, `torii_zk_prover_inflight`, and
@@ -445,6 +448,7 @@ P2P metrics (selected)
 
 Sumeragi metrics
 - Counters: `sumeragi_tail_votes_total`, `sumeragi_widen_before_rotate_total`, `sumeragi_view_change_suggest_total`, `sumeragi_view_change_install_total`; histogram: `sumeragi_cert_size` (signatures per committed block).
+- Commit quorum/certificate: `sumeragi_commit_signatures_present`, `sumeragi_commit_signatures_counted`, `sumeragi_commit_signatures_set_b`, `sumeragi_commit_signatures_required` track the last commit tally; `sumeragi_commit_certificate_height`, `sumeragi_commit_certificate_view`, `sumeragi_commit_certificate_epoch`, `sumeragi_commit_certificate_signatures_total`, `sumeragi_commit_certificate_validator_set_len` summarize the latest commit certificate.
 - Queue health: `sumeragi_tx_queue_depth`/`sumeragi_tx_queue_capacity` gauge the live mempool size and effective ceiling; `sumeragi_tx_queue_saturated` flips to `1` when Torii reports saturation, signalling that redundant collector fan-out is temporarily suppressed.
 - VRF emission: `sumeragi_vrf_commits_emitted_total`, `sumeragi_vrf_reveals_emitted_total`, and `sumeragi_vrf_reveals_late_total` count how many commit/reveal messages this validator broadcast (including late reveals accepted after the window). Pair with `sumeragi_vrf_non_reveal_*` counters to monitor participation health at epoch boundaries.
 - Collector fan-out: `sumeragi_redundant_sends_total` (aggregate), `sumeragi_redundant_sends_by_peer{peer="…"}`, and `sumeragi_redundant_sends_by_collector{idx="…"}` highlight redundant collector sends; investigate sustained spikes to locate congested collectors or unhealthy peers.
@@ -459,9 +463,10 @@ Sumeragi additions (new series)
   - See also: `sumeragi_new_view_receipts_by_hv{height="<h>",view="<v>"}` for per-(height,view) receipt counts.
 - `sumeragi_post_to_peer_total{peer}` (counter) — post attempts to peers (collector routing and backpressure insight).
 - `sumeragi_bg_post_enqueued_total{kind}` (counter) — background-post tasks enqueued by kind in {Post,Broadcast}.
-- `sumeragi_bg_post_overflow_total{kind}` (counter) — background-post channel overflows (fallback to inline) by kind.
- - `sumeragi_bg_post_queue_depth` (gauge) — global background-post queue depth.
- - `sumeragi_bg_post_queue_depth_by_peer{peer}` (gauge) — per-collector background-post queue depth.
+- `sumeragi_bg_post_overflow_total{kind}` (counter) — background-post queue full events; sender blocks until space is available.
+- `sumeragi_bg_post_drop_total{kind}` (counter) — background-post drops when the queue is missing or disconnected.
+- `sumeragi_bg_post_queue_depth` (gauge) — global background-post queue depth.
+- `sumeragi_bg_post_queue_depth_by_peer{peer}` (gauge) — per-collector background-post queue depth.
 
 Sumeragi pacemaker
 - Config gauges:

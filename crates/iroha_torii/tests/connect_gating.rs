@@ -240,6 +240,16 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
             attachments_per_tenant_max_bytes:
                 iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_BYTES,
+            attachments_allowed_mime_types:
+                iroha_config::parameters::defaults::torii::attachments_allowed_mime_types(),
+            attachments_max_expanded_bytes:
+                iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_EXPANDED_BYTES,
+            attachments_max_archive_depth:
+                iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_ARCHIVE_DEPTH,
+            attachments_sanitizer_mode:
+                iroha_config::parameters::actual::AttachmentSanitizerMode::Subprocess,
+            attachments_sanitize_timeout_ms:
+                iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS,
             webhook: iroha_config::parameters::actual::Webhook::default(),
             push: iroha_config::parameters::actual::Push::default(),
             zk_prover_enabled: false,

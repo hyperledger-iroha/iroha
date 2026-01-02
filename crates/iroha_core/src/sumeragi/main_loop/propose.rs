@@ -130,9 +130,9 @@ impl Actor {
         self.qc_cache
             .retain(|(_, hash, _, _, _), _| hash != &pending_hash);
         self.execution_qc_cache.remove(&pending_hash);
-        self.propose.proposal_cache.pop_hint(height, view);
-        self.propose.proposal_cache.pop_proposal(height, view);
-        self.proposals_seen.remove(&(height, view));
+        self.subsystems.propose.proposal_cache.pop_hint(height, view);
+        self.subsystems.propose.proposal_cache.pop_proposal(height, view);
+        self.subsystems.propose.proposals_seen.remove(&(height, view));
 
         Some((tx_count, requeued, failures, duplicate_failures))
     }
@@ -376,13 +376,13 @@ impl Actor {
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
-                    crate::da::receipts::prune_spool(&self.da_spool_dir, &cursor_snapshot);
-                    let receipts = crate::da::receipts::load_receipt_entries(&self.da_spool_dir)
+                    crate::da::receipts::prune_spool(&self.subsystems.da_rbc.spool_dir, &cursor_snapshot);
+                    let receipts = crate::da::receipts::load_receipt_entries(&self.subsystems.da_rbc.spool_dir)
                         .map_err(|err| eyre!(err))?;
                     crate::da::receipts::plan_committable_receipts(
                         &lane_config,
                         &cursor_snapshot,
-                        &self.da.sealed_commitments,
+                        &self.subsystems.da_rbc.da.sealed_commitments,
                         receipts,
                     )
                     .map_err(|err| eyre!(err))?
@@ -391,13 +391,13 @@ impl Actor {
                 };
 
                 let mut bundle_opt = match crate::da::commitments::load_commitment_bundle(
-                    &self.da_spool_dir,
+                    &self.subsystems.da_rbc.spool_dir,
                 ) {
                     Ok(value) => value,
                     Err(err) => {
                         warn!(
                             ?err,
-                            spool = %self.da_spool_dir.display(),
+                            spool = %self.subsystems.da_rbc.spool_dir.display(),
                             "failed to load DA commitments from spool; proceeding without DA bundle"
                         );
                         None
@@ -415,12 +415,12 @@ impl Actor {
                     bundle.commitments.retain(|record| {
                         let key =
                             iroha_data_model::da::commitment::DaCommitmentKey::from_record(record);
-                        if self.da.sealed_commitments.contains(&key) {
+                        if self.subsystems.da_rbc.da.sealed_commitments.contains(&key) {
                             return false;
                         }
 
                         crate::sumeragi::main_loop::manifest_available_for_commitment(
-                            &self.da_spool_dir,
+                            &self.subsystems.da_rbc.spool_dir,
                             record,
                             lane_config.manifest_policy(record.lane_id),
                         )
@@ -447,7 +447,7 @@ impl Actor {
 
                     if let Some(bundle) = bundle_opt.as_ref() {
                         let shard_cursor_path =
-                            crate::da::DaShardCursorJournal::journal_path(&self.da_spool_dir);
+                            crate::da::DaShardCursorJournal::journal_path(&self.subsystems.da_rbc.spool_dir);
                         let mut shard_journal = match crate::da::DaShardCursorJournal::load(
                             &lane_config,
                             shard_cursor_path.clone(),
@@ -485,21 +485,21 @@ impl Actor {
                     for record in &bundle.commitments {
                         let key =
                             iroha_data_model::da::commitment::DaCommitmentKey::from_record(record);
-                        self.da.sealed_commitments.insert(key);
+                        self.subsystems.da_rbc.da.sealed_commitments.insert(key);
                     }
-                    self.da.da_bundles.insert(proposal_height, bundle.clone());
+                    self.subsystems.da_rbc.da.da_bundles.insert(proposal_height, bundle.clone());
                     builder = builder.with_da_commitments(Some(bundle));
                 }
 
                 let pin_bundle_opt = match crate::da::pin_intents::load_pin_intents(
-                    &self.da_spool_dir,
+                    &self.subsystems.da_rbc.spool_dir,
                 ) {
                     Ok(Some(intents)) => Some(DaPinIntentBundle::new(intents)),
                     Ok(None) => None,
                     Err(err) => {
                         warn!(
                             ?err,
-                            spool = %self.da_spool_dir.display(),
+                            spool = %self.subsystems.da_rbc.spool_dir.display(),
                             "failed to load DA pin intents from spool; proceeding without pin bundle"
                         );
                         None
@@ -541,7 +541,7 @@ impl Actor {
                             intent.sequence,
                             intent.storage_ticket,
                         );
-                        !self.da.sealed_pin_intents.contains(&key)
+                        !self.subsystems.da_rbc.da.sealed_pin_intents.contains(&key)
                     });
                     #[cfg(feature = "telemetry")]
                     {
@@ -562,7 +562,7 @@ impl Actor {
                                 intent.sequence,
                                 intent.storage_ticket,
                             );
-                            self.da.sealed_pin_intents.insert(key);
+                            self.subsystems.da_rbc.da.sealed_pin_intents.insert(key);
                         }
                         #[cfg(feature = "telemetry")]
                         for _ in &sanitized_bundle.intents {
@@ -571,7 +571,7 @@ impl Actor {
                                 crate::telemetry::PinIntentSpoolReason::Kept,
                             );
                         }
-                        self.da
+                        self.subsystems.da_rbc.da
                             .da_pin_bundles
                             .insert(proposal_height, sanitized_bundle.clone());
                         builder = builder.with_da_pin_intents(Some(sanitized_bundle));
@@ -653,7 +653,7 @@ impl Actor {
                     local_validator_index,
                     view,
                 );
-                self.propose
+                self.subsystems.propose
                     .proposal_cache
                     .insert_proposal(proposal.clone());
 
@@ -664,7 +664,7 @@ impl Actor {
                     highest_qc,
                     avail_qc_ref: None,
                 };
-                self.propose.proposal_cache.insert_hint(proposal_hint);
+                self.subsystems.propose.proposal_cache.insert_hint(proposal_hint);
 
                 break (
                     signed_block,
@@ -738,7 +738,7 @@ impl Actor {
 
             let relay_envelopes = crate::sumeragi::status::lane_relay_envelopes_snapshot();
             if !relay_envelopes.is_empty() {
-                self.lane_relay.broadcast(relay_envelopes);
+                self.subsystems.merge.lane_relay.broadcast(relay_envelopes);
             }
 
             self.record_phase_sample(PipelinePhase::Propose, proposal_height, view);
@@ -844,7 +844,7 @@ impl Actor {
 
         for record in &bundle.commitments {
             let policy = lane_config.manifest_policy(record.lane_id);
-            match manifest_guard_outcome(&self.da_spool_dir, record, policy) {
+            match manifest_guard_outcome(&self.subsystems.da_rbc.spool_dir, record, policy) {
                 ManifestGuardOutcome::Pass => {}
                 ManifestGuardOutcome::Warn(err) => warn!(
                     ?err,
@@ -918,7 +918,7 @@ impl Actor {
     }
 
     pub(super) fn should_defer_proposal(&mut self) -> bool {
-        self.propose.backpressure_gate.should_defer()
+        self.subsystems.propose.backpressure_gate.should_defer()
     }
 
     pub(super) fn on_pacemaker_backpressure_deferral(
@@ -942,7 +942,7 @@ impl Actor {
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_pacemaker_propose_ready(&mut self, now: Instant) -> bool {
         trace!(?now, "pacemaker evaluating NEW_VIEW gating");
-        let prev_attempt = self.propose.last_pacemaker_attempt.replace(now);
+        let prev_attempt = self.subsystems.propose.last_pacemaker_attempt.replace(now);
         let view_snapshot = self.state.view();
         let topology_peers = self.effective_commit_topology_from_view(&view_snapshot);
         let local_index = self.local_validator_index(&view_snapshot);
@@ -954,7 +954,7 @@ impl Actor {
 
         // Drop NEW_VIEW entries that point at already-committed heights so the pacemaker
         // cannot re-propose a finalized height after a commit.
-        self.propose.new_view_tracker.prune(committed_height);
+        self.subsystems.propose.new_view_tracker.prune(committed_height);
 
         let empty_child_ctx = if pending_queue_len == 0 {
             self.empty_child_fallback(now)
@@ -977,7 +977,7 @@ impl Actor {
         }
 
         let mut topology = super::network_topology::Topology::new(topology_peers);
-        let required = topology.min_votes_for_commit();
+        let required = topology.min_votes_for_view_change();
         let local_idx = local_index;
 
         if da_enabled && pending_queue_len == 0 && empty_child_ctx.is_none() {
@@ -1001,9 +1001,10 @@ impl Actor {
         }
         let current_view = self.phase_tracker.current_view(tracked_height);
         let bootstrap_view = current_view.is_none_or(|view| view == 0);
-        if pending_queue_len > 0 && self.propose.propose_attempt_monitor.should_log(now) {
+        if pending_queue_len > 0 && self.subsystems.propose.propose_attempt_monitor.should_log(now) {
             let since_last_attempt = prev_attempt.map(|ts| now.saturating_duration_since(ts));
             let since_last_success = self
+                .subsystems
                 .propose
                 .last_successful_proposal
                 .map(|ts| now.saturating_duration_since(ts));
@@ -1070,7 +1071,7 @@ impl Actor {
                     }) {
                         self.highest_qc = Some(qc);
                     }
-                    self.propose.new_view_tracker.record(
+                    self.subsystems.propose.new_view_tracker.record(
                         qc.height.saturating_add(1),
                         0,
                         local_idx,
@@ -1098,6 +1099,7 @@ impl Actor {
         }
 
         let new_view_summary: Vec<String> = self
+            .subsystems
             .propose
             .new_view_tracker
             .entries
@@ -1108,17 +1110,18 @@ impl Actor {
             height = view_height,
             required,
             local_idx = ?local_idx,
-            forced = ?self.propose.forced_view_after_timeout,
+            forced = ?self.subsystems.propose.forced_view_after_timeout,
             new_view_slots = ?new_view_summary,
             "pacemaker NEW_VIEW snapshot before selection"
         );
 
         let mut candidate = self
+            .subsystems
             .propose
             .new_view_tracker
             .select_with_quorum(required, local_idx);
         if pending_queue_len > 0 {
-            if let Some((forced_height, forced_view)) = self.propose.forced_view_after_timeout {
+            if let Some((forced_height, forced_view)) = self.subsystems.propose.forced_view_after_timeout {
                 if let Some(qc) = precommit_qc {
                     let should_override = candidate.as_ref().is_none_or(|selection| {
                         selection.key.0 != forced_height || selection.key.1 < forced_view
@@ -1129,14 +1132,14 @@ impl Actor {
                             quorum: required,
                             highest_qc: qc,
                         });
-                        self.propose.forced_view_after_timeout = None;
+                        self.subsystems.propose.forced_view_after_timeout = None;
                     }
                 }
             }
         }
 
         if candidate.is_none() {
-            if let Some((forced_height, forced_view)) = self.propose.forced_view_after_timeout {
+            if let Some((forced_height, forced_view)) = self.subsystems.propose.forced_view_after_timeout {
                 if let Some(qc) = precommit_qc {
                     if forced_height == qc.height.saturating_add(1) {
                         candidate = Some(NewViewSelection {
@@ -1144,7 +1147,7 @@ impl Actor {
                             quorum: required,
                             highest_qc: qc,
                         });
-                        self.propose.forced_view_after_timeout = None;
+                        self.subsystems.propose.forced_view_after_timeout = None;
                     }
                 }
             }
@@ -1255,6 +1258,7 @@ impl Actor {
         // same view causes double-voting and scatters QC collection; wait for the existing
         // proposal to gather votes or transition via a view change instead.
         if self
+            .subsystems
             .propose
             .proposal_cache
             .get_proposal(height, view_idx)
@@ -1277,7 +1281,7 @@ impl Actor {
             return false;
         }
 
-        if self.proposals_seen.contains(&(height, view_idx)) {
+        if self.subsystems.propose.proposals_seen.contains(&(height, view_idx)) {
             if pending_queue_len > 0 {
                 iroha_logger::info!(
                     height,
@@ -1640,8 +1644,8 @@ impl Actor {
             "proposal assembly succeeded"
         );
 
-        self.propose.new_view_tracker.remove(height, view_idx);
-        self.propose.last_successful_proposal = Some(now);
+        self.subsystems.propose.new_view_tracker.remove(height, view_idx);
+        self.subsystems.propose.last_successful_proposal = Some(now);
         true
     }
 }

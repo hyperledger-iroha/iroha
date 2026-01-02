@@ -5,10 +5,14 @@ use core::convert::TryFrom;
 
 use derive_more::Display;
 use indexmap::IndexSet;
+use iroha_crypto::HashOf;
 #[cfg(test)]
 use iroha_crypto::KeyPair;
 use iroha_crypto::PublicKey;
-use iroha_data_model::{block::BlockSignature, prelude::PeerId};
+use iroha_data_model::{
+    block::{BlockHeader, BlockSignature},
+    prelude::PeerId,
+};
 
 /// The ordering of the peers which defines their roles in the current round of consensus.
 ///
@@ -96,6 +100,12 @@ impl Topology {
     /// The required amount of votes to commit a block with this topology.
     pub fn min_votes_for_commit(&self) -> usize {
         commit_quorum_from_len(self.0.len())
+    }
+
+    /// The required amount of votes to trigger a view change (f + 1).
+    pub fn min_votes_for_view_change(&self) -> usize {
+        let required = self.max_faults().saturating_add(1);
+        required.min(self.0.len().max(1))
     }
 
     /// Index of leader
@@ -322,10 +332,18 @@ impl Topology {
         self.0[..rotate_at].rotate_left(1);
     }
 
-    /// Rotate topology after a block has been committed
-    pub fn block_committed(&mut self, new_peers: impl IntoIterator<Item = PeerId>) {
-        self.rotate_set_a();
+    /// Rotate topology after a block has been committed, keyed to the previous block hash.
+    pub fn block_committed(
+        &mut self,
+        new_peers: impl IntoIterator<Item = PeerId>,
+        prev_block_hash: HashOf<BlockHeader>,
+    ) {
         self.update_peer_list(new_peers);
+        let rotate_at = self.min_votes_for_commit();
+        let k = rotation_offset_for_prev_hash(&prev_block_hash, rotate_at);
+        if k > 0 {
+            self.0[..rotate_at].rotate_left(k);
+        }
         self.1 = 0;
     }
 }
@@ -396,20 +414,16 @@ mod prf_collectors_tests {
     }
 }
 
-/// Deterministic rotation keyed to (epoch, height).
+/// Deterministic rotation keyed to the previous block hash.
 ///
 /// This helper produces a `Topology` whose Set A (first `min_votes_for_commit()` peers)
-/// is rotated left by `((epoch + height) mod min_votes_for_commit)` positions. The
+/// is rotated left by `hash(prev_block_hash) mod min_votes_for_commit` positions. The
 /// Set B segment order is preserved, and the view change index is set to 0.
 ///
 /// Notes
 /// - Rotation depends only on the provided inputs. It is not influenced by any
 ///   signature set or runtime state and is thus suitable for auditing.
-/// - `epoch` is the committee epoch (incremented whenever the peer set changes).
-///   `height` is the height within that epoch (starting at 0 for the first round).
-///
-/// Example: compute `(leader, proxy_tail)` from `(epoch, height)`
-/// Rotate the initial consensus topology (Set A) as a pure function of `(epoch, height)`.
+/// - `prev_block_hash` is the hash of the block immediately preceding the round.
 ///
 /// Invariants
 /// - Deterministic across nodes and hardware.
@@ -418,50 +432,53 @@ mod prf_collectors_tests {
 ///
 /// Example
 /// ```ignore
-/// use iroha_core::sumeragi::network_topology::{rotated_for_epoch_height, ConsensusTopology};
-/// use iroha_data_model::prelude::PeerId;
+/// use iroha_core::sumeragi::network_topology::{rotated_for_prev_block_hash, ConsensusTopology};
+/// use iroha_data_model::{block::BlockHeader, prelude::PeerId};
+/// use iroha_crypto::HashOf;
 ///
 /// // Application provides the current ordered peer list (e.g., from committed state)
 /// let peers: Vec<PeerId> = get_current_peers();
-/// let epoch: u64 = 7;
-/// let height_in_epoch: u64 = 3;
+/// let prev_hash: HashOf<BlockHeader> = get_prev_block_hash();
 ///
-/// let topo = rotated_for_epoch_height(peers, epoch, height_in_epoch);
+/// let topo = rotated_for_prev_block_hash(peers, prev_hash);
 /// let leader = topo.leader().clone();
 /// let proxy_tail = topo
 ///     .is_consensus_required()
 ///     .expect("N > 1 required for proxy tail")
 ///     .proxy_tail()
 ///     .clone();
-/// // Now (leader, proxy_tail) are the expected roles for (epoch,height)
+/// // Now (leader, proxy_tail) are the expected roles for the next round
 /// ```
-pub fn rotated_for_epoch_height(
+pub fn rotated_for_prev_block_hash(
     peers: impl IntoIterator<Item = PeerId>,
-    epoch: u64,
-    height: u64,
+    prev_block_hash: HashOf<BlockHeader>,
 ) -> Topology {
     let mut topology = Topology::new(peers);
     let rotate_at = topology.min_votes_for_commit();
-    if rotate_at == 0 {
-        return topology;
-    }
-    let modulus = u128::try_from(rotate_at).expect("rotate_at fits u128");
-    let combined = (u128::from(epoch) + u128::from(height)) % modulus;
-    let k = combined as usize;
+    let k = rotation_offset_for_prev_hash(&prev_block_hash, rotate_at);
     if k > 0 {
         topology.0[..rotate_at].rotate_left(k);
     }
     topology
 }
 
-/// Compute the expected role of each peer for auditing given (epoch, height).
+fn rotation_offset_for_prev_hash(prev_block_hash: &HashOf<BlockHeader>, rotate_at: usize) -> usize {
+    if rotate_at == 0 {
+        return 0;
+    }
+    let mut head = [0u8; 8];
+    head.copy_from_slice(&prev_block_hash.as_ref()[..8]);
+    let modulus = u128::try_from(rotate_at).expect("rotate_at fits u128");
+    (u128::from(u64::from_be_bytes(head)) % modulus) as usize
+}
+
+/// Compute the expected role of each peer for auditing given the previous block hash.
 /// Returns a vector of (`PeerId`, `Role`) in the rotated topology order.
-pub fn audit_roles_for_epoch_height(
+pub fn audit_roles_for_prev_block_hash(
     peers: impl IntoIterator<Item = PeerId>,
-    epoch: u64,
-    height: u64,
+    prev_block_hash: HashOf<BlockHeader>,
 ) -> Vec<(PeerId, Role)> {
-    let topo = rotated_for_epoch_height(peers, epoch, height);
+    let topo = rotated_for_prev_block_hash(peers, prev_block_hash);
     topo.0
         .iter()
         .cloned()
@@ -567,6 +584,12 @@ mod tests {
                     .unwrap()
             })
             .collect()
+    }
+
+    fn prev_hash_with_seed(seed: u64) -> HashOf<BlockHeader> {
+        let mut seed_bytes = [0u8; iroha_crypto::Hash::LENGTH];
+        seed_bytes[..8].copy_from_slice(&seed.to_be_bytes());
+        HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(seed_bytes))
     }
 
     #[test]
@@ -983,6 +1006,21 @@ mod tests {
     }
 
     #[test]
+    fn view_change_quorum_is_f_plus_one() {
+        let cases = [1_usize, 2, 3, 4, 5, 6, 7, 10, 16];
+        for len in cases {
+            let topology = test_topology(len);
+            let max_faults = (len.saturating_sub(1)) / 3;
+            let expected = max_faults.saturating_add(1);
+            assert_eq!(
+                topology.min_votes_for_view_change(),
+                expected,
+                "view-change quorum mismatch for len={len}"
+            );
+        }
+    }
+
+    #[test]
     fn set_b_validators() {
         let peers = test_peers(7);
         let topology = Topology::new(peers.clone());
@@ -1190,9 +1228,8 @@ mod tests {
 
     #[test]
     fn collectors_k3_follow_block_committed_rotation_of_set_a() {
-        // After a commit, Set A (first min_votes) rotates left by 1. For N=7,
-        // min_votes=5, so indices [0..4] -> [1,2,3,4,0]. Therefore collector
-        // peers at [4,5,6] should map to original peers [0,5,6].
+        // After a commit, Set A rotates by hash(prev_block_hash) mod min_votes.
+        // Use a seed that yields a rotation offset of 2 to verify hash-keyed rotation.
         let peers = test_peers(7);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(3);
@@ -1202,10 +1239,11 @@ mod tests {
             vec![peers[4].clone(), peers[5].clone(), peers[6].clone()]
         );
 
-        topo.block_committed(peers.clone());
+        let prev_hash = prev_hash_with_seed(2);
+        topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(3);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        let expect_after = vec![peers[0].clone(), peers[5].clone(), peers[6].clone()];
+        let expect_after = vec![peers[1].clone(), peers[5].clone(), peers[6].clone()];
         assert_eq!(cs_after, expect_after);
     }
 
@@ -1235,17 +1273,18 @@ mod tests {
 
     #[test]
     fn collectors_k2_follow_block_committed_rotation_of_set_a_n4() {
-        // N=4 -> min_votes=3 -> Set A indices [0,1,2] rotate to [1,2,0]
+        // N=4 -> min_votes=3 -> Set A rotates by hash(prev_block_hash) mod 3.
         let peers = test_peers(4);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(2);
         let cs_before: Vec<_> = idxs_before.iter().map(|&i| topo.0[i].clone()).collect();
         assert_eq!(cs_before, vec![peers[2].clone(), peers[3].clone()]);
-        topo.block_committed(peers.clone());
+        let prev_hash = prev_hash_with_seed(2);
+        topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(2);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        // After rotation of Set A, index 2 now holds original peer 0; index 3 unchanged.
-        assert_eq!(cs_after, vec![peers[0].clone(), peers[3].clone()]);
+        // After rotation of Set A, index 2 now holds original peer 1; index 3 unchanged.
+        assert_eq!(cs_after, vec![peers[1].clone(), peers[3].clone()]);
     }
 
     #[test]
@@ -1272,7 +1311,7 @@ mod tests {
 
     #[test]
     fn collectors_k3_follow_block_committed_rotation_of_set_a_n5() {
-        // N=5 -> min_votes=3 -> Set A indices [0,1,2] rotate to [1,2,0]
+        // N=5 -> min_votes=3 -> Set A rotates by hash(prev_block_hash) mod 3.
         let peers = test_peers(5);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(3);
@@ -1281,13 +1320,14 @@ mod tests {
             cs_before,
             vec![peers[2].clone(), peers[3].clone(), peers[4].clone()]
         );
-        topo.block_committed(peers.clone());
+        let prev_hash = prev_hash_with_seed(2);
+        topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(3);
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
-        // After rotation of Set A, index 2 now holds original 0; others unchanged.
+        // After rotation of Set A, index 2 now holds original 1; others unchanged.
         assert_eq!(
             cs_after,
-            vec![peers[0].clone(), peers[3].clone(), peers[4].clone()]
+            vec![peers[1].clone(), peers[3].clone(), peers[4].clone()]
         );
     }
 
@@ -1340,26 +1380,30 @@ mod tests {
     }
 
     #[test]
-    fn rotated_for_epoch_height_matches_block_committed_sequence() {
-        // Build a stable peer set and compare explicit rotation vs. sequential commits.
+    fn rotated_for_prev_block_hash_rotates_set_a() {
         let peers = test_peers(7);
-        let mut topo_seq = Topology::new(peers.clone());
-        // Epoch 0; we interpret height as the number of commits within the epoch.
-        for h in 0u64..12 {
-            let topo_explicit = rotated_for_epoch_height(peers.clone(), 0, h);
-            // Compare full order, not just leader, since rotation affects Set A.
-            assert_eq!(topo_explicit.0, topo_seq.0, "mismatch at height {h}");
-            // Advance sequence by one commit (no membership change).
-            topo_seq.block_committed(topo_seq.0.clone());
-        }
+        let mut seed_bytes = [0u8; iroha_crypto::Hash::LENGTH];
+        seed_bytes[7] = 1;
+        let prev_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed(seed_bytes),
+        );
+
+        let rotated = rotated_for_prev_block_hash(peers.clone(), prev_hash);
+        let mut expected = Topology::new(peers);
+        let rotate_at = expected.min_votes_for_commit();
+        expected.0[..rotate_at].rotate_left(1);
+        assert_eq!(rotated.0, expected.0);
     }
 
     #[test]
-    fn rotated_for_epoch_height_is_deterministic_across_nodes() {
+    fn rotated_for_prev_block_hash_is_deterministic_across_nodes() {
         let keys = (0..5).map(|_| KeyPair::random()).collect::<Vec<_>>();
         let peers = keys.iter().map(|k| PeerId::new(k.public_key().clone()));
-        let a = rotated_for_epoch_height(peers.clone(), 3, 17);
-        let b = rotated_for_epoch_height(peers, 3, 17);
+        let prev_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x11; iroha_crypto::Hash::LENGTH]),
+        );
+        let a = rotated_for_prev_block_hash(peers.clone(), prev_hash);
+        let b = rotated_for_prev_block_hash(peers, prev_hash);
         assert_eq!(a.0, b.0);
         assert_eq!(a.leader(), b.leader());
         assert_eq!(a.proxy_tail(), b.proxy_tail());

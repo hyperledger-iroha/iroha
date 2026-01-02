@@ -14,10 +14,9 @@ use crate::{
     sumeragi::{WsvEpochRosterAdapter, consensus::ValidatorIndex, epoch::EpochManager},
 };
 
-pub(super) fn canonicalize_roster(mut roster: Vec<PeerId>) -> Vec<PeerId> {
-    roster.sort();
-    roster.dedup();
-    roster
+pub(super) fn canonicalize_roster(roster: Vec<PeerId>) -> Vec<PeerId> {
+    // Preserve input ordering so topology rotation and config ordering remain stable.
+    dedup_preserving_order(roster)
 }
 
 #[allow(dead_code)]
@@ -303,5 +302,31 @@ pub(super) fn apply_roster_indices_to_manager(
         }
     } else {
         manager.set_validator_roster_indices(roster_indices);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    use super::*;
+
+    #[test]
+    fn canonicalize_roster_preserves_order_and_dedups() {
+        let first = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let second = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+
+        let roster = vec![first.clone(), second.clone(), first.clone()];
+        let canonical = canonicalize_roster(roster);
+
+        assert_eq!(canonical, vec![first, second]);
     }
 }

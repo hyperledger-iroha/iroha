@@ -55,6 +55,8 @@ pub(super) struct PendingBlock {
     pub(super) inserted_at: Instant,
     pub(super) precommit_vote_sent: bool,
     pub(super) commit_vote_sent: bool,
+    pub(super) commit_certificate_seen: bool,
+    pub(super) commit_certificate_epoch: Option<u64>,
     pub(super) validation_status: ValidationStatus,
     pub(super) kura_retry_attempts: u32,
     pub(super) next_kura_retry: Option<Instant>,
@@ -80,6 +82,8 @@ impl PendingBlock {
             inserted_at: Instant::now(),
             precommit_vote_sent: false,
             commit_vote_sent: false,
+            commit_certificate_seen: false,
+            commit_certificate_epoch: None,
             validation_status: ValidationStatus::Pending,
             kura_retry_attempts: 0,
             next_kura_retry: None,
@@ -125,6 +129,8 @@ impl PendingBlock {
             self.inserted_at = Instant::now();
             self.precommit_vote_sent = false;
             self.commit_vote_sent = false;
+            self.commit_certificate_seen = false;
+            self.commit_certificate_epoch = None;
             self.last_gate_satisfied = None;
             self.reset_kura_retry();
             self.kura_persisted = false;
@@ -144,8 +150,9 @@ impl PendingBlock {
         self.last_quorum_reschedule = Some(now);
     }
 
-    pub(super) fn recompute_gate(&mut self, da_enabled: bool) -> GateComputation {
-        let gate = da::evaluate(da_enabled, self.availability_qc_view.is_some());
+    pub(super) fn recompute_gate(&mut self, _da_enabled: bool) -> GateComputation {
+        // Availability evidence is advisory; do not surface missing AvailabilityQC as a gate.
+        let gate = None;
         let previous_gate = self.last_gate;
         let satisfaction = da::gate_satisfaction(previous_gate, gate);
         if let Some(satisfied) = satisfaction {
@@ -186,6 +193,8 @@ impl PendingBlock {
         self.availability_qc_view = None;
         self.precommit_vote_sent = false;
         self.commit_vote_sent = false;
+        self.commit_certificate_seen = false;
+        self.commit_certificate_epoch = None;
         self.availability_vote_sent = false;
         self.last_precommit_rebroadcast = None;
     }

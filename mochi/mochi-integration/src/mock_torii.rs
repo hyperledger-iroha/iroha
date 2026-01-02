@@ -17,7 +17,8 @@ use iroha_data_model::{
     block::{
         BlockHeader,
         consensus::{
-            SumeragiBlockSyncRosterStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
+            SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus,
+            SumeragiCommitQuorumStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
             SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
             SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
             SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus,
@@ -130,6 +131,8 @@ impl Default for MockToriiData {
             locked_qc_height: 9,
             locked_qc_view: 3,
             locked_qc_subject: None,
+            commit_certificate: SumeragiCommitCertificateStatus::default(),
+            commit_quorum: SumeragiCommitQuorumStatus::default(),
             view_change_proof_accepted_total: 1,
             view_change_proof_stale_total: 0,
             view_change_proof_rejected_total: 0,

@@ -286,8 +286,18 @@ static LAST_COLLECT_WITNESS_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
-static BG_POST_INLINE_POST_TOTAL: AtomicU64 = AtomicU64::new(0);
-static BG_POST_INLINE_BROADCAST_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_VOTE_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_VOTE_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_BLOCK_CREATED_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_BLOCK_CREATED_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_PROPOSAL_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_PROPOSAL_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_RBC_READY_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_RBC_READY_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_RBC_DELIVER_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BG_POST_DROP_POST_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BG_POST_DROP_BROADCAST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_HINT_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -328,6 +338,7 @@ static BLOCK_SYNC_ROSTER_DROP_MISSING_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_DA_GATE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_MISSING_PAYLOAD_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_MISSING_QC_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_VALIDATION_REJECT_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -336,6 +347,7 @@ static VIEW_CHANGE_CAUSE_LAST_LABEL: OnceLock<Mutex<Option<String>>> = OnceLock:
 static VIEW_CHANGE_CAUSE_LAST_COMMIT_FAILURE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS: AtomicU64 = AtomicU64::new(0);
+static VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_MISSING_PAYLOAD_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_MISSING_QC_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_VALIDATION_REJECT_TS_MS: AtomicU64 = AtomicU64::new(0);
@@ -380,6 +392,14 @@ static COMMIT_INFLIGHT_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::ne
 static COMMIT_INFLIGHT_LAST_TIMEOUT_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static COMMIT_PAUSE_QUEUE_DEPTHS: OnceLock<Mutex<WorkerQueueDepthSnapshot>> = OnceLock::new();
 static COMMIT_RESUME_QUEUE_DEPTHS: OnceLock<Mutex<WorkerQueueDepthSnapshot>> = OnceLock::new();
+static COMMIT_QUORUM_HEIGHT: AtomicU64 = AtomicU64::new(0);
+static COMMIT_QUORUM_VIEW: AtomicU64 = AtomicU64::new(0);
+static COMMIT_QUORUM_PRESENT: AtomicU64 = AtomicU64::new(0);
+static COMMIT_QUORUM_COUNTED: AtomicU64 = AtomicU64::new(0);
+static COMMIT_QUORUM_SET_B: AtomicU64 = AtomicU64::new(0);
+static COMMIT_QUORUM_REQUIRED: AtomicU64 = AtomicU64::new(0);
+static COMMIT_QUORUM_LAST_UPDATED_MS: AtomicU64 = AtomicU64::new(0);
+static COMMIT_QUORUM_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static VIEW_CHANGE_INDEX: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_PROOF_ACCEPTED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_PROOF_STALE_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -1699,6 +1719,12 @@ pub fn set_locked_qc(height: u64, view: u64, subject: Option<HashOf<BlockHeader>
         LOCKED_QC_HEIGHT.store(height, Ordering::Relaxed);
         LOCKED_QC_VIEW.store(view, Ordering::Relaxed);
         set_locked_qc_hash(subject);
+        return;
+    }
+    if (height, view) == (cur_h, cur_v) {
+        if subject.is_some() && locked_qc_hash().is_none() {
+            set_locked_qc_hash(subject);
+        }
     }
 }
 
@@ -1992,6 +2018,8 @@ pub struct ViewChangeCauseSnapshot {
     pub quorum_timeout_total: u64,
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
     pub da_gate_total: u64,
+    /// Total view changes triggered after censorship evidence reaches quorum.
+    pub censorship_evidence_total: u64,
     /// Total view changes triggered after missing payloads exceeded dwell.
     pub missing_payload_total: u64,
     /// Total view changes triggered after missing or stale QCs.
@@ -2008,6 +2036,8 @@ pub struct ViewChangeCauseSnapshot {
     pub last_quorum_timeout_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
     pub last_da_gate_timestamp_ms: u64,
+    /// Milliseconds since UNIX epoch when a censorship-evidence cause was last recorded.
+    pub last_censorship_evidence_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a missing-payload cause was last recorded.
     pub last_missing_payload_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a missing-QC cause was last recorded.
@@ -2301,6 +2331,71 @@ pub struct CommitInflightSnapshot {
     pub resume_queue_depths: WorkerQueueDepthSnapshot,
 }
 
+/// Snapshot of the latest commit-quorum signature tally.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommitQuorumSnapshot {
+    /// Block height associated with the tally.
+    pub height: u64,
+    /// View associated with the tally.
+    pub view: u64,
+    /// Block hash associated with the tally.
+    pub block_hash: Option<HashOf<BlockHeader>>,
+    /// Total signatures present on the block.
+    pub signatures_present: u64,
+    /// Signatures counted toward the commit quorum.
+    pub signatures_counted: u64,
+    /// Signatures contributed by set-B validators.
+    pub signatures_set_b: u64,
+    /// Required commit quorum size for the roster.
+    pub signatures_required: u64,
+    /// Timestamp (ms since UNIX epoch) when the tally was recorded.
+    pub last_updated_ms: u64,
+}
+
+/// Snapshot of the most recent commit certificate (summary only).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommitCertificateSnapshot {
+    /// Block height certified by the latest commit certificate.
+    pub height: u64,
+    /// View associated with the commit certificate.
+    pub view: u64,
+    /// Epoch associated with the commit certificate.
+    pub epoch: u64,
+    /// Block hash certified by the commit certificate.
+    pub block_hash: Option<HashOf<BlockHeader>>,
+    /// Stable hash of the validator set that produced the certificate.
+    pub validator_set_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Number of validators in the recorded set.
+    pub validator_set_len: u64,
+    /// Total signatures attached to the certificate.
+    pub signatures_total: u64,
+}
+
+/// Snapshot of dedup cache evictions for inbound consensus traffic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DedupEvictionSnapshot {
+    /// Vote dedup evictions due to capacity.
+    pub vote_capacity_total: u64,
+    /// Vote dedup evictions due to TTL expiry.
+    pub vote_expired_total: u64,
+    /// BlockCreated dedup evictions due to capacity.
+    pub block_created_capacity_total: u64,
+    /// BlockCreated dedup evictions due to TTL expiry.
+    pub block_created_expired_total: u64,
+    /// Proposal dedup evictions due to capacity.
+    pub proposal_capacity_total: u64,
+    /// Proposal dedup evictions due to TTL expiry.
+    pub proposal_expired_total: u64,
+    /// RBC READY dedup evictions due to capacity.
+    pub rbc_ready_capacity_total: u64,
+    /// RBC READY dedup evictions due to TTL expiry.
+    pub rbc_ready_expired_total: u64,
+    /// RBC DELIVER dedup evictions due to capacity.
+    pub rbc_deliver_capacity_total: u64,
+    /// RBC DELIVER dedup evictions due to TTL expiry.
+    pub rbc_deliver_expired_total: u64,
+}
+
 /// Compact snapshot of consensus status for operator APIs.
 #[derive(Clone, Debug, Default)]
 pub struct StatusSnapshot {
@@ -2356,14 +2451,20 @@ pub struct StatusSnapshot {
     pub highest_qc_subject: Option<HashOf<BlockHeader>>,
     /// Optional `LockedQC` subject block hash (best-effort).
     pub locked_qc_subject: Option<HashOf<BlockHeader>>,
+    /// Latest commit certificate summary (best-effort).
+    pub commit_certificate: CommitCertificateSnapshot,
+    /// Latest commit quorum signature tally (best-effort).
+    pub commit_quorum: CommitQuorumSnapshot,
     /// Settlement telemetry snapshot (DvP/PvP).
     pub settlement: SettlementStatusSnapshot,
     /// Total gossip fallback invocations (collectors exhausted).
     pub gossip_fallback_total: u64,
-    /// Total inline fallbacks for background Post requests.
-    pub bg_post_inline_post_total: u64,
-    /// Total inline fallbacks for background Broadcast requests.
-    pub bg_post_inline_broadcast_total: u64,
+    /// Dedup eviction counters for inbound consensus traffic.
+    pub dedup_evictions: DedupEvictionSnapshot,
+    /// Total background Post drops when the worker is unavailable.
+    pub bg_post_drop_post_total: u64,
+    /// Total background Broadcast drops when the worker is unavailable.
+    pub bg_post_drop_broadcast_total: u64,
     /// Total `BlockCreated` drops due to locked QC gate.
     pub block_created_dropped_by_lock_total: u64,
     /// Total `BlockCreated` drops due to hint mismatches.
@@ -2749,6 +2850,21 @@ pub fn reset_commit_certs_for_tests() {
 }
 
 #[cfg(test)]
+/// Clear commit quorum snapshot counters (test-only helper).
+pub fn reset_commit_quorum_for_tests() {
+    COMMIT_QUORUM_HEIGHT.store(0, Ordering::Relaxed);
+    COMMIT_QUORUM_VIEW.store(0, Ordering::Relaxed);
+    COMMIT_QUORUM_PRESENT.store(0, Ordering::Relaxed);
+    COMMIT_QUORUM_COUNTED.store(0, Ordering::Relaxed);
+    COMMIT_QUORUM_SET_B.store(0, Ordering::Relaxed);
+    COMMIT_QUORUM_REQUIRED.store(0, Ordering::Relaxed);
+    COMMIT_QUORUM_LAST_UPDATED_MS.store(0, Ordering::Relaxed);
+    if let Ok(mut guard) = commit_quorum_hash_slot().lock() {
+        *guard = None;
+    }
+}
+
+#[cfg(test)]
 /// Clear `NPoS` election history (test-only helper).
 pub fn reset_npos_elections_for_tests() {
     let mut guard = npos_election_history_slot()
@@ -2836,6 +2952,8 @@ fn view_change_cause_snapshot() -> ViewChangeCauseSnapshot {
         commit_failure_total: VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL.load(Ordering::Relaxed),
         quorum_timeout_total: VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.load(Ordering::Relaxed),
         da_gate_total: VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.load(Ordering::Relaxed),
+        censorship_evidence_total: VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL
+            .load(Ordering::Relaxed),
         missing_payload_total: VIEW_CHANGE_CAUSE_MISSING_PAYLOAD_TOTAL.load(Ordering::Relaxed),
         missing_qc_total: VIEW_CHANGE_CAUSE_MISSING_QC_TOTAL.load(Ordering::Relaxed),
         validation_reject_total: VIEW_CHANGE_CAUSE_VALIDATION_REJECT_TOTAL.load(Ordering::Relaxed),
@@ -2846,6 +2964,8 @@ fn view_change_cause_snapshot() -> ViewChangeCauseSnapshot {
         last_quorum_timeout_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS
             .load(Ordering::Relaxed),
         last_da_gate_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.load(Ordering::Relaxed),
+        last_censorship_evidence_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS
+            .load(Ordering::Relaxed),
         last_missing_payload_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_MISSING_PAYLOAD_TS_MS
             .load(Ordering::Relaxed),
         last_missing_qc_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_MISSING_QC_TS_MS
@@ -2907,6 +3027,23 @@ fn peer_key_policy_snapshot() -> PeerKeyPolicySnapshot {
         identifier_collision_total: PEER_KEY_POLICY_ID_COLLISION_TOTAL.load(Ordering::Relaxed),
         last_reason: *last_reason,
         last_timestamp_ms: PEER_KEY_POLICY_LAST_TS_MS.load(Ordering::Relaxed),
+    }
+}
+
+fn dedup_evictions_snapshot() -> DedupEvictionSnapshot {
+    DedupEvictionSnapshot {
+        vote_capacity_total: DEDUP_VOTE_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
+        vote_expired_total: DEDUP_VOTE_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
+        block_created_capacity_total: DEDUP_BLOCK_CREATED_EVICT_CAPACITY_TOTAL
+            .load(Ordering::Relaxed),
+        block_created_expired_total: DEDUP_BLOCK_CREATED_EVICT_EXPIRED_TOTAL
+            .load(Ordering::Relaxed),
+        proposal_capacity_total: DEDUP_PROPOSAL_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
+        proposal_expired_total: DEDUP_PROPOSAL_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
+        rbc_ready_capacity_total: DEDUP_RBC_READY_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
+        rbc_ready_expired_total: DEDUP_RBC_READY_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
+        rbc_deliver_capacity_total: DEDUP_RBC_DELIVER_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
+        rbc_deliver_expired_total: DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
     }
 }
 
@@ -3002,10 +3139,13 @@ pub fn snapshot() -> StatusSnapshot {
         locked_qc_view: LOCKED_QC_VIEW.load(Ordering::Relaxed),
         highest_qc_subject: highest_qc_hash(),
         locked_qc_subject: locked_qc_hash(),
+        commit_certificate: commit_certificate_snapshot(),
+        commit_quorum: commit_quorum_snapshot(),
         settlement: settlement_snapshot(),
         gossip_fallback_total: GOSSIP_FALLBACK_TOTAL.load(Ordering::Relaxed),
-        bg_post_inline_post_total: BG_POST_INLINE_POST_TOTAL.load(Ordering::Relaxed),
-        bg_post_inline_broadcast_total: BG_POST_INLINE_BROADCAST_TOTAL.load(Ordering::Relaxed),
+        dedup_evictions: dedup_evictions_snapshot(),
+        bg_post_drop_post_total: BG_POST_DROP_POST_TOTAL.load(Ordering::Relaxed),
+        bg_post_drop_broadcast_total: BG_POST_DROP_BROADCAST_TOTAL.load(Ordering::Relaxed),
         block_created_dropped_by_lock_total: BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL
             .load(Ordering::Relaxed),
         block_created_hint_mismatch_total: BLOCK_CREATED_HINT_MISMATCH_TOTAL
@@ -3192,19 +3332,85 @@ pub fn inc_gossip_fallback() {
     GOSSIP_FALLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Increment inline fallback counter for background queue saturation.
-pub fn inc_bg_post_inline(kind: &'static str) {
+/// Dedup cache kinds for eviction accounting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DedupEvictionKind {
+    /// Vote cache evictions.
+    Vote,
+    /// `BlockCreated` payload cache evictions.
+    BlockCreated,
+    /// Proposal payload cache evictions.
+    Proposal,
+    /// RBC READY payload cache evictions.
+    RbcReady,
+    /// RBC DELIVER payload cache evictions.
+    RbcDeliver,
+}
+
+/// Record dedup evictions for the given cache kind.
+pub(crate) fn record_dedup_evictions(kind: DedupEvictionKind, capacity: usize, expired: usize) {
+    let capacity = u64::try_from(capacity).unwrap_or(u64::MAX);
+    let expired = u64::try_from(expired).unwrap_or(u64::MAX);
+    if capacity == 0 && expired == 0 {
+        return;
+    }
     match kind {
-        "Post" => {
-            BG_POST_INLINE_POST_TOTAL.fetch_add(1, Ordering::Relaxed);
+        DedupEvictionKind::Vote => {
+            if capacity > 0 {
+                DEDUP_VOTE_EVICT_CAPACITY_TOTAL.fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_VOTE_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
         }
-        "Broadcast" => {
-            BG_POST_INLINE_BROADCAST_TOTAL.fetch_add(1, Ordering::Relaxed);
+        DedupEvictionKind::BlockCreated => {
+            if capacity > 0 {
+                DEDUP_BLOCK_CREATED_EVICT_CAPACITY_TOTAL.fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_BLOCK_CREATED_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::Proposal => {
+            if capacity > 0 {
+                DEDUP_PROPOSAL_EVICT_CAPACITY_TOTAL.fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_PROPOSAL_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::RbcReady => {
+            if capacity > 0 {
+                DEDUP_RBC_READY_EVICT_CAPACITY_TOTAL.fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_RBC_READY_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::RbcDeliver => {
+            if capacity > 0 {
+                DEDUP_RBC_DELIVER_EVICT_CAPACITY_TOTAL.fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+/// Increment background post drop counter when no worker is available.
+pub fn record_bg_post_drop(kind: &'static str) {
+    match kind {
+        "Post" | "PostControlFlow" => {
+            BG_POST_DROP_POST_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        "Broadcast" | "BroadcastControlFlow" => {
+            BG_POST_DROP_BROADCAST_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
         other => {
             iroha_logger::warn!(
                 kind = other,
-                "unknown background request kind for inline fallback"
+                "unknown background request kind for drop accounting"
             );
         }
     }
@@ -3410,6 +3616,10 @@ pub fn record_view_change_cause(cause: &str) {
             VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.fetch_add(1, Ordering::Relaxed);
             VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.store(now_ms, Ordering::Relaxed);
         }
+        "censorship_evidence" => {
+            VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL.fetch_add(1, Ordering::Relaxed);
+            VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS.store(now_ms, Ordering::Relaxed);
+        }
         "missing_payload" => {
             VIEW_CHANGE_CAUSE_MISSING_PAYLOAD_TOTAL.fetch_add(1, Ordering::Relaxed);
             VIEW_CHANGE_CAUSE_LAST_MISSING_PAYLOAD_TS_MS.store(now_ms, Ordering::Relaxed);
@@ -3564,6 +3774,7 @@ pub(crate) fn reset_view_change_cause_counters_for_tests() {
     VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.store(0, Ordering::Relaxed);
+    VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_MISSING_PAYLOAD_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_MISSING_QC_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_VALIDATION_REJECT_TOTAL.store(0, Ordering::Relaxed);
@@ -3571,6 +3782,7 @@ pub(crate) fn reset_view_change_cause_counters_for_tests() {
     VIEW_CHANGE_CAUSE_LAST_COMMIT_FAILURE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.store(0, Ordering::Relaxed);
+    VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_MISSING_PAYLOAD_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_MISSING_QC_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_VALIDATION_REJECT_TS_MS.store(0, Ordering::Relaxed);
@@ -4366,6 +4578,28 @@ pub fn record_commit_inflight_timeout(
     }
 }
 
+/// Record the latest commit quorum signature tally (best-effort).
+pub fn record_commit_quorum_snapshot(
+    height: u64,
+    view: u64,
+    block_hash: HashOf<BlockHeader>,
+    present: u64,
+    counted: u64,
+    set_b_signatures: u64,
+    required: u64,
+) {
+    COMMIT_QUORUM_HEIGHT.store(height, Ordering::Relaxed);
+    COMMIT_QUORUM_VIEW.store(view, Ordering::Relaxed);
+    COMMIT_QUORUM_PRESENT.store(present, Ordering::Relaxed);
+    COMMIT_QUORUM_COUNTED.store(counted, Ordering::Relaxed);
+    COMMIT_QUORUM_SET_B.store(set_b_signatures, Ordering::Relaxed);
+    COMMIT_QUORUM_REQUIRED.store(required, Ordering::Relaxed);
+    COMMIT_QUORUM_LAST_UPDATED_MS.store(now_timestamp_ms(), Ordering::Relaxed);
+    if let Ok(mut guard) = commit_quorum_hash_slot().lock() {
+        *guard = Some(block_hash.into());
+    }
+}
+
 /// Increment the counter tracking prevote-quorum timeouts that forced a view change.
 pub fn inc_prevote_timeout() {
     PREVOTE_TIMEOUT_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -4610,6 +4844,10 @@ fn commit_inflight_timeout_hash_slot() -> &'static Mutex<Option<UntypedHash>> {
     COMMIT_INFLIGHT_LAST_TIMEOUT_HASH.get_or_init(|| Mutex::new(None))
 }
 
+fn commit_quorum_hash_slot() -> &'static Mutex<Option<UntypedHash>> {
+    COMMIT_QUORUM_HASH.get_or_init(|| Mutex::new(None))
+}
+
 fn commit_pause_queue_depths_slot() -> &'static Mutex<WorkerQueueDepthSnapshot> {
     COMMIT_PAUSE_QUEUE_DEPTHS.get_or_init(|| Mutex::new(WorkerQueueDepthSnapshot::default()))
 }
@@ -4664,6 +4902,40 @@ fn commit_inflight_snapshot() -> CommitInflightSnapshot {
         paused_since_ms: COMMIT_PAUSE_STARTED_MS.load(Ordering::Relaxed),
         pause_queue_depths,
         resume_queue_depths,
+    }
+}
+
+fn commit_quorum_snapshot() -> CommitQuorumSnapshot {
+    let block_hash = commit_quorum_hash_slot()
+        .lock()
+        .ok()
+        .and_then(|hash| hash.map(HashOf::from_untyped_unchecked));
+    CommitQuorumSnapshot {
+        height: COMMIT_QUORUM_HEIGHT.load(Ordering::Relaxed),
+        view: COMMIT_QUORUM_VIEW.load(Ordering::Relaxed),
+        block_hash,
+        signatures_present: COMMIT_QUORUM_PRESENT.load(Ordering::Relaxed),
+        signatures_counted: COMMIT_QUORUM_COUNTED.load(Ordering::Relaxed),
+        signatures_set_b: COMMIT_QUORUM_SET_B.load(Ordering::Relaxed),
+        signatures_required: COMMIT_QUORUM_REQUIRED.load(Ordering::Relaxed),
+        last_updated_ms: COMMIT_QUORUM_LAST_UPDATED_MS.load(Ordering::Relaxed),
+    }
+}
+
+fn commit_certificate_snapshot() -> CommitCertificateSnapshot {
+    let latest = commit_certificate_history().into_iter().next();
+    if let Some(cert) = latest {
+        CommitCertificateSnapshot {
+            height: cert.height,
+            view: cert.view,
+            epoch: cert.epoch,
+            block_hash: Some(cert.block_hash),
+            validator_set_hash: Some(cert.validator_set_hash),
+            validator_set_len: u64::try_from(cert.validator_set.len()).unwrap_or(u64::MAX),
+            signatures_total: u64::try_from(cert.signatures.len()).unwrap_or(u64::MAX),
+        }
+    } else {
+        CommitCertificateSnapshot::default()
     }
 }
 
@@ -4926,12 +5198,26 @@ pub(crate) fn reset_rbc_store_evictions_for_tests() {
 #[cfg(test)]
 pub(crate) fn reset_gossip_fallback_for_tests() {
     GOSSIP_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
-    BG_POST_INLINE_POST_TOTAL.store(0, Ordering::Relaxed);
-    BG_POST_INLINE_BROADCAST_TOTAL.store(0, Ordering::Relaxed);
+    BG_POST_DROP_POST_TOTAL.store(0, Ordering::Relaxed);
+    BG_POST_DROP_BROADCAST_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_CREATED_HINT_MISMATCH_TOTAL.store(0, Ordering::Relaxed);
     BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL.store(0, Ordering::Relaxed);
     LAST_PIPELINE_TOTAL_EMA_MS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn reset_dedup_evictions_for_tests() {
+    DEDUP_VOTE_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_VOTE_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_BLOCK_CREATED_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_BLOCK_CREATED_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_PROPOSAL_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_PROPOSAL_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_RBC_READY_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_RBC_READY_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_RBC_DELIVER_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
 }
 
 /// Simple struct for phase-latencies snapshot.
@@ -5047,6 +5333,20 @@ mod tests {
         assert_eq!(snap.locked_qc_height, 12);
         assert_eq!(snap.locked_qc_view, 0);
         assert_eq!(snap.locked_qc_subject, Some(hash_2));
+    }
+
+    #[test]
+    fn locked_qc_subject_updates_for_same_height_view() {
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [3; UntypedHash::LENGTH],
+        ));
+        super::set_locked_qc(0, 0, None);
+        super::set_locked_qc(10, 2, None);
+        super::set_locked_qc(10, 2, Some(hash));
+        let snap = super::snapshot();
+        assert_eq!(snap.locked_qc_height, 10);
+        assert_eq!(snap.locked_qc_view, 2);
+        assert_eq!(snap.locked_qc_subject, Some(hash));
     }
 
     #[test]
@@ -5243,6 +5543,75 @@ mod tests {
         assert_eq!(oldest.view, 10);
         super::set_commit_cert_history_cap(old_cap);
     }
+
+    #[test]
+    fn commit_quorum_snapshot_records_tally() {
+        super::reset_commit_quorum_for_tests();
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xDA; UntypedHash::LENGTH],
+        ));
+
+        super::record_commit_quorum_snapshot(12, 3, block_hash, 6, 5, 1, 5);
+
+        let snapshot = super::snapshot().commit_quorum;
+        assert_eq!(snapshot.height, 12);
+        assert_eq!(snapshot.view, 3);
+        assert_eq!(snapshot.block_hash, Some(block_hash));
+        assert_eq!(snapshot.signatures_present, 6);
+        assert_eq!(snapshot.signatures_counted, 5);
+        assert_eq!(snapshot.signatures_set_b, 1);
+        assert_eq!(snapshot.signatures_required, 5);
+        assert!(snapshot.last_updated_ms > 0);
+    }
+
+    #[test]
+    fn commit_certificate_snapshot_tracks_latest() {
+        super::reset_commit_certs_for_tests();
+        let block_hash_a = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xC1; UntypedHash::LENGTH],
+        ));
+        let block_hash_b = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xC2; UntypedHash::LENGTH],
+        ));
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let validator_set = vec![peer_a, peer_b];
+        let validator_set_hash = HashOf::new(&validator_set);
+
+        let first = CommitCertificate {
+            height: 1,
+            block_hash: block_hash_a,
+            view: 1,
+            epoch: 0,
+            validator_set_hash,
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            signatures: Vec::new(),
+        };
+        let second = CommitCertificate {
+            height: 2,
+            block_hash: block_hash_b,
+            view: 4,
+            epoch: 1,
+            validator_set_hash,
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            signatures: Vec::new(),
+        };
+
+        super::record_commit_certificate(first);
+        super::record_commit_certificate(second.clone());
+
+        let snapshot = super::snapshot().commit_certificate;
+        assert_eq!(snapshot.height, second.height);
+        assert_eq!(snapshot.view, second.view);
+        assert_eq!(snapshot.epoch, second.epoch);
+        assert_eq!(snapshot.block_hash, Some(second.block_hash));
+        assert_eq!(snapshot.validator_set_hash, Some(second.validator_set_hash));
+        assert_eq!(snapshot.validator_set_len, 2);
+        assert_eq!(snapshot.signatures_total, 0);
+    }
+
     #[test]
     fn consensus_key_history_is_capped_and_ordered() {
         super::reset_consensus_keys_for_tests();
@@ -5465,6 +5834,7 @@ mod tests {
         super::record_view_change_cause("commit_failure");
         super::record_view_change_cause("quorum_timeout");
         super::record_view_change_cause("da_gate");
+        super::record_view_change_cause("censorship_evidence");
         super::record_view_change_cause("missing_payload");
         super::record_view_change_cause("missing_qc");
         super::record_view_change_cause("validation_reject");
@@ -5473,6 +5843,7 @@ mod tests {
         assert_eq!(snapshot.view_change_causes.commit_failure_total, 1);
         assert_eq!(snapshot.view_change_causes.quorum_timeout_total, 1);
         assert_eq!(snapshot.view_change_causes.da_gate_total, 1);
+        assert_eq!(snapshot.view_change_causes.censorship_evidence_total, 1);
         assert_eq!(snapshot.view_change_causes.missing_payload_total, 1);
         assert_eq!(snapshot.view_change_causes.missing_qc_total, 1);
         assert_eq!(snapshot.view_change_causes.validation_reject_total, 1);
@@ -5647,28 +6018,6 @@ mod tests {
     fn da_gate_transition_counters_surface_in_snapshot() {
         super::reset_da_gate_counters_for_tests();
 
-        super::record_da_gate_transition(None, Some(GateReason::MissingAvailabilityQc));
-        let snapshot = super::snapshot();
-        assert_eq!(
-            snapshot.da_gate.reason,
-            super::DaGateReasonSnapshot::MissingAvailabilityQc
-        );
-        assert_eq!(snapshot.da_gate.missing_availability_total, 1);
-        assert_eq!(snapshot.da_gate.manifest_guard_total, 0);
-        assert_eq!(
-            snapshot.da_gate.last_satisfied,
-            super::DaGateSatisfactionSnapshot::None
-        );
-        assert_eq!(super::da_gate_missing_availability_total(), 1);
-
-        super::record_da_gate_transition(Some(GateReason::MissingAvailabilityQc), None);
-        let snapshot = super::snapshot();
-        assert_eq!(snapshot.da_gate.reason, super::DaGateReasonSnapshot::None);
-        assert_eq!(
-            snapshot.da_gate.last_satisfied,
-            super::DaGateSatisfactionSnapshot::AvailabilityQc
-        );
-
         super::record_da_gate_transition(
             None,
             Some(GateReason::ManifestGuard {
@@ -5683,12 +6032,28 @@ mod tests {
             snapshot.da_gate.reason,
             super::DaGateReasonSnapshot::ManifestMissing
         );
-        assert_eq!(snapshot.da_gate.missing_availability_total, 1);
+        assert_eq!(snapshot.da_gate.missing_availability_total, 0);
         assert_eq!(snapshot.da_gate.manifest_guard_total, 1);
-        assert_eq!(super::da_gate_missing_availability_total(), 1);
+        assert_eq!(super::da_gate_missing_availability_total(), 0);
         assert_eq!(
             snapshot.da_gate.last_satisfied,
-            super::DaGateSatisfactionSnapshot::AvailabilityQc
+            super::DaGateSatisfactionSnapshot::None
+        );
+
+        super::record_da_gate_transition(
+            Some(GateReason::ManifestGuard {
+                lane: LaneId::new(1),
+                epoch: 2,
+                sequence: 3,
+                kind: ManifestGateKind::Missing,
+            }),
+            None,
+        );
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.da_gate.reason, super::DaGateReasonSnapshot::None);
+        assert_eq!(
+            snapshot.da_gate.last_satisfied,
+            super::DaGateSatisfactionSnapshot::None
         );
     }
 
@@ -5764,14 +6129,25 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_tracks_background_inline_fallbacks() {
+    fn snapshot_tracks_background_drops() {
         super::reset_gossip_fallback_for_tests();
-        super::inc_bg_post_inline("Post");
-        super::inc_bg_post_inline("Broadcast");
-        super::inc_bg_post_inline("Post");
+        super::record_bg_post_drop("Post");
+        super::record_bg_post_drop("Broadcast");
+        super::record_bg_post_drop("Post");
         let snapshot = super::snapshot();
-        assert_eq!(snapshot.bg_post_inline_post_total, 2);
-        assert_eq!(snapshot.bg_post_inline_broadcast_total, 1);
+        assert_eq!(snapshot.bg_post_drop_post_total, 2);
+        assert_eq!(snapshot.bg_post_drop_broadcast_total, 1);
+    }
+
+    #[test]
+    fn snapshot_tracks_dedup_evictions() {
+        super::reset_dedup_evictions_for_tests();
+        super::record_dedup_evictions(super::DedupEvictionKind::Vote, 2, 1);
+        super::record_dedup_evictions(super::DedupEvictionKind::Proposal, 0, 3);
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.dedup_evictions.vote_capacity_total, 2);
+        assert_eq!(snapshot.dedup_evictions.vote_expired_total, 1);
+        assert_eq!(snapshot.dedup_evictions.proposal_expired_total, 3);
     }
 
     #[test]

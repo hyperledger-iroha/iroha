@@ -9,8 +9,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use iroha_crypto::HashOf;
 use iroha_data_model::{
-    block::consensus::{EvidenceRecord, Height, View},
+    block::{
+        BlockHeader,
+        consensus::{EvidenceRecord, Height, View},
+    },
     prelude::ChainId,
 };
 use mv::storage::StorageReadOnly;
@@ -43,11 +47,62 @@ pub struct EvidenceValidationContext<'a> {
 /// Derive a deterministic deduplication key for an evidence entry.
 #[must_use]
 pub fn evidence_key(ev: &Evidence) -> Vec<u8> {
+    let canonical = canonicalize_evidence(ev);
+    evidence_key_inner(&canonical)
+}
+
+fn evidence_key_inner(ev: &Evidence) -> Vec<u8> {
     use norito::codec::Encode as _;
     let mut key = Vec::new();
     key.push(ev.kind as u8);
     key.extend_from_slice(&ev.encode());
     key
+}
+
+fn canonicalize_evidence(ev: &Evidence) -> Evidence {
+    match &ev.payload {
+        EvidencePayload::DoubleVote { v1, v2 } => {
+            let (first, second) = canonical_vote_pair(v1, v2);
+            Evidence {
+                kind: ev.kind,
+                payload: EvidencePayload::DoubleVote {
+                    v1: first,
+                    v2: second,
+                },
+            }
+        }
+        EvidencePayload::DoubleExecVote { v1, v2 } => {
+            let (first, second) = canonical_exec_vote_pair(v1, v2);
+            Evidence {
+                kind: ev.kind,
+                payload: EvidencePayload::DoubleExecVote {
+                    v1: first,
+                    v2: second,
+                },
+            }
+        }
+        EvidencePayload::Censorship { tx_hash, receipts } => Evidence {
+            kind: ev.kind,
+            payload: EvidencePayload::Censorship {
+                tx_hash: tx_hash.clone(),
+                receipts: canonicalize_censorship_receipts(receipts),
+            },
+        },
+        _ => ev.clone(),
+    }
+}
+
+fn canonicalize_censorship_receipts(
+    receipts: &[iroha_data_model::transaction::TransactionSubmissionReceipt],
+) -> Vec<iroha_data_model::transaction::TransactionSubmissionReceipt> {
+    use norito::codec::Encode as _;
+    let mut keyed: Vec<_> = receipts
+        .iter()
+        .cloned()
+        .map(|receipt| (receipt.encode(), receipt))
+        .collect();
+    keyed.sort_by(|(left, _), (right, _)| left.cmp(right));
+    keyed.into_iter().map(|(_, receipt)| receipt).collect()
 }
 
 fn double_vote_kind_for_phases(first: Phase, second: Phase) -> Option<EvidenceKind> {
@@ -161,12 +216,13 @@ impl EvidenceStore {
 
     /// Insert evidence if unseen. Returns true if newly inserted.
     pub fn insert(&mut self, ev: &Evidence, context: &EvidenceValidationContext<'_>) -> bool {
-        if validate_evidence(ev, context).is_err() {
+        let canonical = canonicalize_evidence(ev);
+        if validate_evidence(&canonical, context).is_err() {
             return false;
         }
-        let key = evidence_key(ev);
+        let key = evidence_key_inner(&canonical);
         if self.seen.insert(key.clone()) {
-            self.entries.insert(key, ev.clone());
+            self.entries.insert(key, canonical);
             true
         } else {
             false
@@ -183,7 +239,8 @@ pub fn persist_record(
     evidence: &Evidence,
     context: &EvidenceValidationContext<'_>,
 ) -> bool {
-    if validate_evidence(evidence, context).is_err() {
+    let canonical = canonicalize_evidence(evidence);
+    if validate_evidence(&canonical, context).is_err() {
         return false;
     }
     let (fallback_height, horizon) = {
@@ -195,14 +252,14 @@ pub fn persist_record(
             .map(|params| params.evidence_horizon_blocks());
         (current_height, horizon)
     };
-    let key = evidence_key(evidence);
+    let key = evidence_key_inner(&canonical);
     let view = state.world.consensus_evidence.view();
     if view.get(&key).is_some() {
         return false;
     }
     drop(view);
 
-    let (subject_height, subject_view) = evidence_subject_height_view(evidence);
+    let (subject_height, subject_view) = evidence_subject_height_view(&canonical);
     if !evidence_within_configured_horizon(fallback_height, horizon, subject_height) {
         return false;
     }
@@ -211,7 +268,7 @@ pub fn persist_record(
     let recorded_at_ms = current_unix_ms();
 
     let record = EvidenceRecord {
-        evidence: evidence.clone(),
+        evidence: canonical,
         recorded_at_height,
         recorded_at_view,
         recorded_at_ms,
@@ -263,6 +320,7 @@ pub fn record_double_exec_vote(
     persist_record(state, &evidence, context)
 }
 
+/// Extract the height/view referenced by consensus evidence, when present.
 pub fn evidence_subject_height_view(evidence: &Evidence) -> (Option<Height>, Option<View>) {
     match &evidence.payload {
         EvidencePayload::DoubleVote { v1, .. } => (Some(v1.height), Some(v1.view)),
@@ -271,7 +329,34 @@ pub fn evidence_subject_height_view(evidence: &Evidence) -> (Option<Height>, Opt
             (Some(proposal.header.height), Some(proposal.header.view))
         }
         EvidencePayload::DoubleExecVote { v1, .. } => (Some(v1.height), Some(v1.view)),
+        EvidencePayload::Censorship { receipts, .. } => {
+            let height = receipts
+                .iter()
+                .map(|receipt| receipt.payload.submitted_at_height)
+                .min();
+            (height, None)
+        }
     }
+}
+
+pub(crate) fn evidence_block_refs(evidence: &Evidence) -> Vec<(u64, HashOf<BlockHeader>)> {
+    let mut refs = Vec::new();
+    match &evidence.payload {
+        EvidencePayload::DoubleVote { v1, v2 } => {
+            refs.push((v1.height, v1.block_hash));
+            if v2.block_hash != v1.block_hash {
+                refs.push((v2.height, v2.block_hash));
+            }
+        }
+        EvidencePayload::DoubleExecVote { v1, .. } => {
+            refs.push((v1.height, v1.block_hash));
+        }
+        EvidencePayload::InvalidQc { qc, .. } => {
+            refs.push((qc.height, qc.subject_block_hash));
+        }
+        EvidencePayload::InvalidProposal { .. } | EvidencePayload::Censorship { .. } => {}
+    }
+    refs
 }
 
 fn current_unix_ms() -> u64 {
@@ -335,6 +420,16 @@ pub enum EvidenceValidationError {
     InvalidProposalView,
     /// Proposal evidence references a QC whose subject does not match the proposal parent hash.
     InvalidProposalParentMismatch,
+    /// Censorship evidence carries no receipts.
+    ReceiptMissing,
+    /// Censorship evidence receipts refer to different transaction hashes.
+    ReceiptTxHashMismatch,
+    /// Censorship evidence receipts are signed by non-validators.
+    ReceiptSignerOutOfTopology,
+    /// Censorship evidence receipt signature verification failed.
+    ReceiptSignatureInvalid,
+    /// Censorship evidence does not meet the f + 1 receipt threshold.
+    ReceiptQuorumMissing,
 }
 
 impl std::fmt::Display for EvidenceValidationError {
@@ -368,6 +463,11 @@ impl std::fmt::Display for EvidenceValidationError {
             InvalidProposalParentMismatch => {
                 "invalid proposal evidence QC subject must match header parent hash"
             }
+            ReceiptMissing => "censorship evidence must include receipts",
+            ReceiptTxHashMismatch => "censorship evidence receipts must match the tx hash",
+            ReceiptSignerOutOfTopology => "censorship evidence signer not in topology",
+            ReceiptSignatureInvalid => "censorship evidence receipt signature invalid",
+            ReceiptQuorumMissing => "censorship evidence below f + 1 receipt threshold",
         };
         write!(f, "{msg}")
     }
@@ -402,6 +502,9 @@ pub fn validate_evidence(
         (EvidenceKind::InvalidQC, EvidencePayload::InvalidQc { .. }) => Ok(()),
         (EvidenceKind::InvalidProposal, EvidencePayload::InvalidProposal { proposal, .. }) => {
             validate_invalid_proposal(proposal)
+        }
+        (EvidenceKind::Censorship, EvidencePayload::Censorship { tx_hash, receipts }) => {
+            validate_censorship(tx_hash, receipts, context)
         }
         _ => Err(EvidenceValidationError::KindPayloadMismatch),
     }
@@ -532,6 +635,34 @@ fn validate_double_exec_vote(
     Ok(())
 }
 
+fn validate_censorship(
+    tx_hash: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+    receipts: &[iroha_data_model::transaction::TransactionSubmissionReceipt],
+    context: &EvidenceValidationContext<'_>,
+) -> Result<(), EvidenceValidationError> {
+    if receipts.is_empty() {
+        return Err(EvidenceValidationError::ReceiptMissing);
+    }
+    let required = context.topology.min_votes_for_view_change();
+    let mut unique = BTreeSet::new();
+    for receipt in receipts {
+        if &receipt.payload.tx_hash != tx_hash {
+            return Err(EvidenceValidationError::ReceiptTxHashMismatch);
+        }
+        if context.topology.position(&receipt.payload.signer).is_none() {
+            return Err(EvidenceValidationError::ReceiptSignerOutOfTopology);
+        }
+        receipt
+            .verify()
+            .map_err(|_| EvidenceValidationError::ReceiptSignatureInvalid)?;
+        unique.insert(receipt.payload.signer.clone());
+    }
+    if unique.len() < required {
+        return Err(EvidenceValidationError::ReceiptQuorumMissing);
+    }
+    Ok(())
+}
+
 fn validate_invalid_proposal(proposal: &Proposal) -> Result<(), EvidenceValidationError> {
     let qc = &proposal.header.highest_qc;
     if proposal.header.height <= qc.height {
@@ -554,6 +685,9 @@ mod tests {
         parameter::{Parameter, Parameters, system::SumeragiNposParameters},
         peer::PeerId,
         prelude::ChainId,
+        transaction::{
+            SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+        },
     };
     use mv::cell::Cell;
     use norito::codec::{Decode, Encode as _};
@@ -709,6 +843,57 @@ mod tests {
         (v1, v2)
     }
 
+    fn sample_tx_hash(tag: u8) -> HashOf<SignedTransaction> {
+        HashOf::from_untyped_unchecked(Hash::prehashed([tag; Hash::LENGTH]))
+    }
+
+    fn submission_receipt_for(
+        ctx: &EvidenceTestContext,
+        signer_idx: usize,
+        tx_hash: HashOf<SignedTransaction>,
+        submitted_at_height: u64,
+    ) -> TransactionSubmissionReceipt {
+        let keypair = ctx
+            .keypairs
+            .get(signer_idx)
+            .expect("signer index must be in range for test context");
+        let payload = TransactionSubmissionReceiptPayload {
+            tx_hash,
+            submitted_at_ms: 1,
+            submitted_at_height,
+            signer: keypair.public_key().clone(),
+        };
+        TransactionSubmissionReceipt::sign(payload, keypair)
+    }
+
+    fn submission_receipt_with_invalid_signature(
+        ctx: &EvidenceTestContext,
+        signer_idx: usize,
+        tx_hash: HashOf<SignedTransaction>,
+        submitted_at_height: u64,
+    ) -> TransactionSubmissionReceipt {
+        let signer_key = ctx
+            .keypairs
+            .get(signer_idx)
+            .expect("signer index must be in range for test context");
+        let other_idx = if signer_idx + 1 < ctx.keypairs.len() {
+            signer_idx + 1
+        } else {
+            0
+        };
+        let signing_key = ctx
+            .keypairs
+            .get(other_idx)
+            .expect("backup signer key exists");
+        let payload = TransactionSubmissionReceiptPayload {
+            tx_hash,
+            submitted_at_ms: 1,
+            submitted_at_height,
+            signer: signer_key.public_key().clone(),
+        };
+        TransactionSubmissionReceipt::sign(payload, signing_key)
+    }
+
     fn double_vote_with(
         ctx: &EvidenceTestContext,
         mutate: impl FnOnce(&mut Vote, &mut Vote),
@@ -814,6 +999,11 @@ mod tests {
             reason: "forged proposal payload variant".to_owned(),
         };
 
+        let censorship_payload = EvidencePayload::Censorship {
+            tx_hash: sample_tx_hash(0xCC),
+            receipts: Vec::new(),
+        };
+
         let mut exec_vote = ExecVote {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC7; 32])),
             parent_state_root: Hash::prehashed([0xC8; 32]),
@@ -874,6 +1064,16 @@ mod tests {
             (
                 EvidenceKind::InvalidProposal,
                 invalid_qc_payload.clone(),
+                expected,
+            ),
+            (
+                EvidenceKind::Censorship,
+                invalid_qc_payload.clone(),
+                expected,
+            ),
+            (
+                EvidenceKind::InvalidQC,
+                censorship_payload.clone(),
                 expected,
             ),
             (
@@ -1785,6 +1985,194 @@ mod tests {
             &context,
             &evidence,
             EvidenceValidationError::InvalidProposalParentMismatch,
+        );
+    }
+
+    #[test]
+    fn censorship_evidence_accepts_quorum_receipts() {
+        let ctx = EvidenceTestContext::new(4);
+        let context = ctx.validation_context();
+        let tx_hash = sample_tx_hash(0xDD);
+        let required = ctx.topology.min_votes_for_view_change();
+        let receipts: Vec<_> = (0..required)
+            .map(|idx| submission_receipt_for(&ctx, idx, tx_hash, 10))
+            .collect();
+        let evidence = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship { tx_hash, receipts },
+        };
+        assert!(validate_evidence(&evidence, &context).is_ok());
+        let mut store = EvidenceStore::new();
+        assert!(store.insert(&evidence, &context));
+    }
+
+    #[test]
+    fn censorship_evidence_dedups_receipt_order() {
+        let ctx = EvidenceTestContext::new(4);
+        let context = ctx.validation_context();
+        let tx_hash = sample_tx_hash(0xEE);
+        let required = ctx.topology.min_votes_for_view_change();
+        let receipts: Vec<_> = (0..required)
+            .map(|idx| submission_receipt_for(&ctx, idx, tx_hash, 10))
+            .collect();
+        let mut reversed = receipts.clone();
+        reversed.reverse();
+
+        let evidence = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship { tx_hash, receipts },
+        };
+        let reordered = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship {
+                tx_hash,
+                receipts: reversed,
+            },
+        };
+
+        assert_eq!(evidence_key(&evidence), evidence_key(&reordered));
+
+        let mut store = EvidenceStore::new();
+        assert!(store.insert(&evidence, &context));
+        assert!(
+            !store.insert(&reordered, &context),
+            "reordered receipts should not create a new evidence entry"
+        );
+    }
+
+    #[test]
+    fn double_vote_evidence_dedups_vote_order() {
+        let ctx = test_context();
+        let context = ctx.validation_context();
+        let (v1, v2) = sample_double_vote_pair(&ctx);
+        let evidence = Evidence {
+            kind: EvidenceKind::DoublePrevote,
+            payload: EvidencePayload::DoubleVote {
+                v1: v1.clone(),
+                v2: v2.clone(),
+            },
+        };
+        let reordered = Evidence {
+            kind: EvidenceKind::DoublePrevote,
+            payload: EvidencePayload::DoubleVote { v1: v2, v2: v1 },
+        };
+
+        assert_eq!(evidence_key(&evidence), evidence_key(&reordered));
+
+        let mut store = EvidenceStore::new();
+        assert!(store.insert(&evidence, &context));
+        assert!(
+            !store.insert(&reordered, &context),
+            "reordered votes should not create a new evidence entry"
+        );
+    }
+
+    #[test]
+    fn double_exec_vote_evidence_dedups_vote_order() {
+        let ctx = test_context();
+        let context = ctx.validation_context();
+        let (v1, v2) = sample_double_exec_vote_pair(&ctx);
+        let evidence = Evidence {
+            kind: EvidenceKind::DoubleExecVote,
+            payload: EvidencePayload::DoubleExecVote {
+                v1: v1.clone(),
+                v2: v2.clone(),
+            },
+        };
+        let reordered = Evidence {
+            kind: EvidenceKind::DoubleExecVote,
+            payload: EvidencePayload::DoubleExecVote { v1: v2, v2: v1 },
+        };
+
+        assert_eq!(evidence_key(&evidence), evidence_key(&reordered));
+
+        let mut store = EvidenceStore::new();
+        assert!(store.insert(&evidence, &context));
+        assert!(
+            !store.insert(&reordered, &context),
+            "reordered exec votes should not create a new evidence entry"
+        );
+    }
+
+    #[test]
+    fn censorship_evidence_rejects_invalid_receipts() {
+        let ctx = EvidenceTestContext::new(4);
+        let context = ctx.validation_context();
+        let tx_hash = sample_tx_hash(0xDE);
+
+        let missing = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship {
+                tx_hash,
+                receipts: Vec::new(),
+            },
+        };
+        assert_invalid_evidence_rejected(
+            &context,
+            &missing,
+            EvidenceValidationError::ReceiptMissing,
+        );
+
+        let mismatched = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship {
+                tx_hash: sample_tx_hash(0xDF),
+                receipts: vec![submission_receipt_for(&ctx, 0, tx_hash, 10)],
+            },
+        };
+        assert_invalid_evidence_rejected(
+            &context,
+            &mismatched,
+            EvidenceValidationError::ReceiptTxHashMismatch,
+        );
+
+        let outsider = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let payload = TransactionSubmissionReceiptPayload {
+            tx_hash,
+            submitted_at_ms: 1,
+            submitted_at_height: 3,
+            signer: outsider.public_key().clone(),
+        };
+        let outsider_receipt = TransactionSubmissionReceipt::sign(payload, &outsider);
+        let outsider_ev = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship {
+                tx_hash,
+                receipts: vec![outsider_receipt],
+            },
+        };
+        assert_invalid_evidence_rejected(
+            &context,
+            &outsider_ev,
+            EvidenceValidationError::ReceiptSignerOutOfTopology,
+        );
+
+        let invalid_sig = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship {
+                tx_hash,
+                receipts: vec![submission_receipt_with_invalid_signature(
+                    &ctx, 0, tx_hash, 3,
+                )],
+            },
+        };
+        assert_invalid_evidence_rejected(
+            &context,
+            &invalid_sig,
+            EvidenceValidationError::ReceiptSignatureInvalid,
+        );
+
+        let below_quorum = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship {
+                tx_hash,
+                receipts: vec![submission_receipt_for(&ctx, 0, tx_hash, 3)],
+            },
+        };
+        assert_invalid_evidence_rejected(
+            &context,
+            &below_quorum,
+            EvidenceValidationError::ReceiptQuorumMissing,
         );
     }
 

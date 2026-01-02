@@ -92,10 +92,12 @@ impl Actor {
                 prevote_timeouts.push((key, pending_age, qc_any));
                 continue;
             }
-            let vote_count = qc_precommit
-                .as_ref()
-                .map_or(0, |qc| precommit_vote_count(qc, roster_len));
-            if missing_quorum_stale(pending_age, quorum_timeout, vote_count, min_votes) {
+            let (vote_count, quorum_reached) = if pending.commit_certificate_seen {
+                (0, true)
+            } else {
+                self.commit_vote_quorum_status_for_block(*hash, pending.height, pending.view)
+            };
+            if missing_quorum_stale(pending_age, quorum_timeout, quorum_reached) {
                 if !pending.reschedule_due(now, quorum_reschedule_cooldown) {
                     reschedule_backoff_skipped = reschedule_backoff_skipped.saturating_add(1);
                     continue;
@@ -318,7 +320,8 @@ impl Actor {
                 .retain(|(_, qc_hash, _, _, _), _| qc_hash != &block_hash);
             self.execution_qc_cache.remove(&block_hash);
         } else {
-            // Keep the pending block and cached QCs so late precommit QCs can still finalize it.
+            // Keep the pending block and cached QCs so late commit certificates or
+            // availability evidence can still finalize it.
             // We only requeue the transactions to allow a new view to assemble a fresh proposal.
             self.pending.pending_blocks.insert(block_hash, pending);
         }
@@ -368,7 +371,7 @@ impl Actor {
                 &pending.block,
                 self.state.as_ref(),
                 self.kura.as_ref(),
-                self.mode_tag(),
+                self.config.consensus_mode,
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
             );
@@ -391,7 +394,7 @@ impl Actor {
         let hint = if drop_pending {
             false
         } else {
-            self.propose
+            self.subsystems.propose
                 .proposal_cache
                 .get_hint(height, view)
                 .copied()

@@ -1,11 +1,14 @@
-<!-- Japanese translation for docs/source/nexus_overview.md -->
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
 ---
 lang: ja
 direction: ltr
 source: docs/source/nexus_overview.md
-status: draft
+status: complete
 translator: LLM (Codex)
+translation_last_reviewed: 2026-01-01
 ---
 
 # Nexus 概要とオペレーター向けコンテキスト

@@ -25,7 +25,7 @@ translator: manual
 | エビデンス伝搬 & 監査エンドポイント | ◉ | `ControlFlow::Evidence`、Torii エビデンス API、ネガティブテストを実装。 | status.md:176; status.md:760-761 |
 | RBC テレメトリ、準備／DELIVER メトリクス | ◉ | `/v1/sumeragi/rbc*` エンドポイントとテレメトリカウンタ／ヒストグラムを提供。 | status.md:283-284; status.md:772 |
 | コンセンサスパラメータ広告 & トポロジ検証 | ◉ | ノードが `(collectors_k, redundant_send_r)` をブロードキャストし、ピア間の一致を検証。 | status.md:255 |
-| (epoch,height) キーのローテーション | ◉ | `rotated_for_epoch_height` が決定論的にローテーションを提供し、テスト済み。 | status.md:259 |
+| 前ブロックハッシュでのローテーション | ◉ | `rotated_for_prev_block_hash` が決定論的にローテーションを提供し、テスト済み。 | status.md:259 |
 
 ## パイプライン／Kura／状態
 

@@ -15,7 +15,7 @@ Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially i
 | Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
 | RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
 | Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |
-| Rotation keyed to (epoch,height) | ◉ | Rotation helper `rotated_for_epoch_height` deterministic with tests. | status.md:259 |
+| Rotation keyed to prev block hash | ◉ | Rotation helper `rotated_for_prev_block_hash` deterministic with tests. | status.md:259 |
 
 ## Pipeline, Kura & State
 

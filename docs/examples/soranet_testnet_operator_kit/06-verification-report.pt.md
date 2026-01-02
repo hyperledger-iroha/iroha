@@ -1,18 +1,51 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/examples/soranet_testnet_operator_kit/06-verification-report.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: bf489427d0eba2beebfdefc44092730c3963cbd77e83669853f4e9681ac9fd2d
 source_last_modified: "2025-11-21T14:25:28.923348+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-01
 ---
 
-# Tradução em andamento
+## Relatorio de verificacao do operador (fase T0)
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+- Nome do operador: ______________________
+- ID do descriptor do relay: ______________________
+- Data de envio (UTC): ___________________
+- Email / matrix de contato: ___________________
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+### Resumo do checklist
+
+| Item | Concluido (S/N) | Notas |
+|------|-----------------|-------|
+| Hardware e rede validados | | |
+| Bloco de compliance aplicado | | |
+| Envelope de admissao verificado | | |
+| Smoke test de guard rotation | | |
+| Telemetria coletada e dashboards ativos | | |
+| Brownout drill executado | | |
+| Sucesso de tickets PoW dentro da meta | | |
+
+### Snapshot de metricas
+
+- Ratio PQ (`sorafs_orchestrator_pq_ratio`): ________
+- Contagem de downgrade ultimas 24h: ________
+- RTT medio de circuitos (p95): ________ ms
+- Tempo mediano de resolucao PoW: ________ ms
+
+### Anexos
+
+Por favor anexe:
+
+1. Hash do support bundle do relay (`sha256`): __________________________
+2. Capturas de dashboards (ratio PQ, sucesso de circuitos, histograma PoW).
+3. Bundle de drill assinado (`drills-signed.json` + chave publica do signatario em hex e anexos).
+4. Relatorio de metricas SNNet-10 (`cargo xtask soranet-testnet-metrics --input <snapshot> --out metrics-report.json`).
+
+### Assinatura do operador
+
+Certifico que as informacoes acima estao corretas e que todos os passos obrigatorios foram concluidos.
+
+Assinatura: _________________________  Data: ___________________

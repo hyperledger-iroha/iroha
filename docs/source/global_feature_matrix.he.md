@@ -27,7 +27,7 @@ translator: manual
 | הפצת Evidence ונקודות קצה לאודיט | ◉ | `ControlFlow::Evidence`, API ב-Torii ובדיקות שליליות. | status.md:176; status.md:760-761 |
 | טלמטריית RBC (מדדי מוכנות/מסירה) | ◉ | `/v1/sumeragi/rbc*` והיסטוגרמות למפעילים. | status.md:283-284; status.md:772 |
 | פרסום פרמטרי קונצנזוס ואימות טופולוגיה | ◉ | נודים מפרסמים `(collectors_k, redundant_send_r)` ומוודאים זהות. | status.md:255 |
-| רוטציה לפי `(epoch,height)` | ◉ | הפונקציה `rotated_for_epoch_height` דטרמיניסטית ונבחנת. | status.md:259 |
+| רוטציה לפי האש הבלוק הקודם | ◉ | הפונקציה `rotated_for_prev_block_hash` דטרמיניסטית ונבחנת. | status.md:259 |
 
 ## פייפליין, Kura ומצב
 

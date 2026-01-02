@@ -50,11 +50,12 @@ This note captures concrete requirements for closing the open residual risks cal
 **Scope:** All attachments ingested via Torii (including manifests, proofs, blobs) must undergo format validation to prevent decompression bombs and malicious payloads.
 
 **Requirements**
-- Detect content type using magic-byte sniffing (fall back to declared MIME). Reject unknown or disallowed formats.
-- Enforce decompression/expansion limits before storing on disk. For compressed archives, limit total expanded size and depth of nested archives.
-- Execute risky parsers (e.g., PDF, image metadata) in a sandbox (seccomp profile or WASI guest) with read-only inputs and strict CPU/memory limits.
-- Sanitize outbound exports: optionally strip active content (scripts/macros) or block unsupported formats when exporting attachments.
-- Record provenance metadata (hashes, sniffed type, sanitizer result) alongside stored attachments.
+- Detect content type using magic-byte sniffing and enforce the allowlist from `torii.attachments_allowed_mime_types` before persistence.
+- Enforce decompression/expansion limits via `torii.attachments_max_expanded_bytes` and `torii.attachments_max_archive_depth`; only gzip/zstd containers are expanded.
+- Run decompression/sanitization in a bounded worker with `torii.attachments_sanitize_timeout_ms`, deterministic byte limits, and a configurable execution mode (`torii.attachments_sanitizer_mode`, default `subprocess`).
+- Apply OS-level CPU/memory limits to the sanitizer subprocess (rlimits) to bound resource use.
+- Record provenance metadata (hashes, sniffed type, sanitizer verdict) alongside stored attachments.
+- Sanitize outbound exports by re‑validating legacy attachments (those without provenance) before serving bytes.
 
 **Observability**
 - Prometheus counters:
@@ -66,3 +67,5 @@ This note captures concrete requirements for closing the open residual risks cal
 - Configuration should allow per-format enable/disable and expansion thresholds.
 - Fallback path must remain deterministic across nodes; attach sanitized output or reject uniformly.
 - Provide integration tests with representative fixture files.
+
+**Status:** Implemented with magic sniffing, bounded decompression, subprocess-capable sanitizer mode, OS-level rlimits, export re‑sanitization for legacy payloads, provenance metadata, and rejection telemetry.

@@ -27,15 +27,16 @@ translator: manual
 נקודות קצה:
 - `POST /v1/zk/attachments` — מעלה קובץ ומחזיר `{ id, size, content_type, created_ms }`.
 - `GET  /v1/zk/attachments` — רשימת מטא-נתונים (תומך מסננים: `id`, ‏`content_type`, ‏`since_ms`, ‏`before_ms`, ‏`has_tag=<TAG>`, ‏`limit`, ‏`offset`, ‏`order`, ‏`ids_only`).
-- `GET  /v1/zk/attachments/:id` — מוריד קובץ גולמי.
+- `GET  /v1/zk/attachments/:id` — מוריד את הבייטים המאוחסנים לפי מזהה.
 - `DELETE /v1/zk/attachments/:id` — מוחק קובץ ומטא-נתונים.
 - `GET  /v1/zk/attachments/count` — `{ count }` עם מסננים זהים.
 - `GET  /v1/zk/proof/{backend}/{hash}` — שליפת רשומת הוכחה (מחזיר JSON עם סטטוס, גובה אימות, VK וכו').
 - `GET  /v1/zk/proofs` + `GET /count` — רשימה/ספירה עם מסננים (`backend`, ‏`status`, ‏`has_tag`, ‏`verified_from_height`, ‏`verified_until_height`, ‏`limit`, ‏`offset`, ‏`order`, ‏`ids_only`).
 
 פרטים:
-- מזהה = Blake2b-32 של גוף הבקשה (hex).
-- Content-Type נשמר; ברירת מחדל `application/octet-stream`.
+- מזהה = Blake2b-32 של גוף הבקשה לאחר סניטציה (hex).
+- Content-Type מנורמל לפי sniffing; הסוג המוצהר נשמר ב-`provenance`.
+- סניטציה: gzip/zstd מורחבים לפי `torii.attachments_max_expanded_bytes` ו-`torii.attachments_max_archive_depth`; מתקבלים רק סוגי MIME ב-`torii.attachments_allowed_mime_types`; מצב ריצה נקבע ב-`torii.attachments_sanitizer_mode`; יצוא של רשומות ישנות (ללא `provenance`) עובר סניטציה מחדש.
 - גודל פר פריט מוגבל (`torii.attachments_max_bytes`, ברירת מחדל 4MiB).
 - מכסה פר טננט (`torii.attachments_per_tenant_max_*`). טננט מזוהה לפי `X-API-Token` (hash `token:<blake32>`); ללא טוקן → `anon`. חריגה גוררת מחיקה דטרמיניסטית של קבצים ישנים.
 - TTL: קבצים ישנים מ-`torii.attachments_ttl_secs` (ברירת מחדל 7 ימים) נמחקים כל ~60 שניות.

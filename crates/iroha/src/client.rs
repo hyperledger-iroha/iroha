@@ -1371,7 +1371,7 @@ struct TransactionResponseHandler;
 
 impl TransactionResponseHandler {
     fn handle(resp: &Response<Vec<u8>>) -> Result<()> {
-        if resp.status() == StatusCode::OK {
+        if matches!(resp.status(), StatusCode::OK | StatusCode::ACCEPTED) {
             Ok(())
         } else {
             Err(
@@ -3989,6 +3989,53 @@ mod evidence_http_tests {
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
         assert_eq!(snapshots[1].url.path(), "/query");
     }
+
+    #[test]
+    fn pipeline_status_empty_body_falls_back_to_committed_query() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+        };
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("lock snapshot store").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::OK)),
+                    "/query" => {
+                        let response = QueryResponse::Iterable(QueryOutput {
+                            batch: QueryOutputBatchBoxTuple {
+                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
+                            },
+                            remaining_items: 0,
+                            continue_cursor: None,
+                        });
+                        Ok(norito_response(StatusCode::OK, &response))
+                    }
+                    path => Err(eyre::eyre!("unexpected request path: {path}")),
+                }
+            }
+        };
+
+        let result = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let hash =
+                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                    Hash::prehashed([0x22; Hash::LENGTH]),
+                );
+            client.transaction_confirmation_status(hash)
+        });
+
+        let status = result.expect("confirmation status query");
+        assert!(status.is_none());
+
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[1].url.path(), "/query");
+    }
 }
 
 /// Private structure to incapsulate error reporting for HTTP response.
@@ -4736,7 +4783,8 @@ impl Client {
         hash: HashOf<SignedTransaction>,
     ) -> Result<Option<TxConfirmationStatus>> {
         match self.transaction_pipeline_status(hash) {
-            Ok(status) => Ok(status),
+            Ok(Some(status)) => Ok(Some(status)),
+            Ok(None) => self.transaction_committed(hash),
             Err(err) => {
                 warn!(
                     %hash,
@@ -8709,6 +8757,10 @@ mod tests {
             locked_qc_height: 11,
             locked_qc_view: 4,
             locked_qc_subject: None,
+            commit_certificate:
+                iroha_data_model::block::consensus::SumeragiCommitCertificateStatus::default(),
+            commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
+            ),
             view_change_proof_accepted_total: 5,
             view_change_proof_stale_total: 6,
             view_change_proof_rejected_total: 7,
@@ -10346,6 +10398,15 @@ mod tests {
     }
 
     #[test]
+    fn transaction_response_handler_accepts_accepted() {
+        let response = Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .body(Vec::new())
+            .unwrap();
+        assert!(TransactionResponseHandler::handle(&response).is_ok());
+    }
+
+    #[test]
     fn decode_status_response_returns_err_on_internal_server_error() {
         let response = Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -10465,6 +10526,10 @@ mod tests {
             locked_qc_height: 0,
             locked_qc_view: 0,
             locked_qc_subject: None,
+            commit_certificate:
+                iroha_data_model::block::consensus::SumeragiCommitCertificateStatus::default(),
+            commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
+            ),
             view_change_proof_accepted_total: 0,
             view_change_proof_stale_total: 0,
             view_change_proof_rejected_total: 0,
@@ -10740,6 +10805,10 @@ mod tests {
             locked_qc_height: 11,
             locked_qc_view: 4,
             locked_qc_subject: None,
+            commit_certificate:
+                iroha_data_model::block::consensus::SumeragiCommitCertificateStatus::default(),
+            commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
+            ),
             view_change_proof_accepted_total: 5,
             view_change_proof_stale_total: 6,
             view_change_proof_rejected_total: 7,

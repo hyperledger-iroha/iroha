@@ -10,13 +10,13 @@ Key properties:
 
 ## Attachments
 
-Attachments store raw artifacts such as proof envelopes or JSON DTOs. Each attachment is addressed by a deterministic id.
+Attachments store sanitized artifacts such as proof envelopes or JSON DTOs. Each attachment is addressed by a deterministic id derived from the sanitized bytes.
 
 Endpoints:
-- `POST /v1/zk/attachments` — store attachment, returns metadata `{ id, size, content_type, created_ms }`.
+- `POST /v1/zk/attachments` — store attachment, returns metadata `{ id, size, content_type, created_ms, provenance? }`.
 - `GET  /v1/zk/attachments` — list metadata for stored attachments (JSON array).
 - Supports filters via query params: `id`, `content_type` (substring), `since_ms`, `before_ms`, `has_tag=<TAG>` (ZK1 TLV tag present, e.g., `PROF`, `IPAK`), `limit`, `offset`, `order=asc|desc`, `ids_only=true`.
-- `GET  /v1/zk/attachments/:id` — fetch raw attachment bytes by id; content type is preserved.
+- `GET  /v1/zk/attachments/:id` — fetch stored attachment bytes by id; content type is preserved.
 - `DELETE /v1/zk/attachments/:id` — delete stored attachment and metadata.
  - `GET  /v1/zk/attachments/count` — return `{ count }` for the same filter set as the list endpoint.
 - `GET  /v1/zk/proof/{backend}/{hash}` — fetch a proof record by backend and proof hash (64‑hex). Returns JSON `{ backend, proof_hash, status, verified_at_height?, vk_ref?, vk_commitment? }`.
@@ -33,8 +33,11 @@ Endpoints:
   - Metrics: `torii_proof_requests_total`, `torii_proof_request_duration_seconds`, `torii_proof_response_bytes_total`, `torii_proof_cache_hits_total`, and `torii_proof_throttled_total` expose outcomes and cache hits per endpoint.
 
 Details:
-- Deterministic id: Blake2b‑32 of the raw request body bytes (lower‑case hex).
-- Content‑Type: preserved from the `Content-Type` header on POST; defaults to `application/octet-stream`.
+- Deterministic id: Blake2b‑32 of the sanitized request body bytes (lower‑case hex).
+- Content‑Type: normalized to the sniffed type (magic‑byte inspection). The declared header is recorded in `provenance.declared_type`.
+- Sanitization: gzip/zstd payloads are expanded within `torii.attachments_max_expanded_bytes` and `torii.attachments_max_archive_depth`. Only allowlisted MIME types (`torii.attachments_allowed_mime_types`) are accepted. Sanitizer execution mode is controlled by `torii.attachments_sanitizer_mode` (default `subprocess`). Sanitizer metadata is recorded under `provenance`, and export responses re‑sanitize legacy records lacking provenance.
+- Provenance: responses include `provenance` with `{ declared_type, sniffed_type, hashes { blake2b_256, sha256 }, sanitizer { verdict, expanded_bytes, archive_depth, sandboxed } }`.
+- Rejections: unsupported types return `415 Unsupported Media Type`; expansion/sandbox failures return `413`/`400` with the rejection reason in the body.
 - Size cap: enforced per item via `torii.attachments_max_bytes` (default 4 MiB). Requests exceeding the cap receive `413 Payload Too Large`.
 - Per-tenant quota: Torii enforces per-tenant attachment limits using `torii.attachments_per_tenant_max_count` (count) and `torii.attachments_per_tenant_max_bytes` (aggregate bytes). Tenants are derived from `X-API-Token` (hashed as `token:<blake2b-32 hex>`); requests without a token fall back to tenant `anon`. If an upload would exceed either limit, Torii deterministically evicts the oldest attachments for that tenant before persisting the new body. When the incoming body alone exceeds `torii.attachments_per_tenant_max_bytes`, Torii returns `413 Payload Too Large`.
 - Retention (TTL): attachments older than `torii.attachments_ttl_secs` (default 7 days) are removed by a background GC that runs approximately every 60 seconds.
@@ -115,6 +118,11 @@ attachments_ttl_secs = 604800         # 7 days
 attachments_max_bytes = 4_194_304     # 4 MiB
 attachments_per_tenant_max_count = 128
 attachments_per_tenant_max_bytes = 8_388_608   # 8 MiB aggregate per tenant
+attachments_allowed_mime_types = ["application/x-norito", "application/json", "text/json", "application/x-zk1"]
+attachments_max_expanded_bytes = 16_777_216    # 16 MiB expanded payload cap
+attachments_max_archive_depth = 2              # max nested gzip/zstd layers
+attachments_sanitize_timeout_ms = 1000         # sanitizer timeout (ms)
+attachments_sanitizer_mode = "subprocess"      # subprocess or in_process
 
 # Background prover (non-consensus)
 zk_prover_enabled = false             # disabled by default

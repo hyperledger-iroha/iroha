@@ -1,20 +1,50 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/examples/sns_training_eval_template.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 0397eec8373494a74060a7244a7f923714723e5feacc4a54374ee4461f0ddde1
 source_last_modified: "2025-11-15T09:17:43.374603+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-01
 ---
 
-# ترجمہ جاری ہے
-
 <div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
+<!-- docs/examples/sns_training_eval_template.md کا اردو ترجمہ -->
+
+# SNS ٹریننگ ایویلیوایشن ٹیمپلیٹ
+
+براہ کرم ہر سیشن کے فوراً بعد یہ سروے تقسیم کریں۔ جوابات فارم ٹول یا Markdown کے ذریعے جمع کیے جا سکتے ہیں اور
+`artifacts/sns/training/<suffix>/<cycle>/feedback/` میں آرکائیو کریں۔
+
+## سیشن میٹا ڈیٹا
+- suffix:
+- cycle:
+- زبان:
+- تاریخ:
+- فیسلیٹیٹر(ز):
+
+## ریٹنگ اسکیل
+1 - کمزور / 2 - مناسب / 3 - اچھا / 4 - بہت اچھا / 5 - بہترین
+
+| سوال | 1 | 2 | 3 | 4 | 5 |
+|------|---|---|---|---|---|
+| KPI walkthrough کی وضاحت | [ ] | [ ] | [ ] | [ ] | [ ] |
+| لیبز کی افادیت | [ ] | [ ] | [ ] | [ ] | [ ] |
+| رفتار + وقت کی تقسیم | [ ] | [ ] | [ ] | [ ] | [ ] |
+| لوکلائزیشن معیار (slides + facilitation) | [ ] | [ ] | [ ] | [ ] | [ ] |
+| suffix لانچ سے پہلے مجموعی اعتماد | [ ] | [ ] | [ ] | [ ] | [ ] |
+
+## کھلے سوالات
+1. کس موضوع کو مزید گہرائی چاہیے؟
+2. ورک بک میں کون سی ٹولز/ڈاکس کم تھے؟
+3. کیا لوکلائزیشن آپ کی توقعات پر پوری اتری؟ اگر نہیں تو کیوں؟
+4. اضافی تبصرے / بلاکرز جنہیں پروگرام کو ٹریک کرنا چاہیے۔
+
+## فالو اپ
+- `[]` فیڈبیک governance tracker میں درج (ticket: __________)
+- `[]` annex export محفوظ کیا گیا (path: ____________________)
+- `[]` ایکشن آئٹمز تفویض (owner + due date)
+
 </div>

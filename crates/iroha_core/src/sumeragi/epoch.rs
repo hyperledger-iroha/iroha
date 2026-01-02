@@ -334,6 +334,11 @@ impl EpochManager {
     pub(crate) fn restore_from_record(&mut self, record: &VrfEpochRecord) {
         self.epoch = record.epoch;
         self.seed = record.seed;
+        self.set_params(
+            record.epoch_length,
+            record.commit_deadline_offset,
+            record.reveal_deadline_offset,
+        );
         self.reveals = record
             .participants
             .iter()
@@ -460,6 +465,8 @@ pub enum VrfNoteResult {
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::consensus::VrfEpochRecord;
+
     use super::*;
     #[test]
     fn commit_and_reveal_window_and_epoch_rollover() {
@@ -676,6 +683,36 @@ mod tests {
         let seed = [0x22; 32];
         em.set_epoch_seed(seed);
         assert_eq!(em.seed(), seed);
+    }
+
+    #[test]
+    fn restore_from_record_updates_epoch_params() {
+        let chain = ChainId::from("iroha:test:epoch_restore_params");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+
+        let record = VrfEpochRecord {
+            epoch: 2,
+            seed: [0x11; 32],
+            epoch_length: 12,
+            commit_deadline_offset: 4,
+            reveal_deadline_offset: 9,
+            roster_len: 0,
+            finalized: false,
+            updated_at_height: 0,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+
+        em.restore_from_record(&record);
+        assert_eq!(em.epoch_length_blocks(), 12);
+        assert_eq!(em.commit_window_end(), 4);
+        assert_eq!(em.reveal_window_end(), 9);
     }
 
     #[test]

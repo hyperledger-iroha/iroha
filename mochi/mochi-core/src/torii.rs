@@ -5352,9 +5352,10 @@ mod tests {
             block::{
                 BlockHeader,
                 consensus::{
-                    SumeragiBlockSyncRosterStatus, SumeragiDaGateReason,
-                    SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiDataspaceCommitment,
-                    SumeragiKuraStoreStatus, SumeragiLaneCommitment, SumeragiLaneGovernance,
+                    SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus,
+                    SumeragiCommitQuorumStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
+                    SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
+                    SumeragiLaneCommitment, SumeragiLaneGovernance,
                     SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
                     SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus,
                     SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
@@ -5384,6 +5385,8 @@ mod tests {
             locked_qc_height: 14,
             locked_qc_view: 5,
             locked_qc_subject: None,
+            commit_certificate: SumeragiCommitCertificateStatus::default(),
+            commit_quorum: SumeragiCommitQuorumStatus::default(),
             view_change_proof_accepted_total: 9,
             view_change_proof_stale_total: 10,
             view_change_proof_rejected_total: 11,

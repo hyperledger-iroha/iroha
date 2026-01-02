@@ -104,7 +104,7 @@ _עודכן לאחרונה: 2025-11-07 · סקירה הבאה: 2026-02-05_
 | Telemetry redaction policy | פתוח | lints/CI | Observability WG | 2025-10-20 |
 | Time and NTP hardening | פתוח | NTS/מקורות מרובים | Runtime WG & Ops | 2025-11-10 |
 | Membership mismatch telemetry | פתוח | metric + alerting | Consensus WG | 2025-10-15 |
-| Attachment sanitisation | פתוח | sniffing, sandbox | Runtime WG | 2025-11-30 |
+| Attachment sanitisation | סגור | sniffing + subprocess + סניטציה מחדש ביצוא | Runtime WG | 2025-11-30 |
 | Witness retention audit | פתוח | בדיקה אוטומטית | ZK WG | 2025-11-05 |
 | Peer churn telemetry | בתהליך | Alerts ודשבורדים | Core WG | 2025-10-25 |
 
@@ -121,7 +121,7 @@ _עודכן לאחרונה: 2025-11-07 · סקירה הבאה: 2026-02-05_
 | --- | --- | --- | --- |
 | Security | security@iroha | בהמתנה | תגובה עד 2025-10-05 |
 | Core | core@iroha | בהמתנה | אימות DoS ו-churn |
-| Runtime | runtime@iroha | בהמתנה | פעולות המשך לסניטיזציה |
+| Runtime | runtime@iroha | בהמתנה | אישור השלמת סניטיזציה |
 | Torii | torii@iroha | בהמתנה | אימות הקשחת auth (`TOR-118`) ותוכנית gating |
 | Consensus | consensus@iroha | בהמתנה | Audit + telemetry |
 | Data Model | data-model@iroha | בהמתנה | Norito/Kotodama |
