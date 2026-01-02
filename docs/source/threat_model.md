@@ -107,11 +107,12 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 **Current controls**
 - Size caps on attachments (`handle_post_attachment` enforces max bytes from config or 4 MiB fallback).
 - Deterministic ID (Blake2b-32) and TTL-based GC for stored attachments.
-- Content type recorded for auditing; attachments stored under dedicated directory with atomic writes.
+- Magic-byte sniffing with allowlisted MIME types; gzip/zstd expansion bounded by max bytes and archive depth.
+- Provenance metadata (hashes, sniffed type, sanitizer verdict) stored alongside attachments; content type recorded for auditing.
+- Sanitizer runs in a subprocess by default with timeout + byte caps + OS-level rlimits; legacy exports are re‑sanitized before serving.
 
 **Outstanding gaps**
-- No magic-byte sniffing or sandboxed parsing; decompression guards limited to size caps (**see residual risks: Hardware-accelerated hashing** for verification). Sanitisation plan: add Norito attachment metadata hashing + deterministic magic-byte validation in Torii (reject mismatched MIME/ext), route opaque payloads through a Firecracker jail with time/CPU caps for decompression, and land nightly ClamAV scans over persisted attachments. Work tracked under OPS-2217 / targeted for M5 (May 2026).
-- Export sanitisation and format-specific safeguards pending design.
+- External malware scanning remains a follow-up.
 
 ### Zero-Knowledge Pipeline
 
@@ -180,7 +181,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 | Telemetry redaction policy | Closed | Strict redaction + allow-list guard + integrity chain shipped; see `docs/source/telemetry.md`. | Observability WG | 2025-12-31 |
 | Time and NTP hardening | Open | NTS or multi-source bounds (status tracked in `status.md` Time Service section) | Runtime WG & Ops | 2025-11-10 |
 | Membership mismatch telemetry | Open | `sumeragi_membership_mismatch_total` metric landed; wire alerting and operational runbook | Consensus WG | 2025-10-15 |
-| Attachment sanitisation | Open | Design magic-byte sniffing, sandboxing, export guards (align with `docs/source/security_hardening_requirements.md`) | Runtime WG | 2025-11-30 |
+| Attachment sanitisation | Closed | Magic-byte sniffing + bounded decompression + subprocess sanitizer mode + export re‑sanitization shipped (see `docs/source/security_hardening_requirements.md`). | Runtime WG | 2025-11-30 |
 | Witness retention audit | Open | Automate witness shredding verification (requirements captured in `security_hardening_requirements.md`) | ZK WG | 2025-11-05 |
 | Peer churn telemetry | In progress | Metric `p2p_peer_churn_total` shipped; wire alert thresholds and dashboards via observability runbook | Core WG | 2025-10-25 |
 
@@ -197,7 +198,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 | --- | --- | --- | --- |
 | Security WG | security@iroha | Pending | Circulate document; collect acknowledgements and ticket references by 2025-10-05. |
 | Core WG | core@iroha | Pending | Confirm pre-auth DoS roadmap and churn telemetry alerting coverage. |
-| Runtime WG | runtime@iroha | Pending | Confirm attachment sanitisation follow-up actions. |
+| Runtime WG | runtime@iroha | Pending | Confirm attachment sanitisation completion. |
 | Torii WG | torii@iroha | Pending | Validate auth hardening (`TOR-118`) and connection gating schedule. |
 | Consensus WG | consensus@iroha | Pending | Provide fairness audit schedule and membership telemetry plan. |
 | Data Model WG | data-model@iroha | Pending | Confirm Norito/Kotodama coverage and fuzz corpus maintenance. |

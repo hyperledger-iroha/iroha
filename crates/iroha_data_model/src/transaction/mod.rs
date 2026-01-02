@@ -4,10 +4,15 @@
 pub mod error;
 /// Executable payloads backing transactions and triggers.
 pub mod executable;
+/// Transaction submission receipts.
+pub mod receipt;
 /// Signed transaction forms and helpers.
 pub mod signed;
 
 pub use executable::{Executable, IvmBytecode};
+pub use receipt::{
+    TX_SUBMISSION_RECEIPT_DOMAIN, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+};
 pub use signed::{
     ExecutionStep, SignedTransaction, TransactionBuilder, TransactionEntrypoint, TransactionResult,
     TransactionResultInner, TransactionSignature,
@@ -19,7 +24,8 @@ pub use crate::trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntryp
 pub mod prelude {
     pub use super::{
         DataTriggerSequence, DataTriggerStep, Executable, ExecutionStep, IvmBytecode,
-        SignedTransaction, TimeTriggerEntrypoint, TransactionBuilder, TransactionEntrypoint,
-        TransactionResult, TransactionResultInner, TransactionSignature, error::prelude::*,
+        SignedTransaction, TX_SUBMISSION_RECEIPT_DOMAIN, TimeTriggerEntrypoint, TransactionBuilder,
+        TransactionEntrypoint, TransactionResult, TransactionResultInner, TransactionSignature,
+        TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload, error::prelude::*,
     };
 }

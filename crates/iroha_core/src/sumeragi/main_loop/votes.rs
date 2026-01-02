@@ -26,6 +26,25 @@ fn vote_duplicate(
 }
 
 impl Actor {
+    pub(super) fn consensus_context_for_height(
+        &self,
+        height: u64,
+    ) -> (ConsensusMode, &'static str, Option<[u8; 32]>) {
+        let view = self.state.view();
+        let consensus_mode =
+            super::effective_consensus_mode_for_height(&view, height, self.config.consensus_mode);
+        let mode_tag = match consensus_mode {
+            ConsensusMode::Permissioned => super::consensus::PERMISSIONED_TAG,
+            ConsensusMode::Npos => super::consensus::NPOS_TAG,
+        };
+        let prf_seed = if matches!(consensus_mode, ConsensusMode::Npos) {
+            Some(super::npos_seed_for_height(&view, height))
+        } else {
+            None
+        };
+        (consensus_mode, mode_tag, prf_seed)
+    }
+
     pub(super) fn handle_vote(&mut self, vote: crate::sumeragi::consensus::Vote) {
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         if self.drop_vote_for_height_or_view(&vote, committed_height) {
@@ -34,7 +53,10 @@ impl Actor {
         if self.drop_precommit_vote_for_lock(&vote) {
             return;
         }
-        let topology_peers = self.roster_for_vote(vote.block_hash, vote.height);
+        let (consensus_mode, mode_tag, prf_seed) =
+            self.consensus_context_for_height(vote.height);
+        let topology_peers =
+            self.roster_for_vote_with_mode(vote.block_hash, vote.height, consensus_mode);
         if topology_peers.is_empty() {
             warn!(
                 phase = ?vote.phase,
@@ -48,13 +70,6 @@ impl Actor {
         }
         let topology = super::network_topology::Topology::new(topology_peers.clone());
         let chain_id = self.common_config.chain.clone();
-        let mode_tag = self.mode_tag();
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, vote.height))
-        } else {
-            None
-        };
         let evidence_context = super::evidence::EvidenceValidationContext {
             topology: &topology,
             chain_id: &chain_id,
@@ -62,8 +77,9 @@ impl Actor {
             prf_seed,
         };
         let signature_topology =
-            topology_for_view(&topology, vote.height, vote.view, self.mode_tag(), prf_seed);
-        if !self.validate_and_record_vote(&vote, &signature_topology, &evidence_context) {
+            topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
+        if !self.validate_and_record_vote(&vote, &signature_topology, &evidence_context, mode_tag)
+        {
             return;
         }
 
@@ -248,6 +264,7 @@ impl Actor {
         vote: &crate::sumeragi::consensus::Vote,
         signature_topology: &super::network_topology::Topology,
         evidence_context: &super::evidence::EvidenceValidationContext<'_>,
+        mode_tag: &str,
     ) -> bool {
         if vote_duplicate(&self.vote_log, vote) {
             iroha_logger::debug!(
@@ -265,7 +282,7 @@ impl Actor {
             vote,
             signature_topology,
             &self.common_config.chain,
-            self.mode_tag(),
+            mode_tag,
         ) {
             Ok(()) => {}
             Err(err) => {
@@ -388,7 +405,7 @@ impl Actor {
             block,
             state,
             kura,
-            self.mode_tag(),
+            self.config.consensus_mode,
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
         );
@@ -409,16 +426,33 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         height: u64,
     ) -> Vec<PeerId> {
+        self.roster_for_vote_with_mode(block_hash, height, self.consensus_mode)
+    }
+
+    // Prefer the roster tied to a committed block to keep signatures valid across roster changes.
+    pub(super) fn roster_for_vote_with_mode(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        consensus_mode: ConsensusMode,
+    ) -> Vec<PeerId> {
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         if height <= committed_height {
             if let Some(selection) = super::persisted_roster_for_block(
                 self.state.as_ref(),
                 &self.kura,
+                consensus_mode,
                 height,
                 block_hash,
             )
-            .or_else(|| super::block_sync_history_roster_for_block(block_hash, height))
-            {
+            .or_else(|| {
+                super::block_sync_history_roster_for_block(
+                    self.state.as_ref(),
+                    consensus_mode,
+                    block_hash,
+                    height,
+                )
+            }) {
                 if !selection.roster.is_empty() {
                     return selection.roster;
                 }
@@ -435,10 +469,21 @@ impl Actor {
         if height <= committed_height.saturating_add(1) && !active.is_empty() {
             return active;
         }
-        if let Some(selection) =
-            super::persisted_roster_for_block(self.state.as_ref(), &self.kura, height, block_hash)
-                .or_else(|| super::block_sync_history_roster_for_block(block_hash, height))
-        {
+        if let Some(selection) = super::persisted_roster_for_block(
+            self.state.as_ref(),
+            &self.kura,
+            consensus_mode,
+            height,
+            block_hash,
+        )
+        .or_else(|| {
+            super::block_sync_history_roster_for_block(
+                self.state.as_ref(),
+                consensus_mode,
+                block_hash,
+                height,
+            )
+        }) {
             if !selection.roster.is_empty() {
                 return selection.roster;
             }
@@ -486,7 +531,10 @@ impl Actor {
                 return;
             }
         }
-        let topology_peers = self.roster_for_vote(vote.block_hash, vote.height);
+        let (consensus_mode, mode_tag, prf_seed) =
+            self.consensus_context_for_height(vote.height);
+        let topology_peers =
+            self.roster_for_vote_with_mode(vote.block_hash, vote.height, consensus_mode);
         if topology_peers.is_empty() {
             warn!(
                 height = vote.height,
@@ -498,14 +546,8 @@ impl Actor {
             return;
         }
         let topology = super::network_topology::Topology::new(topology_peers);
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, vote.height))
-        } else {
-            None
-        };
         let signature_topology =
-            topology_for_view(&topology, vote.height, vote.view, self.mode_tag(), prf_seed);
+            topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
         let local_idx = self.local_validator_index_for_topology(&signature_topology);
         let as_vote = crate::sumeragi::consensus::Vote {
             phase: crate::sumeragi::consensus::Phase::Available,
@@ -521,7 +563,7 @@ impl Actor {
             &as_vote,
             &signature_topology,
             &self.common_config.chain,
-            self.mode_tag(),
+            mode_tag,
         ) {
             Ok(()) => {}
             Err(err) => {
@@ -612,7 +654,10 @@ impl Actor {
                 return;
             }
         }
-        let topology_peers = self.roster_for_vote(vote.block_hash, vote.height);
+        let (consensus_mode, mode_tag, prf_seed) =
+            self.consensus_context_for_height(vote.height);
+        let topology_peers =
+            self.roster_for_vote_with_mode(vote.block_hash, vote.height, consensus_mode);
         if topology_peers.is_empty() {
             warn!(
                 height = vote.height,
@@ -624,25 +669,19 @@ impl Actor {
             return;
         }
         let topology = super::network_topology::Topology::new(topology_peers);
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, vote.height))
-        } else {
-            None
-        };
         let evidence_context = super::evidence::EvidenceValidationContext {
             topology: &topology,
             chain_id: &self.common_config.chain,
-            mode_tag: self.mode_tag(),
+            mode_tag,
             prf_seed,
         };
         let signature_topology =
-            topology_for_view(&topology, vote.height, vote.view, self.mode_tag(), prf_seed);
+            topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
         match super::exec_vote_signature_check(
             &vote,
             &signature_topology,
             &self.common_config.chain,
-            self.mode_tag(),
+            mode_tag,
         ) {
             Ok(()) => {}
             Err(err) => {
@@ -843,7 +882,7 @@ mod tests {
             &block,
             &state,
             kura.as_ref(),
-            PERMISSIONED_TAG,
+            ConsensusMode::Permissioned,
             &trusted,
             &me_id,
         );

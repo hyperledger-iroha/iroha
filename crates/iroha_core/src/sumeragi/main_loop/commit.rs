@@ -165,7 +165,9 @@ pub(super) fn execute_commit_work(
     .and_then(|(valid_block, state_block)| {
         let commit_result = match qc_signers.as_ref() {
             None => valid_block.commit(&topology),
-            Some(signers) => valid_block.commit_with_signers(&topology, signers, allow_quorum_bypass),
+            Some(signers) => {
+                valid_block.commit_with_signers(&topology, signers, allow_quorum_bypass)
+            }
         };
         commit_result
             .unpack(|event| pipeline_events.push(event))
@@ -386,60 +388,12 @@ impl Actor {
         )
     }
 
-    fn commit_locked_block_if_ready(&mut self) -> bool {
-        if self.commit.inflight.is_some() {
-            return false;
-        }
-        let Some(lock) = self.locked_qc else {
-            return false;
-        };
-        if lock.phase != crate::sumeragi::consensus::Phase::Precommit {
-            return false;
-        }
-        let Some(child_qc) = self.find_child_qc_extending_lock(lock) else {
-            return false;
-        };
-        trace!(
-            locked_height = lock.height,
-            locked_hash = %lock.subject_block_hash,
-            child_height = child_qc.height,
-            child_hash = %child_qc.subject_block_hash,
-            "locked block has extending child QC; attempting commit"
-        );
-        let block_hash = lock.subject_block_hash;
-        let Some(mut pending) = self.pending.pending_blocks.remove(&block_hash) else {
-            return false;
-        };
-        if pending.aborted {
-            debug!(
-                height = pending.height,
-                view = pending.view,
-                block = %block_hash,
-                "pending block marked aborted; awaiting new proposal or operator action"
-            );
-            self.pending.pending_blocks.insert(block_hash, pending);
-            return false;
-        }
-        let gate = self.refresh_da_gate_status(&mut pending);
-        if let Some(reason) = gate.reason {
-            debug!(
-                ?block_hash,
-                height = pending.height,
-                view = pending.view,
-                ?reason,
-                da_enabled = gate.da_enabled,
-                "DA availability missing; commit continues"
-            );
-        }
-        self.finalize_pending_block(lock, pending, Some(child_qc))
-    }
-
     fn drain_commit_results(&mut self) -> bool {
         let mut progress = false;
-        while let Some(recv_result) = self.commit.result_rx.as_ref().map(mpsc::Receiver::try_recv) {
+        while let Some(recv_result) = self.subsystems.commit.result_rx.as_ref().map(mpsc::Receiver::try_recv) {
             match recv_result {
                 Ok(result) => {
-                    let inflight = match self.commit.inflight.take() {
+                    let inflight = match self.subsystems.commit.inflight.take() {
                         Some(inflight) if inflight.id == result.id => inflight,
                         Some(inflight) => {
                             warn!(
@@ -448,7 +402,7 @@ impl Actor {
                                 inflight_hash = %inflight.block_hash,
                                 "commit result id mismatch; ignoring"
                             );
-                            self.commit.inflight = Some(inflight);
+                            self.subsystems.commit.inflight = Some(inflight);
                             continue;
                         }
                         None => {
@@ -465,9 +419,9 @@ impl Actor {
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     warn!("commit worker result channel closed; falling back to inline commit");
-                    self.commit.result_rx = None;
-                    self.commit.work_tx = None;
-                    if let Some(inflight) = self.commit.inflight.take() {
+                    self.subsystems.commit.result_rx = None;
+                    self.subsystems.commit.work_tx = None;
+                    if let Some(inflight) = self.subsystems.commit.inflight.take() {
                         let persist_required = !inflight.pending.kura_persisted;
                         let work = CommitWork {
                             id: inflight.id,
@@ -500,8 +454,9 @@ impl Actor {
         let pending_height = inflight.pending.height;
         let pending_view = inflight.pending.view;
         let block_hash = inflight.block_hash;
-        if self.commit.inflight.is_some() {
+        if self.subsystems.commit.inflight.is_some() {
             if self
+                .subsystems
                 .commit
                 .inflight
                 .as_ref()
@@ -521,7 +476,7 @@ impl Actor {
             return false;
         }
 
-        if let Some(work_tx) = self.commit.work_tx.as_ref() {
+        if let Some(work_tx) = self.subsystems.commit.work_tx.as_ref() {
             match work_tx.try_send(work) {
                 Ok(()) => {
                     super::status::record_commit_inflight_start(
@@ -530,7 +485,7 @@ impl Actor {
                         pending_view,
                         block_hash,
                     );
-                    self.commit.inflight = Some(inflight);
+                    self.subsystems.commit.inflight = Some(inflight);
                     return false;
                 }
                 Err(mpsc::TrySendError::Full(_work)) => {
@@ -552,8 +507,8 @@ impl Actor {
                         block = %block_hash,
                         "commit worker channel closed; running commit inline"
                     );
-                    self.commit.work_tx = None;
-                    self.commit.result_rx = None;
+                    self.subsystems.commit.work_tx = None;
+                    self.subsystems.commit.result_rx = None;
                     let outcome = execute_commit_work(
                         self.state.as_ref(),
                         self.kura.as_ref(),
@@ -623,14 +578,14 @@ impl Actor {
                 let persist_required = !pending.kura_persisted;
                 pending.mark_kura_persisted();
                 self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
+                let qc_key = (
+                    crate::sumeragi::consensus::Phase::Precommit,
+                    block_hash,
+                    pending_height,
+                    pending_view,
+                    lock.epoch,
+                );
                 if !allow_quorum_bypass {
-                    let qc_key = (
-                        crate::sumeragi::consensus::Phase::Precommit,
-                        block_hash,
-                        pending_height,
-                        pending_view,
-                        lock.epoch,
-                    );
                     if !self.qc_cache.contains_key(&qc_key) {
                         if let Some(signers) = qc_signers.as_ref() {
                             let aggregate_signature = match super::aggregate_vote_signatures(
@@ -683,17 +638,13 @@ impl Actor {
                     if let Some(exec_witness) = exec_witness.as_ref() {
                         let parent_state_root = parent_state_from_witness(exec_witness);
                         let post_state_root = post_state_from_witness(exec_witness);
-                        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-                            let view = self.state.view();
-                            Some(super::npos_seed_for_height(&view, pending_height))
-                        } else {
-                            None
-                        };
+                        let (_, mode_tag, prf_seed) =
+                            self.consensus_context_for_height(pending_height);
                         let signature_topology = topology_for_view(
                             &topology,
                             pending_height,
                             pending_view,
-                            self.mode_tag(),
+                            mode_tag,
                             prf_seed,
                         );
                         let required = signature_topology.min_votes_for_commit();
@@ -855,21 +806,30 @@ impl Actor {
                         crate::sumeragi::status::record_precommit_signers(record);
                     }
                 }
+                let tally = qc_signers.as_ref().map_or_else(
+                    || {
+                        crate::block::valid::commit_signature_tally(
+                            committed_block.as_ref(),
+                            &topology,
+                        )
+                    },
+                    |signers| crate::block::valid::SignatureTally {
+                        present: signers.len(),
+                        counted: signers.len(),
+                        set_b_signatures: 0,
+                    },
+                );
+                crate::sumeragi::status::record_commit_quorum_snapshot(
+                    pending_height,
+                    pending_view,
+                    block_hash,
+                    tally.present as u64,
+                    tally.counted as u64,
+                    tally.set_b_signatures as u64,
+                    topology.min_votes_for_commit() as u64,
+                );
                 #[cfg(feature = "telemetry")]
                 {
-                    let tally = qc_signers.as_ref().map_or_else(
-                        || {
-                            crate::block::valid::commit_signature_tally(
-                                committed_block.as_ref(),
-                                &topology,
-                            )
-                        },
-                        |signers| crate::block::valid::SignatureTally {
-                            present: signers.len(),
-                            counted: signers.len(),
-                            set_b_signatures: 0,
-                        },
-                    );
                     self.telemetry.set_commit_signature_totals(
                         tally.present as u64,
                         tally.counted as u64,
@@ -897,7 +857,7 @@ impl Actor {
                     &sync_block,
                     &self.state,
                     &self.kura,
-                    self.mode_tag(),
+                    self.config.consensus_mode,
                     self.common_config.trusted_peers.value(),
                     self.common_config.peer.id(),
                 );
@@ -1026,10 +986,18 @@ impl Actor {
                         crate::block::SignatureVerificationError::NotEnoughSignatures { .. }
                     )
                 );
+                let tally = crate::block::valid::commit_signature_tally(&failed_block, &topology);
+                crate::sumeragi::status::record_commit_quorum_snapshot(
+                    pending_height,
+                    pending_view,
+                    block_hash,
+                    tally.present as u64,
+                    tally.counted as u64,
+                    tally.set_b_signatures as u64,
+                    topology.min_votes_for_commit() as u64,
+                );
                 #[cfg(feature = "telemetry")]
                 {
-                    let tally =
-                        crate::block::valid::commit_signature_tally(&failed_block, &topology);
                     self.telemetry.set_commit_signature_totals(
                         tally.present as u64,
                         tally.counted as u64,
@@ -1044,15 +1012,11 @@ impl Actor {
                 let pending_age = pending.age();
                 let vote_count = sig_indices.len();
                 let quorum_timeout = self.quorum_timeout(da_enabled);
+                let quorum_reached = has_quorum_signers || vote_count >= min_votes_for_commit;
 
                 if commit_signatures_missing
                     && !has_quorum_signers
-                    && missing_quorum_stale(
-                        pending_age,
-                        quorum_timeout,
-                        vote_count,
-                        min_votes_for_commit,
-                    )
+                    && missing_quorum_stale(pending_age, quorum_timeout, quorum_reached)
                 {
                     let reschedule_backoff = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
                     let now = Instant::now();
@@ -1149,6 +1113,15 @@ impl Actor {
                             self.locked_qc,
                             self.highest_qc,
                             latest_committed,
+                        );
+                        debug!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = ?block_hash,
+                            requeued = outcome.requeued,
+                            failed_requeues = outcome.failed_requeues,
+                            drop_pending = outcome.drop_pending,
+                            "commit failure requeue outcome"
                         );
                         if outcome.view_change_triggered {
                             self.trigger_view_change_after_commit_failure(
@@ -1291,7 +1264,7 @@ impl Actor {
 
             let _ = kickstart_pacemaker_after_commit(
                 self.queue.tx_len(),
-                self.propose.backpressure_gate.should_defer(),
+                self.subsystems.propose.backpressure_gate.should_defer(),
                 |now| self.on_pacemaker_propose_ready(now),
             );
 
@@ -1318,7 +1291,7 @@ impl Actor {
             self.qc_cache.retain(|(_, hash, height, _, _), _| {
                 *hash == block_hash || *height > pending_height
             });
-            self.propose.proposal_cache.prune_height_leq(pending_height);
+            self.subsystems.propose.proposal_cache.prune_height_leq(pending_height);
             if let Some(parent) = parent_to_cleanup {
                 self.qc_cache
                     .retain(|(_, hash, _, _, _), _| hash != &parent);
@@ -1373,6 +1346,8 @@ impl Actor {
         let block_hash = lock.subject_block_hash;
         let pending_height = pending.height;
         let pending_view = pending.view;
+        let (consensus_mode, mode_tag, prf_seed) =
+            self.consensus_context_for_height(pending_height);
         let now = Instant::now();
         let da_enabled = self.runtime_da_enabled();
         debug!(
@@ -1381,7 +1356,7 @@ impl Actor {
             block = %block_hash,
             "finalizing pending block"
         );
-        if let Some(inflight) = self.commit.inflight.as_ref() {
+        if let Some(inflight) = self.subsystems.commit.inflight.as_ref() {
             if inflight.block_hash == block_hash {
                 debug!(
                     height = pending_height,
@@ -1429,6 +1404,16 @@ impl Actor {
                 self.execution_qc_cache.remove(&parent);
             }
             return true;
+        }
+        if !pending.commit_certificate_seen {
+            debug!(
+                height = pending_height,
+                view = pending_view,
+                block = %block_hash,
+                "commit certificate missing; deferring finalize"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
         }
         if kura_has_block && !pending.kura_persisted {
             info!(
@@ -1518,21 +1503,17 @@ impl Actor {
 
         let mut allow_quorum_bypass = false;
         let mut quorum_signers: Option<BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> = None;
-        let signature_commit_ready = match self.consensus_mode {
+        let signature_commit_ready = match consensus_mode {
             ConsensusMode::Permissioned => {
                 crate::block::ValidBlock::is_commit(&pending.block, &topology).is_ok()
             }
             ConsensusMode::Npos => {
-                let prf_seed = {
-                    let view = self.state.view();
-                    Some(super::npos_seed_for_height(&view, pending_height))
-                };
                 let state_view = self.state.view();
                 let validated_signers = match super::validated_block_signers(
                     &pending.block,
                     &canonical_topology,
                     &state_view,
-                    self.mode_tag(),
+                    mode_tag,
                     prf_seed,
                 ) {
                     Ok(signers) => signers,
@@ -1617,12 +1598,8 @@ impl Actor {
                 quorum_timeout_ms = quorum_timeout.as_millis(),
                 "deferring commit due to insufficient quorum"
             );
-            if missing_quorum_stale(
-                pending_age,
-                quorum_timeout,
-                vote_count,
-                min_votes_for_commit,
-            ) {
+            let quorum_reached = signature_commit_ready;
+            if missing_quorum_stale(pending_age, quorum_timeout, quorum_reached) {
                 if pending.reschedule_due(now, reschedule_backoff) {
                     self.reschedule_pending_quorum_block(
                         pending,
@@ -1657,7 +1634,7 @@ impl Actor {
             "committing with signature quorum"
         );
 
-        let id = self.commit.next_id();
+        let id = self.subsystems.commit.next_id();
         let persist_required = !pending.kura_persisted;
         let work = CommitWork {
             id,
@@ -1678,7 +1655,6 @@ impl Actor {
             signature_topology,
             qc_signers: quorum_signers,
             allow_quorum_bypass,
-            block_signers,
             post_commit_qc,
             enqueue_time: now,
         };
@@ -1700,7 +1676,7 @@ impl Actor {
         if timeout.is_zero() {
             return false;
         }
-        let Some(inflight) = self.commit.inflight.as_ref() else {
+        let Some(inflight) = self.subsystems.commit.inflight.as_ref() else {
             return false;
         };
         let elapsed = now.saturating_duration_since(inflight.enqueue_time);
@@ -1708,6 +1684,7 @@ impl Actor {
             return false;
         }
         let inflight = self
+            .subsystems
             .commit
             .inflight
             .take()
@@ -1736,16 +1713,16 @@ impl Actor {
         self.execution_qc_cache.remove(&block_hash);
         self.commit_votes
             .retain(|(hash, _, _, _, _), _| *hash != block_hash);
-        self.propose.proposal_cache.pop_hint(height, view);
-        self.propose.proposal_cache.pop_proposal(height, view);
-        self.proposals_seen.remove(&(height, view));
+        self.subsystems.propose.proposal_cache.pop_hint(height, view);
+        self.subsystems.propose.proposal_cache.pop_proposal(height, view);
+        self.subsystems.propose.proposals_seen.remove(&(height, view));
         self.pending.pending_replay_last_sent.remove(&block_hash);
         self.pending
             .availability_rebroadcast_last_sent
             .remove(&block_hash);
         let session_key = Self::session_key(&block_hash, height, view);
-        self.rbc.payload_rebroadcast_last_sent.remove(&session_key);
-        self.rbc.ready_rebroadcast_last_sent.remove(&session_key);
+        self.subsystems.da_rbc.rbc.payload_rebroadcast_last_sent.remove(&session_key);
+        self.subsystems.da_rbc.rbc.ready_rebroadcast_last_sent.remove(&session_key);
         drop(pending);
         super::status::record_commit_inflight_timeout(height, view, block_hash, elapsed);
         super::status::record_commit_inflight_finish(inflight.id);
@@ -1889,7 +1866,7 @@ impl Actor {
         let local_peer_id = self.common_config.peer.id().clone();
 
         if self.active_pending_blocks_len() == 0 {
-            let inflight = self.commit.inflight.is_some();
+            let inflight = self.subsystems.commit.inflight.is_some();
             if matches!(trigger, CommitPipelineTrigger::Tick) {
                 super::status::note_commit_pipeline_tick(self.consensus_mode, inflight);
                 #[cfg(feature = "telemetry")]
@@ -1922,26 +1899,6 @@ impl Actor {
         if enable_qc_pipeline && should_rebuild_qcs {
             self.last_qc_rebuild = now;
             self.rebuild_qcs_from_cached_votes(&commit_topology);
-        }
-
-        // Single‑peer fast path: we already have all the votes we can get.
-        // Avoid waiting for network round‑trips that will never arrive.
-        if commit_topology.len() == 1 {
-            let pending_hashes: Vec<_> = self.pending.pending_blocks.keys().copied().collect();
-            for hash in pending_hashes {
-                let Some(pending) = self.pending.pending_blocks.remove(&hash) else {
-                    continue;
-                };
-                let qc = crate::sumeragi::consensus::QcHeaderRef {
-                    phase: crate::sumeragi::consensus::Phase::Precommit,
-                    subject_block_hash: hash,
-                    height: pending.height,
-                    view: pending.view,
-                    epoch: 0,
-                };
-                let _ = self.finalize_pending_block(qc, pending, None);
-            }
-            return;
         }
 
         let highest_pending_hash = self
@@ -2001,6 +1958,8 @@ impl Actor {
                     ),
                     None => continue,
                 };
+            let (_, pending_mode_tag, pending_prf_seed) =
+                self.consensus_context_for_height(pending_height);
             let kura_has_block = self.kura.get_block_height_by_hash(hash).is_some();
             let (state_height, state_tip_hash) = {
                 let view = self.state.view();
@@ -2044,8 +2003,8 @@ impl Actor {
 
             let delivered = if da_enabled {
                 Self::ensure_block_matches_rbc_payload(
-                    &self.rbc.sessions,
-                    &self.rbc.status_handle,
+                    &self.subsystems.da_rbc.rbc.sessions,
+                    &self.subsystems.da_rbc.rbc.status_handle,
                     &hash,
                     pending_height,
                     &payload_hash,
@@ -2055,7 +2014,6 @@ impl Actor {
             };
 
             let mut emit_availability = false;
-            let mut ready_for_commit: Option<crate::sumeragi::consensus::QcHeaderRef> = None;
             let mut emit_commit_vote = false;
             let mut emit_precommit = false;
             let mut abort_due_to_kura = false;
@@ -2071,7 +2029,7 @@ impl Actor {
             self.pending
                 .pending_processing_parent
                 .set(pending.block.header().prev_block_hash());
-            if !pending.commit_vote_sent {
+            if !pending.commit_vote_sent && !pending.commit_certificate_seen {
                 emit_commit_vote = true;
             }
 
@@ -2131,23 +2089,17 @@ impl Actor {
                 // If availability votes lag but RBC READY already hit quorum, treat that as
                 // sufficient availability evidence to avoid missing availability telemetry.
                 if pending.availability_qc_view.is_none() {
-                    let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-                        let view = self.state.view();
-                        Some(super::npos_seed_for_height(&view, pending_height))
-                    } else {
-                        None
-                    };
                     let signature_topology = topology_for_view(
                         &topology,
                         pending_height,
                         pending_view,
-                        self.mode_tag(),
-                        prf_seed,
+                        pending_mode_tag,
+                        pending_prf_seed,
                     );
                     let required = signature_topology.min_votes_for_commit();
                     if required > 0 {
                         let session_key = Self::session_key(&hash, pending_height, pending_view);
-                        if let Some(session) = self.rbc.sessions.get(&session_key) {
+                        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&session_key) {
                             let ready_signers: BTreeSet<_> = session
                                 .ready_signatures
                                 .iter()
@@ -2185,8 +2137,11 @@ impl Actor {
             }
 
             let gate = recompute_da_gate_status(&mut pending, da_enabled);
+            let availability_missing = da_enabled && pending.availability_qc_view.is_none();
 
             let kura_ready = pending.kura_retry_due(now);
+            let commit_epoch = pending.commit_certificate_epoch.unwrap_or(current_epoch);
+            let ready_to_finalize = pending.commit_certificate_seen && kura_ready;
             if pending.kura_aborted {
                 warn!(
                     ?hash,
@@ -2197,17 +2152,12 @@ impl Actor {
                 );
                 abort_due_to_kura = true;
             } else if kura_ready {
-                if enable_qc_pipeline && !pending.precommit_vote_sent {
+                if enable_qc_pipeline
+                    && !pending.precommit_vote_sent
+                    && !pending.commit_certificate_seen
+                {
                     emit_precommit = true;
                 }
-                let qc_header = crate::sumeragi::consensus::QcHeaderRef {
-                    phase: crate::sumeragi::consensus::Phase::Precommit,
-                    subject_block_hash: hash,
-                    height: pending_height,
-                    view: pending_view,
-                    epoch: current_epoch,
-                };
-                ready_for_commit = Some(qc_header);
             } else {
                 debug!(
                     ?hash,
@@ -2218,28 +2168,21 @@ impl Actor {
                 );
             }
 
-            if matches!(gate.reason, Some(GateReason::MissingAvailabilityQc)) && da_enabled {
+            if availability_missing {
                 let topology = super::network_topology::Topology::new(commit_topology.clone());
                 let required = self.commit_min_votes(&topology);
-                let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-                    let view = self.state.view();
-                    Some(super::npos_seed_for_height(&view, pending_height))
-                } else {
-                    None
-                };
                 let signature_topology = super::topology_for_view(
                     &topology,
                     pending_height,
                     pending_view,
-                    self.mode_tag(),
-                    prf_seed,
+                    pending_mode_tag,
+                    pending_prf_seed,
                 );
                 let mut availability_votes_total = 0usize;
                 let mut availability_votes_valid = 0usize;
                 let mut availability_votes_invalid_sig = 0usize;
                 let mut availability_votes_invalid_signer = 0usize;
                 let chain_id = &self.common_config.chain;
-                let mode_tag = self.mode_tag();
                 for vote in self.vote_log.values() {
                     if vote.phase == crate::sumeragi::consensus::Phase::Available
                         && vote.block_hash == hash
@@ -2252,7 +2195,7 @@ impl Actor {
                             vote,
                             &signature_topology,
                             chain_id,
-                            mode_tag,
+                            pending_mode_tag,
                         ) {
                             Ok(()) => {
                                 availability_votes_valid =
@@ -2272,7 +2215,7 @@ impl Actor {
                         }
                     }
                 }
-                if !self.rbc.sessions.contains_key(&session_key) && self.block_known_locally(hash) {
+                if !self.subsystems.da_rbc.rbc.sessions.contains_key(&session_key) && self.block_known_locally(hash) {
                     if let Err(err) = self.seed_rbc_session_from_block(
                         session_key,
                         &pending.block,
@@ -2288,6 +2231,8 @@ impl Actor {
                     }
                 }
                 let (ready_signers, ready_count, payload_bundle, ready_bundle) = self
+                    .subsystems
+                    .da_rbc
                     .rbc
                     .sessions
                     .get(&session_key)
@@ -2394,7 +2339,7 @@ impl Actor {
                                 &pending.block,
                                 self.state.as_ref(),
                                 self.kura.as_ref(),
-                                self.mode_tag(),
+                                self.config.consensus_mode,
                                 self.common_config.trusted_peers.value(),
                                 self.common_config.peer.id(),
                             );
@@ -2474,8 +2419,8 @@ impl Actor {
                         has_availability_qc = pending.availability_qc_view.is_some(),
                         gate = ?pending.last_gate,
                         last_satisfied = ?pending.last_gate_satisfied,
-                        session_present = self.rbc.sessions.contains_key(&session_key),
-                        status_present = self.rbc.status_handle.get(&session_key).is_some(),
+                        session_present = self.subsystems.da_rbc.rbc.sessions.contains_key(&session_key),
+                        status_present = self.subsystems.da_rbc.rbc.status_handle.get(&session_key).is_some(),
                         pending_age_ms,
                         availability_timeout_ms = availability_timeout.as_millis(),
                         availability_votes_total,
@@ -2497,8 +2442,8 @@ impl Actor {
                         has_availability_qc = pending.availability_qc_view.is_some(),
                         gate = ?pending.last_gate,
                         last_satisfied = ?pending.last_gate_satisfied,
-                        session_present = self.rbc.sessions.contains_key(&session_key),
-                        status_present = self.rbc.status_handle.get(&session_key).is_some(),
+                        session_present = self.subsystems.da_rbc.rbc.sessions.contains_key(&session_key),
+                        status_present = self.subsystems.da_rbc.rbc.status_handle.get(&session_key).is_some(),
                         pending_age_ms,
                         availability_timeout_ms = availability_timeout.as_millis(),
                         availability_votes_total,
@@ -2524,7 +2469,7 @@ impl Actor {
                             cooldown,
                         )
                     {
-                        if !self.rbc.sessions.contains_key(&session_key) {
+                        if !self.subsystems.da_rbc.rbc.sessions.contains_key(&session_key) {
                             if let Err(err) = self.seed_rbc_session_from_block(
                                 session_key,
                                 &pending.block,
@@ -2585,7 +2530,7 @@ impl Actor {
                         payload_rebroadcast_cooldown,
                     )
                 {
-                    if !self.rbc.sessions.contains_key(&session_key) {
+                    if !self.subsystems.da_rbc.rbc.sessions.contains_key(&session_key) {
                         if let Err(err) = self.seed_rbc_session_from_block(
                             session_key,
                             &pending.block,
@@ -2601,6 +2546,8 @@ impl Actor {
                         }
                     }
                     let ready_count = self
+                        .subsystems
+                        .da_rbc
                         .rbc
                         .sessions
                         .get(&session_key)
@@ -2672,7 +2619,7 @@ impl Actor {
                         &pending.block,
                         self.state.as_ref(),
                         self.kura.as_ref(),
-                        self.mode_tag(),
+                        self.config.consensus_mode,
                         self.common_config.trusted_peers.value(),
                         self.common_config.peer.id(),
                     );
@@ -2770,8 +2717,13 @@ impl Actor {
 
             let finalize_start = Instant::now();
             if emit_commit_vote {
-                if self.emit_commit_vote(hash, pending_height, pending_view, current_epoch, &topology)
-                {
+                if self.emit_commit_vote(
+                    hash,
+                    pending_height,
+                    pending_view,
+                    current_epoch,
+                    &topology,
+                ) {
                     pending.commit_vote_sent = true;
                 }
             }
@@ -2797,14 +2749,25 @@ impl Actor {
                 }
             }
 
-            if let Some(qc_header) = ready_for_commit {
+            if ready_to_finalize {
+                let qc_header = crate::sumeragi::consensus::QcHeaderRef {
+                    phase: crate::sumeragi::consensus::Phase::Precommit,
+                    subject_block_hash: hash,
+                    height: pending_height,
+                    view: pending_view,
+                    epoch: commit_epoch,
+                };
                 let _ = self.finalize_pending_block(qc_header, pending, None);
                 self.pending.pending_processing.set(None);
                 self.pending.pending_processing_parent.set(None);
                 continue;
             }
             let finalize_cost = finalize_start.elapsed();
+            let commit_cert_seen = pending.commit_certificate_seen;
             self.pending.pending_blocks.insert(hash, pending);
+            if !commit_cert_seen {
+                let _ = self.replay_commit_votes_for_block(hash, pending_height, pending_view);
+            }
 
             let cached_precommit_votes = qc_cache_for_subject(&self.qc_cache, hash)
                 .find(|qc| {
@@ -2836,8 +2799,6 @@ impl Actor {
             self.pending.pending_processing.set(None);
             self.pending.pending_processing_parent.set(None);
         }
-
-        while self.commit_locked_block_if_ready() {}
     }
 
     pub(super) fn emit_availability_vote(
@@ -2851,15 +2812,10 @@ impl Actor {
             return false;
         }
 
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let topology = super::network_topology::Topology::new(topology_peers);
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, height))
-        } else {
-            None
-        };
         let signature_topology =
-            topology_for_view(&topology, height, view, self.mode_tag(), prf_seed);
+            topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
                 height,
@@ -2869,7 +2825,10 @@ impl Actor {
             );
             return false;
         };
-        let epoch = self.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+        let epoch = match consensus_mode {
+            ConsensusMode::Permissioned => 0,
+            ConsensusMode::Npos => self.epoch_manager.as_ref().map_or(0, EpochManager::epoch),
+        };
         let sent_key = (
             crate::sumeragi::consensus::Phase::Available,
             height,
@@ -2896,7 +2855,7 @@ impl Actor {
 
         let vote = build_availability_vote(AvailabilityVoteInputs {
             chain_id: &self.chain_id,
-            mode_tag: self.mode_tag(),
+            mode_tag,
             private_key: self.common_config.key_pair.private_key(),
             block_hash: *block_hash,
             height,
@@ -2910,7 +2869,7 @@ impl Actor {
 
         let message = BlockMessage::AvailabilityVote(vote);
         let mut collector_targets: Vec<_> =
-            self.propose.collectors_contacted.iter().cloned().collect();
+            self.subsystems.propose.collectors_contacted.iter().cloned().collect();
         let mut fallback_to_topology = false;
         if collector_targets.is_empty() {
             fallback_to_topology = true;
@@ -2964,14 +2923,8 @@ impl Actor {
         epoch: u64,
         topology: &super::network_topology::Topology,
     ) -> Option<crate::sumeragi::consensus::Vote> {
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, height))
-        } else {
-            None
-        };
-        let signature_topology =
-            topology_for_view(topology, height, view, self.mode_tag(), prf_seed);
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let local_idx = self.local_validator_index_for_topology(&signature_topology)?;
         let key = (
             crate::sumeragi::consensus::Phase::Precommit,
@@ -3050,7 +3003,8 @@ impl Actor {
             bls_sig: Vec::new(),
             signature: Vec::new(),
         };
-        let preimage = vote_preimage(&self.common_config.chain, self.mode_tag(), &vote);
+        let (_, mode_tag, _) = self.consensus_context_for_height(height);
+        let preimage = vote_preimage(&self.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
         vote
@@ -3066,14 +3020,8 @@ impl Actor {
         topology: &super::network_topology::Topology,
         parent_hash: Option<HashOf<BlockHeader>>,
     ) -> bool {
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, height))
-        } else {
-            None
-        };
-        let signature_topology =
-            topology_for_view(topology, height, view, self.mode_tag(), prf_seed);
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
                 height,
@@ -3127,7 +3075,7 @@ impl Actor {
                 return false;
             }
             let signature_topology =
-                topology_for_view(topology, vote.height, vote.view, self.mode_tag(), prf_seed);
+                topology_for_view(topology, vote.height, vote.view, mode_tag, prf_seed);
             let Ok(vote_idx) = usize::try_from(vote.signer) else {
                 return false;
             };
@@ -3206,7 +3154,7 @@ impl Actor {
             self.note_collector_contact(peer.clone(), true);
         }
         let mut collector_targets: Vec<_> =
-            self.propose.collectors_contacted.iter().cloned().collect();
+            self.subsystems.propose.collectors_contacted.iter().cloned().collect();
         let mut fallback_to_topology = false;
         if collector_targets.is_empty() {
             fallback_to_topology = true;
@@ -3256,14 +3204,8 @@ impl Actor {
         epoch: u64,
         topology: &super::network_topology::Topology,
     ) -> bool {
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, height))
-        } else {
-            None
-        };
-        let signature_topology =
-            topology_for_view(topology, height, view, self.mode_tag(), prf_seed);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
                 height,
@@ -3331,29 +3273,68 @@ impl Actor {
                 );
             }
         }
-        let proxy_tail_idx = signature_topology.proxy_tail_index();
-        let proxy_tail = match signature_topology.as_ref().get(proxy_tail_idx) {
-            Some(peer) => peer,
-            None => {
-                warn!(
-                    height,
-                    view,
-                    block = ?block_hash,
-                    topology_len = signature_topology.as_ref().len(),
-                    "skipping commit vote: proxy tail index out of bounds"
-                );
-                return false;
-            }
+        let _ = self.handle_commit_vote(vote.clone());
+
+        let (collectors_k, redundant_r) = self.collector_plan_params_for_mode(consensus_mode);
+        let mut collector_targets = if collectors_k == 0 {
+            Vec::new()
+        } else {
+            super::collectors::deterministic_collectors(
+                &signature_topology,
+                consensus_mode,
+                collectors_k,
+                prf_seed,
+                height,
+                view,
+            )
         };
-        let local_peer = self.common_config.peer.id();
-        if proxy_tail == local_peer {
-            let _ = self.handle_commit_vote(vote);
-            return true;
+        if !collector_targets.is_empty() {
+            let limit = usize::from(redundant_r.max(1));
+            collector_targets.truncate(limit);
         }
-        self.schedule_background(BackgroundRequest::Post {
-            peer: proxy_tail.clone(),
-            msg: BlockMessage::CommitVote(vote),
-        });
+        let mut fallback_to_topology = false;
+        if collector_targets.is_empty() {
+            fallback_to_topology = true;
+            collector_targets = signature_topology.as_ref().to_vec();
+        }
+        let local_peer_id = self.common_config.peer.id().clone();
+        collector_targets.retain(|peer| peer != &local_peer_id);
+        if collector_targets.is_empty() {
+            fallback_to_topology = true;
+            collector_targets = signature_topology.as_ref().to_vec();
+            collector_targets.retain(|peer| peer != &local_peer_id);
+        }
+        let required = signature_topology.min_votes_for_commit();
+        if required > 0 && collector_targets.len() < required {
+            fallback_to_topology = true;
+            collector_targets = signature_topology.as_ref().to_vec();
+            collector_targets.retain(|peer| peer != &local_peer_id);
+        }
+        if fallback_to_topology {
+            iroha_logger::info!(
+                height,
+                view,
+                block = ?block_hash,
+                signer = local_idx,
+                targets = collector_targets.len(),
+                "sending commit vote to commit topology (collector plan empty, local-only, or below quorum)"
+            );
+        } else {
+            iroha_logger::info!(
+                height,
+                view,
+                block = ?block_hash,
+                signer = local_idx,
+                targets = collector_targets.len(),
+                "sending commit vote to collectors"
+            );
+        }
+        for peer in collector_targets {
+            self.schedule_background(BackgroundRequest::Post {
+                peer,
+                msg: BlockMessage::CommitVote(vote.clone()),
+            });
+        }
         true
     }
 
@@ -3371,38 +3352,15 @@ impl Actor {
             );
             return Ok(());
         }
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, vote.height))
-        } else {
-            None
-        };
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
         let base_topology = super::network_topology::Topology::new(commit_topology.clone());
-        let signature_topology =
-            topology_for_view(&base_topology, vote.height, vote.view, self.mode_tag(), prf_seed);
-        let proxy_tail_idx = signature_topology.proxy_tail_index();
-        let Some(proxy_tail) = signature_topology.as_ref().get(proxy_tail_idx) else {
-            warn!(
-                height = vote.height,
-                view = vote.view,
-                block = %vote.block_hash,
-                topology_len = signature_topology.as_ref().len(),
-                "dropping commit vote: proxy tail index out of bounds"
-            );
-            return Ok(());
-        };
-        let local_peer = self.common_config.peer.id();
-        if proxy_tail != local_peer {
-            trace!(
-                height = vote.height,
-                view = vote.view,
-                block = %vote.block_hash,
-                local = %local_peer,
-                proxy_tail = %proxy_tail,
-                "ignoring commit vote on non-proxy tail"
-            );
-            return Ok(());
-        }
+        let signature_topology = topology_for_view(
+            &base_topology,
+            vote.height,
+            vote.view,
+            mode_tag,
+            prf_seed,
+        );
         let signer_idx_usize = match usize::try_from(vote.signature.index()) {
             Ok(idx) => idx,
             Err(err) => {
@@ -3443,24 +3401,31 @@ impl Actor {
             );
             return Ok(());
         }
-        let signer_idx = match crate::sumeragi::consensus::ValidatorIndex::try_from(
-            vote.signature.index(),
-        ) {
-            Ok(idx) => idx,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    height = vote.height,
-                    view = vote.view,
-                    block = %vote.block_hash,
-                    signer = vote.signature.index(),
-                    "dropping commit vote: signer index exceeds ValidatorIndex"
-                );
-                return Ok(());
-            }
-        };
-        let vote_key = (vote.block_hash, vote.height, vote.view, vote.epoch, signer_idx);
-        self.commit_votes.entry(vote_key).or_insert_with(|| vote.clone());
+        let signer_idx =
+            match crate::sumeragi::consensus::ValidatorIndex::try_from(vote.signature.index()) {
+                Ok(idx) => idx,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        height = vote.height,
+                        view = vote.view,
+                        block = %vote.block_hash,
+                        signer = vote.signature.index(),
+                        "dropping commit vote: signer index exceeds ValidatorIndex"
+                    );
+                    return Ok(());
+                }
+            };
+        let vote_key = (
+            vote.block_hash,
+            vote.height,
+            vote.view,
+            vote.epoch,
+            signer_idx,
+        );
+        self.commit_votes
+            .entry(vote_key)
+            .or_insert_with(|| vote.clone());
         if let Some(pending) = self.pending.pending_blocks.get_mut(&vote.block_hash) {
             if let Err(err) = pending.block.add_signature(vote.signature.clone()) {
                 debug!(
@@ -3473,52 +3438,223 @@ impl Actor {
                 );
             }
         }
-        let signers =
-            self.commit_vote_signers_for(vote.block_hash, vote.height, vote.view, vote.epoch);
-        let has_quorum =
-            self.commit_vote_quorum_reached(&signers, &signature_topology, &commit_topology);
-        if !has_quorum {
-            return Ok(());
-        }
-        let Some(pending) = self.pending.pending_blocks.get(&vote.block_hash) else {
-            warn!(
-                height = vote.height,
-                view = vote.view,
-                block = %vote.block_hash,
-                "commit quorum reached but block payload missing; awaiting block sync"
-            );
-            return Ok(());
-        };
-        let cert = Self::synthesize_commit_certificate(
-            self.state.as_ref(),
-            &pending.block,
-            &commit_topology,
-            self.mode_tag(),
-            prf_seed,
-            vote.epoch,
-            self.consensus_mode,
-        );
-        let Some(cert) = cert else {
-            warn!(
-                height = vote.height,
-                view = vote.view,
-                block = %vote.block_hash,
-                "commit quorum reached but failed to synthesize commit certificate"
-            );
-            return Ok(());
-        };
-        super::status::record_commit_certificate(cert.clone());
-        let mut update = super::message::BlockSyncUpdate::from(&pending.block);
-        update.commit_certificate = Some(cert.clone());
-        self.broadcast_block_sync_update(update, &commit_topology);
-        self.apply_commit_certificate(
-            &cert,
-            &commit_topology,
+        let _ = self.try_apply_commit_votes_for_epoch(
             vote.block_hash,
             vote.height,
             vote.view,
-        );
+            vote.epoch,
+            &commit_topology,
+            &signature_topology,
+        )?;
         Ok(())
+    }
+
+    fn commit_vote_epochs_for_block(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> BTreeSet<u64> {
+        self.commit_votes
+            .keys()
+            .filter_map(|(hash, vote_height, vote_view, epoch, _)| {
+                if *hash == block_hash && *vote_height == height && *vote_view == view {
+                    Some(*epoch)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn try_apply_commit_votes_for_epoch(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        commit_topology: &[PeerId],
+        signature_topology: &super::network_topology::Topology,
+    ) -> Result<bool> {
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let local_peer = self.common_config.peer.id();
+        if signature_topology.position(local_peer.public_key()).is_none() {
+            trace!(
+                height,
+                view,
+                block = %block_hash,
+                local = %local_peer,
+                "skipping commit certificate synthesis: local peer not in view topology"
+            );
+            return Ok(false);
+        }
+        let (collectors_k, redundant_r) = self.collector_plan_params_for_mode(consensus_mode);
+        let mut collector_targets = if collectors_k == 0 {
+            Vec::new()
+        } else {
+            super::collectors::deterministic_collectors(
+                signature_topology,
+                consensus_mode,
+                collectors_k,
+                prf_seed,
+                height,
+                view,
+            )
+        };
+        if !collector_targets.is_empty() {
+            let limit = usize::from(redundant_r.max(1));
+            collector_targets.truncate(limit);
+        }
+        let required = signature_topology.min_votes_for_commit();
+        let fallback_to_topology =
+            collector_targets.is_empty() || (required > 0 && collector_targets.len() < required);
+        if !fallback_to_topology && !collector_targets.iter().any(|peer| peer == local_peer) {
+            trace!(
+                height,
+                view,
+                block = %block_hash,
+                local = %local_peer,
+                "skipping commit certificate synthesis: local peer not in collector targets"
+            );
+            return Ok(false);
+        }
+        let signers = self.commit_vote_signers_for(block_hash, height, view, epoch);
+        if signers.is_empty() {
+            return Ok(false);
+        }
+        let has_quorum = self.commit_vote_quorum_reached(
+            consensus_mode,
+            &signers,
+            signature_topology,
+            commit_topology,
+        );
+        if !has_quorum {
+            return Ok(false);
+        }
+        let state = Arc::clone(&self.state);
+        let vote_signatures: Vec<_> = self
+            .commit_votes
+            .values()
+            .filter(|vote| {
+                vote.block_hash == block_hash
+                    && vote.height == height
+                    && vote.view == view
+                    && vote.epoch == epoch
+            })
+            .map(|vote| vote.signature.clone())
+            .collect();
+        let cert = {
+            let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) else {
+                warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "commit quorum reached but block payload missing; awaiting block sync"
+                );
+                return Ok(false);
+            };
+            for signature in &vote_signatures {
+                let _ = pending.block.add_signature(signature.clone());
+            }
+            Self::synthesize_commit_certificate(
+                state.as_ref(),
+                &pending.block,
+                commit_topology,
+                mode_tag,
+                prf_seed,
+                epoch,
+                consensus_mode,
+            )
+        };
+        let Some(cert) = cert else {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                "commit quorum reached but failed to synthesize commit certificate"
+            );
+            return Ok(false);
+        };
+        super::status::record_commit_certificate(cert.clone());
+        #[cfg(feature = "telemetry")]
+        self.telemetry.set_commit_certificate_summary(&cert);
+        let block_for_sync = self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .map(|pending| pending.block.clone());
+        let Some(block_for_sync) = block_for_sync else {
+            return Ok(false);
+        };
+        let mut update = super::message::BlockSyncUpdate::from(&block_for_sync);
+        update.commit_certificate = Some(cert.clone());
+        self.broadcast_block_sync_update(update, commit_topology);
+        self.apply_commit_certificate(&cert, commit_topology, block_hash, height, view);
+        Ok(true)
+    }
+
+    pub(super) fn replay_commit_votes_for_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> Result<()> {
+        let commit_topology = self.effective_commit_topology();
+        if commit_topology.is_empty() {
+            return Ok(());
+        }
+        let epochs = self.commit_vote_epochs_for_block(block_hash, height, view);
+        if epochs.is_empty() {
+            return Ok(());
+        }
+        let topology = super::network_topology::Topology::new(commit_topology.clone());
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        for epoch in epochs {
+            let _ = self.try_apply_commit_votes_for_epoch(
+                block_hash,
+                height,
+                view,
+                epoch,
+                &commit_topology,
+                &signature_topology,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn commit_vote_quorum_status_for_block(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> (usize, bool) {
+        let commit_topology = self.effective_commit_topology();
+        if commit_topology.is_empty() {
+            return (0, false);
+        }
+        let epochs = self.commit_vote_epochs_for_block(block_hash, height, view);
+        if epochs.is_empty() {
+            return (0, false);
+        }
+        let topology = super::network_topology::Topology::new(commit_topology.clone());
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let mut max_votes = 0usize;
+        let mut quorum_reached = false;
+        for epoch in epochs {
+            let signers = self.commit_vote_signers_for(block_hash, height, view, epoch);
+            max_votes = max_votes.max(signers.len());
+            if self.commit_vote_quorum_reached(
+                consensus_mode,
+                &signers,
+                &signature_topology,
+                &commit_topology,
+            ) {
+                quorum_reached = true;
+            }
+        }
+        (max_votes, quorum_reached)
     }
 
     fn commit_vote_signers_for(
@@ -3542,12 +3678,15 @@ impl Actor {
 
     fn commit_vote_quorum_reached(
         &self,
+        consensus_mode: ConsensusMode,
         signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
         signature_topology: &super::network_topology::Topology,
         roster: &[PeerId],
     ) -> bool {
-        match self.consensus_mode {
-            ConsensusMode::Permissioned => signers.len() >= signature_topology.min_votes_for_commit(),
+        match consensus_mode {
+            ConsensusMode::Permissioned => {
+                signers.len() >= signature_topology.min_votes_for_commit()
+            }
             ConsensusMode::Npos => {
                 let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
                 let mut signer_peers = BTreeSet::new();
@@ -3564,13 +3703,12 @@ impl Actor {
                     signer_peers.insert(peer.clone());
                 }
                 let view = self.state.view();
-                super::stake_quorum_reached_for_peers(&view, roster, &signer_peers)
-                    .unwrap_or(false)
+                super::stake_quorum_reached_for_peers(&view, roster, &signer_peers).unwrap_or(false)
             }
         }
     }
 
-    fn apply_commit_certificate(
+    pub(super) fn apply_commit_certificate(
         &mut self,
         cert: &CommitCertificate,
         roster: &[PeerId],
@@ -3578,14 +3716,9 @@ impl Actor {
         height: u64,
         view: u64,
     ) {
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view_state = self.state.view();
-            Some(super::npos_seed_for_height(&view_state, height))
-        } else {
-            None
-        };
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology =
-            super::signature_topology_for_roster(roster, height, view, self.mode_tag(), prf_seed);
+            super::signature_topology_for_roster(roster, height, view, mode_tag, prf_seed);
         let mapped = map_commit_certificate_signatures(cert, &signature_topology);
         if mapped.is_empty() {
             warn!(
@@ -3596,6 +3729,10 @@ impl Actor {
             );
             return;
         }
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.set_commit_certificate_summary(cert);
+        }
         let Some(pending) = self.pending.pending_blocks.remove(&block_hash) else {
             return;
         };
@@ -3603,6 +3740,8 @@ impl Actor {
         for sig in mapped {
             let _ = pending.block.add_signature(sig);
         }
+        pending.commit_certificate_seen = true;
+        pending.commit_certificate_epoch = Some(cert.epoch);
         let qc_header = crate::sumeragi::consensus::QcHeaderRef {
             phase: crate::sumeragi::consensus::Phase::Precommit,
             subject_block_hash: block_hash,
@@ -3639,20 +3778,14 @@ impl Actor {
             return 0;
         }
         let topology = super::network_topology::Topology::new(topology_peers);
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, height))
-        } else {
-            None
-        };
-        let signature_topology =
-            topology_for_view(&topology, height, view, self.mode_tag(), prf_seed);
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         self.ensure_collector_plan(&signature_topology, height, view);
         while let Some(peer) = self.next_redundant_collector() {
             self.note_collector_contact(peer.clone(), true);
         }
         let mut collector_targets: Vec<_> =
-            self.propose.collectors_contacted.iter().cloned().collect();
+            self.subsystems.propose.collectors_contacted.iter().cloned().collect();
         let mut fallback_to_topology = false;
         if collector_targets.is_empty() {
             fallback_to_topology = true;
@@ -3739,21 +3872,15 @@ impl Actor {
             return 0;
         }
         let topology = super::network_topology::Topology::new(topology_peers);
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, height))
-        } else {
-            None
-        };
-        let signature_topology =
-            topology_for_view(&topology, height, view, self.mode_tag(), prf_seed);
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         self.ensure_collector_plan(&signature_topology, height, view);
         while let Some(peer) = self.next_redundant_collector() {
             self.note_collector_contact(peer.clone(), true);
         }
         let mut collector_targets: Vec<_> =
-            self.propose.collectors_contacted.iter().cloned().collect();
+            self.subsystems.propose.collectors_contacted.iter().cloned().collect();
         let mut fallback_to_topology = false;
         if collector_targets.is_empty() {
             fallback_to_topology = true;
@@ -3819,7 +3946,8 @@ impl Actor {
         view: u64,
         witness: ExecWitness,
     ) {
-        let epoch = match self.consensus_mode {
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let epoch = match consensus_mode {
             ConsensusMode::Permissioned => 0,
             ConsensusMode::Npos => self.epoch_manager.as_ref().map_or(0, EpochManager::epoch),
         };
@@ -3829,14 +3957,7 @@ impl Actor {
             return;
         }
         let topology = super::network_topology::Topology::new(topology_peers);
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, height))
-        } else {
-            None
-        };
-        let signature_topology =
-            topology_for_view(&topology, height, view, self.mode_tag(), prf_seed);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
                 height,
@@ -3846,15 +3967,15 @@ impl Actor {
             );
             return;
         };
-        let (collectors_k, redundant_r, seed_opt) = self.collector_plan_params();
+        let (collectors_k, redundant_r) = self.collector_plan_params_for_mode(consensus_mode);
         let mut collector_targets = if collectors_k == 0 {
             Vec::new()
         } else {
             super::collectors::deterministic_collectors(
                 &signature_topology,
-                self.consensus_mode,
+                consensus_mode,
                 collectors_k,
-                seed_opt,
+                prf_seed,
                 height,
                 view,
             )
@@ -3936,7 +4057,7 @@ impl Actor {
                 );
                 let preimage = crate::sumeragi::consensus::bls_preimage::exec_vote(
                     &self.common_config.chain,
-                    self.mode_tag(),
+                    mode_tag,
                     &vote,
                 );
                 let signature =
@@ -4084,7 +4205,7 @@ impl Actor {
         let gate = Self::compute_da_gate_status(
             pending,
             da_enabled,
-            &self.da_spool_dir,
+            &self.subsystems.da_rbc.spool_dir,
             &lane_config,
             self.telemetry_handle(),
         );
@@ -4202,7 +4323,7 @@ impl Actor {
                 block.as_ref(),
                 self.state.as_ref(),
                 self.kura.as_ref(),
-                self.mode_tag(),
+                self.config.consensus_mode,
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
             );
@@ -4301,14 +4422,9 @@ impl Actor {
             return Some(recovered);
         }
 
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, qc.height))
-        } else {
-            None
-        };
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let signature_topology =
-            super::topology_for_view(&topology, qc.height, qc.view, self.mode_tag(), prf_seed);
+            super::topology_for_view(&topology, qc.height, qc.view, mode_tag, prf_seed);
         let signers = self.qc_signers_for_votes(
             qc.phase,
             qc.subject_block_hash,
@@ -4557,13 +4673,14 @@ impl Actor {
         let now = Instant::now();
         let cooldown = self.rebroadcast_cooldown().max(REBROADCAST_COOLDOWN_FLOOR);
         let mut cursor = 0usize;
-        if let Some(state) = self.broadcast_new_views.get(&key) {
+        if let Some(state) = self.subsystems.propose.broadcast_new_views.get(&key) {
             if now.saturating_duration_since(state.last_sent) < cooldown {
                 return;
             }
             cursor = state.cursor;
         }
 
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(target_height);
         let mut frame = crate::sumeragi::consensus::NewView {
             height: target_height,
             view: target_view,
@@ -4571,11 +4688,11 @@ impl Actor {
             sender,
             signature: Vec::new(),
         };
-        let preimage = new_view_preimage(&self.chain_id, self.mode_tag(), &frame);
+        let preimage = new_view_preimage(&self.chain_id, mode_tag, &frame);
         let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
         frame.signature = signature.payload().to_vec();
 
-        let local_count = self.propose.new_view_tracker.record(
+        let local_count = self.subsystems.propose.new_view_tracker.record(
             target_height,
             target_view,
             sender,
@@ -4597,17 +4714,11 @@ impl Actor {
             target_view,
             cursor,
         );
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, target_height))
-        } else {
-            None
-        };
         if let Some(leader_peer) = super::topology_for_view(
             &super::network_topology::Topology::new(topology_peers.clone()),
             target_height,
             target_view,
-            self.mode_tag(),
+            mode_tag,
             prf_seed,
         )
         .as_ref()
@@ -4620,7 +4731,7 @@ impl Actor {
             }
         }
         let next_cursor = cursor.saturating_add(targets.len().max(1));
-        self.broadcast_new_views.insert(
+        self.subsystems.propose.broadcast_new_views.insert(
             key,
             NewViewBroadcastState {
                 last_sent: now,
@@ -4642,7 +4753,7 @@ impl Actor {
         local_idx: Option<ValidatorIndex>,
     ) {
         let Some((height, view, highest_qc)) =
-            self.propose.new_view_tracker.entries.iter().rev().find_map(
+            self.subsystems.propose.new_view_tracker.entries.iter().rev().find_map(
                 |(&(height, view), entry)| {
                     if entry.count_with_local(local_idx) >= required {
                         None
@@ -4743,7 +4854,7 @@ impl Actor {
         }
 
         let mut stale_hints = Vec::new();
-        for ((height, view), hint) in &self.propose.proposal_cache.hints {
+        for ((height, view), hint) in &self.subsystems.propose.proposal_cache.hints {
             let extends = chain_extends_tip(
                 hint.block_hash,
                 *height,
@@ -4766,12 +4877,12 @@ impl Actor {
             }
         }
         for (height, view) in stale_hints {
-            self.propose.proposal_cache.pop_hint(height, view);
-            self.proposals_seen.remove(&(height, view));
+            self.subsystems.propose.proposal_cache.pop_hint(height, view);
+            self.subsystems.propose.proposals_seen.remove(&(height, view));
         }
 
         let mut stale_proposals = Vec::new();
-        for ((height, view), proposal) in &self.propose.proposal_cache.proposals {
+        for ((height, view), proposal) in &self.subsystems.propose.proposal_cache.proposals {
             let parent_height = height.saturating_sub(1);
             let extends = chain_extends_tip(
                 proposal.header.parent_hash,
@@ -4793,8 +4904,8 @@ impl Actor {
             }
         }
         for (height, view) in stale_proposals {
-            self.propose.proposal_cache.pop_proposal(height, view);
-            self.proposals_seen.remove(&(height, view));
+            self.subsystems.propose.proposal_cache.pop_proposal(height, view);
+            self.subsystems.propose.proposals_seen.remove(&(height, view));
         }
 
         let mut stale_qcs: Vec<QcVoteKey> = Vec::new();
@@ -4822,19 +4933,21 @@ impl Actor {
         height: u64,
     ) {
         let chunk_store = if self.ensure_rbc_chunk_store() {
-            self.rbc.chunk_store.as_ref()
+            self.subsystems.da_rbc.rbc.chunk_store.as_ref()
         } else {
             None
         };
         let (lane_totals, dataspace_totals) = super::drain_rbc_state_for_block(
             block_hash,
-            &mut self.rbc.sessions,
-            &mut self.rbc.pending,
-            &mut self.rbc.session_rosters,
-            &self.rbc.status_handle,
+            &mut self.subsystems.da_rbc.rbc.sessions,
+            &mut self.subsystems.da_rbc.rbc.pending,
+            &mut self.subsystems.da_rbc.rbc.session_rosters,
+            &self.subsystems.da_rbc.rbc.status_handle,
             chunk_store,
         );
         let payload_keys: Vec<_> = self
+            .subsystems
+            .da_rbc
             .rbc
             .payload_rebroadcast_last_sent
             .keys()
@@ -4842,9 +4955,11 @@ impl Actor {
             .copied()
             .collect();
         for key in payload_keys {
-            self.rbc.payload_rebroadcast_last_sent.remove(&key);
+            self.subsystems.da_rbc.rbc.payload_rebroadcast_last_sent.remove(&key);
         }
         let ready_keys: Vec<_> = self
+            .subsystems
+            .da_rbc
             .rbc
             .ready_rebroadcast_last_sent
             .keys()
@@ -4852,9 +4967,9 @@ impl Actor {
             .copied()
             .collect();
         for key in ready_keys {
-            self.rbc.ready_rebroadcast_last_sent.remove(&key);
+            self.subsystems.da_rbc.rbc.ready_rebroadcast_last_sent.remove(&key);
         }
-        self.rbc
+        self.subsystems.da_rbc.rbc
             .persisted_full_sessions
             .retain(|(hash, _, _)| *hash != block_hash);
         self.pending.pending_replay_last_sent.remove(&block_hash);
@@ -4885,15 +5000,37 @@ impl Actor {
     }
 
     pub(super) fn refresh_npos_seed(&mut self, seed: [u8; 32]) {
-        if let Some(mut cfg) = self.npos_collectors {
-            cfg.seed = seed;
-            self.npos_collectors = Some(cfg);
-        } else {
-            self.npos_collectors = Some(NposCollectorConfig {
-                seed,
-                k: self.config.npos.k_aggregators,
-                redundant_send_r: self.config.npos.redundant_send_r,
-            });
+        let (mut cfg, epoch_params) = {
+            let view = self.state.view();
+            let cfg = super::load_npos_collector_config(&view)
+                .or(self.npos_collectors)
+                .unwrap_or(NposCollectorConfig {
+                    seed,
+                    k: self.config.npos.k_aggregators,
+                    redundant_send_r: self.config.npos.redundant_send_r,
+                });
+            let epoch_params = super::load_npos_epoch_params(&view, &self.config);
+            (cfg, epoch_params)
+        };
+        cfg.seed = seed;
+        self.npos_collectors = Some(cfg);
+        if let Some(manager) = self.epoch_manager.as_mut() {
+            manager.set_params(
+                epoch_params.epoch_length_blocks,
+                epoch_params.commit_deadline_offset,
+                epoch_params.reveal_deadline_offset,
+            );
+            super::status::set_epoch_parameters(
+                manager.epoch_length_blocks(),
+                manager.commit_window_end(),
+                manager.reveal_window_end(),
+            );
+            #[cfg(feature = "telemetry")]
+            self.telemetry.set_epoch_parameters(
+                manager.epoch_length_blocks(),
+                manager.commit_window_end(),
+                manager.reveal_window_end(),
+            );
         }
     }
 
@@ -4938,9 +5075,10 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_commit(&mut self, height: u64) -> Result<()> {
-        self.propose.new_view_tracker.prune(height);
-        self.broadcast_new_views.retain(|(h, _), _| *h > height);
-        self.propose.forced_view_after_timeout = self
+        self.subsystems.propose.new_view_tracker.prune(height);
+        self.subsystems.propose.broadcast_new_views.retain(|(h, _), _| *h > height);
+        self.subsystems.propose.forced_view_after_timeout = self
+            .subsystems
             .propose
             .forced_view_after_timeout
             .filter(|(forced_height, _)| *forced_height > height);
@@ -4949,7 +5087,7 @@ impl Actor {
             view.latest_block_hash()
         };
         if let Some(hash) = latest_hash {
-            self.view_change_chain.prune(hash);
+            self.subsystems.propose.view_change_chain.prune(hash);
         }
         self.refresh_p2p_topology();
         let commit_topology = self.effective_commit_topology();
@@ -5128,7 +5266,7 @@ impl Actor {
         }
 
         if let Some(epoch) = self.epoch_manager.as_ref().map(EpochManager::epoch) {
-            let _ = self.vrf.state_mut(self.consensus_mode, epoch);
+            let _ = self.subsystems.vrf.state_mut(self.consensus_mode, epoch);
         }
 
         self.apply_penalties(height)?;
@@ -5351,9 +5489,9 @@ impl Actor {
             return false;
         }
         self.last_commit_topology_hash = Some(topology_hash);
-        self.propose.new_view_tracker = NewViewTracker::default();
-        self.broadcast_new_views.clear();
-        self.propose.forced_view_after_timeout = None;
+        self.subsystems.propose.new_view_tracker = NewViewTracker::default();
+        self.subsystems.propose.broadcast_new_views.clear();
+        self.subsystems.propose.forced_view_after_timeout = None;
         true
     }
 
@@ -5370,21 +5508,21 @@ impl Actor {
         self.qc_signer_tally.clear();
         self.execution_qc_cache.clear();
         self.voting_block = None;
-        self.proposals_seen.clear();
-        self.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
+        self.subsystems.propose.proposals_seen.clear();
+        self.subsystems.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
         self.reset_collector_state();
-        self.propose.last_empty_child_attempt = None;
-        self.rbc.pending.clear();
-        self.rbc.sessions.clear();
-        self.rbc.session_rosters.clear();
-        self.rbc.payload_rebroadcast_last_sent.clear();
-        self.rbc.ready_rebroadcast_last_sent.clear();
-        self.rbc.persisted_full_sessions.clear();
-        self.rbc.status_handle.clear();
-        self.da.da_bundles.clear();
-        self.da.da_pin_bundles.clear();
-        self.da.sealed_commitments.clear();
-        self.da.sealed_pin_intents.clear();
+        self.subsystems.propose.last_empty_child_attempt = None;
+        self.subsystems.da_rbc.rbc.pending.clear();
+        self.subsystems.da_rbc.rbc.sessions.clear();
+        self.subsystems.da_rbc.rbc.session_rosters.clear();
+        self.subsystems.da_rbc.rbc.payload_rebroadcast_last_sent.clear();
+        self.subsystems.da_rbc.rbc.ready_rebroadcast_last_sent.clear();
+        self.subsystems.da_rbc.rbc.persisted_full_sessions.clear();
+        self.subsystems.da_rbc.rbc.status_handle.clear();
+        self.subsystems.da_rbc.da.da_bundles.clear();
+        self.subsystems.da_rbc.da.da_pin_bundles.clear();
+        self.subsystems.da_rbc.da.sealed_commitments.clear();
+        self.subsystems.da_rbc.da.sealed_pin_intents.clear();
         self.payload_rebroadcast_log.clear();
         self.block_sync_rebroadcast_log.clear();
         self.block_sync_fetch_log.clear();
@@ -5473,16 +5611,16 @@ impl Actor {
     }
 
     pub(super) fn refresh_backpressure_state(&mut self) -> bool {
-        let refreshed = self.propose.backpressure_gate.refresh();
+        let refreshed = self.subsystems.propose.backpressure_gate.refresh();
         // Always publish the latest snapshot so operator status endpoints report
         // correct queue capacity even when the state has not changed.
-        super::status::set_tx_queue_backpressure(self.propose.backpressure_gate.state());
+        super::status::set_tx_queue_backpressure(self.subsystems.propose.backpressure_gate.state());
         refreshed
     }
 
     #[allow(dead_code)]
     pub(super) fn queue_backpressure_state(&self) -> BackpressureState {
-        self.propose.backpressure_gate.state()
+        self.subsystems.propose.backpressure_gate.state()
     }
 
     pub(super) fn evaluate_pacemaker(
@@ -5633,6 +5771,7 @@ mod tests {
             commit_topology: topology.clone(),
             signature_topology: topology,
             qc_signers: None,
+            allow_quorum_bypass: false,
             persist_required: true,
             events_sender,
         };
@@ -6177,7 +6316,7 @@ mod tests {
             &block,
             &state,
             kura.as_ref(),
-            PERMISSIONED_TAG,
+            ConsensusMode::Permissioned,
             &trusted,
             &me_id,
         );

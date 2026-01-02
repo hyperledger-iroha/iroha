@@ -237,7 +237,10 @@ use iroha_data_model::{
     name::Name,
     nft::NftId,
     peer::Peer,
-    transaction::{SignedTransaction, signed::TransactionEntrypoint},
+    transaction::{
+        SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+        signed::TransactionEntrypoint,
+    },
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
@@ -9038,6 +9041,7 @@ async fn handler_post_transaction(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let tx_hash = transaction.hash();
     routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
         app.queue.clone(),
@@ -9046,8 +9050,20 @@ async fn handler_post_transaction(
         app.telemetry.clone(),
         iroha_torii_shared::uri::TRANSACTION,
     )
-    .await
-    .map(|_| ())
+    .await?;
+    let submitted_at_height = u64::try_from(app.state.view().height()).unwrap_or(0);
+    let submitted_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0);
+    let payload = TransactionSubmissionReceiptPayload {
+        tx_hash,
+        submitted_at_ms,
+        submitted_at_height,
+        signer: app.da_receipt_signer.public_key().clone(),
+    };
+    let receipt = TransactionSubmissionReceipt::sign(payload, &app.da_receipt_signer);
+    Ok((StatusCode::ACCEPTED, NoritoBody(receipt)))
 }
 
 async fn handler_proof_record_get(
@@ -12190,6 +12206,13 @@ impl Torii {
                 config.attachments_max_bytes,
                 config.attachments_per_tenant_max_count,
                 config.attachments_per_tenant_max_bytes,
+                config.attachments_allowed_mime_types.clone(),
+                config.attachments_max_expanded_bytes,
+                config.attachments_max_archive_depth,
+                config.attachments_sanitizer_mode,
+                config.attachments_sanitize_timeout_ms,
+                None,
+                telemetry.clone(),
             );
             // Non-consensus background prover hook (disabled by default)
             crate::zk_prover::configure(

@@ -1302,6 +1302,24 @@ pub mod torii {
     pub const ATTACHMENTS_PER_TENANT_MAX_COUNT: u64 = 128;
     /// Default aggregate attachment bytes per tenant (0 = unlimited).
     pub const ATTACHMENTS_PER_TENANT_MAX_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
+    /// Default allowed MIME types for attachment payloads (post-sniff).
+    #[must_use]
+    pub fn attachments_allowed_mime_types() -> Vec<String> {
+        vec![
+            "application/x-norito".to_string(),
+            "application/json".to_string(),
+            "text/json".to_string(),
+            "application/x-zk1".to_string(),
+        ]
+    }
+    /// Default maximum expanded bytes when decompressing attachments.
+    pub const ATTACHMENTS_MAX_EXPANDED_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB
+    /// Default maximum archive depth when expanding attachments.
+    pub const ATTACHMENTS_MAX_ARCHIVE_DEPTH: u32 = 2;
+    /// Default attachment sanitization timeout (milliseconds).
+    pub const ATTACHMENTS_SANITIZE_TIMEOUT_MS: u64 = 1_000;
+    /// Attachment sanitizer execution mode (`subprocess` or `in_process`).
+    pub const ATTACHMENTS_SANITIZER_MODE: &str = "subprocess";
     /// Background ZK prover worker enable flag (disabled by default)
     pub const ZK_PROVER_ENABLED: bool = false;
     /// Background ZK prover scan period (seconds)

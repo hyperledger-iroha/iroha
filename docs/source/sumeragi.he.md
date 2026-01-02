@@ -16,7 +16,7 @@ translator: manual
 [`sumeragi_npos_task_breakdown.md`](sumeragi_npos_task_breakdown.md).
 
 ### סקירה
-- **תפקידים ורוטציה** – הטופולוגיה המסודרת מחלקת את העמיתים לתפקידים `Leader`, ‏`ValidatingPeer`, ‏`ProxyTail`, ‏`SetBValidator`. לאחר כל קומיט הקבוצה הראשונה (`min_votes_for_commit()`) זזה צעד שמאלה; שינויי View מסובבים את כל הטופולוגיה כדי לקדם את הלידר. הפונקציה `rotated_for_epoch_height(epoch, height)` ב-`network_topology.rs` מספקת רוטציה דטרמיניסטית קלה לביקורת על בסיס `(epoch,height)`.
+- **תפקידים ורוטציה** – הטופולוגיה המסודרת מחלקת את העמיתים לתפקידים `Leader`, ‏`ValidatingPeer`, ‏`ProxyTail`, ‏`SetBValidator`. לאחר כל קומיט הקבוצה הראשונה (`min_votes_for_commit()`) זזה שמאלה לפי `hash(prev_block_hash) mod min_votes_for_commit()`; שינויי View מסובבים את כל הטופולוגיה כדי לקדם את הלידר. הפונקציה `rotated_for_prev_block_hash(prev_hash)` ב-`network_topology.rs` מספקת רוטציה דטרמיניסטית קלה לביקורת על בסיס האש הבלוק הקודם.
 - **מצב K-Collectors** – לכל גובה הטופולוגיה בוחרת דטרמיניסטית K אספנים כקטע רציף שמתחיל ב-`proxy_tail_index()` (כולל) ללא עטיפה; הלידר לעולם אינו נבחר. כאשר K=1 מתקבלת שוב תצורת הפרוקסי-טייל ההיסטורית.
 - **First-QC-wins** – כל אספן ייעודי (כולל Proxy Tail) שמרכיב QC תקף ל-Precommit מפרסם אותו. עמיתים מאמצים את ה-QC התקף הראשון עבור `(height,hash)` ומתעלמים מאיחורים; הקומיט מבוסס מעתה כולו על QCs אלו.
 

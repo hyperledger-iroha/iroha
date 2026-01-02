@@ -105,8 +105,12 @@ impl Actor {
             );
             return Ok(());
         }
+        let (_, leader_mode_tag, leader_prf_seed) =
+            self.consensus_context_for_height(frame.height);
+        let (qc_consensus_mode, qc_mode_tag, qc_prf_seed) =
+            self.consensus_context_for_height(frame.highest_qc.height);
         if let Err(err) =
-            validate_new_view_signature(&self.chain_id, self.mode_tag(), &topology_peers, &frame)
+            validate_new_view_signature(&self.chain_id, leader_mode_tag, &topology_peers, &frame)
         {
             warn!(
                 ?err,
@@ -118,22 +122,16 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(topology_peers.clone());
-        let (qc_prf_seed, leader_prf_seed) = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            (
-                Some(super::npos_seed_for_height(&view, frame.highest_qc.height)),
-                Some(super::npos_seed_for_height(&view, frame.height)),
-            )
-        } else {
-            (None, None)
-        };
         let topology_len = topology.as_ref().len();
         let is_genesis_stub = self.is_genesis_qc_stub(&frame.highest_qc, topology_len);
         let qc_topology = if is_genesis_stub {
             None
         } else {
-            let qc_roster =
-                self.roster_for_vote(frame.highest_qc.subject_block_hash, frame.highest_qc.height);
+            let qc_roster = self.roster_for_vote_with_mode(
+                frame.highest_qc.subject_block_hash,
+                frame.highest_qc.height,
+                qc_consensus_mode,
+            );
             if qc_roster.is_empty() {
                 warn!(
                     height = frame.height,
@@ -169,7 +167,7 @@ impl Actor {
                 &frame.highest_qc,
                 qc_topology,
                 &self.common_config.chain,
-                self.mode_tag(),
+                qc_mode_tag,
                 qc_prf_seed,
             )
         };
@@ -293,11 +291,12 @@ impl Actor {
         self.note_new_view_received();
         let now = Instant::now();
         let prior_count = self
+            .subsystems
             .propose
             .new_view_tracker
             .count(frame.height, frame.view);
         let local_count =
-            self.propose
+            self.subsystems.propose
                 .new_view_tracker
                 .record(frame.height, frame.view, frame.sender, qc_ref);
         let is_new_sender = local_count > prior_count;
@@ -306,17 +305,17 @@ impl Actor {
         if should_catch_up {
             self.phase_tracker
                 .on_view_change(frame.height, frame.view, now);
-            self.propose
+            self.subsystems.propose
                 .new_view_tracker
                 .drop_below_view(frame.height, frame.view);
-            match self.propose.forced_view_after_timeout {
+            match self.subsystems.propose.forced_view_after_timeout {
                 Some((forced_height, forced_view)) => {
                     if forced_height == frame.height && forced_view < frame.view {
-                        self.propose.forced_view_after_timeout = Some((forced_height, frame.view));
+                        self.subsystems.propose.forced_view_after_timeout = Some((forced_height, frame.view));
                     }
                 }
                 None => {
-                    self.propose.forced_view_after_timeout = Some((frame.height, frame.view));
+                    self.subsystems.propose.forced_view_after_timeout = Some((frame.height, frame.view));
                 }
             }
             self.maybe_broadcast_new_view(qc_ref, Some(frame.height), Some(frame.view));
@@ -337,7 +336,7 @@ impl Actor {
                 &topology,
                 frame.height,
                 frame.view,
-                self.mode_tag(),
+                leader_mode_tag,
                 leader_prf_seed,
             )
             .as_ref()
@@ -358,9 +357,9 @@ impl Actor {
                 });
             }
         }
-        let required = topology.min_votes_for_commit();
+        let required = topology.min_votes_for_view_change();
         let count_with_local =
-            self.propose
+            self.subsystems.propose
                 .new_view_tracker
                 .count_with_local(frame.height, frame.view, local_idx);
         let current_view = self.phase_tracker.current_view(frame.height);
@@ -371,7 +370,7 @@ impl Actor {
             }
             self.phase_tracker
                 .on_view_change(frame.height, frame.view, now);
-            self.propose
+            self.subsystems.propose
                 .new_view_tracker
                 .drop_below_view(frame.height, frame.view);
             self.record_phase_sample(PipelinePhase::Propose, frame.height, frame.view);
@@ -410,25 +409,39 @@ impl Actor {
         &mut self,
         evidence: crate::sumeragi::consensus::Evidence,
     ) -> Result<()> {
-        let topology_peers = self.effective_commit_topology();
+        let (subject_height, _) = super::evidence::evidence_subject_height_view(&evidence);
+        let view = self.state.view();
+        let height = subject_height.unwrap_or_else(|| u64::try_from(view.height()).unwrap_or(0));
+        let consensus_mode =
+            super::effective_consensus_mode_for_height(&view, height, self.config.consensus_mode);
+        let mode_tag = match consensus_mode {
+            ConsensusMode::Permissioned => super::consensus::PERMISSIONED_TAG,
+            ConsensusMode::Npos => super::consensus::NPOS_TAG,
+        };
+        let prf_seed = if matches!(consensus_mode, ConsensusMode::Npos) {
+            Some(super::npos_seed_for_height(&view, height))
+        } else {
+            None
+        };
+        drop(view);
+        let mut evidence_roster = None;
+        for (height, block_hash) in super::evidence::evidence_block_refs(&evidence) {
+            let roster = self.roster_for_vote_with_mode(block_hash, height, consensus_mode);
+            if !roster.is_empty() {
+                evidence_roster = Some(roster);
+                break;
+            }
+        }
+        let topology_peers = evidence_roster.unwrap_or_else(|| self.effective_commit_topology());
         if topology_peers.is_empty() {
             debug!("dropping evidence: empty commit topology");
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(topology_peers);
-        let (subject_height, _) = super::evidence::evidence_subject_height_view(&evidence);
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            let height =
-                subject_height.unwrap_or_else(|| u64::try_from(view.height()).unwrap_or(0));
-            Some(super::npos_seed_for_height(&view, height))
-        } else {
-            None
-        };
         let evidence_context = super::evidence::EvidenceValidationContext {
             topology: &topology,
             chain_id: &self.common_config.chain,
-            mode_tag: self.mode_tag(),
+            mode_tag,
             prf_seed,
         };
         if let Err(err) = super::evidence::validate_evidence(&evidence, &evidence_context) {
@@ -438,9 +451,41 @@ impl Actor {
         if !self.evidence_is_fresh(&evidence) {
             return Ok(());
         }
-        if self.evidence_store.insert(&evidence, &evidence_context) {
+        let inserted = self.evidence_store.insert(&evidence, &evidence_context);
+        if inserted {
             let _ =
                 super::evidence::persist_record(self.state.as_ref(), &evidence, &evidence_context);
+        }
+        if inserted && matches!(evidence.kind, crate::sumeragi::consensus::EvidenceKind::Censorship)
+        {
+            let committed_qc = self.latest_committed_qc();
+            let committed_height = committed_qc.as_ref().map_or_else(
+                || {
+                    let view_snapshot = self.state.view();
+                    view_snapshot.height() as u64
+                },
+                |qc| qc.height,
+            );
+            let active_height =
+                super::active_round_height(self.highest_qc, committed_qc, committed_height);
+            let (subject_height, _) = super::evidence::evidence_subject_height_view(&evidence);
+            let target_height = subject_height.map_or(active_height, |height| {
+                if height < active_height {
+                    active_height
+                } else {
+                    height
+                }
+            });
+            info!(
+                height = target_height,
+                subject_height,
+                "triggering view change after censorship evidence"
+            );
+            self.trigger_view_change_with_cause(
+                target_height,
+                0,
+                ViewChangeCause::CensorshipEvidence,
+            );
         }
         Ok(())
     }
@@ -466,10 +511,10 @@ impl Actor {
             return Ok(());
         }
 
-        self.view_change_chain.prune(latest_hash);
+        self.subsystems.propose.view_change_chain.prune(latest_hash);
         let topology = super::network_topology::Topology::new(topology_peers);
         let outcome = match merge_view_change_proof(
-            &mut self.view_change_chain,
+            &mut self.subsystems.propose.view_change_chain,
             proof,
             &topology,
             latest_hash,
@@ -558,29 +603,35 @@ impl Actor {
             }
         };
 
-        let Ok(view_usize) = usize::try_from(view_idx) else {
+        let Ok(view_u32) = u32::try_from(view_idx) else {
             warn!(
                 height,
                 view = view_idx,
-                "skipping view-change proof broadcast: view index exceeds usize limits"
+                "skipping view-change proof broadcast: view index exceeds u32 limits"
             );
             return Ok(());
         };
 
         let local_pk = self.common_config.key_pair.public_key().clone();
-        let mut proof_opt = self.view_change_chain.get_proof_for_view_change(view_usize);
+        let mut proof_opt = self
+            .subsystems
+            .propose
+            .view_change_chain
+            .get_proof_for_view_change(view_u32);
 
         let mut signed_locally = false;
         let needs_signature =
             Self::should_sign_view_change_proof(proof_opt.as_ref(), latest_hash, &local_pk);
 
         if needs_signature {
-            let builder = crate::sumeragi::view_change::ProofBuilder::new(latest_hash, view_usize);
+            let builder = crate::sumeragi::view_change::ProofBuilder::new(latest_hash, view_u32);
             let signed = builder.sign(&self.common_config.key_pair);
             self.handle_view_change_proof(signed.clone())?;
             proof_opt = self
+                .subsystems
+                .propose
                 .view_change_chain
-                .get_proof_for_view_change(view_usize)
+                .get_proof_for_view_change(view_u32)
                 .or(Some(signed));
             super::status::inc_view_change_suggest();
             #[cfg(feature = "telemetry")]

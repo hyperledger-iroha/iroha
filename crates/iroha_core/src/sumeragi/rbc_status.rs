@@ -134,19 +134,22 @@ impl Handle {
                 },
             );
         }
-        if inner.disk.is_some() && persist_needed {
-            let (ttl, capacity) = {
-                let disk = inner
-                    .disk
-                    .as_ref()
-                    .expect("disk store should exist when checked");
-                (disk.ttl, disk.capacity)
-            };
-            enforce_map_limits(&mut inner.map, ttl, capacity);
-            if let Some(disk) = inner.disk.as_ref()
-                && let Err(err) = disk.persist(&inner.map)
-            {
-                warn!(?err, "failed to persist RBC session store after update");
+        let disk_config = inner
+            .disk
+            .as_ref()
+            .map(|disk| (disk.file.clone(), disk.ttl, disk.capacity));
+        if let Some((file, ttl, capacity)) = disk_config {
+            let should_persist = persist_needed || ttl > Duration::ZERO || capacity > 0;
+            if should_persist {
+                enforce_map_limits(&mut inner.map, ttl, capacity);
+                let disk = DiskStore {
+                    file,
+                    ttl,
+                    capacity,
+                };
+                if let Err(err) = disk.persist(&inner.map) {
+                    warn!(?err, "failed to persist RBC session store after update");
+                }
             }
         }
         self.store
@@ -589,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn update_skips_persist_when_summary_unchanged() {
+    fn update_persists_timestamp_when_summary_unchanged() {
         let dir = tempdir().expect("tempdir");
         let handle = register_handle();
         handle.configure(Some(StoreConfig {
@@ -622,7 +625,14 @@ mod tests {
         let updated_time = initial_time + Duration::from_secs(1);
         handle.update(summary, updated_time);
         let after = fs::read(&path).expect("read RBC snapshot");
-        assert_eq!(before, after);
+        assert_ne!(before, after);
+
+        let stored = decode_entries(&after);
+        let entry = stored
+            .iter()
+            .find(|entry| entry.summary.block_hash == block_hash)
+            .expect("entry persisted");
+        assert_eq!(entry.updated_at_ms, system_time_to_ms(updated_time));
 
         let key = (block_hash, height, view);
         let inner = handle.store.inner.lock().expect("rbc status lock poisoned");

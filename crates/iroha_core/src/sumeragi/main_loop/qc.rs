@@ -35,7 +35,7 @@ impl Actor {
         signature_topology: &super::network_topology::Topology,
     ) -> BTreeSet<ValidatorIndex> {
         let chain_id = &self.common_config.chain;
-        let mode_tag = self.mode_tag();
+        let (_, mode_tag, _) = self.consensus_context_for_height(height);
         self.vote_log
             .values()
             .filter(|stored| {
@@ -248,14 +248,9 @@ impl Actor {
         epoch: u64,
         topology: super::network_topology::Topology,
     ) {
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, height))
-        } else {
-            None
-        };
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology =
-            topology_for_view(&topology, height, view, self.mode_tag(), prf_seed);
+            topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
         if let Some(existing) = self.qc_cache.get(&(phase, block_hash, height, view, epoch)) {
@@ -561,14 +556,9 @@ impl Actor {
         if self.execution_qc_cache.contains_key(&block_hash) {
             return;
         }
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, height))
-        } else {
-            None
-        };
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology =
-            topology_for_view(&topology, height, view, self.mode_tag(), prf_seed);
+            topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
         if required == 0 {
@@ -1061,7 +1051,10 @@ impl Actor {
         {
             return Ok(());
         }
-        let commit_topology = self.roster_for_vote(qc.subject_block_hash, qc.height);
+        let (consensus_mode, mode_tag, prf_seed) =
+            self.consensus_context_for_height(qc.height);
+        let commit_topology =
+            self.roster_for_vote_with_mode(qc.subject_block_hash, qc.height, consensus_mode);
         if commit_topology.is_empty() {
             debug!(
                 height = qc.height,
@@ -1072,18 +1065,12 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, qc.height))
-        } else {
-            None
-        };
         let (validation, evidence) = validate_qc_with_evidence(
             &self.vote_log,
             &qc,
             &topology,
             &self.common_config.chain,
-            self.mode_tag(),
+            mode_tag,
             prf_seed,
         );
         let validation = match validation {
@@ -1287,18 +1274,6 @@ impl Actor {
             cache_len = self.qc_cache.len(),
             "cached validated QC"
         );
-        if block_known && matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit) {
-            if let Some(pending) = self.pending.pending_blocks.remove(&qc.subject_block_hash) {
-                let qc_header = crate::sumeragi::consensus::QcHeaderRef {
-                    phase: crate::sumeragi::consensus::Phase::Precommit,
-                    subject_block_hash: qc.subject_block_hash,
-                    height: qc.height,
-                    view: qc.view,
-                    epoch: qc.epoch,
-                };
-                let _ = self.finalize_pending_block(qc_header, pending, None);
-            }
-        }
         if block_known {
             if let Some(highest) = self.highest_qc {
                 self.maybe_broadcast_new_view(highest, None, None);
@@ -1333,7 +1308,7 @@ impl Actor {
             return None;
         }
         let session_key = Self::session_key(&qc.subject_block_hash, qc.height, qc.view);
-        let session = self.rbc.sessions.get(&session_key)?;
+        let session = self.subsystems.da_rbc.rbc.sessions.get(&session_key)?;
         let ready_signers: BTreeSet<_> = session
             .ready_signatures
             .iter()
@@ -1394,19 +1369,14 @@ impl Actor {
         let QcValidationError::MissingVotes { .. } = err else {
             return None;
         };
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, qc.height))
-        } else {
-            None
-        };
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let signature_topology =
-            super::topology_for_view(topology, qc.height, qc.view, self.mode_tag(), prf_seed);
+            super::topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
         if !qc_aggregate_consistent(
             qc,
             &signature_topology,
             &self.common_config.chain,
-            self.mode_tag(),
+            mode_tag,
         ) {
             return None;
         }
@@ -1468,7 +1438,10 @@ impl Actor {
             }
         }
         self.record_phase_sample(PipelinePhase::CollectExec, qc.height, qc.view);
-        let topology_peers = self.roster_for_vote(qc.subject_block_hash, qc.height);
+        let (consensus_mode, mode_tag, prf_seed) =
+            self.consensus_context_for_height(qc.height);
+        let topology_peers =
+            self.roster_for_vote_with_mode(qc.subject_block_hash, qc.height, consensus_mode);
         if topology_peers.is_empty() {
             debug!(
                 height = qc.height,
@@ -1479,17 +1452,11 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(topology_peers);
-        let prf_seed = if matches!(self.consensus_mode, ConsensusMode::Npos) {
-            let view = self.state.view();
-            Some(super::npos_seed_for_height(&view, qc.height))
-        } else {
-            None
-        };
         if let Err(err) = super::validate_execution_qc(
             &qc,
             &topology,
             &self.common_config.chain,
-            self.mode_tag(),
+            mode_tag,
             prf_seed,
         ) {
             warn!(

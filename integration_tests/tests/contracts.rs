@@ -8,6 +8,7 @@ use iroha::data_model::prelude::*;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
 use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
 use iroha_test_network::NetworkBuilder;
+use reqwest::StatusCode;
 
 fn hex32(hash: &Hash) -> String {
     hex::encode(hash.as_ref())
@@ -19,6 +20,7 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
     // Grant CanRegisterSmartContractCode to Alice in genesis so she can register manifests.
     let permission: Permission = CanRegisterSmartContractCode.into();
     let builder = NetworkBuilder::new()
+        .with_min_peers(4)
         // Keep pipeline timings short to ensure the manifest transaction is flushed promptly.
         .with_pipeline_time(std::time::Duration::from_secs(4))
         .with_config_layer(|layer| {
@@ -148,13 +150,40 @@ async fn post_and_get_contract_manifest_via_torii() -> Result<()> {
         .torii_url
         .join(&format!("/v1/contracts/code/{}", hex32(&code_hash)))
         .unwrap();
-    let got_txt = http
-        .get(get_url)
-        .header("Accept", "application/json")
-        .send()
-        .await?
-        .text()
-        .await?;
+    let get_deadline = Instant::now() + std::time::Duration::from_secs(120);
+    let mut got_txt = None;
+    let mut last_get_error: Option<String> = None;
+    while Instant::now() < get_deadline {
+        let resp = http
+            .get(get_url.clone())
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if status == StatusCode::NOT_FOUND {
+            last_get_error = Some("manifest not found".to_owned());
+        } else if !status.is_success() {
+            return Err(eyre!(
+                "GET /v1/contracts/code/{code_hash} returned {status}: {body}"
+            ));
+        } else if body.trim().is_empty() {
+            last_get_error = Some("empty response body".to_owned());
+        } else {
+            got_txt = Some(body);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    let got_txt = got_txt.ok_or_else(|| {
+        eyre!(
+            "manifest GET did not return JSON before deadline{}",
+            last_get_error
+                .as_deref()
+                .map(|err| format!("; last error: {err}"))
+                .unwrap_or_default()
+        )
+    })?;
     let got: norito::json::Value = norito::json::from_str(&got_txt)?;
 
     // Validate manifest present and code_bytes absent

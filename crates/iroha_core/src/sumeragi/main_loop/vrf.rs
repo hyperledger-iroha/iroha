@@ -184,7 +184,7 @@ impl Actor {
         let mut pending_commit: Option<crate::sumeragi::consensus::VrfCommit> = None;
 
         if position <= commit_end {
-            let commit_needed = if let Some(state) = self.vrf.state_mut(self.consensus_mode, epoch)
+            let commit_needed = if let Some(state) = self.subsystems.vrf.state_mut(self.consensus_mode, epoch)
             {
                 !state.commit_sent
             } else {
@@ -193,7 +193,7 @@ impl Actor {
 
             if commit_needed {
                 let (reveal, commitment) = self.derive_vrf_material(epoch, local_signer);
-                if let Some(state) = self.vrf.state_mut(self.consensus_mode, epoch) {
+                if let Some(state) = self.subsystems.vrf.state_mut(self.consensus_mode, epoch) {
                     if !state.commit_sent {
                         state.reveal = reveal;
                         state.commitment = commitment;
@@ -227,7 +227,7 @@ impl Actor {
                     }
                 }
                 other => {
-                    if let Some(state) = self.vrf.state_mut(self.consensus_mode, epoch) {
+                    if let Some(state) = self.subsystems.vrf.state_mut(self.consensus_mode, epoch) {
                         state.commit_sent = false;
                     }
                     if other == VrfNoteResult::RejectedOutOfWindow {
@@ -250,7 +250,7 @@ impl Actor {
         let mut should_emit_reveal = false;
 
         if position > commit_end && position <= reveal_end {
-            if let Some(state) = self.vrf.state_mut(self.consensus_mode, epoch) {
+            if let Some(state) = self.subsystems.vrf.state_mut(self.consensus_mode, epoch) {
                 if state.reveal_sent {
                     // Reveal already sent for this epoch.
                 } else if !state.commit_sent {
@@ -281,7 +281,7 @@ impl Actor {
                         "local VRF commitment mismatch while deriving reveal"
                     );
                 }
-                if let Some(state) = self.vrf.state_mut(self.consensus_mode, epoch) {
+                if let Some(state) = self.subsystems.vrf.state_mut(self.consensus_mode, epoch) {
                     if state.commit_sent && !state.reveal_sent {
                         state.reveal = derived_reveal;
                         state.commitment = commitment;
@@ -302,7 +302,7 @@ impl Actor {
                 self.process_vrf_reveal(height, roster_len_hint, reveal_msg, Some(local_signer))?;
             match note_result {
                 VrfNoteResult::Accepted | VrfNoteResult::AcceptedLate => {
-                    if let Some(state) = self.vrf.state_mut(self.consensus_mode, epoch) {
+                    if let Some(state) = self.subsystems.vrf.state_mut(self.consensus_mode, epoch) {
                         state.reveal_sent = true;
                     }
                     let topology_peers = self.effective_commit_topology();
@@ -389,7 +389,7 @@ impl Actor {
         ) {
             if let Some(local_idx) = local_signer {
                 if local_idx == commit.signer {
-                    self.vrf
+                    self.subsystems.vrf
                         .note_commit(self.consensus_mode, commit.epoch, commit.commitment);
                 }
             }
@@ -464,7 +464,7 @@ impl Actor {
         ) {
             if let Some(local_idx) = local_signer {
                 if local_idx == reveal.signer {
-                    self.vrf
+                    self.subsystems.vrf
                         .note_reveal(self.consensus_mode, reveal.epoch, reveal.reveal);
                 }
             }
@@ -541,12 +541,28 @@ impl Actor {
             })
         };
 
+        let (epoch_length, commit_deadline_offset, reveal_deadline_offset) = self
+            .epoch_manager
+            .as_ref()
+            .map(|manager| {
+                (
+                    manager.epoch_length_blocks(),
+                    manager.commit_window_end(),
+                    manager.reveal_window_end(),
+                )
+            })
+            .unwrap_or((
+                self.config.epoch_length_blocks,
+                self.config.vrf_commit_deadline_offset,
+                self.config.vrf_reveal_deadline_offset,
+            ));
+
         VrfEpochRecord {
             epoch,
             seed,
-            epoch_length: self.config.epoch_length_blocks,
-            commit_deadline_offset: self.config.vrf_commit_deadline_offset,
-            reveal_deadline_offset: self.config.vrf_reveal_deadline_offset,
+            epoch_length,
+            commit_deadline_offset,
+            reveal_deadline_offset,
             roster_len,
             finalized,
             updated_at_height,

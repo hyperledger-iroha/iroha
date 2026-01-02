@@ -107,7 +107,7 @@ _最終レビュー: 2025-11-07 — 次回予定: 2026-02-05_
 | Telemetry redaction policy | 未解決 | Redaction lint/CI を整備 | Observability WG | 2025-10-20 |
 | Time and NTP hardening | 未解決 | NTS もしくは複数ソース検証（チケット予定） | Runtime WG & Ops | 2025-11-10 |
 | Membership mismatch telemetry | 未解決 | `sumeragi_membership_mismatch_total` のアラートを整備 | Consensus WG | 2025-10-15 |
-| Attachment sanitisation | 未解決 | Magic-byte 判定／サンドボックス／エクスポート制御を設計 | Runtime WG | 2025-11-30 |
+| Attachment sanitisation | 解決済み | Magic-byte 判定／サブプロセスサニタイズ／エクスポート再サニタイズを実装 | Runtime WG | 2025-11-30 |
 | Witness retention audit | 未解決 | 証人削除の自動検証を実装 | ZK WG | 2025-11-05 |
 | Peer churn telemetry | 進行中 | `p2p_peer_churn_total` のアラート・ダッシュボード整備 | Core WG | 2025-10-25 |
 
@@ -124,7 +124,7 @@ _最終レビュー: 2025-11-07 — 次回予定: 2026-02-05_
 | --- | --- | --- | --- |
 | Security WG | security@iroha | 未 | 2025-10-05 までに確認・チケット紐付け |
 | Core WG | core@iroha | 未 | pre-auth DoS 計画と churn テレメトリ確認 |
-| Runtime WG | runtime@iroha | 未 | 添付サニタイズのフォローアップ確認 |
+| Runtime WG | runtime@iroha | 未 | 添付サニタイズ完了の確認 |
 | Torii WG | torii@iroha | 未 | 認証強化 (`TOR-118`) の検証と接続ゲート計画 |
 | Consensus WG | consensus@iroha | 未 | 公平性監査とメンバーシップテレメトリ |
 | Data Model WG | data-model@iroha | 未 | Norito/Kotodama カバレッジとファズコーパス |

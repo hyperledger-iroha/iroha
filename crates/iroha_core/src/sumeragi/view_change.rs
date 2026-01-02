@@ -82,11 +82,7 @@ pub struct ProofBuilder(SignedViewChangeProof);
 
 impl ProofBuilder {
     /// Constructor from index.
-    pub fn new(latest_block: HashOf<BlockHeader>, view_change_index: usize) -> Self {
-        let view_change_index = view_change_index
-            .try_into()
-            .expect("INTERNAL BUG: Blockchain height should fit into usize");
-
+    pub fn new(latest_block: HashOf<BlockHeader>, view_change_index: u32) -> Self {
         let proof = SignedViewChangeProof {
             payload: ViewChangeProofPayload {
                 latest_block,
@@ -318,11 +314,9 @@ impl ProofChain {
     /// Get proof for requested view change index
     pub fn get_proof_for_view_change(
         &self,
-        view_change_index: usize,
+        view_change_index: u32,
     ) -> Option<SignedViewChangeProof> {
-        #[allow(clippy::cast_possible_truncation)]
-        // Was created from u32 so should be able to cast back
-        self.0.get(&(view_change_index as u32)).cloned()
+        self.0.get(&view_change_index).cloned()
     }
 }
 
@@ -501,7 +495,7 @@ mod tests {
 
     #[test]
     fn insert_proof_rejects_missing_signatures() {
-        let (key_pairs, topology, latest_block) = prepare_data::<3>();
+        let (key_pairs, topology, latest_block) = prepare_data::<4>();
         let mut chain = ProofChain::default();
         let proof = SignedViewChangeProof {
             signatures: Vec::new(),
@@ -556,6 +550,36 @@ mod tests {
         let archived = from_bytes::<SignedViewChangeProof>(&bytes).expect("from_bytes");
         let decoded = <SignedViewChangeProof as NoritoDeserialize>::deserialize(archived);
         assert_eq!(decoded, proof);
+    }
+
+    #[test]
+    fn proof_builder_sets_payload_fields() {
+        let key_pair = KeyPair::random();
+        let latest_block = HashOf::from_untyped_unchecked(Hash::prehashed([9; 32]));
+        let proof = ProofBuilder::new(latest_block, 4).sign(&key_pair);
+
+        assert_eq!(proof.latest_block(), latest_block);
+        assert_eq!(proof.view_change_index(), 4);
+        assert!(proof.has_signer(key_pair.public_key()));
+    }
+
+    #[test]
+    fn get_proof_for_view_change_returns_expected_entry() {
+        let (key_pairs, topology, latest_block) = prepare_data::<3>();
+        let proof0 = ProofBuilder::new(latest_block, 0).sign(&key_pairs[0]);
+        let proof1 = ProofBuilder::new(latest_block, 1).sign(&key_pairs[1]);
+        let mut chain = ProofChain::default();
+
+        chain
+            .insert_proof(proof0.clone(), &topology, latest_block)
+            .expect("proof0 inserts");
+        chain
+            .insert_proof(proof1.clone(), &topology, latest_block)
+            .expect("proof1 inserts");
+
+        assert_eq!(chain.get_proof_for_view_change(0), Some(proof0));
+        assert_eq!(chain.get_proof_for_view_change(1), Some(proof1));
+        assert!(chain.get_proof_for_view_change(2).is_none());
     }
 
     #[test]

@@ -22,6 +22,13 @@ fn ensure_quota_config() {
             iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_BYTES,
             iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
             8 * 1024 * 1024,
+            iroha_config::parameters::defaults::torii::attachments_allowed_mime_types(),
+            iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_EXPANDED_BYTES,
+            iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_ARCHIVE_DEPTH,
+            iroha_config::parameters::actual::AttachmentSanitizerMode::InProcess,
+            iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS,
+            None,
+            iroha_torii::routing::MaybeTelemetry::disabled(),
         );
     });
 }

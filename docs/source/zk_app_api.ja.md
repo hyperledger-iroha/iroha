@@ -20,12 +20,12 @@ translator: manual
 
 ## 添付ファイル
 
-添付ファイルは証明エンベロープや JSON DTO などの生アーティファクトを保存します。識別子は決定的に決まります。
+添付ファイルは証明エンベロープや JSON DTO などのサニタイズ済みアーティファクトを保存します。識別子は決定的に決まります。
 
 エンドポイント:
 - `POST /v1/zk/attachments` — 添付ファイルを保存し、`{ id, size, content_type, created_ms }` を返す。
 - `GET  /v1/zk/attachments` — 保存済みメタデータを一覧（JSON 配列）。クエリフィルタ: `id`, `content_type`, `since_ms`, `before_ms`, `has_tag=<TAG>`（ZK1 TLV タグ、例: `PROF`, `IPAK`）、`limit`, `offset`, `order=asc|desc`, `ids_only=true`。
-- `GET  /v1/zk/attachments/:id` — ID 指定で生バイトを取得。コンテントタイプ維持。
+- `GET  /v1/zk/attachments/:id` — ID 指定で保存済みバイトを取得。コンテントタイプ維持。
 - `DELETE /v1/zk/attachments/:id` — 添付ファイルとメタデータを削除。
 - `GET  /v1/zk/attachments/count` — 同フィルタで `{ count }` を取得。
 - `GET  /v1/zk/proof/{backend}/{hash}` — バックエンドとハッシュで証明レコードを取得（JSON `{ backend, proof_hash, status, verified_at_height?, vk_ref?, vk_commitment? }`）。
@@ -33,8 +33,9 @@ translator: manual
 - `GET  /v1/zk/proofs/count` — 証明レコード数 `{ count }` を返す。
 
 詳細:
-- ID はリクエストボディの Blake2b-32（小文字 hex）。
-- `Content-Type` は POST のヘッダを保存（既定 `application/octet-stream`）。
+- ID はサニタイズ後のリクエストボディの Blake2b-32（小文字 hex）。
+- `Content-Type` はマジックバイトの sniffing で正規化され、宣言ヘッダは `provenance` に記録。
+- サニタイズ: gzip/zstd は `torii.attachments_max_expanded_bytes` と `torii.attachments_max_archive_depth` の範囲で展開し、`torii.attachments_allowed_mime_types` のみ許可。実行モードは `torii.attachments_sanitizer_mode`。旧データ（`provenance` 無し）は配信時に再サニタイズ。
 - サイズ上限は `torii.attachments_max_bytes`（既定 4 MiB）。超過時は `413 Payload Too Large`。
 - テナント毎の上限: `torii.attachments_per_tenant_max_count`／`_max_bytes`。テナントは `X-API-Token` を `token:<blake2b-32>` にハッシュして決定し、トークンなしは `anon`。上限を越えるアップロードでは最古の添付を削除。単体で上限超過なら即 `413`。
 - TTL: `torii.attachments_ttl_secs`（既定 7 日）経過で GC が 60 秒周期で削除。

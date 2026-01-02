@@ -70,3 +70,51 @@ async fn canary_stage_enforces_allowlist() {
     assert_ne!(allowed.status(), StatusCode::FORBIDDEN);
     assert!(allowed.headers().get(ERROR_HEADER).is_none());
 }
+
+#[tokio::test]
+async fn norito_transaction_returns_submission_receipt() {
+    use axum::body::Body;
+    use axum::http::{Request, header::CONTENT_TYPE};
+    use http_body_util::BodyExt;
+    use iroha_data_model::transaction::{SignedTransaction, TransactionSubmissionReceipt};
+    use iroha_torii_shared::uri;
+    use iroha_version::codec::DecodeVersioned as _;
+    use norito::codec::DecodeAll as _;
+    use tower::ServiceExt as _;
+
+    let harness = NoritoRpcHarness::new(|cfg| {
+        cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
+    });
+
+    let tx_bytes = norito_rpc_harness::sample_transaction_bytes();
+    let tx = SignedTransaction::decode_all_versioned(&tx_bytes).expect("decode transaction");
+    let expected_hash = tx.hash();
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri::TRANSACTION)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .body(Body::from(tx_bytes))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let body = BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let mut slice: &[u8] = body.as_ref();
+    let receipt = TransactionSubmissionReceipt::decode_all(&mut slice).expect("decode receipt");
+    assert!(receipt.verify().is_ok());
+    assert_eq!(receipt.payload.tx_hash, expected_hash);
+    assert_eq!(
+        receipt.payload.signer,
+        harness.cfg.common.key_pair.public_key().clone()
+    );
+}

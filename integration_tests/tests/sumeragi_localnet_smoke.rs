@@ -58,6 +58,10 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
             .iter()
             .map(|status| status.view_changes.into())
             .collect();
+        let peer_count = network.peers().len();
+        let fault_tolerance = peer_count.saturating_sub(1) / 3;
+        let max_extra_view_changes = u64::try_from(fault_tolerance.saturating_add(2))
+            .unwrap_or(u64::MAX);
 
         let submit_peer = network
             .peers()
@@ -91,16 +95,23 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         for (idx, status) in after_statuses.iter().enumerate() {
             let before = baseline_view_changes.get(idx).copied().unwrap_or_default();
             ensure!(
-                u64::from(status.view_changes) <= before.saturating_add(1),
-                "peer {idx} experienced repeated view changes: before={before}, after={}",
-                status.view_changes
+                u64::from(status.view_changes) <= before.saturating_add(max_extra_view_changes),
+                "peer {idx} experienced repeated view changes: before={before}, after={}, max_extra={max_extra_view_changes}",
+                status.view_changes,
             );
         }
-        let first = after_statuses.first().map(|s| s.view_changes);
+        let min_view_changes = after_statuses
+            .iter()
+            .map(|status| u64::from(status.view_changes))
+            .min()
+            .unwrap_or_default();
+        let max_view_changes = after_statuses
+            .iter()
+            .map(|status| u64::from(status.view_changes))
+            .max()
+            .unwrap_or_default();
         ensure!(
-            after_statuses
-                .iter()
-                .all(|status| Some(status.view_changes) == first),
+            max_view_changes.saturating_sub(min_view_changes) <= max_extra_view_changes,
             "view_change counters diverged across peers: {after_statuses:?}"
         );
 

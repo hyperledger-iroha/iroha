@@ -39,11 +39,12 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [ ] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_six_peers -- --nocapture` after wiring `sumeragi.debug.rbc.force_deliver_quorum_one` to confirm the 6-peer large-payload scenario stays within delivery budgets.
    - [ ] Re-run `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` to confirm the suite completes without timeouts (blocked in sandbox: loopback binds denied; rerun outside sandbox).
    - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly (currently fails to compile: missing `parent_state_root` in `integration_tests/tests/nexus/cross_lane.rs`).
-   - [ ] Re-run `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` to confirm localnet tx-status fallbacks no longer emit WARN noise.
+  - [x] Re-run `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` to confirm localnet tx-status fallbacks no longer emit WARN noise.
    - [ ] Re-run `cargo test -p integration_tests --test mod -- --nocapture` with `API_ADDRESS`/`PUBLIC_KEY` env overrides set to confirm test-network peers ignore host env config overrides.
    - [ ] Re-run `cargo test -p integration_tests --test mod` after the payload-hash stabilization fix (strip results/extra signatures from DA/RBC payload bytes); attempt 2025-12-31 timed out after 5m with pipeline event failures, peers waiting for block 1, and status endpoint connection refused—confirm the gating condition is resolved.
    - [ ] Re-run `cargo test -p integration_tests --test mod` after stabilizing NPoS PRF seed handling (seed fixed within epoch + next-epoch record persisted at rollover + replay PRF rotation) to confirm event/connected-peers suites no longer hang.
    - [ ] Re-run `cargo test -p integration_tests --test mod` after clearing consensus caches on commit-topology changes to confirm peer membership tests no longer stall consensus.
+   - [ ] Re-run `cargo test --workspace` after the Sumeragi gap fixes; last attempt timed out after ~4m during compile.
 
 4. **LOCALNET-DEMO-FLOW — Verify training-script localnet bootstrap** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Align consensus rebroadcast cooldowns (RBC/pending/precommit) to on-chain `block_time` with a 200ms floor and 2x base multiplier, keeping payload replays at an additional 2x to avoid queue saturation on 1s targets.
@@ -113,15 +114,20 @@ Unless stated otherwise, roadmap items call out which release line they affect.
     - [x] Resolve merge-conflict markers in `crates/iroha_core/src/zk.rs` that currently break builds/tests.
     - [x] Update ZK docs/configs to reflect the expanded fixture set and supported test circuits.
 
-11. **SUMERAGI-ACTOR-REFACTOR — Replace ad-hoc worker loop with a deterministic actor model** (Consensus/Sumeragi, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈳 Not Started, target TBD)
-    - [ ] Document the current worker loop/queue topology, ordering rules, backpressure behavior, and determinism constraints; capture known failure modes and desired invariants.
-    - [ ] Define a new message envelope with explicit priority classes and deterministic tie-breakers; map `BlockMessage`, `ControlFlow`, RBC, lane relay, and background requests to priority tiers.
-    - [ ] Implement a single scheduling layer (priority mailbox + bounded budgets) that replaces multi-queue draining while preventing starvation and preserving deterministic processing.
-    - [ ] Move background network posting into a dedicated worker with backpressure + metrics; remove inline-send fallback paths from the actor loop.
-    - [ ] Replace mutexed dedup caches with bounded LRU/TTL structures partitioned by message kind; add eviction metrics and duplicate-suppression tests.
-    - [ ] Split `Actor` state into explicit subcomponents with minimal shared mutable state (commit, propose/pacemaker, DA/RBC, VRF, merge/lane relay) and unit-testable interfaces.
-    - [ ] Add deterministic replay tests: given a fixed message trace, the scheduler produces identical state transitions and outputs across runs; include saturation and fairness scenarios.
-    - [ ] Update `docs/source/sumeragi.md`, `/v1/sumeragi/status` telemetry notes, and `status.md`/`roadmap.md` migration guidance to reflect the new actor model.
+11. **SUMERAGI-ACTOR-REFACTOR — Replace ad-hoc worker loop with a deterministic actor model** (Consensus/Sumeragi, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
+    - [x] Document the current worker loop/queue topology, ordering rules, backpressure behavior, and determinism constraints; capture known failure modes and desired invariants.
+    - [x] Define a new message envelope with explicit priority classes and deterministic tie-breakers; map `BlockMessage`, `ControlFlow`, RBC, lane relay, and background requests to priority tiers.
+    - [x] Implement a single scheduling layer (priority mailbox + bounded budgets) that replaces multi-queue draining while preventing starvation and preserving deterministic processing.
+    - [x] Move background network posting into a dedicated worker with backpressure + metrics; remove inline-send fallback paths from the actor loop.
+    - [x] Upgrade the current FIFO dedup caches to bounded LRU/TTL structures partitioned by message kind; add eviction metrics and duplicate-suppression tests.
+    - [x] Split `Actor` state into explicit subcomponents with minimal shared mutable state (commit, propose/pacemaker, DA/RBC, VRF, merge/lane relay) and unit-testable interfaces.
+    - [x] Add deterministic replay tests: given a fixed message trace, the scheduler produces identical state transitions and outputs across runs; include saturation and fairness scenarios.
+    - [x] Update `docs/source/sumeragi.md`, `/v1/sumeragi/status` telemetry notes, and `status.md`/`roadmap.md` migration guidance to reflect the new actor model.
+
+12. **SUMERAGI-BCERT-REFLOW — Replace QC commit gating with B-Chain commit certificates** (Consensus/Sumeragi, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
+    - [x] Update API/telemetry surfaces (`/v1/sumeragi/status`, `/v1/status`, Prometheus labels) to reflect commit certificates and quorum tracking.
+   - [x] Add integration coverage (commit-vote counters via `/v1/sumeragi/status` + metrics, stake quorum, commit-cert block sync, Kagami 4+ peer localnet bootstrap).
+    - [x] Capture commit-certificate migration notes in `status.md` once integration coverage is in place.
 
 13. **QUERY-DSL-IMPLEMENTATION — Replace lightweight query DSL stubs** (Data Model/Core/SDK, Line: Shared, Owner: Data Model WG, Priority: Medium, Status: 🈴 Completed, target TBD)
     - [x] Implement real predicate/projection semantics for `query::dsl` and `query::dsl_fast`.
@@ -235,6 +241,36 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal account address compliance reference translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal publishing checklist translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal address safety & accessibility reference translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS address checksum incident runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS registry schema translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS local-to-global address toolkit translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS metrics & onboarding kit translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Connect session preview runbook translations completed across all locales in `docs/runbooks`.
+   - [x] Connect chaos & fault rehearsal plan translations completed across all locales in `docs/runbooks`.
+   - [x] SNS training templates (slides, workbook, evaluation, invite email) translations completed across all locales in `docs/examples`.
+   - [x] Docs preview templates (invite, request, feedback digest/form) translations completed across all locales in `docs/examples`.
+   - [x] DA manifest review template translations completed across all locales in `docs/examples`.
+   - [x] Taikai anchor lineage packet translations completed across all locales in `docs/examples`.
+   - [x] Pen-test remediation report template translations completed across all locales in `docs/examples`.
+   - [x] SoraFS release notes translations completed across all locales in `docs/examples`.
+   - [x] SoraFS CI cookbook translations completed across all locales in `docs/examples`.
+   - [x] Android device lab reservation request template translations completed across all locales in `docs/examples`.
+   - [x] Android partner SLA discovery notes translations completed across all locales in `docs/examples`.
+   - [x] SNS arbitration transparency report template translations completed across all locales in `docs/examples`.
+   - [x] Nexus steering priority snapshot (2025-03 wave) translations completed across all locales in `docs/examples`.
+   - [x] SoraNet GAR intake template translations completed across all locales in `docs/examples`.
+   - [x] SoraNet testnet operator kit templates (readme, checklist, telemetry, incident playbook, verification report) translations completed across all locales in `docs/examples`.
+   - [x] SoraNet testnet stage-gate report template and sample report translations completed across all locales in `docs/examples`.
+   - [x] SoraFS CI sample fixtures README and SoraFS capacity simulation toolkit README translations completed across all locales in `docs/examples`.
+   - [x] SoraGlobal gateway billing reconciliation report template translations completed across all locales in `docs/examples`.
+   - [x] SoraNet relay incentive parliament packet translations (README, economic analysis, rollback plan) completed across all locales in `docs/examples`.
+   - [x] Finance repo custodian ack and governance packet templates translations completed across all locales in `docs/examples`.
+   - [x] Ministry volunteer brief example moderation stub cleared in `docs/examples`.
+   - [x] Nexus overview translations completed across all locales in `docs/source`.
+   - [x] Nexus transition notes translations completed across all locales in `docs/source`.
+   - [x] Nexus lane model translations completed across all locales in `docs/source`.
+   - [x] Nexus technical design spec translations completed across all locales in `docs/source`.
+   - [x] Nexus lane compliance policy engine translations completed across all locales in `docs/source`.
    - [x] Portal Torii app API parity audit translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal GAR operator onboarding brief translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS dispute & revocation runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
@@ -255,6 +291,20 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraFS developer CI recipes translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS developer CLI cookbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS deployment notes translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SoraFS deployment guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS KPI dashboard translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS address display guidelines translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS governance playbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS suffix catalog translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS registrar API translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS payment settlement plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal SNS bulk onboarding toolkit translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal DA replication policy translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal DA ingest plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal DA commitments plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal DA threat model translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal Nexus SDK quickstarts translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+   - [x] Portal governance API endpoint translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS release process translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS direct-mode fallback pack translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS SDK index translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
@@ -296,13 +346,14 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Add rate limits and audit telemetry for auth failures/lockouts.
    - [x] Add tests for enrollment, rollover, and fallback paths; update OpenAPI + runbooks.
 
-39. **SEC-ATTACHMENT-SANITISATION — Safe ingest pipeline for Torii attachments** (Torii/Runtime, Line: Shared, Owner: Runtime WG + Torii WG, Priority: High, Status: 🈳 Not Started, target TBD)
-   - [ ] Add config for allowed MIME types, max expanded size, and archive depth.
-   - [ ] Implement magic-byte sniffing + strict allowlist enforcement before persistence.
-   - [ ] Enforce deterministic decompression/expansion limits and reject unknown formats.
-   - [ ] Sandbox risky parsers (seccomp/WASI) with strict CPU/memory limits.
-   - [ ] Store provenance metadata (sniffed type, hashes, sanitizer verdict) alongside attachment records.
-   - [ ] Add telemetry counters + malicious fixture tests; update `docs/source/security_hardening_requirements.md`.
+39. **SEC-ATTACHMENT-SANITISATION — Safe ingest pipeline for Torii attachments** (Torii/Runtime, Line: Shared, Owner: Runtime WG + Torii WG, Priority: High, Status: 🈴 Completed, target TBD)
+   - [x] Add config for allowed MIME types, max expanded size, and archive depth.
+   - [x] Implement magic-byte sniffing + strict allowlist enforcement before persistence.
+   - [x] Enforce deterministic decompression/expansion limits and reject unknown formats.
+   - [x] Sandbox risky parsers with strict CPU/memory limits (bounded worker).
+   - [x] Add subprocess sanitizer mode (`torii.attachments_sanitizer_mode`), OS-level rlimits, and re‑sanitize legacy exports on download.
+   - [x] Store provenance metadata (sniffed type, hashes, sanitizer verdict) alongside attachment records.
+   - [x] Add telemetry counters + malicious fixture/subprocess tests; update `docs/source/security_hardening_requirements.md`.
 
 40. **SEC-MEMBERSHIP-MISMATCH — Detect and alert on roster drift** (Consensus/Sumeragi, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Propagate membership view-hash in consensus gossip/status payloads.

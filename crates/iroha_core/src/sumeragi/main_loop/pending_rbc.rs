@@ -320,7 +320,7 @@ impl Actor {
         let now = Instant::now();
         let ttl = self.config.rbc_pending_ttl;
         let evictions = Self::apply_pending_rbc_housekeeping(
-            &mut self.rbc.pending,
+            &mut self.subsystems.da_rbc.rbc.pending,
             key,
             PENDING_RBC_STASH_LIMIT,
             ttl,
@@ -356,6 +356,8 @@ impl Actor {
         }
 
         let pending_entry = self
+            .subsystems
+            .da_rbc
             .rbc
             .pending
             .entry(key)
@@ -365,11 +367,11 @@ impl Actor {
     }
 
     pub(super) fn clear_pending_rbc(&mut self, key: &SessionKey) {
-        self.rbc.pending.remove(key);
+        self.subsystems.da_rbc.rbc.pending.remove(key);
     }
 
     pub(super) fn flush_pending_rbc(&mut self, key: SessionKey) -> Result<()> {
-        let Some(pending) = self.rbc.pending.remove(&key) else {
+        let Some(pending) = self.subsystems.da_rbc.rbc.pending.remove(&key) else {
             return Ok(());
         };
 

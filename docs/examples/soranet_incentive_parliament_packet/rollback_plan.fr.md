@@ -1,18 +1,34 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: docs/examples/soranet_incentive_parliament_packet/rollback_plan.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 1add138352dabf2433c36c9abac24085af8c7e53dca8bc579d73b37680e470cf
 source_last_modified: "2025-11-22T04:59:33.125102+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-01
 ---
 
-# Traduction en cours
+# Plan de rollback des incentives relay
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+Utilisez ce playbook pour desactiver les paiements automatiques de relay si governance
+demande un halt ou si les guardrails de telemetrie se declenchent.
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+1. **Geler l'automatisation.** Arretez le daemon d'incentives sur chaque host orchestrator
+   (`systemctl stop soranet-incentives.service` ou l'equivalent container) et confirmez que le processus ne tourne plus.
+2. **Drenner les instructions en attente.** Executez
+   `iroha sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
+   pour garantir qu'il n'y a pas d'instructions de payout en attente. Archivez les payloads Norito resultants pour audit.
+3. **Revoquer l'approbation governance.** Editez `reward_config.json`, mettez
+   `"budget_approval_id": null`, puis redeployez la configuration via
+   `iroha sorafs incentives service init` (ou `update-config` si un daemon long-terme tourne). Le moteur de payout echoue maintenant en ferme avec
+   `MissingBudgetApprovalId`, donc le daemon refuse de minter des payouts tant qu'un nouveau hash d'approbation n'est pas restaure. Enregistrez le commit git et le SHA-256 de la config modifiee dans le log d'incident.
+4. **Notifier le Parlement Sora.** Joignez le ledger de payouts draine, le rapport shadow-run et un resume court de l'incident. Les minutes du Parlement doivent noter le hash de la configuration revoquee et l'heure d'arret du daemon.
+5. **Validation rollback.** Gardez le daemon desactive jusqu'a:
+   - les alertes de telemetrie (`soranet_incentives_rules.yml`) soient vertes pendant >=24 h,
+   - le rapport de reconciliation de tresorerie montre zero transferts manquants, et
+   - le Parlement approuve un nouveau hash de budget.
+
+Une fois que governance re-emet un hash d'approbation budget, mettez a jour `reward_config.json`
+avec le nouveau digest, relancez la commande `shadow-run` sur la telemetrie la plus recente,
+et redemarrez le daemon d'incentives.

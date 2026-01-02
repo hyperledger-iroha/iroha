@@ -11244,6 +11244,21 @@ pub struct Torii {
         default = "defaults::torii::ATTACHMENTS_PER_TENANT_MAX_BYTES"
     )]
     pub attachments_per_tenant_max_bytes: u64,
+    /// Allowed MIME types for attachment payloads (post-sniff).
+    #[config(default = "defaults::torii::attachments_allowed_mime_types()")]
+    pub attachments_allowed_mime_types: Vec<String>,
+    /// Maximum expanded bytes allowed when decompressing attachments.
+    #[config(default = "defaults::torii::ATTACHMENTS_MAX_EXPANDED_BYTES")]
+    pub attachments_max_expanded_bytes: u64,
+    /// Maximum nested archive depth allowed when decompressing attachments.
+    #[config(default = "defaults::torii::ATTACHMENTS_MAX_ARCHIVE_DEPTH")]
+    pub attachments_max_archive_depth: u32,
+    /// Attachment sanitization execution mode (`subprocess` or `in_process`).
+    #[config(default = "defaults::torii::ATTACHMENTS_SANITIZER_MODE.to_string()")]
+    pub attachments_sanitizer_mode: String,
+    /// Attachment sanitization timeout (milliseconds).
+    #[config(default = "defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS")]
+    pub attachments_sanitize_timeout_ms: u64,
     /// Enable background ZK prover worker (non-consensus, app API).
     #[config(
         env = "TORII_ZK_PROVER_ENABLED",
@@ -11614,6 +11629,13 @@ impl Torii {
             attachments_max_bytes: self.attachments_max_bytes,
             attachments_per_tenant_max_count: self.attachments_per_tenant_max_count,
             attachments_per_tenant_max_bytes: self.attachments_per_tenant_max_bytes,
+            attachments_allowed_mime_types: self.attachments_allowed_mime_types,
+            attachments_max_expanded_bytes: self.attachments_max_expanded_bytes,
+            attachments_max_archive_depth: self.attachments_max_archive_depth,
+            attachments_sanitizer_mode: parse_attachment_sanitizer_mode(
+                &self.attachments_sanitizer_mode,
+            ),
+            attachments_sanitize_timeout_ms: self.attachments_sanitize_timeout_ms,
             zk_prover_enabled: self.zk_prover_enabled,
             zk_prover_scan_period_secs: self.zk_prover_scan_period_secs,
             zk_prover_reports_ttl_secs: self.zk_prover_reports_ttl_secs,
@@ -11852,6 +11874,16 @@ fn parse_operator_token_source(value: &str) -> actual::OperatorTokenSource {
         "both" => actual::OperatorTokenSource::Both,
         other => panic!(
             "invalid torii.operator_auth.token_source `{other}`; expected `operator`, `api`, or `both`"
+        ),
+    }
+}
+
+fn parse_attachment_sanitizer_mode(value: &str) -> actual::AttachmentSanitizerMode {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "in_process" | "inprocess" | "inline" => actual::AttachmentSanitizerMode::InProcess,
+        "subprocess" | "external" | "process" => actual::AttachmentSanitizerMode::Subprocess,
+        other => panic!(
+            "invalid torii.attachments_sanitizer_mode `{other}`; expected `subprocess` or `in_process`"
         ),
     }
 }

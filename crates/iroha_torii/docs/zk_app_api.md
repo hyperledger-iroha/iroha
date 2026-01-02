@@ -10,10 +10,10 @@ Contents
 
 ## Endpoints
 
-Attachments (store raw bytes with metadata):
-- `POST /v1/zk/attachments` — store a new attachment (body = raw bytes)
+Attachments (store sanitized bytes with metadata):
+- `POST /v1/zk/attachments` — store a new attachment (body = bytes, sanitized on ingest)
 - `GET  /v1/zk/attachments` — list stored attachments (JSON array)
-- `GET  /v1/zk/attachments/{id}` — fetch raw bytes by id
+- `GET  /v1/zk/attachments/{id}` — fetch stored attachment bytes by id
 - `DELETE /v1/zk/attachments/{id}` — delete an attachment
 
 Background prover reports (non‑consensus verification):
@@ -22,7 +22,8 @@ Background prover reports (non‑consensus verification):
 - `DELETE /v1/zk/prover/reports/{id}` — delete a report
 
 Notes
-- Attachment id is a deterministic Blake2b‑32 (hex, lowercase) of the raw body bytes.
+- Attachment id is a deterministic Blake2b‑32 (hex, lowercase) of the sanitized body bytes.
+- Content type is normalized from magic‑byte sniffing; the declared header is recorded in `provenance`.
 - Attachments persist on disk under `./storage/torii/zk_attachments/`:
   - `./storage/torii/zk_attachments/{id}.bin` (body)
   - `./storage/torii/zk_attachments/{id}.json` (metadata)
@@ -45,6 +46,21 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
 - `torii.attachments_per_tenant_max_bytes` (u64)
   - Aggregate bytes retained per tenant. When uploads would exceed the cap, Torii deterministically evicts the oldest attachments for that tenant before persisting the new body. Bodies larger than the cap are rejected with `413`.
   - Default: 64 MiB.
+- `torii.attachments_allowed_mime_types` (list of strings)
+  - Allowlisted MIME types for attachment payloads after magic‑byte sniffing.
+  - Default: `["application/x-norito", "application/json", "text/json", "application/x-zk1"]`.
+- `torii.attachments_max_expanded_bytes` (u64)
+  - Maximum expanded size for gzip/zstd payloads.
+  - Default: 16 MiB.
+- `torii.attachments_max_archive_depth` (u32)
+  - Maximum nested gzip/zstd layers.
+  - Default: 2.
+- `torii.attachments_sanitizer_mode` (string)
+  - Sanitizer execution mode (`subprocess` or `in_process`).
+  - Default: `subprocess`.
+- `torii.attachments_sanitize_timeout_ms` (u64)
+  - Sanitization timeout in milliseconds.
+  - Default: 1000.
 - `torii.zk_prover_enabled` (bool)
   - Enables background prover scan worker. When disabled, endpoints still serve existing reports, but no new reports are created.
   - Default: false.
@@ -76,6 +92,7 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 
 - Non‑consensus: attaching proofs and reading prover reports does not modify WSV or affect consensus. They are app/operator tools.
 - Determinism & safety: id derivation and report generation are deterministic (based on body and content type). The prover verifies proofs using configured backends; it does not generate proofs or affect consensus.
+- Sanitization: gzip/zstd payloads are expanded within configured limits and only allowlisted types are stored; sanitizer metadata is captured in `provenance` and legacy exports are re‑sanitized.
 - GC cadence: attachment GC runs every minute and removes entries older than `attachments_ttl_secs`.
 - Storage hygiene: deleting an attachment removes both `.bin` and `.json`; deleting a report removes the corresponding `.json` under `zk_prover/reports`.
 - Payloads: the prover expects `ProofAttachment`/`ProofAttachmentList` payloads (Norito or JSON). ZK1/TLV envelopes are tagged but rejected as top‑level payloads.

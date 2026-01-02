@@ -1338,6 +1338,7 @@ mod tests {
             size: body.len() as u64,
             created_ms: now_ms(),
             tenant: Some("anon".to_string()),
+            provenance: None,
         };
         fs::create_dir_all(attachments_dir()).unwrap();
         fs::write(attachment_bin_path(&id), &body).unwrap();
@@ -1376,6 +1377,7 @@ mod tests {
                 size: size as u64,
                 created_ms: now_ms(),
                 tenant: None,
+                provenance: None,
             };
             fs::create_dir_all(attachments_dir()).unwrap();
             fs::write(attachment_bin_path(&id), vec![b'A'; size]).unwrap();
@@ -1409,6 +1411,7 @@ mod tests {
                 size: 16,
                 created_ms: now_ms(),
                 tenant: None,
+                provenance: None,
             };
             fs::create_dir_all(attachments_dir()).unwrap();
             fs::write(attachment_bin_path(&id), vec![b'B'; 16]).unwrap();
@@ -1468,6 +1471,7 @@ mod tests {
             size: ok_body.len() as u64,
             created_ms: super::now_ms(),
             tenant: None,
+            provenance: None,
         };
         fs::write(
             super::attachment_meta_path(&ok_id),
@@ -1486,6 +1490,7 @@ mod tests {
             size: err_body.len() as u64,
             created_ms: super::now_ms(),
             tenant: None,
+            provenance: None,
         };
         fs::write(
             super::attachment_meta_path(&err_id),

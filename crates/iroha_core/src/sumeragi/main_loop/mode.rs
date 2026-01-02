@@ -14,6 +14,7 @@ impl Actor {
                 redundant_send_r: self.config.npos.redundant_send_r,
             })
         });
+        let epoch_params = super::load_npos_epoch_params(&view, &self.config);
         let last_epoch_record = view
             .world()
             .vrf_epochs()
@@ -22,9 +23,9 @@ impl Actor {
             .map(|(_, record)| record.clone());
         let mut manager = EpochManager::new_from_chain(&self.common_config.chain);
         manager.set_params(
-            self.config.epoch_length_blocks.max(1),
-            self.config.vrf_commit_deadline_offset,
-            self.config.vrf_reveal_deadline_offset,
+            epoch_params.epoch_length_blocks,
+            epoch_params.commit_deadline_offset,
+            epoch_params.reveal_deadline_offset,
         );
         if let Some(record) = last_epoch_record.as_ref() {
             manager.restore_from_record(record);
@@ -38,12 +39,26 @@ impl Actor {
         );
         apply_roster_indices_to_manager(&mut manager, roster_len, indices);
         let seed = manager.seed();
+        let epoch_length_blocks = manager.epoch_length_blocks();
+        let commit_deadline_offset = manager.commit_window_end();
+        let reveal_deadline_offset = manager.reveal_window_end();
         if let Some(cfg) = collectors.as_mut() {
             cfg.seed = seed;
         }
         drop(view);
         self.epoch_manager = Some(manager);
         self.npos_collectors = collectors;
+        super::status::set_epoch_parameters(
+            epoch_length_blocks,
+            commit_deadline_offset,
+            reveal_deadline_offset,
+        );
+        #[cfg(feature = "telemetry")]
+        self.telemetry.set_epoch_parameters(
+            epoch_length_blocks,
+            commit_deadline_offset,
+            reveal_deadline_offset,
+        );
         Ok(Some(seed))
     }
 
@@ -68,50 +83,50 @@ impl Actor {
     }
 
     fn reset_mode_flip_state(&mut self) {
-        self.propose.collector_plan = None;
-        self.propose.collector_plan_subject = None;
-        self.propose.collector_plan_targets.clear();
-        self.propose.collectors_contacted.clear();
-        self.propose.collector_role_index = None;
+        self.subsystems.propose.collector_plan = None;
+        self.subsystems.propose.collector_plan_subject = None;
+        self.subsystems.propose.collector_plan_targets.clear();
+        self.subsystems.propose.collectors_contacted.clear();
+        self.subsystems.propose.collector_role_index = None;
         self.pending.pending_blocks.clear();
-        self.rbc.pending.clear();
-        self.rbc.sessions.clear();
-        self.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
-        self.proposals_seen.clear();
+        self.subsystems.da_rbc.rbc.pending.clear();
+        self.subsystems.da_rbc.rbc.sessions.clear();
+        self.subsystems.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
+        self.subsystems.propose.proposals_seen.clear();
         self.qc_cache.clear();
         self.execution_qc_cache.clear();
         self.vote_log.clear();
-        self.propose.collector_redundant_limit = self.config.collectors_redundant_send_r;
+        self.subsystems.propose.collector_redundant_limit = self.config.collectors_redundant_send_r;
         self.pending.pending_replay_last_sent.clear();
         self.pending.missing_block_requests.clear();
-        self.da.da_bundles.clear();
-        self.da.da_pin_bundles.clear();
-        self.da.sealed_commitments.clear();
-        self.da.sealed_pin_intents.clear();
+        self.subsystems.da_rbc.da.da_bundles.clear();
+        self.subsystems.da_rbc.da.da_pin_bundles.clear();
+        self.subsystems.da_rbc.da.sealed_commitments.clear();
+        self.subsystems.da_rbc.da.sealed_pin_intents.clear();
         self.payload_rebroadcast_log.clear();
         self.block_sync_rebroadcast_log.clear();
         self.block_sync_fetch_log.clear();
         let now = Instant::now();
         let base_pacemaker_interval = pacemaker_base_interval(&self.config);
         reset_runtime_state_for_mode_flip(
-            &mut self.propose.pacemaker,
-            &mut self.propose.new_view_tracker,
-            &mut self.view_change_chain,
-            &mut self.broadcast_new_views,
+            &mut self.subsystems.propose.pacemaker,
+            &mut self.subsystems.propose.new_view_tracker,
+            &mut self.subsystems.propose.view_change_chain,
+            &mut self.subsystems.propose.broadcast_new_views,
             &mut self.phase_tracker,
-            &mut self.propose.propose_attempt_monitor,
-            &mut self.propose.pacemaker_backpressure,
-            &mut self.propose.forced_view_after_timeout,
-            &mut self.propose.last_pacemaker_attempt,
-            &mut self.propose.last_successful_proposal,
+            &mut self.subsystems.propose.propose_attempt_monitor,
+            &mut self.subsystems.propose.pacemaker_backpressure,
+            &mut self.subsystems.propose.forced_view_after_timeout,
+            &mut self.subsystems.propose.last_pacemaker_attempt,
+            &mut self.subsystems.propose.last_successful_proposal,
             &mut self.tick_counter,
             &mut self.qc_signer_tally,
             &mut self.exec_vote_log,
             &mut self.voting_block,
             &mut self.pending_roster_activation,
-            &mut self.propose.last_empty_child_attempt,
-            &self.rbc.status_handle,
-            &mut self.vrf,
+            &mut self.subsystems.propose.last_empty_child_attempt,
+            &self.subsystems.da_rbc.rbc.status_handle,
+            &mut self.subsystems.vrf,
             base_pacemaker_interval,
             now,
         );

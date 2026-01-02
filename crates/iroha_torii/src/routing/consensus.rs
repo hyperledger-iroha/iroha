@@ -5,13 +5,13 @@ use iroha_core::state::StateReadOnly;
 use iroha_data_model::prelude::ChainId;
 use iroha_data_model::{
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiConsensusCapsStatus,
-        SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
-        SumeragiMembershipMismatchStatus, SumeragiMembershipStatus, SumeragiPeerKeyPolicyStatus,
-        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiRuntimeUpgradeHook,
-        SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
-        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
-        SumeragiWorkerQueueTotals,
+        SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus, SumeragiCommitInflightStatus,
+        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiDataspaceCommitment,
+        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
+        SumeragiMembershipStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
+        SumeragiPendingRbcStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus,
+        SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
     },
     nexus::{DataSpaceId, LaneId},
 };
@@ -1045,7 +1045,14 @@ fn decode_and_validate_evidence(
     let evidence = decode_evidence_hex(value)?;
     let view = state.view();
     let topology_peers: Vec<_> = view.commit_topology().iter().cloned().collect();
-    let npos_seed = iroha_core::sumeragi::load_npos_collector_config(&view).map(|cfg| cfg.seed);
+    let (subject_height, _) =
+        iroha_core::sumeragi::evidence_subject_height_view(&evidence);
+    let npos_seed = if view.world.sumeragi_npos_parameters().is_some() {
+        let height = subject_height.unwrap_or_else(|| u64::try_from(view.height()).unwrap_or(0));
+        Some(iroha_core::sumeragi::npos_seed_for_height(&view, height))
+    } else {
+        None
+    };
     drop(view);
     if topology_peers.is_empty() {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -1088,7 +1095,13 @@ mod evidence_submit_tests {
     use super::*;
     use iroha_core::sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Vote};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{block::BlockHeader, peer::PeerId, prelude::ChainId};
+    use iroha_data_model::{
+        block::BlockHeader,
+        consensus::VrfEpochRecord,
+        parameter::system::SumeragiNposParameters,
+        peer::PeerId,
+        prelude::ChainId,
+    };
     use norito::codec::Encode as _;
 
     fn test_state_with_peer(peer: PeerId) -> iroha_core::state::State {
@@ -1204,6 +1217,123 @@ mod evidence_submit_tests {
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
             ))
         ));
+    }
+
+    #[test]
+    fn decode_and_validate_evidence_uses_subject_height_seed() {
+        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let keypair0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer0 = PeerId::new(keypair0.public_key().clone());
+        let peer1 = PeerId::new(keypair1.public_key().clone());
+        let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![
+            peer0.clone(),
+            peer1.clone(),
+        ]);
+        let height = 1_u64;
+        let view = 0_u64;
+        // Find two seeds that map to different leaders for the same (height, view).
+        let mut seed_epoch0 = None;
+        let mut seed_epoch1 = None;
+        let mut leader_epoch0 = 0usize;
+        for byte in 0u8..=u8::MAX {
+            let seed = [byte; 32];
+            let leader = topology.leader_index_prf(seed, height, view);
+            if seed_epoch0.is_none() {
+                seed_epoch0 = Some(seed);
+                leader_epoch0 = leader;
+                continue;
+            }
+            if leader != leader_epoch0 {
+                seed_epoch1 = Some(seed);
+                break;
+            }
+        }
+        let seed_epoch0 = seed_epoch0.expect("seed for epoch 0");
+        let seed_epoch1 = seed_epoch1.expect("seed for epoch 1");
+        let leader_epoch1 = topology.leader_index_prf(seed_epoch1, height, view);
+        assert_ne!(leader_epoch0, leader_epoch1, "seed search must pick distinct leaders");
+
+        let signer_keypair = if leader_epoch0 == 0 {
+            &keypair0
+        } else {
+            &keypair1
+        };
+
+        let mut world = iroha_core::state::World::default();
+        {
+            let mut block = world.block();
+            let params = SumeragiNposParameters {
+                epoch_length_blocks: 1,
+                ..SumeragiNposParameters::default()
+            };
+            block.parameters.get_mut().custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                params.into_custom_parameter(),
+            );
+            block.vrf_epochs.insert(
+                0,
+                VrfEpochRecord {
+                    epoch: 0,
+                    seed: seed_epoch0,
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 0,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.vrf_epochs.insert(
+                1,
+                VrfEpochRecord {
+                    epoch: 1,
+                    seed: seed_epoch1,
+                    epoch_length: 1,
+                    commit_deadline_offset: 0,
+                    reveal_deadline_offset: 0,
+                    roster_len: 2,
+                    finalized: false,
+                    updated_at_height: 1,
+                    participants: Vec::new(),
+                    late_reveals: Vec::new(),
+                    committed_no_reveal: Vec::new(),
+                    no_participation: Vec::new(),
+                    penalties_applied: false,
+                    penalties_applied_at_height: None,
+                    validator_election: None,
+                },
+            );
+            block.commit();
+        }
+        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+        let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let state = iroha_core::state::State::new_for_testing(world, kura, query);
+        {
+            let mut block = state.commit_topology.block();
+            block.push(peer0);
+            block.push(peer1);
+            block.commit();
+        }
+
+        let mode_tag = iroha_core::sumeragi::consensus::NPOS_TAG;
+        let v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
+        let v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
+        let ev = Evidence {
+            kind: EvidenceKind::DoublePrevote,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let encoded = hex::encode(ev.encode());
+        let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
+            .expect("evidence should validate with subject-height seed");
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
     }
 }
 
@@ -1620,6 +1750,45 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
     ]);
     let settlement = settlement_snapshot_value(&snap.settlement);
+    let dedup_evictions = json_object(vec![
+        json_entry(
+            "vote_capacity_total",
+            snap.dedup_evictions.vote_capacity_total,
+        ),
+        json_entry("vote_expired_total", snap.dedup_evictions.vote_expired_total),
+        json_entry(
+            "block_created_capacity_total",
+            snap.dedup_evictions.block_created_capacity_total,
+        ),
+        json_entry(
+            "block_created_expired_total",
+            snap.dedup_evictions.block_created_expired_total,
+        ),
+        json_entry(
+            "proposal_capacity_total",
+            snap.dedup_evictions.proposal_capacity_total,
+        ),
+        json_entry(
+            "proposal_expired_total",
+            snap.dedup_evictions.proposal_expired_total,
+        ),
+        json_entry(
+            "rbc_ready_capacity_total",
+            snap.dedup_evictions.rbc_ready_capacity_total,
+        ),
+        json_entry(
+            "rbc_ready_expired_total",
+            snap.dedup_evictions.rbc_ready_expired_total,
+        ),
+        json_entry(
+            "rbc_deliver_capacity_total",
+            snap.dedup_evictions.rbc_deliver_capacity_total,
+        ),
+        json_entry(
+            "rbc_deliver_expired_total",
+            snap.dedup_evictions.rbc_deliver_expired_total,
+        ),
+    ]);
     let tx_queue = json_object(vec![
         json_entry("depth", snap.tx_queue_depth),
         json_entry("capacity", snap.tx_queue_capacity),
@@ -2267,10 +2436,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("kura_store", kura_store),
         json_entry("epoch", epoch),
         json_entry("gossip_fallback_total", snap.gossip_fallback_total),
-        json_entry("bg_post_inline_post_total", snap.bg_post_inline_post_total),
+        json_entry("dedup_evictions", dedup_evictions),
+        json_entry("bg_post_drop_post_total", snap.bg_post_drop_post_total),
         json_entry(
-            "bg_post_inline_broadcast_total",
-            snap.bg_post_inline_broadcast_total,
+            "bg_post_drop_broadcast_total",
+            snap.bg_post_drop_broadcast_total,
         ),
         json_entry(
             "block_created_dropped_by_lock_total",
@@ -2934,6 +3104,25 @@ pub async fn handle_v1_sumeragi_status(
             locked_qc_height: snap.locked_qc_height,
             locked_qc_view: snap.locked_qc_view,
             locked_qc_subject: snap.locked_qc_subject,
+            commit_certificate: SumeragiCommitCertificateStatus {
+                height: snap.commit_certificate.height,
+                view: snap.commit_certificate.view,
+                epoch: snap.commit_certificate.epoch,
+                block_hash: snap.commit_certificate.block_hash,
+                validator_set_hash: snap.commit_certificate.validator_set_hash,
+                validator_set_len: snap.commit_certificate.validator_set_len,
+                signatures_total: snap.commit_certificate.signatures_total,
+            },
+            commit_quorum: SumeragiCommitQuorumStatus {
+                height: snap.commit_quorum.height,
+                view: snap.commit_quorum.view,
+                block_hash: snap.commit_quorum.block_hash,
+                signatures_present: snap.commit_quorum.signatures_present,
+                signatures_counted: snap.commit_quorum.signatures_counted,
+                signatures_set_b: snap.commit_quorum.signatures_set_b,
+                signatures_required: snap.commit_quorum.signatures_required,
+                last_updated_ms: snap.commit_quorum.last_updated_ms,
+            },
             view_change_proof_accepted_total: snap.view_change_proof_accepted_total,
             view_change_proof_stale_total: snap.view_change_proof_stale_total,
             view_change_proof_rejected_total: snap.view_change_proof_rejected_total,

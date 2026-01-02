@@ -14269,7 +14269,7 @@ impl<'state> StateBlock<'state> {
         } else {
             let mut topo = crate::sumeragi::network_topology::Topology::new(topology);
             let world_peers = self.world.peers().iter().cloned();
-            topo.block_committed(world_peers);
+            topo.block_committed(world_peers, block_hash);
             topo.as_ref().to_vec()
         };
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
@@ -25814,13 +25814,14 @@ mod tests {
 
         let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
+        let prev_hash = committed.as_ref().hash();
         let _ = state_block.apply_without_execution(&committed, base_topology.clone());
         state_block.commit().expect("commit state block");
 
         let mut expected_topology = Topology::new(base_topology.clone());
         let mut world_peers = base_topology.clone();
         world_peers.push(new_peer);
-        expected_topology.block_committed(world_peers);
+        expected_topology.block_committed(world_peers, prev_hash);
         let expected = expected_topology.as_ref().to_vec();
 
         let view = state.view();

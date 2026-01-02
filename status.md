@@ -1,6 +1,155 @@
 # Status
 
 ## Latest Updates
+- Translated the Nexus lane compliance policy engine spec across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Aligned NPoS epoch scheduling with on-chain `SumeragiNposParameters` during mode flips and seed refreshes, updated status/telemetry + docs, and added unit coverage for epoch-parameter loading and overrides.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus technical design spec across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Applied VRF epoch parameter snapshots during epoch-manager restore and persisted VRF records using the epoch-manager window/length values; added unit coverage for restore and snapshot behavior.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Guarded view-change proof creation/lookup with u32 indices and skipped proof broadcasts on overflow view indices; added unit coverage for proof builder, proof lookup, and overflow handling.
+- Tests: not run (not requested).
+- Translated the Nexus lane model doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and confirmed ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Updated proposal-hint PRF context to use activation-height seed selection and added unit coverage.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Refreshed NPoS collector params on seed updates so on-chain k/redundant-r changes apply without restart; added unit coverage.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Hardened Torii attachment sanitization with subprocess mode config, OS-level rlimits, export re‑sanitization for legacy attachments, sanitized IDs, fixture + subprocess tests, and updated zk app API/security hardening/threat model/roadmap docs (including he/ja updates).
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Aligned Sumeragi leader selection and collector planning with activation-height consensus mode/PRF seed; added activation-height unit tests for leader selection and collector plan.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus transition notes across docs/source locales (ar/es/fr/pt/ru/ur) and confirmed ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Aligned Sumeragi commit pipeline (vote emission, commit votes, QC tallying, roster sidecars) with activation-height consensus mode tags/PRF seeds; added activation-height unit tests for emitted availability/precommit/exec votes and commit vote validation.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus overview doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur), finalizing the JA/HE drafts and adding RTL wrappers.
+- Tests: not run (docs-only change).
+- Added commit-vote status/metrics assertions and bounded commit-certificate history queries in the Sumeragi commit-certificate integration tests, plus a Kagami localnet bootstrap test for 4-peer coverage.
+- Tests: not run (not requested).
+- Aligned Sumeragi RBC READY/DELIVER handling and NEW_VIEW broadcast signing with activation-height consensus mode tags/PRF seeds; added unit tests for activation-height RBC READY/DELIVER and NEW_VIEW signatures.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the finance repo custodian ack/governance packet templates across docs examples locales (ar/es/fr/he/ja/pt/ru/ur) and cleared the remaining docs/examples translation stub in the volunteer brief template.
+- Tests: not run (docs-only change).
+- Implemented Torii attachment sanitization with magic-byte sniffing, allowlisted MIME types, bounded gzip/zstd expansion, provenance metadata, and new telemetry counters/tests; docs updated.
+- Tests: not run (not requested).
+- Translated the SoraNet relay incentive parliament packet docs (README, economic analysis, rollback plan) across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Fixed Sumeragi QC handling and NEW_VIEW validation to use height-based consensus mode/tags (including activation-height acceptance), with unit coverage for QC/NewView activation-mode cases.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the SoraGlobal gateway billing reconciliation report template across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SoraFS CI sample fixtures README and SoraFS capacity simulation toolkit README across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SoraNet testnet stage-gate report template and sample report across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Fixed Sumeragi block-sync QC caching and vote/availability/exec vote validation to use height-based consensus mode/tags, and added activation-height unit coverage for those paths.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the SoraNet testnet operator kit templates (readme, checklist, telemetry, incident playbook, verification report) across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Commit-certificate migration note: B-Chain commit certificates now gate finalize, with integration coverage for permissioned quorum, NPoS stake quorum gating, and block-sync propagation on restart.
+- Tests: not run (not requested).
+- Recorded Sumeragi worker drain-budget config and last-envelope metadata to clear dead-code warnings.
+- Tests: not run (not requested).
+- Translated the SoraNet GAR intake template across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the Nexus steering priority snapshot (2025-03 wave) across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Fixed Sumeragi actor subsystem field access and block sync mode tagging after the refactor.
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture`.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the SNS arbitration transparency report template across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Adjusted Sumeragi block-sync validation and outgoing updates to use height-specific consensus mode/tag/PRF seed across roster selection, signatures, and QCs; added block-sync tests for activation-mode mapping and pre-activation acceptance after a mode flip.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Completed the Sumeragi actor refactor (subcomponent split, background-post backpressure/drop metrics, dedup eviction tracking) and refreshed Sumeragi/telemetry docs to reflect the deterministic scheduler.
+- Tests: not run (not requested).
+- Fixed Sumeragi penalties/test plumbing (typed roster collection, evidence helper path) and updated Torii VRF epoch test setup to use the `vrf_epochs()` accessor.
+- Tests: `cargo test --workspace` (timed out after 240s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Evidence handling now derives consensus mode and roster selection from evidence height (including penalty processing), added a height-specific consensus-mode helper, and added unit coverage for evidence mode tagging.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Canonicalized double-vote and double-exec evidence ordering for deterministic evidence keys and added evidence-order dedup tests.
+- Tests: not run (not requested).
+- Translated the SNS training templates (slides, workbook, evaluation, invite email) across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Fixed consensus penalty offender mapping to prefer evidence-specific roster snapshots/history (avoiding misattribution after topology rotation) and added penalties helper tests.
+- Tests: not run (not requested).
+- Translated the Connect chaos & fault rehearsal runbook across docs runbook locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Adjusted Torii evidence validation to derive NPoS PRF seeds from the evidence subject height, added NPoS height-sensitive evidence tests in Torii routing handlers, and exposed `npos_seed_for_height` for cross-crate use.
+- Tests: not run (not requested).
+- Translated the Connect session preview runbook across docs runbook locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Fixed Sumeragi active-topology ordering to preserve commit rotation, canonicalized censorship receipts for deterministic evidence deduplication, and allowed locked-QC subjects to update on same height/view; added unit coverage.
+- Tests: not run (not requested).
+- Translated the SNS metrics & onboarding kit page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS local-to-global address toolkit page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS registry schema page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS address checksum incident runbook page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the Nexus SDK quickstarts page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the DA threat model page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Relaxed the localnet smoke test view-change expectations to tolerate f+1 suspicion churn while still bounding divergence across peers (`integration_tests/tests/sumeragi_localnet_smoke.rs`).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test contracts post_and_get_contract_manifest_via_torii -- --nocapture`; `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture`; `CARGO_TARGET_DIR=target-codex cargo test --workspace` (failed: `No space left on device` writing to `target-codex`).
+- Translated the DA commitments plan page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Hardened Torii contract manifest integration test polling (wait for manifest GET with clearer errors) and enforced 4-peer localnet in `integration_tests/tests/contracts.rs`.
+- Tests: `cargo test -p integration_tests post_and_get_contract_manifest_via_torii -- --nocapture` (failed: `No space left on device` writing `target/debug` artifacts; `dsymutil` I/O failure).
+- Translated the DA ingest plan page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the DA replication policy page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS bulk onboarding toolkit page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Finished Sumeragi commit-certificate/quorum status/telemetry surfacing (metrics + `/v1/status`/`/v1/sumeragi/status`), added commit quorum/certificate snapshot tests, and refreshed Sumeragi/evidence/telemetry docs with censorship-evidence view-change notes.
+- Tests: `cargo fmt --all` (warns about unstable fmt options on stable toolchain); `cargo test --workspace` (failed: `integration_tests` sandbox tests cannot bind `127.0.0.1:30000`).
+- Translated the SNS payment settlement plan page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS suffix catalog page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS registrar API page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the governance API endpoints page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Aligned Sumeragi block-sync/precommit unit expectations with gossip fanout and inline precommit routing; fixed non-proxy commit-vote coverage to sign with the view leader; added a helper for block-sync target counts in tests.
+- Tests: `cargo test -p iroha_core --lib commit_vote_`.
+- Format: `cargo fmt --all` (warns about unstable fmt options on stable toolchain).
+- Translated the SNS governance playbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Validated Sumeragi commit-certificate unit coverage (commit-vote replay + commit-cert gating) against heartbeat-backed non-genesis blocks.
+- Tests: `cargo test -p iroha_core --lib commit_votes_replayed_after_payload_arrives`, `cargo test -p iroha_core --lib finalize_pending_block_requires_commit_certificate`.
+- Translated the SNS address display guidelines across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Adjusted Sumeragi commit-vote tests to seed a genesis stub and build heartbeat-backed non-genesis blocks; fixed RBC status persistence borrow + RBC dedup signature hash typing; refreshed Sumeragi handle tests for RBC queues.
+- Tests: `cargo test -p iroha_core commit_vote_from_proxy_tail_commits_block` (failed: build ran out of disk space, `os error 28`; cargo target dir locked intermittently).
+- Translated the SNS KPI dashboard across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SoraFS deployment guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Sumeragi ingress now uses non-blocking enqueue for network relay (try_* APIs + tests), background routing is centralized on `BlockMessage`, dedup caches evict FIFO instead of clearing, RBC status persists timestamps on unchanged updates, and main-loop lint allowances are scoped to submodules/actor blocks.
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Implemented B‑Chain commit-certificate flow in Sumeragi: commit votes to proxy tail, commit certificates gate finalize, commit-vote replay on payload arrival, QC-driven finalize removed, quorum timeouts use commit votes (stake-aware for NPoS); added unit coverage and refreshed Sumeragi docs/roadmap.
+- Tests: not run (user requested no full workspace run).
 - Added a Sumeragi actor-model refactor plan with staged tasks in `roadmap.md`.
 - Resolved merge conflict in `status.md` and merged latest updates from both branches.
 - Completed SEC-TORII-OPERATOR-AUTH: WebAuthn/mTLS operator auth with enrollment/login flow, session tokens, mTLS gating, operator endpoint protection, telemetry, and updated OpenAPI/docs/tests.
@@ -210,3 +359,12 @@
 - Translated the W3 beta feedback summary across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the W3 beta invite log across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
 - Translated the SoraFS publishing and monitoring guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Try It sandbox guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated docs preview templates (invite, request, feedback digest/form) across all locales in `docs/examples`.
+- Translated the DA manifest review template across all locales in `docs/examples`.
+- Translated the Taikai anchor lineage packet across all locales in `docs/examples`.
+- Translated the pen-test remediation report template across all locales in `docs/examples`.
+- Translated the SoraFS release notes across all locales in `docs/examples`.
+- Translated the SoraFS CI cookbook across all locales in `docs/examples`.
+- Translated the Android device lab reservation request template across all locales in `docs/examples`.
+- Translated the Android partner SLA discovery notes template across all locales in `docs/examples`.

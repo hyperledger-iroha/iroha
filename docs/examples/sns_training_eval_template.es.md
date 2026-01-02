@@ -1,18 +1,44 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/examples/sns_training_eval_template.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 0397eec8373494a74060a7244a7f923714723e5feacc4a54374ee4461f0ddde1
 source_last_modified: "2025-11-15T09:17:43.374603+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-01
 ---
 
-# Traducción en curso
+# Plantilla de evaluacion de entrenamiento SNS
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+Por favor distribuye esta encuesta inmediatamente despues de cada sesion. Las respuestas pueden capturarse via un formulario o Markdown y archivarse en
+`artifacts/sns/training/<suffix>/<cycle>/feedback/`.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## Metadatos de la sesion
+- Sufijo:
+- Ciclo:
+- Idioma:
+- Fecha:
+- Facilitador(es):
+
+## Escala de calificacion
+1 - Malo / 2 - Regular / 3 - Bueno / 4 - Muy bueno / 5 - Excelente
+
+| Pregunta | 1 | 2 | 3 | 4 | 5 |
+|----------|---|---|---|---|---|
+| Claridad del walkthrough de KPI | [ ] | [ ] | [ ] | [ ] | [ ] |
+| Utilidad de los labs | [ ] | [ ] | [ ] | [ ] | [ ] |
+| Ritmo + distribucion de tiempo | [ ] | [ ] | [ ] | [ ] | [ ] |
+| Calidad de localizacion (slides + facilitacion) | [ ] | [ ] | [ ] | [ ] | [ ] |
+| Confianza general para el lanzamiento del sufijo | [ ] | [ ] | [ ] | [ ] | [ ] |
+
+## Preguntas abiertas
+1. Que tema necesita mas profundidad?
+2. Faltaba alguna herramienta/doc en el cuaderno?
+3. La localizacion cumplio tus expectativas? Si no, por que?
+4. Comentarios adicionales / bloqueos que el programa debe seguir.
+
+## Seguimiento
+- `[]` Feedback registrado en el tracker de governance (ticket: __________)
+- `[]` Export de annex capturado (ruta: ____________________)
+- `[]` Acciones asignadas (owner + fecha limite)

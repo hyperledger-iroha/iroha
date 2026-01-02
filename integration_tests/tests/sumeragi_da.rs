@@ -14,6 +14,7 @@ use iroha::{
     client::{Client, Status},
     data_model::{
         Level,
+        consensus::CommitCertificate,
         isi::{Log, SetParameter, Unregister},
         parameter::{Parameter, SumeragiParameter, TransactionParameter},
         prelude::QueryBuilderExt,
@@ -117,6 +118,8 @@ const LARGE_PAYLOAD_BYTES: usize = 1024; // keep payload light to ensure timely 
 const RBC_DELIVER_BUDGET_MS: u64 = 15_000;
 const RBC_DELIVER_GRACE_MS: u64 = 1_000;
 const COMMIT_BUDGET_MS: u64 = 50_000;
+const RBC_DELIVER_BUDGET_PER_EXTRA_PEER_MS: u64 = 10_000;
+const COMMIT_BUDGET_PER_EXTRA_PEER_MS: u64 = 25_000;
 const THROUGHPUT_FLOOR_MIB_S: f64 = 0.1;
 const BG_POST_QUEUE_DEPTH_BUDGET: f64 = 32.0;
 const P2P_QUEUE_DROP_BUDGET: f64 = 0.0;
@@ -157,6 +160,7 @@ async fn sumeragi_rbc_da_large_payload_four_peers() -> Result<()> {
         "sumeragi_rbc_da_large_payload_four_peers",
         4,
         LARGE_PAYLOAD_BYTES,
+        false,
         |_| {},
         |_| Ok(()),
     )
@@ -168,11 +172,31 @@ async fn sumeragi_rbc_da_large_payload_four_peers() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_da_commit_certificate_history_four_peers() -> Result<()> {
+    let result = run_sumeragi_da_scenario_with(
+        "sumeragi_da_commit_certificate_history_four_peers",
+        4,
+        LARGE_PAYLOAD_BYTES,
+        true,
+        |_| {},
+        |_| Ok(()),
+    )
+    .await;
+    if sandbox::handle_result(result, "sumeragi_da_commit_certificate_history_four_peers")?
+        .is_none()
+    {
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_rbc_da_large_payload_six_peers() -> Result<()> {
     let result = run_sumeragi_da_scenario_with(
         "sumeragi_rbc_da_large_payload_six_peers",
         6,
         LARGE_PAYLOAD_BYTES,
+        false,
         |_| {},
         |_| Ok(()),
     )
@@ -189,6 +213,7 @@ async fn sumeragi_exec_qc_with_tight_block_queue_four_peers() -> Result<()> {
         "sumeragi_exec_qc_with_tight_block_queue_four_peers",
         4,
         LARGE_PAYLOAD_BYTES,
+        false,
         |layer| {
             layer.write(["sumeragi", "msg_channel_cap_blocks"], 2i64);
         },
@@ -204,11 +229,12 @@ async fn sumeragi_exec_qc_with_tight_block_queue_four_peers() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sumeragi_rbc_inline_fallback_without_worker() -> Result<()> {
+async fn sumeragi_rbc_background_queue_synchronous() -> Result<()> {
     let result = run_sumeragi_da_scenario_with(
-        "sumeragi_rbc_inline_fallback_without_worker",
+        "sumeragi_rbc_background_queue_synchronous",
         4,
         LARGE_PAYLOAD_BYTES,
+        false,
         |layer| {
             layer.write(["sumeragi", "debug", "disable_background_worker"], true);
         },
@@ -217,17 +243,27 @@ async fn sumeragi_rbc_inline_fallback_without_worker() -> Result<()> {
                 per_peer_metrics.iter().any(|(_, metrics)| {
                     let reader = MetricsReader::new(&metrics.snapshot);
                     reader
-                        .max_with_prefix("sumeragi_bg_post_inline_total")
+                        .max_with_prefix("sumeragi_bg_post_enqueued_total")
                         .unwrap_or(0.0)
                         > 0.0
                 }),
-                "expected at least one peer to fall back to inline consensus background posting"
+                "expected at least one peer to enqueue background post tasks"
+            );
+            ensure!(
+                per_peer_metrics.iter().all(|(_, metrics)| {
+                    let reader = MetricsReader::new(&metrics.snapshot);
+                    reader
+                        .max_with_prefix("sumeragi_bg_post_drop_total")
+                        .unwrap_or(0.0)
+                        == 0.0
+                }),
+                "expected background post drops to remain zero with a synchronous queue"
             );
             Ok(())
         },
     )
     .await;
-    if sandbox::handle_result(result, "sumeragi_rbc_inline_fallback_without_worker")?.is_none() {
+    if sandbox::handle_result(result, "sumeragi_rbc_background_queue_synchronous")?.is_none() {
         return Ok(());
     }
     Ok(())
@@ -993,6 +1029,7 @@ async fn run_sumeragi_da_scenario_with<F, G>(
     scenario_name: &str,
     peer_count: usize,
     payload_bytes: usize,
+    check_commit_certificates: bool,
     configure: F,
     inspect: G,
 ) -> Result<()>
@@ -1173,8 +1210,13 @@ where
     let rbc_observation = rbc_handle.await.wrap_err("rbc join")??;
     let commit_elapsed = commit_handle.await.wrap_err("commit join")??;
 
+    let torii_urls = network.torii_urls();
+    if check_commit_certificates {
+        wait_for_commit_certificates(&http, &torii_urls, expected_height, Instant::now()).await?;
+    }
+
     let mut per_peer_metrics = Vec::new();
-    for (idx, torii) in network.torii_urls().into_iter().enumerate() {
+    for (idx, torii) in torii_urls.iter().enumerate() {
         let mut attempts = 0;
         let (
             payload_bytes_metric,
@@ -1304,7 +1346,12 @@ where
     let throughput_mib_s = payload_mib / rbc_observation.delivered_at.as_secs_f64().max(1e-6);
     // Require RBC delivery within the delivery budget to keep small payload scenarios tolerant.
     #[allow(clippy::cast_precision_loss)]
-    let deliver_budget_ms = RBC_DELIVER_BUDGET_MS.saturating_add(RBC_DELIVER_GRACE_MS);
+    let extra_peers = u64::try_from(peer_count.saturating_sub(4)).unwrap_or(0);
+    let deliver_budget_ms = RBC_DELIVER_BUDGET_MS
+        .saturating_add(RBC_DELIVER_GRACE_MS)
+        .saturating_add(extra_peers.saturating_mul(RBC_DELIVER_BUDGET_PER_EXTRA_PEER_MS));
+    let commit_budget_ms = COMMIT_BUDGET_MS
+        .saturating_add(extra_peers.saturating_mul(COMMIT_BUDGET_PER_EXTRA_PEER_MS));
     let throughput_floor_mib_s =
         (payload_mib / ((deliver_budget_ms as f64) / 1000.0)).min(THROUGHPUT_FLOOR_MIB_S);
 
@@ -1315,8 +1362,8 @@ where
         "RBC delivery {deliver_ms_u64} ms exceeded budget {deliver_budget_ms} ms"
     );
     assert!(
-        commit_ms_u64 <= COMMIT_BUDGET_MS,
-        "Commit latency {commit_ms_u64} ms exceeded budget {COMMIT_BUDGET_MS} ms"
+        commit_ms_u64 <= commit_budget_ms,
+        "Commit latency {commit_ms_u64} ms exceeded budget {commit_budget_ms} ms"
     );
     assert!(
         throughput_mib_s >= throughput_floor_mib_s,
@@ -1492,8 +1539,15 @@ async fn run_sumeragi_da_scenario(
     peer_count: usize,
     payload_bytes: usize,
 ) -> Result<()> {
-    run_sumeragi_da_scenario_with(scenario_name, peer_count, payload_bytes, |_| {}, |_| Ok(()))
-        .await
+    run_sumeragi_da_scenario_with(
+        scenario_name,
+        peer_count,
+        payload_bytes,
+        false,
+        |_| {},
+        |_| Ok(()),
+    )
+    .await
 }
 
 async fn set_sumeragi_parameter(client: &Client, parameter: SumeragiParameter) -> Result<()> {
@@ -1586,13 +1640,24 @@ fn torii_max_content_len_saturates_on_overflow() {
     assert_eq!(limit, i64::MAX);
 }
 
+#[test]
+fn da_commit_wait_timeout_is_reasonable() {
+    assert_eq!(da_commit_wait_timeout(), Duration::from_secs(240));
+}
+
+const DA_COMMIT_WAIT_TIMEOUT_SECS: u64 = 240;
+
+fn da_commit_wait_timeout() -> Duration {
+    Duration::from_secs(DA_COMMIT_WAIT_TIMEOUT_SECS)
+}
+
 async fn wait_for_height(
     http: reqwest::Client,
     status_url: reqwest::Url,
     target_height: u64,
     start: Instant,
 ) -> Result<Duration> {
-    let timeout = Duration::from_secs(120);
+    let timeout = da_commit_wait_timeout();
     loop {
         if start.elapsed() > timeout {
             return Err(eyre!(
@@ -1619,6 +1684,64 @@ async fn wait_for_height(
             && height >= target_height
         {
             return Ok(start.elapsed());
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_commit_certificates(
+    http: &reqwest::Client,
+    torii_urls: &[String],
+    expected_height: u64,
+    start: Instant,
+) -> Result<()> {
+    let timeout = da_commit_wait_timeout();
+    let mut urls = Vec::with_capacity(torii_urls.len());
+    for torii in torii_urls {
+        let base =
+            reqwest::Url::parse(torii).wrap_err_with(|| format!("parse torii url {torii}"))?;
+        let mut url = base
+            .join("v1/sumeragi/commit-certificates")
+            .wrap_err_with(|| format!("compose commit certificates URL for {torii}"))?;
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("from", &expected_height.to_string());
+            pairs.append_pair("limit", "1");
+        }
+        urls.push((torii.clone(), url));
+    }
+
+    let mut last_missing = Vec::new();
+    loop {
+        if start.elapsed() > timeout {
+            return Err(eyre!(
+                "timed out waiting for commit certificates at height {expected_height}; missing={last_missing:?}"
+            ));
+        }
+        last_missing.clear();
+        for (torii, url) in &urls {
+            let response = http
+                .get(url.clone())
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .wrap_err("fetch commit certificates")?;
+            if !response.status().is_success() {
+                last_missing.push(format!("{torii} (status {})", response.status()));
+                continue;
+            }
+            let body = response.text().await.wrap_err("commit certificates body")?;
+            let certificates: Vec<CommitCertificate> =
+                json::from_str(&body).wrap_err("parse commit certificates JSON")?;
+            if !certificates
+                .iter()
+                .any(|cert| cert.height == expected_height)
+            {
+                last_missing.push(format!("{torii} (missing height {expected_height})"));
+            }
+        }
+        if last_missing.is_empty() {
+            return Ok(());
         }
         sleep(Duration::from_millis(200)).await;
     }

@@ -17,11 +17,21 @@ use tower::ServiceExt as _;
 fn ensure_quota_config() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
+        let mut allowed =
+            iroha_config::parameters::defaults::torii::attachments_allowed_mime_types();
+        allowed.push("application/octet-stream".to_string());
         iroha_torii::zk_attachments::configure(
             iroha_config::parameters::defaults::torii::ATTACHMENTS_TTL_SECS,
             iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_BYTES,
             iroha_config::parameters::defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,
             8 * 1024 * 1024,
+            allowed,
+            iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_EXPANDED_BYTES,
+            iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_ARCHIVE_DEPTH,
+            iroha_config::parameters::actual::AttachmentSanitizerMode::InProcess,
+            iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS,
+            None,
+            iroha_torii::routing::MaybeTelemetry::disabled(),
         );
     });
 }
@@ -110,7 +120,7 @@ async fn attachments_list_filters_and_count() {
                 let mut h = axum::http::HeaderMap::new();
                 h.insert(
                     axum::http::header::CONTENT_TYPE,
-                    axum::http::HeaderValue::from_static("application/x-norito"),
+                    axum::http::HeaderValue::from_static("application/x-zk1"),
                 );
                 h
             },

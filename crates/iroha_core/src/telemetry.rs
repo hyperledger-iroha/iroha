@@ -45,6 +45,7 @@ use iroha_data_model::{
     Identifiable,
     asset::AssetDefinitionId,
     block::BlockHeader,
+    consensus::CommitCertificate,
     nexus::{
         AxtPolicySnapshot, AxtRejectReason, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId,
         LaneStorageProfile, LaneVisibility, PublicLaneValidatorStatus, UniversalAccountId,
@@ -6223,11 +6224,11 @@ impl Telemetry {
         }
     }
 
-    /// Increment inline fallback counter labeled by kind {Post,Broadcast}
-    pub fn inc_bg_post_inline(&self, kind: &'static str) {
+    /// Increment background-post drop counter labeled by kind {Post,Broadcast}
+    pub fn inc_bg_post_drop(&self, kind: &'static str) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics
-                .sumeragi_bg_post_inline_total
+                .sumeragi_bg_post_drop_total
                 .with_label_values(&[kind])
                 .inc();
         }
@@ -6859,6 +6860,20 @@ impl Telemetry {
                     .with_label_values(&[scheme, status_label.as_str()])
                     .inc();
             }
+        }
+    }
+
+    /// Record a rejected attachment during Torii sanitization.
+    pub fn inc_torii_attachment_reject(&self, reason: &str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.inc_torii_attachment_reject(reason);
+        }
+    }
+
+    /// Record attachment sanitization latency in milliseconds.
+    pub fn observe_torii_attachment_sanitize_ms(&self, millis: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.observe_torii_attachment_sanitize_ms(millis);
         }
     }
 
@@ -7694,6 +7709,25 @@ impl Telemetry {
         }
     }
 
+    /// Record the latest commit certificate summary (best-effort).
+    pub fn set_commit_certificate_summary(&self, cert: &CommitCertificate) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_commit_certificate_height
+                .set(cert.height);
+            self.metrics.sumeragi_commit_certificate_view.set(cert.view);
+            self.metrics
+                .sumeragi_commit_certificate_epoch
+                .set(cert.epoch);
+            self.metrics
+                .sumeragi_commit_certificate_signatures_total
+                .set(u64::try_from(cert.signatures.len()).unwrap_or(u64::MAX));
+            self.metrics
+                .sumeragi_commit_certificate_validator_set_len
+                .set(u64::try_from(cert.validator_set.len()).unwrap_or(u64::MAX));
+        }
+    }
+
     /// Report the event of block commit, measuring the block time.
     pub fn report_block_commit_blocking(&self, block_header: &BlockHeader) {
         let report = BlockCommitReport::new(block_header, &self.time_source);
@@ -8465,6 +8499,42 @@ mod tests {
         assert_eq!(metrics.sumeragi_commit_signatures_counted.get(), 3);
         assert_eq!(metrics.sumeragi_commit_signatures_set_b.get(), 2);
         assert_eq!(metrics.sumeragi_commit_signatures_required.get(), 4);
+    }
+
+    #[test]
+    fn commit_certificate_summary_metrics_updated() {
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let validator_set = vec![peer_a, peer_b];
+        let validator_set_hash = HashOf::new(&validator_set);
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
+        let cert = CommitCertificate {
+            height: 42,
+            block_hash,
+            view: 7,
+            epoch: 1,
+            validator_set_hash,
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            signatures: Vec::new(),
+        };
+
+        telemetry.set_commit_certificate_summary(&cert);
+
+        assert_eq!(metrics.sumeragi_commit_certificate_height.get(), 42);
+        assert_eq!(metrics.sumeragi_commit_certificate_view.get(), 7);
+        assert_eq!(metrics.sumeragi_commit_certificate_epoch.get(), 1);
+        assert_eq!(
+            metrics.sumeragi_commit_certificate_signatures_total.get(),
+            0
+        );
+        assert_eq!(
+            metrics.sumeragi_commit_certificate_validator_set_len.get(),
+            2
+        );
     }
 
     #[test]
@@ -11427,7 +11497,7 @@ mod tests {
         tel.inc_post_to_peer(&peer);
         tel.inc_bg_post_enqueued("Post");
         tel.inc_bg_post_overflow("Post");
-        tel.inc_bg_post_inline("Post");
+        tel.inc_bg_post_drop("Post");
         assert_eq!(
             metrics
                 .sumeragi_post_to_peer_total
@@ -11451,7 +11521,7 @@ mod tests {
         );
         assert_eq!(
             metrics
-                .sumeragi_bg_post_inline_total
+                .sumeragi_bg_post_drop_total
                 .with_label_values(&["Post"])
                 .get(),
             1
@@ -11949,6 +12019,22 @@ mod tests {
         assert_eq!(metrics.torii_multisig_direct_sign_reject_total.get(), 1);
         telemetry.inc_multisig_derived_account_detected();
         assert_eq!(metrics.multisig_derived_account_detected_total.get(), 1);
+        telemetry.inc_torii_attachment_reject("type");
+        assert_eq!(
+            metrics
+                .torii_attachment_reject_total
+                .with_label_values(&["type"])
+                .get(),
+            1
+        );
+        telemetry.observe_torii_attachment_sanitize_ms(12);
+        assert_eq!(
+            metrics
+                .torii_attachment_sanitize_ms
+                .with_label_values::<&str>(&[])
+                .get_sample_count(),
+            1
+        );
         telemetry.disable();
         telemetry.inc_torii_signature_limit_reject(10, 7, "single");
         assert_eq!(
@@ -12004,6 +12090,24 @@ mod tests {
             metrics.multisig_derived_account_detected_total.get(),
             1,
             "disabled telemetry must not record derived-account detections"
+        );
+        telemetry.inc_torii_attachment_reject("type");
+        assert_eq!(
+            metrics
+                .torii_attachment_reject_total
+                .with_label_values(&["type"])
+                .get(),
+            1,
+            "disabled telemetry must not record attachment rejects"
+        );
+        telemetry.observe_torii_attachment_sanitize_ms(7);
+        assert_eq!(
+            metrics
+                .torii_attachment_sanitize_ms
+                .with_label_values::<&str>(&[])
+                .get_sample_count(),
+            1,
+            "disabled telemetry must not record attachment sanitize latency"
         );
     }
 
