@@ -43,7 +43,8 @@ translator: manual
 
 ### K / r パラメータ
 - 設定キー: `sumeragi.collectors_k: usize`（高さごとのコレクター数、既定 1）、`sumeragi.collectors_redundant_send_r: u8`（冗長送信ファンアウト、既定 1）。
-- オンチェーン: K と r は `SumeragiParameters` にも格納され、`SetSumeragiParameters` によって更新できます。オペレーターは `sumeragi status --summary` などの CLI で最新値を確認できます。
+- オンチェーン: K と r は `SumeragiParameters` に保存され、コレクタ計画と `ConsensusParams` 広告の正となります。設定値はジェネシスの初期値を与えます。ピア間で K/r の広告が異なる場合でも、ミスマッチを記録してオンチェーン値を維持します。
+- フォールバック: `k` でコレクタが選べない場合、投票はコミットトポロジ全体にフォールバックします。`redundant_send_r` は最小 1 として扱われます。
 
 ### トポロジ原則
 - トポロジ生成は BLS PoP を持つバリデータのみで実施します。`leader_index()` と `proxy_tail_index()` は余り演算を使わず、監査しやすい決定論的な `TopologySegment` を返します。

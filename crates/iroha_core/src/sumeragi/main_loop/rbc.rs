@@ -788,7 +788,7 @@ impl Actor {
         self.update_rbc_status_entry(key, &plan.session, false);
         self.persist_rbc_session(key, &plan.session);
 
-        let roster = self.effective_commit_topology();
+        let roster = self.rbc_roster_for_session(key);
         self.record_rbc_session_roster(key, roster.clone());
         let topology_peers = roster;
         let local_peer_id = self.common_config.peer.id().clone();
@@ -798,7 +798,7 @@ impl Actor {
             }
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
-                msg: BlockMessage::RbcInit(plan.init.clone()),
+                msg: BlockMessage::RbcInit(plan.init),
             });
         }
         for chunk in plan.chunks {
@@ -885,7 +885,8 @@ impl Actor {
         };
 
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-        self.record_rbc_session_roster(key, self.effective_commit_topology());
+        let roster = self.rbc_roster_for_session(key);
+        self.record_rbc_session_roster(key, roster);
         self.flush_pending_rbc(key)?;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
@@ -1160,7 +1161,8 @@ impl Actor {
             );
             return Ok(());
         }
-        self.record_rbc_session_roster(key, self.effective_commit_topology());
+        let roster = self.rbc_roster_for_session(key);
+        self.record_rbc_session_roster(key, roster);
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
             if let Some(expected_hash) = session.payload_hash() {
                 if expected_hash != init.payload_hash {

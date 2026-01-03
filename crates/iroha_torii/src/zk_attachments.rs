@@ -428,8 +428,7 @@ fn sniff_format(bytes: &[u8]) -> SniffedFormat {
     }
     if bytes
         .iter()
-        .skip_while(|b| b.is_ascii_whitespace())
-        .next()
+        .find(|b| !b.is_ascii_whitespace())
         .is_some_and(|b| matches!(b, b'{' | b'['))
     {
         return SniffedFormat::Json;
@@ -1350,6 +1349,7 @@ static ATTACH_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// Configure attachments TTL, per-item size cap, and per-tenant quotas from Torii config.
 /// The sanitizer executable override is intended for tests and tooling.
+#[allow(clippy::too_many_arguments)]
 pub fn configure(
     ttl_secs: u64,
     max_bytes: u64,
@@ -1452,9 +1452,7 @@ fn sanitize_timeout_cfg() -> Duration {
 
 /// Run the attachment sanitizer process if requested via environment.
 pub fn sanitizer_process_exit_code_from_env() -> Option<i32> {
-    if env::var_os(ATTACHMENT_SANITIZER_ENV).is_none() {
-        return None;
-    }
+    env::var_os(ATTACHMENT_SANITIZER_ENV)?;
     let exit_code = match run_sanitizer_process() {
         Ok(()) => 0,
         Err(err) => {
@@ -1559,7 +1557,7 @@ fn set_rlimit(resource: libc::c_int, value: u64) -> Result<(), SanitizeError> {
         rlim_cur: value as libc::rlim_t,
         rlim_max: value as libc::rlim_t,
     };
-    let result = unsafe { libc::setrlimit(resource, &limit) };
+    let result = unsafe { libc::setrlimit(resource, &raw const limit) };
     if result == 0 {
         return Ok(());
     }

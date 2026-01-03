@@ -229,7 +229,7 @@ fn eq_ignoring_underscores(left: &str, right: &str) -> bool {
     loop {
         match (left_iter.next(), right_iter.next()) {
             (None, None) => return true,
-            (Some(left_byte), Some(right_byte)) if left_byte == right_byte => continue,
+            (Some(left_byte), Some(right_byte)) if left_byte == right_byte => {}
             _ => return false,
         }
     }

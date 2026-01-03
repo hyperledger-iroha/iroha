@@ -1040,8 +1040,10 @@ pub mod isi {
             let issued_at_ms = 1_700_000_100;
             let (transfer, record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
             let block_timestamp_ms = issued_at_ms + 100;
-            let mut cfg = actual::Offline::default();
-            cfg.max_receipt_age = Duration::from_millis(50);
+            let cfg = actual::Offline {
+                max_receipt_age: Duration::from_millis(50),
+                ..Default::default()
+            };
             let err = ensure_receipt_timestamps(&transfer, &record, block_timestamp_ms, &cfg)
                 .expect_err("receipt should be expired");
             let expected = format!(

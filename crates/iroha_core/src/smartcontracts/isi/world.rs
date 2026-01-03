@@ -3610,7 +3610,6 @@ pub mod isi {
             "runtime_upgrade_provenance:{}",
             reason.as_label()
         )))
-        .into()
     }
 
     fn validate_runtime_upgrade_provenance(
@@ -5387,14 +5386,12 @@ pub mod isi {
                 if record.commitment != commitment {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "verifying key commitment mismatch".into(),
-                    )
-                    .into());
+                    ));
                 }
                 if vk_box.backend != attachment.backend {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "verifying key backend mismatch".into(),
-                    )
-                    .into());
+                    ));
                 }
                 Some(vk_box)
             }
@@ -8697,6 +8694,28 @@ pub mod isi {
                 }
                 _ => {}
             }
+            match self.inner().clone() {
+                Parameter::Sumeragi(
+                    iroha_data_model::parameter::SumeragiParameter::CollectorsK(0),
+                ) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "sumeragi.collectors_k must be greater than zero".to_owned(),
+                        ),
+                    ));
+                }
+                Parameter::Sumeragi(
+                    iroha_data_model::parameter::SumeragiParameter::RedundantSendR(0),
+                ) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "sumeragi.collectors_redundant_send_r must be greater than zero"
+                                .to_owned(),
+                        ),
+                    ));
+                }
+                _ => {}
+            }
             macro_rules! set_parameter {
                 ($($container:ident($param:ident.$field:ident) => $single:ident::$variant:ident),* $(,)?) => {
                     match self.inner().clone() { $(
@@ -11077,6 +11096,51 @@ pub mod isi {
                 Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
                     msg.contains("mode_activation_height requires next_mode"),
                     "unexpected error message: {msg}"
+                ),
+                other => panic!("unexpected error type: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn set_parameter_rejects_zero_collectors_k() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::CollectorsK(0)));
+            let err = update
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("collectors_k=0 must be rejected");
+            match err {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+                    assert_eq!(msg, "sumeragi.collectors_k must be greater than zero")
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn set_parameter_rejects_zero_redundant_send_r() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::RedundantSendR(0)));
+            let err = update
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("redundant_send_r=0 must be rejected");
+            match err {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert_eq!(
+                    msg,
+                    "sumeragi.collectors_redundant_send_r must be greater than zero"
                 ),
                 other => panic!("unexpected error type: {other:?}"),
             }

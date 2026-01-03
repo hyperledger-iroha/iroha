@@ -307,7 +307,7 @@ fn active_store() -> Option<Arc<Store>> {
 ///
 /// This carries non-consensus operator-facing state about a single RBC
 /// session identified by `(block_hash, height, view)`.
-#[derive(Clone, Debug, Encode, Decode, PartialEq)]
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
 pub struct Summary {
     /// Block hash for which this RBC session is active.
     pub block_hash: HashOf<BlockHeader>,
@@ -604,7 +604,7 @@ mod tests {
         let height = 9;
         let view = 0;
         let summary = Summary {
-            block_hash: block_hash.clone(),
+            block_hash,
             height,
             view,
             total_chunks: 3,

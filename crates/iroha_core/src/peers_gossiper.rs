@@ -931,6 +931,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn topology_update_preserves_static_trusted_peers() {
         let shutdown = ShutdownSignal::new();
         let listen_addr: SocketAddr = "127.0.0.1:0".parse().expect("addr");
@@ -938,8 +939,8 @@ mod tests {
         let peer_id = PeerId::from(key_pair.public_key().clone());
 
         let network_cfg = NetworkConfig {
-            address: WithOrigin::inline(listen_addr.clone().into()),
-            public_address: WithOrigin::inline(listen_addr.clone().into()),
+            address: WithOrigin::inline(listen_addr.clone()),
+            public_address: WithOrigin::inline(listen_addr.clone()),
             relay_mode: RelayMode::Disabled,
             relay_hub_address: None,
             relay_ttl: iroha_config::parameters::defaults::network::RELAY_TTL,

@@ -131,6 +131,7 @@ impl<'a> PenaltyApplier<'a> {
         outcome
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn apply_consensus_penalties(&self, current_height: u64) -> Result<PenaltyOutcome> {
         let mut outcome = PenaltyOutcome::default();
         let activation_lag = self.config.npos.reconfig.activation_lag_blocks;
@@ -152,11 +153,6 @@ impl<'a> PenaltyApplier<'a> {
             return Ok(outcome);
         }
 
-        let current_roster: Vec<PeerId> = {
-            let view = self.state.view();
-            view.commit_topology().iter().cloned().collect()
-        };
-        let current_roster_len = current_roster.len();
         let epoch_seeds = {
             let view = self.state.world.vrf_epochs.view();
             let mut map = BTreeMap::new();
@@ -192,19 +188,37 @@ impl<'a> PenaltyApplier<'a> {
             let evidence_roster =
                 roster_for_evidence(self.state, &record.evidence, &commit_certs, &checkpoints)
                     .filter(|roster| !roster.is_empty());
-            let (topology_len, roster) = match evidence_roster.as_ref() {
-                Some(roster) => (roster.len(), roster.as_slice()),
-                None => (current_roster_len, current_roster.as_slice()),
+            let Some(roster) = evidence_roster.as_ref() else {
+                outcome.pending = outcome.pending.saturating_add(1);
+                continue;
             };
+            if matches!(consensus_mode, ConsensusMode::Npos) && prf_seed.is_none() {
+                outcome.pending = outcome.pending.saturating_add(1);
+                continue;
+            }
+            let roster = roster.as_slice();
             let offenders =
-                offender_indices(&record.evidence, topology_len, consensus_mode, prf_seed);
+                offender_indices(&record.evidence, roster.len(), consensus_mode, prf_seed);
             let slash_id = Hash::new(key.clone());
             // Resolve validators before opening a write transaction to avoid re-entrant locks.
-            let mut applied_here = offenders.is_empty();
-            if is_censorship && offenders.is_empty() {
+            if offenders.is_empty() {
                 // TODO: attribute censorship evidence to responsible validators before slashing.
-                applied_here = false;
-                outcome.pending = outcome.pending.saturating_add(1);
+                if is_censorship || !self::evidence_has_legitimate_empty_offenders(&record.evidence)
+                {
+                    outcome.pending = outcome.pending.saturating_add(1);
+                    continue;
+                }
+                let mut block = self.state.world.block();
+                #[cfg(feature = "telemetry")]
+                let mut tx = block.trasaction(self.telemetry, lane_config.clone(), current_height);
+                #[cfg(not(feature = "telemetry"))]
+                let mut tx = block.trasaction(lane_config.clone(), current_height);
+                record.penalty_applied = true;
+                record.penalty_applied_at_height = Some(current_height);
+                tx.consensus_evidence.insert(key, record);
+                tx.apply();
+                block.commit();
+                continue;
             }
             let mut locators = Vec::new();
             for signer in offenders {
@@ -212,11 +226,16 @@ impl<'a> PenaltyApplier<'a> {
                     locators.push(locator);
                 }
             }
+            if locators.is_empty() {
+                outcome.pending = outcome.pending.saturating_add(1);
+                continue;
+            }
             let mut block = self.state.world.block();
             #[cfg(feature = "telemetry")]
             let mut tx = block.trasaction(self.telemetry, lane_config.clone(), current_height);
             #[cfg(not(feature = "telemetry"))]
             let mut tx = block.trasaction(lane_config.clone(), current_height);
+            let mut applied_here = false;
             for locator in locators {
                 if let Some(amount) =
                     max_slash_amount_for_validator(&tx, &locator, staking_cfg.max_slash_bps)?
@@ -241,6 +260,8 @@ impl<'a> PenaltyApplier<'a> {
             if applied_here {
                 record.penalty_applied = true;
                 record.penalty_applied_at_height = Some(current_height);
+            } else {
+                outcome.pending = outcome.pending.saturating_add(1);
             }
             tx.consensus_evidence.insert(key, record);
             tx.apply();
@@ -390,12 +411,13 @@ fn canonicalize_index_for_view(
     if idx >= topology_len {
         return None;
     }
+    let topology_len_u64 = u64::try_from(topology_len).ok()?;
     let rotation = match consensus_mode {
         ConsensusMode::Permissioned => {
             if view == 0 {
                 return Some(signer);
             }
-            (view % topology_len as u64) as usize
+            usize::try_from(view % topology_len_u64).ok()?
         }
         ConsensusMode::Npos => {
             let seed = prf_seed?;
@@ -486,6 +508,18 @@ fn offender_indices(
             // TODO: map censorship evidence to responsible leaders once the attribution policy is defined.
             Vec::new()
         }
+    }
+}
+
+fn evidence_has_legitimate_empty_offenders(evidence: &Evidence) -> bool {
+    match &evidence.payload {
+        EvidencePayload::InvalidQc { qc, .. } => {
+            bitmap_indices(&qc.aggregate.signers_bitmap).is_empty()
+        }
+        EvidencePayload::Censorship { .. }
+        | EvidencePayload::DoubleVote { .. }
+        | EvidencePayload::DoubleExecVote { .. }
+        | EvidencePayload::InvalidProposal { .. } => false,
     }
 }
 
@@ -696,6 +730,62 @@ mod tests {
     }
 
     #[test]
+    fn canonicalize_index_for_view_permissioned_wraps() {
+        let signer = ValidatorIndex::try_from(1_usize).expect("validator index");
+        let canonical =
+            canonicalize_index_for_view(signer, 10, 7, 5, ConsensusMode::Permissioned, None)
+                .expect("canonical index");
+        let expected = ValidatorIndex::try_from(3_usize).expect("expected index");
+        assert_eq!(canonical, expected);
+    }
+
+    fn insert_epoch_seed(state: &State, epoch: u64, seed: [u8; 32]) {
+        let record = VrfEpochRecord {
+            epoch,
+            seed,
+            epoch_length: 10,
+            commit_deadline_offset: 3,
+            reveal_deadline_offset: 6,
+            roster_len: 1,
+            finalized: true,
+            updated_at_height: 1,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+        let mut block = state.world.vrf_epochs.block();
+        block.insert(epoch, record);
+        block.commit();
+    }
+
+    fn record_roster_history(height: u64, block_hash: HashOf<BlockHeader>, roster: Vec<PeerId>) {
+        let commit_cert = CommitCertificate {
+            height,
+            block_hash,
+            view: 0,
+            epoch: 0,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            signatures: Vec::new(),
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            height,
+            block_hash,
+            roster,
+            Vec::new(),
+            iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        crate::sumeragi::status::record_commit_certificate(commit_cert);
+        crate::sumeragi::status::record_validator_checkpoint(checkpoint);
+    }
+
+    #[test]
     fn offender_indices_canonicalize_view_rotation_in_permissioned_mode() {
         let parent_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32]));
@@ -745,7 +835,7 @@ mod tests {
         let key_pair = KeyPair::random();
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB0; 32]));
         let payload = TransactionSubmissionReceiptPayload {
-            tx_hash: tx_hash.clone(),
+            tx_hash,
             submitted_at_ms: 1,
             submitted_at_height: 2,
             signer: key_pair.public_key().clone(),
@@ -903,8 +993,13 @@ mod tests {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
+        insert_epoch_seed(&state, 0, [0x10; 32]);
 
         // Evidence with empty signer bitmap (no offenders but should mark applied)
+        let keypair = KeyPair::random();
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
         let qc = Qc {
             phase: crate::sumeragi::consensus::Phase::Prevote,
             subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -918,6 +1013,7 @@ mod tests {
                 bls_aggregate_signature: Vec::new(),
             },
         };
+        record_roster_history(qc.height, qc.subject_block_hash, roster);
         let evidence = Evidence {
             kind: EvidenceKind::InvalidQC,
             payload: EvidencePayload::InvalidQc {
@@ -966,9 +1062,14 @@ mod tests {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
         config.npos.reconfig.activation_lag_blocks = 0;
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
+        insert_epoch_seed(&state, 0, [0x12; 32]);
 
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+        let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        record_roster_history(2, block_hash, roster);
         let v1 = Vote {
             phase: Phase::Prevote,
             block_hash,
@@ -1012,6 +1113,137 @@ mod tests {
         let outcome = applier.apply_consensus_penalties(5)?;
         assert_eq!(outcome.applied, 0);
         assert_eq!(outcome.slashed, 0);
+        assert_eq!(outcome.pending, 1);
+
+        let view = state.world.consensus_evidence.view();
+        let updated = view.get(&key).expect("evidence present");
+        assert!(!updated.penalty_applied);
+        assert_eq!(updated.penalty_applied_at_height, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn consensus_penalties_pending_without_roster() -> Result<()> {
+        let state = fresh_state();
+        let mut config = test_sumeragi_config();
+        config.npos.reconfig.activation_lag_blocks = 0;
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
+        insert_epoch_seed(&state, 0, [0x13; 32]);
+
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x31; Hash::LENGTH]));
+        let v1 = Vote {
+            phase: Phase::Prevote,
+            block_hash,
+            height: 3,
+            view: 1,
+            epoch: 0,
+            signer: 0,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        };
+        let mut v2 = v1.clone();
+        v2.block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x32; Hash::LENGTH]));
+        let evidence = Evidence {
+            kind: EvidenceKind::DoublePrevote,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let record = EvidenceRecord {
+            evidence,
+            recorded_at_height: 3,
+            recorded_at_view: 1,
+            recorded_at_ms: 999,
+            penalty_applied: false,
+            penalty_applied_at_height: None,
+        };
+        let key = evidence_key(&record.evidence);
+        {
+            let mut block = state.world.consensus_evidence.block();
+            block.insert(key.clone(), record.clone());
+            block.commit();
+        }
+
+        let applier = PenaltyApplier::new(
+            &state,
+            &config,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let outcome = applier.apply_consensus_penalties(5)?;
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.slashed, 0);
+        assert_eq!(outcome.pending, 1);
+
+        let view = state.world.consensus_evidence.view();
+        let updated = view.get(&key).expect("evidence present");
+        assert!(!updated.penalty_applied);
+        assert_eq!(updated.penalty_applied_at_height, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn consensus_penalties_pending_without_prf_seed() -> Result<()> {
+        let state = fresh_state();
+        let mut config = test_sumeragi_config();
+        config.npos.reconfig.activation_lag_blocks = 0;
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
+
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x41; Hash::LENGTH]));
+        let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        record_roster_history(4, block_hash, roster);
+
+        let v1 = Vote {
+            phase: Phase::Prevote,
+            block_hash,
+            height: 4,
+            view: 1,
+            epoch: 1,
+            signer: 0,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        };
+        let mut v2 = v1.clone();
+        v2.block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH]));
+        let evidence = Evidence {
+            kind: EvidenceKind::DoublePrevote,
+            payload: EvidencePayload::DoubleVote { v1, v2 },
+        };
+        let record = EvidenceRecord {
+            evidence,
+            recorded_at_height: 4,
+            recorded_at_view: 1,
+            recorded_at_ms: 555,
+            penalty_applied: false,
+            penalty_applied_at_height: None,
+        };
+        let key = evidence_key(&record.evidence);
+        {
+            let mut block = state.world.consensus_evidence.block();
+            block.insert(key.clone(), record.clone());
+            block.commit();
+        }
+
+        let applier = PenaltyApplier::new(
+            &state,
+            &config,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let outcome = applier.apply_consensus_penalties(5)?;
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.slashed, 0);
+        assert_eq!(outcome.pending, 1);
 
         let view = state.world.consensus_evidence.view();
         let updated = view.get(&key).expect("evidence present");
@@ -1030,7 +1262,7 @@ mod tests {
         let key_pair = KeyPair::random();
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB1; 32]));
         let payload = TransactionSubmissionReceiptPayload {
-            tx_hash: tx_hash.clone(),
+            tx_hash,
             submitted_at_ms: 10,
             submitted_at_height: 2,
             signer: key_pair.public_key().clone(),

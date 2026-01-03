@@ -153,7 +153,7 @@ impl From<AlgorithmArg> for Algorithm {
     }
 }
 
-#[derive(Subcommand, Debug, Clone, Default)]
+#[derive(Subcommand, Debug, Clone, Copy, Default)]
 pub enum Mode {
     /// Generate default genesis
     #[default]
@@ -286,7 +286,7 @@ fn apply_profile_overrides(
 
 fn resolve_profile_settings(
     profile: Option<GenesisProfile>,
-    chain_id: Option<ChainId>,
+    chain_id: Option<&ChainId>,
     profile_defaults: Option<&ProfileDefaults>,
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
@@ -294,18 +294,16 @@ fn resolve_profile_settings(
     ivm_gas_limit_per_block: Option<u64>,
 ) -> color_eyre::Result<ResolvedGenesisSettings> {
     let mut chain = chain_id
-        .clone()
+        .cloned()
         .or_else(|| profile_defaults.map(|d| d.chain_id.clone()))
         .unwrap_or_else(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
     let mut consensus_mode = consensus_mode;
     let mut next_consensus_mode = next_consensus_mode;
-    let mut profile_vrf_seed = None;
-
-    if let Some(profile) = profile {
+    let profile_vrf_seed = if let Some(profile) = profile {
         let defaults = profile_defaults.expect("profile defaults available when profile is set");
         let overrides = apply_profile_overrides(
             profile,
-            chain_id.as_ref(),
+            chain_id,
             consensus_mode,
             next_consensus_mode,
             vrf_seed_override,
@@ -315,8 +313,10 @@ fn resolve_profile_settings(
         chain = overrides.chain;
         consensus_mode = overrides.consensus_mode;
         next_consensus_mode = overrides.next_consensus_mode;
-        profile_vrf_seed = overrides.profile_vrf_seed;
-    }
+        overrides.profile_vrf_seed
+    } else {
+        None
+    };
 
     Ok(ResolvedGenesisSettings {
         chain,
@@ -326,6 +326,7 @@ fn resolve_profile_settings(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_genesis_for_mode(
     mode: Mode,
     builder: GenesisBuilder,
@@ -457,7 +458,7 @@ impl<T: Write> RunArgs<T> for Args {
         let profile_is_some = profile.is_some();
         let resolved = resolve_profile_settings(
             profile,
-            chain_id,
+            chain_id.as_ref(),
             profile_defaults.as_ref(),
             consensus_mode,
             next_consensus_mode,
@@ -1004,7 +1005,7 @@ mod helper_tests {
         let chain_id = ChainId::from("explicit-chain");
         let resolved = resolve_profile_settings(
             None,
-            Some(chain_id.clone()),
+            Some(&chain_id),
             None,
             SumeragiConsensusMode::Permissioned,
             None,

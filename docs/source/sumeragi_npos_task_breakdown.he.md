@@ -1,69 +1,70 @@
-<!-- Hebrew translation of docs/source/sumeragi_npos_task_breakdown.md -->
-
 ---
 lang: he
 direction: rtl
 source: docs/source/sumeragi_npos_task_breakdown.md
-status: needs-update
-translator: manual
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: a1773b8fda6cda00e38b333096bfe5d6f6181c883ece5a62c11a190a09870d29
+source_last_modified: "2025-12-12T12:49:53.638997+00:00"
+translation_last_reviewed: 2026-01-01
 ---
 
 <div dir="rtl">
 
-> NOTE: This translation has not yet been updated for the v1 DA availability (advisory). Refer to `docs/source/sumeragi_npos_task_breakdown.md` for current semantics.
+<!-- התרגום העברי ל docs/source/sumeragi_npos_task_breakdown.md -->
 
 ## פירוק משימות Sumeragi + NPoS
 
-מסמך זה פורט את מפת הדרכים של שלב A למשימות הנדסיות קטנות, כך שנוכל להמשיך להטמיע את Sumeragi/NPoS בצורה הדרגתית. סימוני הסטטוס: `✅` הושלם, `⚙️` בתהליך, `⬜` טרם התחיל, `🧪` דורש בדיקות.
+מסמך זה מרחיב את מפת הדרכים של שלב A למשימות הנדסיות קטנות כדי שנוכל להשלים בהדרגה את עבודת Sumeragi/NPoS שנותרה. סימוני הסטטוס: `✅` הושלם, `⚙️` בתהליך, `⬜` לא התחיל, ו-`🧪` דורש בדיקות.
 
-### A2 — אימוץ מסרים ברמת ה-wire
-- ✅ הצגת טיפוסי Norito `Proposal`/`Vote`/`Qc` ב-`BlockMessage` והרצת round-trip encode/decode (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
-- ✅ חסימת המסגרות הישנות `BlockSigned/BlockCommitted`; מתג ההגירה הוגדר ל-`false` לפני ההוצאה משימוש.
-- ✅ הסרת מתג ההגירה שהחליף בין מסרים ישנים לחדשים; מסלול Vote/QC הוא עתה המסלול היחיד.
-- ✅ עדכון נתבי Torii, פקודות CLI וצרכני טלמטריה להשתמש ב-`/v1/sumeragi/*` JSON במקום המסגרות הישנות.
-- ✅ כיסוי אינטגרציה מפעיל את `/v1/sumeragi/*` דרך צינור Vote/QC בלבד (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
-- ✅ מחיקת המסגרות הישנות לאחר השגת שוויון פונקציונלי ובדיקות תאימות.
+### A2 - אימוץ מסרים ברמת wire
+- ✅ חשיפת טיפוסי Norito `Proposal`/`Vote`/`Qc` ב-`BlockMessage` והרצת round-trip encode/decode (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
+- ✅ חסימת המסגרות הישנות `BlockSigned/BlockCommitted`; מתג ההגירה נשאר `false` לפני ההוצאה משימוש.
+- ✅ הסרת מתג ההגירה שהחליף בין מסרי הבלוקים הישנים; מסלול Vote/QC הוא כעת המסלול היחיד על wire.
+- ✅ עדכון נתבי Torii, פקודות CLI וצרכני הטלמטריה להעדיף snapshots JSON של `/v1/sumeragi/*` על פני מסגרות הבלוק הישנות.
+- ✅ כיסוי אינטגרציה מפעיל את נקודות הקצה `/v1/sumeragi/*` אך ורק דרך צינור Vote/QC (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- ✅ הסרת המסגרות הישנות לאחר השגת שוויון יכולות ובדיקות תאימות.
 
-### תוכנית הסרת המסגרות
-1. ✅ בדיקות soak מרובות צמתים למשך 72 שעות ב-Telemetry וב-CI; סנאפשוטים הראו תפוקת מציע יציבה ו-QC ללא רגרסיות.
-2. ✅ כיסוי אינטגרציה נשען כעת רק על מסלול Vote/QC (`sumeragi_vote_qc_commit.rs`), ומבטיח קונצנזוס גם בצמתים מעורבים.
-3. ✅ תיעוד ו-CLI למפעילים אינם מזכירים את המסלול הישן; כל ההכוונה מופנית לטלמטריית Vote/QC.
-4. ✅ המסרים, מוני הטלמטריה ומטמוני ה-commit הישנים הוסרו; טבלת התאימות מציגה Vote/QC בלבד.
+### תוכנית הסרת מסגרות
+1. ✅ בדיקות soak מרובות צמתים רצו 72 h על חבילות telemetria ו-CI; snapshots של Torii הראו תפוקת proposer יציבה והיווצרות QC ללא רגרסיות.
+2. ✅ כיסוי בדיקות אינטגרציה רץ כעת רק על נתיב Vote/QC (`sumeragi_vote_qc_commit.rs`), ומבטיח שעמיתים מעורבים מגיעים לקונצנזוס ללא המסגרות הישנות.
+3. ✅ תיעוד למפעילים ועזרת CLI כבר לא מזכירים את נתיב ה-wire הקודם; ההנחיות לאיתור תקלות מצביעות כעת על telemetria של Vote/QC.
+4. ✅ וריאנטים ישנים של מסרים, מוני telemetria ומטמוני commit ממתינים הוסרו; מטריצת התאימות משקפת כעת רק את פני השטח Vote/QC.
 
-### A3 — אכיפת מנוע ופייסמייקר
-- ✅ חלות אינווריאנטים של Highest/Locked QC בתוך `handle_message` (ראו `block_created_header_sanity`).
-- ✅ שער זמינות נתונים מאמת hash של מטען RBC לפני הצבעה (`ensure_block_matches_rbc_payload`); הצבעות זמינות נשלחות רק לאחר DELIVER תואם.
-- ✅ שילוב הדרישה ל-PrecommitQC (`require_precommit_qc`) בקונפיגורציית ברירת המחדל והוספת בדיקות שליליות (ברירת מחדל `true`; הבדיקות מכסות גם opt-out).
-- ✅ החלפת היוריסטיקות של redundant-send ב-controller הנשען על EMA (`aggregator_retry_deadline` נסמך על EMA חי).
-- ✅ עצירת הרכבת הצעות תחת לחץ תורים (`BackpressureGate` עוצר את הפייסמייקר כאשר התור רווי ומדווח על דחיות).
-- ✅ קליטת BlockCreated רושמת hints/proposals, אוכפת התאמת כותרת/מטען ומשלבת שער DA בבלוקים ממתינים כך ש-RBC DELIVER הוא תנאי לנתיב הצבעת זמינות (`crates/iroha_core/src/sumeragi/main_loop.rs:3004`, `:1932`; כיסוי רגרסיה: `:5028`, `:5305`).
-- ✅ כיסוי live/restart כולל התאוששות RBC לאחר cold start (`integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart`) וחזרת הפייסמייקר לאחר downtime (`integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`).
-- ✅ בדיקות ריסטארט/שינוי תצוגה דטרמיניסטיות המכסות התכנסות נעילה (`integration_tests/tests/sumeragi_lock_convergence.rs`).
+### A3 - אכיפת מנוע ו-pacemaker
+- ✅ אכיפת אינווריאנטים של Lock/HighestQC ב-`handle_message` (ראו `block_created_header_sanity`).
+- ✅ מעקב זמינות נתונים מאמת את hash המטען של RBC בעת רישום המסירה (`Actor::ensure_block_matches_rbc_payload`) כך שסשנים לא תואמים לא ייחשבו כמסורים.
+- ✅ שילוב דרישת PrecommitQC (`require_precommit_qc`) בקונפיגורציות ברירת המחדל והוספת בדיקות שליליות (ברירת המחדל כעת `true`; הבדיקות מכסות מסלולי gated ו-opt-out).
+- ✅ החלפת heuristics של redundant-send ברמת view בבקרי pacemaker מבוססי EMA (`aggregator_retry_deadline` נגזר כעת מ-EMA חי ומניע את דד-ליינים של redundant send).
+- ✅ עצירת הרכבת הצעות תחת backpressure של התור (`BackpressureGate` עוצר כעת את ה-pacemaker כשהתור רווי ורושם deferrals ל-status/telemetry).
+- ✅ הצבעות availability נשלחות לאחר אימות ההצעה כאשר DA נדרש (ללא המתנה ל-`DELIVER` מקומי של RBC), ו-evidence של availability נעקב דרך `AvailabilityQC` כהוכחת בטיחות בזמן שה-commit מתקדם ללא המתנה. זה מונע המתנות מעגליות בין הובלת payload להצבעה.
+- ✅ כיסוי restart/liveness כולל כעת התאוששות RBC ב-cold-start (`integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart`) וחידוש pacemaker לאחר downtime (`integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`).
+- ✅ הוספת בדיקות רגרסיה דטרמיניסטיות ל-restart/view-change המכסות התכנסות lock (`integration_tests/tests/sumeragi_lock_convergence.rs`).
 
-### A4 — צינור אוספים ואקראיות
-- ✅ עזרי רוטציה דטרמיניסטיים לאוספים חיים ב-`collectors.rs`.
-- ✅ GA-A4.1 — בחירת אוסף מבוססת PRF מקליטה seed וגובה/תצוגה ב-`/status` ובטלמטריה; hooks של VRF מפיצים הקשר לאחר קומיטים וריביל. בעלי משימה: `@sumeragi-core`. מעקב: `project_tracker/npos_sumeragi_phase_a.md` (נסגר).
-- ✅ GA-A4.2 — חשיפת טלמטריית השתתפות בריביל ופוקודות CLI, עדכון מניפסטים של Norito. בעלי משימה: `@telemetry-ops`, `@torii-sdk`. מעקב: `project_tracker/npos_sumeragi_phase_a.md:6`.
-- ✅ GA-A4.3 — בדיקות התאוששות ריביל מאוחר ואפוק ללא השתתפות ב-`integration_tests/tests/sumeragi_randomness.rs` (למשל `npos_late_vrf_reveal_clears_penalty_and_preserves_seed`, `npos_zero_participation_epoch_reports_full_no_participation`). מעקב: `project_tracker/npos_sumeragi_phase_a.md:7`.
+### A4 - צינור collectors ואקראיות
+- ✅ עזרי רוטציה דטרמיניסטיים ל-collectors נמצאים ב-`collectors.rs`.
+- ✅ GA-A4.1 - בחירת collectors מבוססת PRF כעת רושמת seeds דטרמיניסטיים ו-height/view ב-`/status` וב-telemetria; hooks לרענון VRF מפיצים את ההקשר אחרי commits ו-reveals. בעלי משימה: `@sumeragi-core`. מעקב: `project_tracker/npos_sumeragi_phase_a.md` (נסגר).
+- ✅ GA-A4.2 - חשיפת telemetria להשתתפות reveal + פקודות CLI לבדיקת מצב ועדכון manifests של Norito. בעלי משימה: `@telemetry-ops`, `@torii-sdk`. מעקב: `project_tracker/npos_sumeragi_phase_a.md:6`.
+- ✅ GA-A4.3 - קידוד התאוששות late-reveal ובדיקות epoch ללא השתתפות ב-`integration_tests/tests/sumeragi_randomness.rs` (`npos_late_vrf_reveal_clears_penalty_and_preserves_seed`, `npos_zero_participation_epoch_reports_full_no_participation`), תוך בדיקת telemetria לניקוי עונשים. בעלי משימה: `@sumeragi-core`. מעקב: `project_tracker/npos_sumeragi_phase_a.md:7`.
 
-### A5 — ריקונפיגורציה משותפת וראיות
-- ✅ תשתית ראיות, התמדה ב-WSV ו-roundtrip של Norito מכסים מצבי double-vote, הצעה/ QC שגויים ו-double exec, כולל דה-דופ וחיתוך אופק דטרמיניסטיים (`sumeragi::evidence`).
-- ✅ GA-A5.1 — הפעלת קונצנזוס משותף (הקבוצה הישנה חותמת, החדשה נכנסת בבלוק הבא) מאכפת בתוספת בדיקות אינטגרציה.
-- ✅ GA-A5.2 — עדכון תיעוד ומסלולי CLI לענישה/כליאה, כולל בדיקות mdBook שמכילות את ברירות המחדל ואת ניסוח אופק הראיות.
-- ✅ GA-A5.3 — בדיקות שליליות (חתימה כפולה, זיוף חתימה, הפעלת אפוק ישן, מטעני מניפסט מעורבים) ו-fixtures fuzz נכנסו להרצות לילה שמגנות על ולידציית ה-roundtrip.
+### A5 - קונפיגורציה משותפת ו-evidence
+- ✅ תשתית evidence, התמדה ב-WSV ו-roundtrip של Norito מכסים כעת double-vote, invalid proposal, invalid QC ו-double exec עם דה-דופ דטרמיניסטי וקיטוע אופק (`sumeragi::evidence`).
+- ✅ GA-A5.1 - הפעלת joint-consensus (הסט הישן מבצע commit, הסט החדש מופעל בבלוק הבא) עם כיסוי אינטגרציה ממוקד.
+- ✅ GA-A5.2 - עדכון מסמכי governance וזרימות CLI עבור slashing/jailing, יחד עם בדיקות סנכרון mdBook לנעילת ברירות מחדל וניסוח evidence horizon.
+- ✅ GA-A5.3 - בדיקות evidence למסלול שלילי (duplicate signer, forged signature, stale epoch replay, mixed manifest payloads) יחד עם fixtures fuzz נכנסו ורצות nightly כדי להגן על אימות Norito roundtrip.
 
-### A6 — טולרינג, תיעוד ואימות
-- ✅ טלמטריה/דיווח RBC זמינים; דו״ח DA מייצר מדדים אמיתיים (כולל מוני פינוי).
-- ✅ GA-A6.1 — בדיקת happy-path של 4 פירים NPoS עם VRF רצה ב-CI עם ספים של פייסמייקר/RBC (`integration_tests/tests/sumeragi_npos_happy_path.rs`). בעלי משימה: `@qa-consensus`, `@telemetry-ops`. מעקב: `project_tracker/npos_sumeragi_phase_a.md:11`.
-- ✅ GA-A6.2 — קו בסיס ביצועים ל-NPoS (בלוקים של שנייה, k=3) תועד ב-`status.md`/מדריכי מפעיל, בצירוף seeds ופרטי חומרה לשחזור. דו״ח: `docs/source/generated/sumeragi_baseline_report.md`. מעקב: `project_tracker/npos_sumeragi_phase_a.md:12`. הריצה הוקלטה על Apple M2 Ultra (24 ליבות, 192 GB RAM, macOS 15.0) עם הפקודה שב-`scripts/run_sumeragi_baseline.py`.
-- ✅ GA-A6.3 — מדריכי תפעול לטלמטריה של RBC/פייסמייקר/לחץ תורים נחתו (`docs/source/telemetry.md:523`), עם אוטומציית ניתוח לוגים כמשימת follow-up. בעלי משימה: `@operator-docs`, `@telemetry-ops`. מעקב: `project_tracker/npos_sumeragi_phase_a.md:13`.
-- ✅ תרחישי ביצועים לרשת אחסון RBC/אובדן צ׳אנקים (`npos_rbc_store_backpressure_records_metrics`, `npos_rbc_chunk_loss_fault_reports_backlog`), כיסוי לשליחה עודפת (`npos_redundant_send_retries_update_metrics`) וחסר ג׳יטר חסום (`npos_pacemaker_jitter_within_band`) מבטיחים שה-A6 suite בוחן דחיות soft-limit, הפלות דטרמיניסטיות, טלמטריית שליחה עודפת וג׳יטר פייסמייקר תחת עומס.【integration_tests/tests/sumeragi_npos_performance.rs:633】【:760】【:800】【:639】
+### A6 - טולרינג, תיעוד ואימות
+- ✅ טלמטריה/דיווח RBC זמינים; דו"ח DA מייצר מדדים אמיתיים (כולל מוני eviction).
+- ✅ GA-A6.1 - בדיקת happy-path של 4 פירים NPoS עם VRF רצה ב-CI עם ספי pacemaker/RBC enforced דרך `integration_tests/tests/sumeragi_npos_happy_path.rs`. בעלי משימה: `@qa-consensus`, `@telemetry-ops`. מעקב: `project_tracker/npos_sumeragi_phase_a.md:11`.
+- ✅ GA-A6.2 - קו בסיס ביצועים ל-NPoS (בלוקים של 1 s, k=3) נלכד ופורסם ב-`status.md`/מסמכי מפעיל עם seeds לשחזור ומטריצת חומרה. בעלי משימה: `@performance-lab`, `@telemetry-ops`. דו"ח: `docs/source/generated/sumeragi_baseline_report.md`. מעקב: `project_tracker/npos_sumeragi_phase_a.md:12`. ריצה חיה תועדה על Apple M2 Ultra (24 cores, 192 GB RAM, macOS 15.0) לפי הפקודה שב-`scripts/run_sumeragi_baseline.py`.
+- ✅ GA-A6.3 - מדריכי troubleshooting למפעילים עבור RBC/pacemaker/backpressure פורסמו (`docs/source/telemetry.md:523`); קורלציית לוגים מתבצעת כעת ע"י `scripts/sumeragi_backpressure_log_scraper.py`, כדי שמפעילים יוכלו לשלוף צמדי pacemaker deferral/missing-availability ללא grep ידני. בעלי משימה: `@operator-docs`, `@telemetry-ops`. מעקב: `project_tracker/npos_sumeragi_phase_a.md:13`.
+- ✅ נוספו תרחישי ביצועים של RBC store/chunk-loss (`npos_rbc_store_backpressure_records_metrics`, `npos_rbc_chunk_loss_fault_reports_backlog`), כיסוי fan-out מיותר (`npos_redundant_send_retries_update_metrics`) ו-harness של jitter מוגבל (`npos_pacemaker_jitter_within_band`) כך שסוויטת A6 בודקת deferrals של soft-limit ב-store, drops דטרמיניסטיים של chunks, טלמטריית redundant-send ורצועות jitter של pacemaker תחת עומס. [integration_tests/tests/sumeragi_npos_performance.rs:633] [integration_tests/tests/sumeragi_npos_performance.rs:760] [integration_tests/tests/sumeragi_npos_performance.rs:800] [integration_tests/tests/sumeragi_npos_performance.rs:639]
 
 ### צעדים מידיים
-1. ✅ harness ג׳יטר חסום מודד טלמטריית פייסמייקר (`integration_tests/tests/sumeragi_npos_performance.rs::npos_pacemaker_jitter_within_band`).
-2. ✅ קידום בדיקות דחיית RBC ב-`npos_queue_backpressure_triggers_metrics` באמצעות עומס דטרמיניסטי על חנות RBC (`integration_tests/tests/sumeragi_npos_performance.rs::npos_queue_backpressure_triggers_metrics`).
-3. ✅ הרחבת soak של `/v1/sumeragi/telemetry` לכיסוי אפוקים ארוכים ואוספים אדוורסריים, והשוואת הסנאפשוטים למוני Prometheus (ראו `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`).
+1. ✅ harness של jitter מוגבל מפעיל את מדדי jitter של pacemaker (`integration_tests/tests/sumeragi_npos_performance.rs::npos_pacemaker_jitter_within_band`).
+2. ✅ חיזוק assertions של deferral RBC ב-`npos_queue_backpressure_triggers_metrics` באמצעות יצירת לחץ דטרמיניסטי על store RBC (`integration_tests/tests/sumeragi_npos_performance.rs::npos_queue_backpressure_triggers_metrics`).
+3. ✅ הרחבת soak של `/v1/sumeragi/telemetry` לכיסוי epochs ארוכים ו-collectors עוינים, עם השוואת snapshots למוני Prometheus לאורך מספר heights. מכוסה ע"י `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
 
-ניהול הרשימה כאן מאפשר ל-`roadmap.md` להישאר ממוקד באבני דרך תוך שמירה על צ׳ק-ליסט חי. עדכנו וחשבו השלמות עם נחיתת הפאצ׳ים.
+מעקב אחרי הרשימה כאן שומר על `roadmap.md` ממוקד באבני דרך ובמקביל נותן לצוות רשימת בדיקה חיה לביצוע. עדכנו את הערכים (וסמנו השלמות) עם נחיתת התיקונים.
 
 </div>

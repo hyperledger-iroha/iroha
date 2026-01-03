@@ -55,12 +55,12 @@ const FLAG_USER_VERIFIED: u8 = 0x04;
 const FLAG_ATTESTED_CREDENTIAL_DATA: u8 = 0x40;
 
 #[derive(Clone, Debug)]
-pub(crate) struct AuthContext {
+pub struct AuthContext {
     key: String,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct OperatorAuthError {
+pub struct OperatorAuthError {
     status: StatusCode,
     code: &'static str,
     message: String,
@@ -284,7 +284,7 @@ fn operator_auth_error_response(status: StatusCode, code: &'static str, message:
 }
 
 #[derive(Debug)]
-pub(crate) enum OperatorAuthInitError {
+pub enum OperatorAuthInitError {
     MissingWebAuthn,
     InvalidWebAuthn(String),
     CredentialLoad(String),
@@ -443,7 +443,7 @@ impl LockoutTracker {
     }
 }
 
-pub(crate) struct OperatorAuth {
+pub struct OperatorAuth {
     enabled: bool,
     require_mtls: bool,
     token_fallback: OperatorTokenFallback,
@@ -667,9 +667,8 @@ impl OperatorAuth {
         &self,
         ctx: &AuthContext,
     ) -> Result<norito::json::Value, OperatorAuthError> {
-        let policy = self.webauthn_policy().map_err(|err| {
+        let policy = self.webauthn_policy().inspect_err(|err| {
             self.record_failure(ctx, ACTION_REGISTER_OPTIONS, err.metric_label());
-            err
         })?;
         self.prune_challenges();
         let challenge_bytes = random_bytes(CHALLENGE_BYTES);
@@ -755,38 +754,33 @@ impl OperatorAuth {
         ctx: &AuthContext,
         payload: &norito::json::Value,
     ) -> Result<RegistrationOutcome, OperatorAuthError> {
-        let policy = self.webauthn_policy().map_err(|err| {
+        let policy = self.webauthn_policy().inspect_err(|err| {
             self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            err
         })?;
-        let input = parse_registration_payload(payload).map_err(|err| {
+        let input = parse_registration_payload(payload).inspect_err(|err| {
             self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            err
         })?;
         let client =
-            parse_client_data(&input.client_data_json, "webauthn.create").map_err(|err| {
+            parse_client_data(&input.client_data_json, "webauthn.create").inspect_err(|err| {
                 self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-                err
             })?;
         let _challenge_entry = self
             .take_challenge(&client.challenge, ChallengeKind::Registration)
-            .map_err(|err| {
+            .inspect_err(|err| {
                 self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-                err
             })?;
         if !origin_allowed(&client.origin, &policy.origins) {
             let err = OperatorAuthError::origin_denied();
             self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
             return Err(err);
         }
-        let attestation = parse_attestation_object(&input.attestation_object).map_err(|err| {
-            self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            err
-        })?;
-        let auth_data =
-            parse_auth_data_registration(&attestation.auth_data, policy).map_err(|err| {
+        let attestation =
+            parse_attestation_object(&input.attestation_object).inspect_err(|err| {
                 self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-                err
+            })?;
+        let auth_data =
+            parse_auth_data_registration(&attestation.auth_data, policy).inspect_err(|err| {
+                self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
             })?;
         if auth_data.credential_id != input.raw_id {
             let err = OperatorAuthError::invalid_payload("credential id mismatch");
@@ -801,9 +795,8 @@ impl OperatorAuth {
             sign_count: auth_data.sign_count,
             created_at_ms,
         };
-        let total = self.upsert_credential(credential).map_err(|err| {
+        let total = self.upsert_credential(credential).inspect_err(|err| {
             self.record_failure(ctx, ACTION_REGISTER_VERIFY, err.metric_label());
-            err
         })?;
         self.record_success(ctx, ACTION_REGISTER_VERIFY, "ok");
         Ok(RegistrationOutcome {
@@ -816,9 +809,8 @@ impl OperatorAuth {
         &self,
         ctx: &AuthContext,
     ) -> Result<norito::json::Value, OperatorAuthError> {
-        let policy = self.webauthn_policy().map_err(|err| {
+        let policy = self.webauthn_policy().inspect_err(|err| {
             self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
-            err
         })?;
         self.prune_challenges();
         let credentials = self
@@ -873,23 +865,20 @@ impl OperatorAuth {
         ctx: &AuthContext,
         payload: &norito::json::Value,
     ) -> Result<SessionOutcome, OperatorAuthError> {
-        let policy = self.webauthn_policy().map_err(|err| {
+        let policy = self.webauthn_policy().inspect_err(|err| {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            err
         })?;
-        let input = parse_assertion_payload(payload).map_err(|err| {
+        let input = parse_assertion_payload(payload).inspect_err(|err| {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            err
         })?;
-        let client = parse_client_data(&input.client_data_json, "webauthn.get").map_err(|err| {
-            self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            err
-        })?;
+        let client =
+            parse_client_data(&input.client_data_json, "webauthn.get").inspect_err(|err| {
+                self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
+            })?;
         let _challenge_entry = self
             .take_challenge(&client.challenge, ChallengeKind::Authentication)
-            .map_err(|err| {
+            .inspect_err(|err| {
                 self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-                err
             })?;
         if !origin_allowed(&client.origin, &policy.origins) {
             let err = OperatorAuthError::origin_denied();
@@ -897,9 +886,8 @@ impl OperatorAuth {
             return Err(err);
         }
         let auth_data =
-            parse_auth_data_assertion(&input.authenticator_data, policy).map_err(|err| {
+            parse_auth_data_assertion(&input.authenticator_data, policy).inspect_err(|err| {
                 self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-                err
             })?;
         let mut credentials = self
             .credentials
@@ -925,9 +913,8 @@ impl OperatorAuth {
             &signed_bytes,
             &input.signature,
         )
-        .map_err(|err| {
+        .inspect_err(|err| {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            err
         })?;
         if credential.sign_count != 0
             && auth_data.sign_count != 0
@@ -940,9 +927,8 @@ impl OperatorAuth {
         credential.sign_count = auth_data.sign_count;
         let updated = credentials.clone();
         drop(credentials);
-        persist_credentials(&self.credentials_path, &updated).map_err(|err| {
+        persist_credentials(&self.credentials_path, &updated).inspect_err(|err| {
             self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
-            err
         })?;
         let outcome = self.issue_session(&input.raw_id, policy.session_ttl);
         self.record_success(ctx, ACTION_LOGIN_VERIFY, "ok");
@@ -1103,13 +1089,13 @@ impl OperatorAuth {
 }
 
 /// Result of a successful WebAuthn registration ceremony.
-pub(crate) struct RegistrationOutcome {
+pub struct RegistrationOutcome {
     credential_id: String,
     credentials_total: usize,
 }
 
 /// Result of a successful WebAuthn authentication ceremony.
-pub(crate) struct SessionOutcome {
+pub struct SessionOutcome {
     session_token: String,
     expires_in_secs: u64,
     credential_id: String,
@@ -1250,7 +1236,7 @@ fn origin_allowed(origin: &str, allowed: &[Url]) -> bool {
     let Ok(parsed) = Url::parse(origin) else {
         return false;
     };
-    allowed.iter().any(|known| *known == parsed)
+    allowed.contains(&parsed)
 }
 
 fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
@@ -1265,7 +1251,7 @@ fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
         .ok_or_else(|| "credentials payload must be a JSON object".to_string())?;
     let version = obj
         .get("version")
-        .and_then(|value| value.as_u64())
+        .and_then(norito::json::Value::as_u64)
         .ok_or_else(|| "credentials payload missing version".to_string())?;
     if version != 1 {
         return Err(format!("unsupported credentials version {version}"));
@@ -1293,11 +1279,11 @@ fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
             .ok_or_else(|| "credential entry missing alg".to_string())?;
         let sign_count = item_obj
             .get("sign_count")
-            .and_then(|value| value.as_u64())
+            .and_then(norito::json::Value::as_u64)
             .ok_or_else(|| "credential entry missing sign_count".to_string())?;
         let created_at_ms = item_obj
             .get("created_at_ms")
-            .and_then(|value| value.as_u64())
+            .and_then(norito::json::Value::as_u64)
             .ok_or_else(|| "credential entry missing created_at_ms".to_string())?;
         let id = URL_SAFE_NO_PAD
             .decode(id_b64.as_bytes())
@@ -1637,21 +1623,20 @@ fn verify_signature(
 
 fn cbor_int(value: &CborValue) -> Result<i128, OperatorAuthError> {
     match value {
-        CborValue::Integer(value) => i128::try_from(value.clone())
-            .map_err(|_| OperatorAuthError::invalid_payload("invalid COSE integer encoding")),
+        CborValue::Integer(value) => Ok(i128::from(value.clone())),
         _ => Err(OperatorAuthError::invalid_payload(
             "COSE value must be an integer",
         )),
     }
 }
 
-fn expect_cbor_value<'a>(
-    map: &'a [(CborValue, CborValue)],
+fn expect_cbor_value(
+    map: &[(CborValue, CborValue)],
     key: i128,
-) -> Result<&'a CborValue, OperatorAuthError> {
+) -> Result<&CborValue, OperatorAuthError> {
     map.iter()
         .find(|(candidate, _)| match candidate {
-            CborValue::Integer(value) => i128::try_from(value.clone()).ok() == Some(key),
+            CborValue::Integer(value) => i128::from(value.clone()) == key,
             _ => false,
         })
         .map(|(_, value)| value)
@@ -1683,7 +1668,7 @@ fn expect_cbor_bytes_i(
     }
 }
 
-pub(crate) async fn enforce_operator_auth(
+pub async fn enforce_operator_auth(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
     next: Next,
@@ -1698,7 +1683,7 @@ pub(crate) async fn enforce_operator_auth(
     Ok(next.run(req).await)
 }
 
-pub(crate) async fn handle_operator_register_options(
+pub async fn handle_operator_register_options(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
@@ -1710,7 +1695,7 @@ pub(crate) async fn handle_operator_register_options(
     Ok(JsonBody(payload))
 }
 
-pub(crate) async fn handle_operator_register_verify(
+pub async fn handle_operator_register_verify(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     JsonOnly(payload): JsonOnly<norito::json::Value>,
@@ -1730,7 +1715,7 @@ pub(crate) async fn handle_operator_register_verify(
     Ok(JsonBody(response))
 }
 
-pub(crate) async fn handle_operator_login_options(
+pub async fn handle_operator_login_options(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
@@ -1742,7 +1727,7 @@ pub(crate) async fn handle_operator_login_options(
     Ok(JsonBody(payload))
 }
 
-pub(crate) async fn handle_operator_login_verify(
+pub async fn handle_operator_login_verify(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     JsonOnly(payload): JsonOnly<norito::json::Value>,

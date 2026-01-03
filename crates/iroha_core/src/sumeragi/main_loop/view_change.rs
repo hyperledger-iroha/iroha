@@ -223,6 +223,11 @@ impl Actor {
             validation.missing_votes, 0,
             "QC validation should fail when votes are missing"
         );
+        let QcValidationOutcome {
+            signers: qc_signers,
+            present_signers,
+            ..
+        } = validation;
         if !new_view_highest_qc_phase_valid(&frame.highest_qc) {
             warn!(
                 phase = ?frame.highest_qc.phase,
@@ -296,6 +301,44 @@ impl Actor {
             }
             return Ok(());
         }
+        if !is_genesis_stub {
+            let signer_set: BTreeSet<_> = qc_signers.iter().copied().collect();
+            let tally = QcSignerTally {
+                voting_signers: signer_set.clone(),
+                present_signers,
+            };
+            self.note_validated_qc_tally(&frame.highest_qc, tally);
+            if matches!(frame.highest_qc.phase, crate::sumeragi::consensus::Phase::Precommit) {
+                let roster_len = qc_topology
+                    .as_ref()
+                    .map_or(0, |topology| topology.as_ref().len());
+                crate::sumeragi::status::record_precommit_signers(
+                    crate::sumeragi::status::PrecommitSignerRecord {
+                        block_hash: frame.highest_qc.subject_block_hash,
+                        height: frame.highest_qc.height,
+                        view: frame.highest_qc.view,
+                        epoch: frame.highest_qc.epoch,
+                        signers: signer_set,
+                        bls_aggregate_signature: frame
+                            .highest_qc
+                            .aggregate
+                            .bls_aggregate_signature
+                            .clone(),
+                        roster_len,
+                    },
+                );
+            }
+            self.qc_cache.insert(
+                (
+                    frame.highest_qc.phase,
+                    frame.highest_qc.subject_block_hash,
+                    frame.highest_qc.height,
+                    frame.highest_qc.view,
+                    frame.highest_qc.epoch,
+                ),
+                frame.highest_qc.clone(),
+            );
+        }
         if let Some(lock) = self.locked_qc {
             if qc_ref.height < lock.height {
                 debug!(
@@ -322,7 +365,7 @@ impl Actor {
                 .new_view_tracker
                 .record(frame.height, frame.view, frame.sender, qc_ref);
         let is_new_sender = local_count > prior_count;
-        let should_catch_up = local_view.map_or(true, |current| frame.view > current);
+        let should_catch_up = local_view.is_none_or(|current| frame.view > current);
         let local_idx = self.local_validator_index_for_topology(&topology);
         if should_catch_up {
             self.phase_tracker
@@ -366,9 +409,7 @@ impl Actor {
             .cloned()
             {
                 let local_peer_id = self.common_config.peer.id();
-                if leader_peer != *local_peer_id
-                    && sender_peer.map_or(true, |sender| sender != &leader_peer)
-                {
+                if leader_peer != *local_peer_id && sender_peer != Some(&leader_peer) {
                     self.ensure_gossip_target(&mut targets, leader_peer);
                 }
             }

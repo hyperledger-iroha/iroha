@@ -74,7 +74,9 @@ use super::{
     epoch_report,
     exec::{build_exec_vote_from_witness, parent_state_from_witness, post_state_from_witness},
     penalties::PenaltyApplier,
-    rbc_status, *,
+    rbc_status,
+    stake_snapshot::{CommitStakeSnapshot, stake_map_from_world},
+    *,
 };
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use crate::telemetry::Telemetry;
@@ -1711,6 +1713,7 @@ enum MissingBlockFetchDecision {
 
 /// Plan a missing-block fetch on QC-first arrival, respecting retry backoff and signer preference
 /// with a configurable fallback to the full commit topology.
+#[allow(clippy::too_many_arguments)]
 fn plan_missing_block_fetch(
     requests: &mut BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
     block_hash: HashOf<BlockHeader>,
@@ -1725,10 +1728,7 @@ fn plan_missing_block_fetch(
         return MissingBlockFetchDecision::Backoff;
     }
 
-    let attempts = requests
-        .get(&block_hash)
-        .map(|stats| stats.attempts)
-        .unwrap_or(0);
+    let attempts = requests.get(&block_hash).map_or(0, |stats| stats.attempts);
     let prefer_signers =
         !signers.is_empty() && signer_fallback_attempts > 0 && attempts < signer_fallback_attempts;
     let signer_targets: Vec<_> = signers
@@ -1758,6 +1758,7 @@ fn plan_missing_block_fetch(
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn block_sync_quorum_available(
     block_signers: usize,
     _commit_quorum: usize,
@@ -1797,7 +1798,7 @@ fn send_missing_block_request(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn defer_qc_for_missing_block<F>(
     block_known: bool,
     retry_window: Duration,
@@ -1940,6 +1941,212 @@ fn clear_missing_block_request(
     block_hash: &HashOf<BlockHeader>,
 ) -> Option<MissingBlockRequest> {
     requests.remove(block_hash)
+}
+
+impl Actor {
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    pub(super) fn request_missing_parent(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view: u64,
+        parent_hash: HashOf<BlockHeader>,
+        commit_topology: &[PeerId],
+        roster_hint: Option<&[PeerId]>,
+        expected_height: Option<usize>,
+        actual_height: Option<usize>,
+        trigger: &'static str,
+    ) {
+        if self.block_known_locally(parent_hash) {
+            return;
+        }
+        let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        if block_height <= local_height.saturating_add(1) {
+            return;
+        }
+        let gap = block_height.saturating_sub(local_height.saturating_add(1));
+        let parent_height = block_height.saturating_sub(1);
+        let (consensus_mode, _mode_tag, _prf_seed) =
+            self.consensus_context_for_height(parent_height);
+        let (roster, roster_source) = if let Some(selection) = persisted_roster_for_block(
+            self.state.as_ref(),
+            &self.kura,
+            consensus_mode,
+            parent_height,
+            parent_hash,
+            None,
+        )
+        .or_else(|| {
+            block_sync_history_roster_for_block(
+                self.state.as_ref(),
+                consensus_mode,
+                parent_hash,
+                parent_height,
+                None,
+            )
+        }) {
+            (selection.roster, selection.source.as_str())
+        } else if let Some(hint) = roster_hint.filter(|hint| !hint.is_empty()) {
+            (hint.to_vec(), "roster_hint")
+        } else if !commit_topology.is_empty() {
+            (commit_topology.to_vec(), "commit_topology")
+        } else {
+            let view = self.state.view();
+            let roster = derive_active_topology(
+                &view,
+                self.common_config.trusted_peers.value(),
+                self.common_config.peer.id(),
+            );
+            drop(view);
+            (roster, "trusted_peers")
+        };
+        if roster.is_empty() {
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                missing_parent = ?parent_hash,
+                trigger,
+                "skipping missing-parent fetch: empty roster"
+            );
+            return;
+        }
+
+        let topology = super::network_topology::Topology::new(roster);
+        let mut retry_window = self.quorum_timeout(self.runtime_da_enabled());
+        if gap > 1 {
+            let fast_retry = self.rebroadcast_cooldown();
+            if fast_retry < retry_window {
+                retry_window = fast_retry;
+            }
+        }
+        let now = Instant::now();
+        let signers = BTreeSet::new();
+        let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
+        let decision = plan_missing_block_fetch(
+            &mut requests,
+            parent_hash,
+            parent_height,
+            &signers,
+            &topology,
+            now,
+            retry_window,
+            self.config.missing_block_signer_fallback_attempts,
+        );
+        self.pending.missing_block_requests = requests;
+        let dwell = self
+            .pending
+            .missing_block_requests
+            .get(&parent_hash)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let targets_len = match &decision {
+            MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+
+        match decision {
+            MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(parent_hash, &targets);
+                info!(
+                    height = block_height,
+                    view = block_view,
+                    expected_height = ?expected_height,
+                    actual_height = ?actual_height,
+                    local_height,
+                    gap,
+                    block = %block_hash,
+                    missing_parent = ?parent_hash,
+                    targets = ?targets,
+                    target_kind = target_kind.label(),
+                    roster_source,
+                    trigger,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms = dwell.as_millis(),
+                    "requested missing parent block"
+                );
+            }
+            MissingBlockFetchDecision::NoTargets => {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    expected_height = ?expected_height,
+                    actual_height = ?actual_height,
+                    local_height,
+                    gap,
+                    block = %block_hash,
+                    missing_parent = ?parent_hash,
+                    roster_source,
+                    trigger,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms = dwell.as_millis(),
+                    "missing parent fetch deferred: no targets available"
+                );
+            }
+            MissingBlockFetchDecision::Backoff => {
+                trace!(
+                    height = block_height,
+                    view = block_view,
+                    expected_height = ?expected_height,
+                    actual_height = ?actual_height,
+                    local_height,
+                    gap,
+                    block = %block_hash,
+                    missing_parent = ?parent_hash,
+                    roster_source,
+                    trigger,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms = dwell.as_millis(),
+                    "missing parent fetch skipped due to backoff"
+                );
+            }
+        }
+    }
+
+    pub(super) fn request_missing_parents_for_gap(
+        &mut self,
+        commit_topology: &[PeerId],
+        roster_hint: Option<&[PeerId]>,
+        trigger: &'static str,
+    ) {
+        let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let mut parents = Vec::new();
+        let mut seen = BTreeSet::new();
+        for pending in self.pending.pending_blocks.values() {
+            if pending.height <= local_height.saturating_add(1) {
+                continue;
+            }
+            let Some(parent_hash) = pending.block.header().prev_block_hash() else {
+                continue;
+            };
+            if !seen.insert(parent_hash) {
+                continue;
+            }
+            parents.push((
+                pending.block.hash(),
+                pending.height,
+                u64::from(pending.block.header().view_change_index()),
+                parent_hash,
+            ));
+        }
+        for (block_hash, block_height, block_view, parent_hash) in parents {
+            self.request_missing_parent(
+                block_hash,
+                block_height,
+                block_view,
+                parent_hash,
+                commit_topology,
+                roster_hint,
+                None,
+                None,
+                trigger,
+            );
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2125,17 +2332,15 @@ fn round_duration_ms(value: f64) -> u64 {
     }
 }
 
-fn build_availability_vote(inputs: AvailabilityVoteInputs<'_>) -> AvailableVote {
-    let AvailabilityVoteInputs {
-        chain_id,
-        mode_tag,
-        private_key,
-        block_hash,
-        height,
-        view,
-        epoch,
-        signer,
-    } = inputs;
+fn build_availability_vote(inputs: &AvailabilityVoteInputs<'_>) -> AvailableVote {
+    let chain_id = inputs.chain_id;
+    let mode_tag = inputs.mode_tag;
+    let private_key = inputs.private_key;
+    let block_hash = inputs.block_hash;
+    let height = inputs.height;
+    let view = inputs.view;
+    let epoch = inputs.epoch;
+    let signer = inputs.signer;
     let mut vote = AvailableVote {
         block_hash,
         height,
@@ -2886,6 +3091,7 @@ struct BlockSyncRosterSelection {
     source: BlockSyncRosterSource,
     commit_certificate: Option<CommitCertificate>,
     checkpoint: Option<ValidatorSetCheckpoint>,
+    stake_snapshot: Option<CommitStakeSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2930,14 +3136,20 @@ enum StakeQuorumError {
     SignerOutOfRoster,
     Overflow,
     ZeroTotal,
+    SnapshotMismatch,
 }
 
 fn apply_roster_selection_to_block_sync_update(
     update: &mut super::message::BlockSyncUpdate,
     selection: &BlockSyncRosterSelection,
 ) {
-    update.commit_certificate = selection.commit_certificate.clone();
-    update.validator_checkpoint = selection.checkpoint.clone();
+    update
+        .commit_certificate
+        .clone_from(&selection.commit_certificate);
+    update
+        .validator_checkpoint
+        .clone_from(&selection.checkpoint);
+    update.stake_snapshot.clone_from(&selection.stake_snapshot);
 }
 
 fn stake_quorum_reached_for_peers(
@@ -2945,17 +3157,59 @@ fn stake_quorum_reached_for_peers(
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
 ) -> Result<bool, StakeQuorumError> {
-    let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
-    for ((_lane_id, validator_id), record) in view.world.public_lane_validators().iter() {
-        let Some(pk) = validator_id.try_signatory() else {
-            continue;
+    let stake_map = stake_map_from_world(view.world());
+
+    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+    let mut total = Numeric::from(0_u64);
+    for peer in roster {
+        let Some(stake) = stake_map.get(peer) else {
+            return Err(StakeQuorumError::MissingStake);
         };
-        let peer_id = PeerId::from(pk.clone());
-        let entry = stake_map
-            .entry(peer_id)
-            .or_insert_with(|| record.total_stake.clone());
-        if record.total_stake > *entry {
-            *entry = record.total_stake.clone();
+        total = total
+            .checked_add(stake.clone())
+            .ok_or(StakeQuorumError::Overflow)?;
+    }
+    if total.is_zero() {
+        return Err(StakeQuorumError::ZeroTotal);
+    }
+
+    let mut signed = Numeric::from(0_u64);
+    for peer in signers {
+        if !roster_set.contains(peer) {
+            return Err(StakeQuorumError::SignerOutOfRoster);
+        }
+        let Some(stake) = stake_map.get(peer) else {
+            return Err(StakeQuorumError::MissingStake);
+        };
+        signed = signed
+            .checked_add(stake.clone())
+            .ok_or(StakeQuorumError::Overflow)?;
+    }
+
+    let signed_scaled = signed
+        .checked_mul(Numeric::from(3_u64), NumericSpec::default())
+        .ok_or(StakeQuorumError::Overflow)?;
+    let total_scaled = total
+        .checked_mul(Numeric::from(2_u64), NumericSpec::default())
+        .ok_or(StakeQuorumError::Overflow)?;
+    Ok(signed_scaled >= total_scaled)
+}
+
+fn stake_quorum_reached_for_snapshot(
+    snapshot: &CommitStakeSnapshot,
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+) -> Result<bool, StakeQuorumError> {
+    if !snapshot.matches_roster(roster) {
+        return Err(StakeQuorumError::SnapshotMismatch);
+    }
+    let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
+    for entry in &snapshot.entries {
+        let entry_stake = stake_map
+            .entry(entry.peer_id.clone())
+            .or_insert_with(|| entry.stake.clone());
+        if entry.stake > *entry_stake {
+            *entry_stake = entry.stake.clone();
         }
     }
 
@@ -3123,15 +3377,16 @@ fn canonicalize_block_signatures_for_roster(
     mapped.into_iter().collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn selection_from_roster_artifacts(
     commit_certificate: Option<&CommitCertificate>,
     checkpoint: Option<&ValidatorSetCheckpoint>,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
     block_hash: HashOf<BlockHeader>,
     block_height: u64,
     block_view: Option<u64>,
     source: BlockSyncRosterSource,
     consensus_mode: ConsensusMode,
-    state_view: &StateView<'_>,
 ) -> Option<BlockSyncRosterSelection> {
     let validated_cert =
         commit_certificate.and_then(|cert| {
@@ -3141,7 +3396,7 @@ fn selection_from_roster_artifacts(
                 block_height,
                 block_view,
                 consensus_mode,
-                state_view,
+                stake_snapshot,
             ) {
                 Ok(roster) => Some((roster, cert)),
                 Err(err) => {
@@ -3176,31 +3431,47 @@ fn selection_from_roster_artifacts(
                     "commit certificate and checkpoint rosters differ; preferring commit certificate"
                 );
             }
+            let stake_snapshot = stake_snapshot
+                .filter(|snapshot| snapshot.matches_roster(&roster))
+                .cloned();
             Some(BlockSyncRosterSelection {
                 roster,
                 source,
                 commit_certificate: Some(cert.clone()),
                 checkpoint: Some(chk.clone()),
+                stake_snapshot,
             })
         }
-        (Some((roster, cert)), None) => Some(BlockSyncRosterSelection {
-            roster,
-            source,
-            commit_certificate: Some(cert.clone()),
-            checkpoint: None,
-        }),
-        (None, Some((roster, chk))) => Some(BlockSyncRosterSelection {
-            roster,
-            source,
-            commit_certificate: None,
-            checkpoint: Some(chk.clone()),
-        }),
+        (Some((roster, cert)), None) => {
+            let stake_snapshot = stake_snapshot
+                .filter(|snapshot| snapshot.matches_roster(&roster))
+                .cloned();
+            Some(BlockSyncRosterSelection {
+                roster,
+                source,
+                commit_certificate: Some(cert.clone()),
+                checkpoint: None,
+                stake_snapshot,
+            })
+        }
+        (None, Some((roster, chk))) => {
+            let stake_snapshot = stake_snapshot
+                .filter(|snapshot| snapshot.matches_roster(&roster))
+                .cloned();
+            Some(BlockSyncRosterSelection {
+                roster,
+                source,
+                commit_certificate: None,
+                checkpoint: Some(chk.clone()),
+                stake_snapshot,
+            })
+        }
         (None, None) => None,
     }
 }
 
 fn block_sync_history_roster_for_block(
-    state: &State,
+    _state: &State,
     consensus_mode: ConsensusMode,
     block_hash: HashOf<BlockHeader>,
     block_height: u64,
@@ -3224,16 +3495,15 @@ fn block_sync_history_roster_for_block(
     } else {
         BlockSyncRosterSource::ValidatorCheckpointHistory
     };
-    let state_view = state.view();
     selection_from_roster_artifacts(
         cert.as_ref(),
         checkpoint.as_ref(),
+        None,
         block_hash,
         block_height,
         block_view,
         source,
         consensus_mode,
-        &state_view,
     )
 }
 
@@ -3245,17 +3515,16 @@ fn persisted_roster_for_block(
     block_hash: HashOf<BlockHeader>,
     block_view: Option<u64>,
 ) -> Option<BlockSyncRosterSelection> {
-    let state_view = state.view();
     if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
         if let Some(selection) = selection_from_roster_artifacts(
             Some(&snapshot.commit_certificate),
             Some(&snapshot.validator_checkpoint),
+            snapshot.stake_snapshot.as_ref(),
             block_hash,
             block_height,
             block_view,
             BlockSyncRosterSource::CommitRosterJournal,
             consensus_mode,
-            &state_view,
         ) {
             if let Some(cert) = selection.commit_certificate.as_ref() {
                 status::record_commit_certificate(cert.clone());
@@ -3288,12 +3557,12 @@ fn persisted_roster_for_block(
         if let Some(selection) = selection_from_roster_artifacts(
             meta.commit_certificate.as_ref(),
             meta.validator_checkpoint.as_ref(),
+            meta.stake_snapshot.as_ref(),
             block_hash,
             block_height,
             block_view,
             BlockSyncRosterSource::RosterSidecar,
             consensus_mode,
-            &state_view,
         ) {
             if let Some(cert) = selection.commit_certificate.as_ref() {
                 status::record_commit_certificate(cert.clone());
@@ -3383,6 +3652,7 @@ fn block_sync_update_with_roster(
                     VALIDATOR_SET_HASH_VERSION_V1,
                     None,
                 )),
+                stake_snapshot: None,
             })
         }
     });
@@ -3398,7 +3668,7 @@ fn validate_commit_certificate_roster(
     block_height: u64,
     block_view: Option<u64>,
     consensus_mode: ConsensusMode,
-    state_view: &StateView<'_>,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
     if cert.block_hash != block_hash {
         return Err(RosterValidationError::BlockHashMismatch);
@@ -3472,7 +3742,8 @@ fn validate_commit_certificate_roster(
             }
         }
         ConsensusMode::Npos => {
-            match stake_quorum_reached_for_peers(state_view, &cert.validator_set, &signer_peers) {
+            let snapshot = stake_snapshot.ok_or(RosterValidationError::StakeSnapshotUnavailable)?;
+            match stake_quorum_reached_for_snapshot(snapshot, &cert.validator_set, &signer_peers) {
                 Ok(true) => {}
                 Ok(false) => return Err(RosterValidationError::StakeQuorumMissing),
                 Err(_) => return Err(RosterValidationError::StakeSnapshotUnavailable),
@@ -3556,6 +3827,7 @@ fn select_block_sync_roster(
     persisted: Option<BlockSyncRosterSelection>,
     cert_hint: Option<&CommitCertificate>,
     checkpoint_hint: Option<&ValidatorSetCheckpoint>,
+    stake_snapshot_hint: Option<&CommitStakeSnapshot>,
     state: &State,
     trusted: &iroha_config::parameters::actual::TrustedPeers,
     me: &PeerId,
@@ -3563,7 +3835,6 @@ fn select_block_sync_roster(
     _mode_tag: &'static str,
     allow_uncertified: bool,
 ) -> Option<BlockSyncRosterSelection> {
-    let state_view = state.view();
     let block_view = u64::from(block.header().view_change_index());
     if let Some(selection) = persisted {
         return Some(selection);
@@ -3573,12 +3844,12 @@ fn select_block_sync_roster(
         if let Some(selection) = selection_from_roster_artifacts(
             Some(&snapshot.commit_certificate),
             Some(&snapshot.validator_checkpoint),
+            snapshot.stake_snapshot.as_ref(),
             block_hash,
             block_height,
             Some(block_view),
             BlockSyncRosterSource::CommitRosterJournal,
             consensus_mode,
-            &state_view,
         ) {
             return Some(selection);
         }
@@ -3593,12 +3864,12 @@ fn select_block_sync_roster(
         if let Some(selection) = selection_from_roster_artifacts(
             Some(cert_hint),
             Some(checkpoint_hint),
+            stake_snapshot_hint,
             block_hash,
             block_height,
             Some(block_view),
             BlockSyncRosterSource::CommitCheckpointPairHint,
             consensus_mode,
-            &state_view,
         ) {
             return Some(selection);
         }
@@ -3608,12 +3879,12 @@ fn select_block_sync_roster(
         if let Some(selection) = selection_from_roster_artifacts(
             Some(cert_hint),
             checkpoint_hint,
+            stake_snapshot_hint,
             block_hash,
             block_height,
             Some(block_view),
             BlockSyncRosterSource::CommitCertificateHint,
             consensus_mode,
-            &state_view,
         ) {
             return Some(selection);
         }
@@ -3621,12 +3892,12 @@ fn select_block_sync_roster(
         if let Some(selection) = selection_from_roster_artifacts(
             None,
             Some(checkpoint_hint),
+            stake_snapshot_hint,
             block_hash,
             block_height,
             Some(block_view),
             BlockSyncRosterSource::ValidatorCheckpointHint,
             consensus_mode,
-            &state_view,
         ) {
             return Some(selection);
         }
@@ -3658,6 +3929,7 @@ fn select_block_sync_roster(
                 source,
                 commit_certificate: None,
                 checkpoint: None,
+                stake_snapshot: None,
             });
         }
     }
@@ -3736,7 +4008,7 @@ impl Actor {
         prf_seed: Option<[u8; 32]>,
         epoch: u64,
         consensus_mode: ConsensusMode,
-    ) -> Option<CommitCertificate> {
+    ) -> Option<(CommitCertificate, Option<CommitStakeSnapshot>)> {
         if roster.is_empty() {
             return None;
         }
@@ -3756,10 +4028,13 @@ impl Actor {
             validated_block_signers(block, &topology, &state_view, mode_tag, prf_seed).ok()?;
         let canonical_signatures =
             canonicalize_block_signatures_for_roster(block, roster, mode_tag, prf_seed);
-        let quorum_ok = match consensus_mode {
+        let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => {
                 let quorum = topology.min_votes_for_commit().max(1);
-                canonical_signatures.len() >= quorum
+                if canonical_signatures.len() < quorum {
+                    return None;
+                }
+                None
             }
             ConsensusMode::Npos => {
                 let mut signer_peers = BTreeSet::new();
@@ -3767,33 +4042,35 @@ impl Actor {
                     let Ok(idx) = usize::try_from(signer) else {
                         return None;
                     };
-                    let Some(peer) = topology.as_ref().get(idx) else {
-                        return None;
-                    };
+                    let peer = topology.as_ref().get(idx)?;
                     signer_peers.insert(peer.clone());
                 }
-                stake_quorum_reached_for_peers(&state_view, roster, &signer_peers).ok()?
+                let snapshot = CommitStakeSnapshot::from_roster(state_view.world(), roster)?;
+                if !stake_quorum_reached_for_snapshot(&snapshot, roster, &signer_peers).ok()? {
+                    return None;
+                }
+                Some(snapshot)
             }
         };
-        if !quorum_ok {
-            return None;
-        }
-        Some(CommitCertificate {
-            height,
-            block_hash: block.hash(),
-            view,
-            epoch,
-            validator_set_hash: HashOf::<Vec<PeerId>>::new(&roster.to_vec()),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster.to_vec(),
-            signatures: canonical_signatures,
-        })
+        Some((
+            CommitCertificate {
+                height,
+                block_hash: block.hash(),
+                view,
+                epoch,
+                validator_set_hash: HashOf::<Vec<PeerId>>::new(&roster.to_vec()),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set: roster.to_vec(),
+                signatures: canonical_signatures,
+            },
+            stake_snapshot,
+        ))
     }
 
     fn persist_roster_sidecar_for_commit(&self, block: &SignedBlock, roster: &[PeerId]) {
         let height = block.header().height().get();
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        if let Some(cert) = Self::synthesize_commit_certificate(
+        if let Some((cert, stake_snapshot)) = Self::synthesize_commit_certificate(
             self.state.as_ref(),
             block,
             roster,
@@ -3803,12 +4080,22 @@ impl Actor {
             consensus_mode,
         ) {
             super::status::record_commit_certificate(cert.clone());
-            let sidecar = crate::kura::RosterSidecar::new_v1(
-                block.header().height().get(),
-                block.hash(),
-                Some(cert),
-                None,
-            );
+            let sidecar = if stake_snapshot.is_some() {
+                crate::kura::RosterSidecar::new_v2(
+                    block.header().height().get(),
+                    block.hash(),
+                    Some(cert),
+                    None,
+                    stake_snapshot,
+                )
+            } else {
+                crate::kura::RosterSidecar::new_v1(
+                    block.header().height().get(),
+                    block.hash(),
+                    Some(cert),
+                    None,
+                )
+            };
             self.kura.write_roster_metadata(&sidecar);
         }
     }
@@ -3826,6 +4113,11 @@ impl Actor {
         self.effective_commit_topology_from_view(&view)
     }
 
+    fn rbc_roster_for_session(&self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
+        let (consensus_mode, _mode_tag, _prf_seed) = self.consensus_context_for_height(key.1);
+        self.roster_for_vote_with_mode(key.0, key.1, key.2, consensus_mode)
+    }
+
     fn rbc_session_roster(&self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
         self.subsystems
             .da_rbc
@@ -3833,7 +4125,7 @@ impl Actor {
             .session_rosters
             .get(&key)
             .cloned()
-            .unwrap_or_else(|| self.effective_commit_topology())
+            .unwrap_or_else(|| self.rbc_roster_for_session(key))
     }
 
     fn record_rbc_session_roster(
@@ -4119,16 +4411,18 @@ impl Actor {
     }
 
     fn broadcast_consensus_params(&mut self, membership: SumeragiMembershipStatus) {
-        let collectors_k = u16::try_from(self.config.collectors_k).unwrap_or_else(|_| {
+        let (collectors_k, redundant_send_r) =
+            self.collector_plan_params_for_height(membership.height);
+        let collectors_k = u16::try_from(collectors_k).unwrap_or_else(|_| {
             warn!(
-                collectors_k = self.config.collectors_k,
+                collectors_k,
                 "collectors_k exceeds u16::MAX; clamping in consensus params advert"
             );
             u16::MAX
         });
         let advert = super::message::ConsensusParamsAdvert {
             collectors_k,
-            redundant_send_r: self.config.collectors_redundant_send_r,
+            redundant_send_r,
             membership: Some(membership),
         };
         self.schedule_background(BackgroundRequest::Broadcast {
@@ -4301,7 +4595,11 @@ impl Actor {
         let rbc_manifest = super::rbc_store::SoftwareManifest::current();
         let backpressure_gate = BackpressureGate::new(queue.backpressure_handle().subscribe());
         let now = Instant::now();
-        let qc_rebuild_cooldown = config.npos.block_time.max(Duration::from_millis(200));
+        let block_time = {
+            let view = state.view();
+            view.world.parameters().sumeragi().block_time()
+        };
+        let qc_rebuild_cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
         let initial_qc_rebuild = now.checked_sub(qc_rebuild_cooldown).unwrap_or(now);
         let commit_pipeline_cooldown = qc_rebuild_cooldown;
         let initial_commit_pipeline_run = now.checked_sub(commit_pipeline_cooldown).unwrap_or(now);
@@ -4524,8 +4822,32 @@ impl Actor {
         let genesis_account = Self::determine_genesis_account(state.as_ref())?;
         let lane_relay = LaneRelayBroadcaster::new(network.clone());
         let npos_timeouts = config.npos.timeouts;
-        let pacemaker_base_interval = pacemaker_base_interval(&config);
-        let collector_redundant_limit = config.collectors_redundant_send_r.max(1);
+        let pacemaker_base_interval = pacemaker_base_interval(block_time, &config);
+        let collector_redundant_limit = match consensus_mode {
+            ConsensusMode::Permissioned => {
+                let view = state.view();
+                let redundant = view
+                    .world
+                    .parameters()
+                    .sumeragi()
+                    .collectors_redundant_send_r;
+                drop(view);
+                redundant.max(1)
+            }
+            ConsensusMode::Npos => {
+                let redundant = npos_collectors
+                    .as_ref()
+                    .map(|cfg| cfg.redundant_send_r)
+                    .or_else(|| {
+                        let view = state.view();
+                        let cfg = super::load_npos_collector_config(&view);
+                        drop(view);
+                        cfg.map(|cfg| cfg.redundant_send_r)
+                    })
+                    .unwrap_or(config.npos.redundant_send_r);
+                redundant.max(1)
+            }
+        };
         let adaptive_cfg = config.adaptive_observability;
         let adaptive_state = AdaptiveObservabilityState::new(
             adaptive_cfg,
@@ -4736,25 +5058,34 @@ impl Actor {
         self.collector_plan_params_for_mode(self.consensus_mode)
     }
 
+    fn collector_plan_params_for_height(&self, height: u64) -> (usize, u8) {
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        self.collector_plan_params_for_mode(consensus_mode)
+    }
+
     fn collector_plan_params_for_mode(&self, consensus_mode: ConsensusMode) -> (usize, u8) {
         match consensus_mode {
-            ConsensusMode::Permissioned => (
-                self.config.collectors_k,
-                self.config.collectors_redundant_send_r,
-            ),
-            ConsensusMode::Npos => {
-                if let Some(cfg) = self.npos_collectors {
-                    (cfg.k, cfg.redundant_send_r)
-                } else {
+            ConsensusMode::Permissioned => {
+                let view = self.state.view();
+                let params = view.world.parameters().sumeragi();
+                let k = usize::from(params.collectors_k);
+                let redundant = params.collectors_redundant_send_r;
+                drop(view);
+                (k, redundant)
+            }
+            ConsensusMode::Npos => self.npos_collectors.map_or_else(
+                || {
                     let view = self.state.view();
-                    super::load_npos_collector_config(&view)
-                        .map(|cfg| (cfg.k, cfg.redundant_send_r))
-                        .unwrap_or((
+                    super::load_npos_collector_config(&view).map_or(
+                        (
                             self.config.npos.k_aggregators,
                             self.config.npos.redundant_send_r,
-                        ))
-                }
-            }
+                        ),
+                        |cfg| (cfg.k, cfg.redundant_send_r),
+                    )
+                },
+                |cfg| (cfg.k, cfg.redundant_send_r),
+            ),
         }
     }
 
@@ -4912,10 +5243,11 @@ impl Actor {
 
     fn recompute_consensus_caps(&self) -> iroha_p2p::ConsensusConfigCaps {
         let sumeragi = &self.config;
+        let (collectors_k, redundant_send_r) = self.collector_plan_params();
         let da_enabled = sumeragi_da_enabled(&self.state);
         let config_caps = iroha_p2p::ConsensusConfigCaps {
-            collectors_k: u16::try_from(sumeragi.collectors_k).unwrap_or(u16::MAX),
-            redundant_send_r: sumeragi.collectors_redundant_send_r,
+            collectors_k: u16::try_from(collectors_k).unwrap_or(u16::MAX),
+            redundant_send_r,
             da_enabled,
             require_execution_qc: sumeragi.require_execution_qc,
             require_wsv_exec_qc: sumeragi.require_wsv_exec_qc,
@@ -5065,6 +5397,7 @@ impl Actor {
         false
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn tick(&mut self) -> bool {
         let tick_start = Instant::now();
         self.tick_counter = self.tick_counter.saturating_add(1);
@@ -5560,10 +5893,10 @@ impl Actor {
                         signatures: BTreeMap::new(),
                     });
 
-                let candidate_matches = match entry.candidate.as_ref() {
-                    Some(existing) => existing == &candidate,
-                    None => true,
-                };
+                let candidate_matches = entry
+                    .candidate
+                    .as_ref()
+                    .is_none_or(|existing| existing == &candidate);
                 if candidate_matches {
                     if entry.candidate.is_none() {
                         entry.candidate = Some(candidate.clone());
@@ -5944,6 +6277,7 @@ impl Actor {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn maybe_emit_rbc_ready(&mut self, key: super::rbc_store::SessionKey) -> Result<()> {
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
@@ -6221,7 +6555,7 @@ impl Actor {
             }
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
-                msg: BlockMessage::RbcInit(init.clone()),
+                msg: BlockMessage::RbcInit(init),
             });
         }
         self.subsystems
@@ -6943,8 +7277,7 @@ fn active_round_height(
     )
 }
 
-fn pacemaker_base_interval(config: &SumeragiConfig) -> Duration {
-    let block_time = config.npos.block_time;
+fn pacemaker_base_interval(block_time: Duration, config: &SumeragiConfig) -> Duration {
     let propose_seed = config.npos.timeouts.propose;
     let rtt_mul = config.npos.pacemaker_rtt_floor_multiplier.max(1);
     let propose_floor = saturating_mul_duration(propose_seed, rtt_mul);

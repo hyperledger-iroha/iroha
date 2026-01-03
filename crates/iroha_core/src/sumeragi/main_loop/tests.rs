@@ -101,6 +101,7 @@ fn select_block_sync_roster(
         persisted,
         cert_hint,
         checkpoint_hint,
+        None,
         state,
         trusted,
         local_peer,
@@ -162,7 +163,7 @@ fn execution_qc_with_signers(
                 .to_vec()
         })
         .collect();
-    let sig_refs: Vec<&[u8]> = signatures.iter().map(|sig| sig.as_slice()).collect();
+    let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
     let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
         .expect("aggregate execution QC signatures");
     ExecutionQcRecord {
@@ -306,10 +307,12 @@ fn seed_npos_epochs(
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     let mut block = state.world.block();
     let params = block.parameters.get_mut();
-    let mut npos_params = iroha_data_model::parameter::system::SumeragiNposParameters::default();
-    npos_params.epoch_length_blocks = epoch_len;
-    npos_params.epoch_seed = seed_epoch0;
-    npos_params.evidence_horizon_blocks = 0;
+    let npos_params = iroha_data_model::parameter::system::SumeragiNposParameters {
+        epoch_length_blocks: epoch_len,
+        epoch_seed: seed_epoch0,
+        evidence_horizon_blocks: 0,
+        ..iroha_data_model::parameter::system::SumeragiNposParameters::default()
+    };
     params.custom.insert(
         iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
         npos_params.into_custom_parameter(),
@@ -961,10 +964,12 @@ async fn apply_mode_flip_uses_world_epoch_params() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        let mut npos_params = SumeragiNposParameters::default();
-        npos_params.epoch_length_blocks = 11;
-        npos_params.vrf_commit_window_blocks = 4;
-        npos_params.vrf_reveal_window_blocks = 5;
+        let npos_params = SumeragiNposParameters {
+            epoch_length_blocks: 11,
+            vrf_commit_window_blocks: 4,
+            vrf_reveal_window_blocks: 5,
+            ..SumeragiNposParameters::default()
+        };
         params.custom.insert(
             SumeragiNposParameters::parameter_id(),
             npos_params.into_custom_parameter(),
@@ -1424,6 +1429,15 @@ async fn test_actor_harness_with_config(
     }
 }
 
+fn on_chain_permissioned_collector_params(actor: &Actor) -> (usize, u8) {
+    let view = actor.state.view();
+    let params = view.world.parameters().sumeragi();
+    (
+        usize::from(params.collectors_k),
+        params.collectors_redundant_send_r,
+    )
+}
+
 /// Compute how many block sync updates should be gossiped given the target roster.
 fn expected_block_sync_update_targets(actor: &Actor, peers: &[PeerId]) -> usize {
     if actor.block_sync_gossip_limit == 0 || peers.is_empty() {
@@ -1488,7 +1502,7 @@ async fn merge_committee_signatures_commit_merge_entry() {
     let actor = &mut harness.actor;
 
     actor.state.nexus.write().enabled = true;
-    let lane_keypairs = vec![
+    let lane_keypairs = [
         harness.key_pairs[0].clone(),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -1540,7 +1554,7 @@ async fn merge_committee_accepts_remote_signature() {
     let actor = &mut harness.actor;
 
     actor.state.nexus.write().enabled = true;
-    let lane_keypairs = vec![
+    let lane_keypairs = [
         harness.key_pairs[0].clone(),
         harness.key_pairs[1].clone(),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -2094,6 +2108,53 @@ async fn block_sync_update_drops_conflicting_committed_block_without_roster_coun
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let state_height = actor.state.view().height() as u64;
+    let block_height = state_height.saturating_add(2);
+    let mut missing_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x61; Hash::LENGTH]));
+    if actor.block_known_locally(missing_parent) {
+        missing_parent =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; Hash::LENGTH]));
+    }
+    let block = sample_block(block_height, 0, Some(missing_parent));
+    let block_hash = block.hash();
+    let now = Instant::now();
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height: block_height,
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered: false,
+            attempts: 0,
+        },
+    );
+
+    let update = super::message::BlockSyncUpdate::from(&block);
+    actor
+        .handle_block_sync_update(update)
+        .expect("block sync update");
+
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "block sync update should retain payload while parent is missing"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&missing_parent),
+        "signature mismatch should still trigger a missing-parent request"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_accepts_pre_activation_signature_after_mode_flip() {
     use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
@@ -2127,9 +2188,11 @@ async fn block_sync_update_accepts_pre_activation_signature_after_mode_flip() {
     };
     let view = (0_u64..32)
         .find(|candidate| {
-            let mut topo = super::network_topology::Topology::new(roster.clone());
+            let topo = super::network_topology::Topology::new(roster.clone());
             let npos_leader = topo.leader_index_prf(seed, height, *candidate);
-            npos_leader != (*candidate as usize % roster_len)
+            let candidate_usize =
+                usize::try_from(*candidate).expect("candidate view fits usize");
+            npos_leader != (candidate_usize % roster_len)
         })
         .expect("find view with differing rotations");
     let signature_topology =
@@ -4009,12 +4072,11 @@ async fn commit_inflight_timeout_triggers_view_change_and_drops_pending() {
 
     assert!(harness.actor.subsystems.commit.inflight.is_none());
     assert!(
-        harness
+        !harness
             .actor
             .pending
             .pending_blocks
-            .get(&block_hash)
-            .is_none()
+            .contains_key(&block_hash)
     );
     assert_eq!(
         harness.actor.phase_tracker.current_view(height),
@@ -4241,15 +4303,16 @@ async fn commit_vote_targets_collectors_or_topology() {
 
     let signature_topology =
         super::topology_for_view(&topology, 1, 0, actor.mode_tag(), actor.npos_prf_seed());
+    let (collectors_k, redundant_r) = on_chain_permissioned_collector_params(actor);
     let collectors = super::collectors::deterministic_collectors(
         &signature_topology,
         ConsensusMode::Permissioned,
-        actor.config.collectors_k,
+        collectors_k,
         None,
         1,
         0,
     );
-    let limit = usize::from(actor.config.collectors_redundant_send_r.max(1));
+    let limit = usize::from(redundant_r.max(1));
     let required = signature_topology.min_votes_for_commit();
     let mut expected_targets: Vec<_> = if collectors.is_empty() {
         signature_topology.as_ref().to_vec()
@@ -4268,11 +4331,11 @@ async fn commit_vote_targets_collectors_or_topology() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::CommitVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::CommitVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -4517,6 +4580,37 @@ async fn rebroadcast_cooldown_uses_chain_block_time() {
     assert_eq!(
         cooldown,
         super::rebroadcast_cooldown_from_block_time(block_time)
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_base_interval_uses_chain_block_time_on_mode_reset() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.config.npos.block_time = Duration::from_secs(10);
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut params_block = state.world.parameters.block();
+        params_block.sumeragi.block_time_ms = 200;
+        params_block.commit();
+    }
+
+    actor.reset_mode_flip_state();
+
+    let block_time = actor
+        .state
+        .view()
+        .world
+        .parameters()
+        .sumeragi()
+        .block_time();
+    let expected = pacemaker_base_interval(block_time, &actor.config);
+    assert_eq!(
+        actor.subsystems.propose.pacemaker.propose_interval, expected,
+        "pacemaker interval should follow chain block_time"
     );
 
     harness.shutdown.send();
@@ -4794,15 +4888,16 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
 
     let signature_topology =
         super::topology_for_view(&topology, 1, 0, actor.mode_tag(), actor.npos_prf_seed());
+    let (collectors_k, redundant_r) = on_chain_permissioned_collector_params(actor);
     let collectors = super::collectors::deterministic_collectors(
         &signature_topology,
         ConsensusMode::Permissioned,
-        actor.config.collectors_k,
+        collectors_k,
         None,
         1,
         0,
     );
-    let limit = usize::from(actor.config.collectors_redundant_send_r.max(1));
+    let limit = usize::from(redundant_r.max(1));
     let required = signature_topology.min_votes_for_commit();
     let mut expected_targets: Vec<_> = if collectors.is_empty() {
         signature_topology.as_ref().to_vec()
@@ -4864,7 +4959,7 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
     let signature_topology =
         super::topology_for_view(&topology, 1, 0, actor.mode_tag(), actor.npos_prf_seed());
     let local_peer_id = actor.common_config.peer.id().clone();
-    let mut planned_collectors: Vec<_> = signature_topology
+    let planned_collectors: Vec<_> = signature_topology
         .as_ref()
         .iter()
         .filter(|peer| *peer != &local_peer_id)
@@ -4886,7 +4981,7 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
         .subsystems
         .propose
         .collectors_contacted
-        .extend(planned_collectors.drain(..));
+        .extend(planned_collectors.into_iter());
 
     let _ = actor.rebroadcast_block_votes(Phase::Precommit, block_hash, 1, 0);
 
@@ -4898,11 +4993,11 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::PrecommitVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::PrecommitVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -5827,7 +5922,7 @@ async fn handle_available_vote_uses_roster_snapshot_after_topology_change() {
     );
     {
         let mut journal = actor.state.commit_roster_journal.write();
-        journal.upsert(commit_certificate, checkpoint);
+        journal.upsert(commit_certificate, checkpoint, None);
     }
 
     let mut roster_new = roster.clone();
@@ -5987,7 +6082,7 @@ async fn handle_exec_vote_uses_roster_snapshot_after_topology_change() {
     );
     {
         let mut journal = actor.state.commit_roster_journal.write();
-        journal.upsert(commit_certificate, checkpoint);
+        journal.upsert(commit_certificate, checkpoint, None);
     }
 
     let mut roster_new = roster.clone();
@@ -6099,7 +6194,7 @@ async fn handle_execution_qc_uses_roster_snapshot_after_topology_change() {
     );
     {
         let mut journal = actor.state.commit_roster_journal.write();
-        journal.upsert(commit_certificate, checkpoint);
+        journal.upsert(commit_certificate, checkpoint, None);
     }
 
     let mut roster_new = roster.clone();
@@ -6203,7 +6298,7 @@ async fn handle_precommit_vote_uses_roster_snapshot_after_topology_change() {
     );
     {
         let mut journal = actor.state.commit_roster_journal.write();
-        journal.upsert(commit_certificate, checkpoint);
+        journal.upsert(commit_certificate, checkpoint, None);
     }
 
     let mut roster_new = roster.clone();
@@ -6312,7 +6407,7 @@ async fn handle_qc_uses_roster_snapshot_after_topology_change() {
     );
     {
         let mut journal = actor.state.commit_roster_journal.write();
-        journal.upsert(commit_certificate, checkpoint);
+        journal.upsert(commit_certificate, checkpoint, None);
     }
 
     let mut roster_new = roster.clone();
@@ -7168,9 +7263,9 @@ async fn rbc_ready_gossips_to_sampled_peers() {
         .handle_rbc_ready(ready)
         .expect("ready accepted");
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let ready_posts: Vec<_> = posts
-        .iter()
+    let ready_posts = harness
+        .background_rx
+        .try_iter()
         .filter(|post| {
             matches!(
                 post,
@@ -7180,7 +7275,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
                 }
             )
         })
-        .collect();
+        .count();
     let topology = super::network_topology::Topology::new(roster);
     let signature_topology =
         super::topology_for_view(&topology, key.1, key.2, harness.actor.mode_tag(), None);
@@ -7194,7 +7289,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
         .filter(|peer| *peer != local_peer_id)
         .count();
     assert_eq!(
-        ready_posts.len(),
+        ready_posts,
         expected_rebroadcast_targets + expected_gossip_targets.len()
     );
 
@@ -8017,6 +8112,16 @@ fn membership_view_hash_changes_with_context() {
 #[tokio::test(flavor = "current_thread")]
 async fn init_collector_plan_broadcasts_membership_advert() {
     let mut harness = test_actor_harness(3).await;
+    harness.actor.config.collectors_k = 1;
+    harness.actor.config.collectors_redundant_send_r = 1;
+    {
+        let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.sumeragi.collectors_k = 2;
+        params.sumeragi.collectors_redundant_send_r = 3;
+        block.commit();
+    }
     let height = 5;
     let view = 2;
     let epoch = harness.actor.current_epoch();
@@ -8026,9 +8131,9 @@ async fn init_collector_plan_broadcasts_membership_advert() {
     let _ = harness.background_rx.try_iter().count();
     harness.actor.init_collector_plan(&topology, height, view);
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let advert = posts
-        .into_iter()
+    let advert = harness
+        .background_rx
+        .try_iter()
         .find_map(|post| match post {
             BackgroundPost::Broadcast {
                 msg: BlockMessage::ConsensusParams(advert),
@@ -8037,12 +8142,10 @@ async fn init_collector_plan_broadcasts_membership_advert() {
             _ => None,
         })
         .expect("consensus params broadcast");
-    let expected_k = u16::try_from(harness.actor.config.collectors_k).unwrap_or(u16::MAX);
+    let (on_chain_k, on_chain_r) = on_chain_permissioned_collector_params(&harness.actor);
+    let expected_k = u16::try_from(on_chain_k).unwrap_or(u16::MAX);
     assert_eq!(advert.collectors_k, expected_k);
-    assert_eq!(
-        advert.redundant_send_r,
-        harness.actor.config.collectors_redundant_send_r
-    );
+    assert_eq!(advert.redundant_send_r, on_chain_r);
     let membership = advert.membership.expect("membership payload");
     assert_eq!(membership.height, height);
     assert_eq!(membership.view, view);
@@ -8055,6 +8158,83 @@ async fn init_collector_plan_broadcasts_membership_advert() {
         topology.as_ref(),
     );
     assert_eq!(membership.view_hash, Some(expected_hash));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn collector_plan_params_permissioned_use_on_chain() {
+    let mut harness = test_actor_harness(3).await;
+    harness.actor.config.collectors_k = 1;
+    harness.actor.config.collectors_redundant_send_r = 1;
+    {
+        let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.sumeragi.collectors_k = 2;
+        params.sumeragi.collectors_redundant_send_r = 3;
+        block.commit();
+    }
+
+    let (k, r) = harness
+        .actor
+        .collector_plan_params_for_mode(ConsensusMode::Permissioned);
+    assert_eq!(k, 2);
+    assert_eq!(r, 3);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn consensus_params_expectation_uses_on_chain_values() {
+    let mut harness = test_actor_harness(3).await;
+    harness.actor.config.collectors_k = 1;
+    harness.actor.config.collectors_redundant_send_r = 1;
+    {
+        let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.sumeragi.collectors_k = 2;
+        params.sumeragi.collectors_redundant_send_r = 3;
+        block.commit();
+    }
+
+    let advert = super::message::ConsensusParamsAdvert {
+        collectors_k: 9,
+        redundant_send_r: 9,
+        membership: Some(
+            iroha_data_model::block::consensus::SumeragiMembershipStatus {
+                height: 5,
+                view: 1,
+                epoch: 0,
+                view_hash: None,
+            },
+        ),
+    };
+    let (expected_k, expected_r) = harness.actor.expected_collector_params_for_advert(&advert);
+    assert_eq!(expected_k, 2);
+    assert_eq!(expected_r, 3);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn consensus_caps_use_on_chain_collectors() {
+    let mut harness = test_actor_harness(3).await;
+    harness.actor.config.collectors_k = 1;
+    harness.actor.config.collectors_redundant_send_r = 1;
+    {
+        let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.sumeragi.collectors_k = 2;
+        params.sumeragi.collectors_redundant_send_r = 3;
+        block.commit();
+    }
+
+    let caps = harness.actor.recompute_consensus_caps();
+    assert_eq!(caps.collectors_k, 2);
+    assert_eq!(caps.redundant_send_r, 3);
 
     harness.shutdown.send();
 }
@@ -8755,6 +8935,7 @@ fn active_topology_excludes_self_when_missing_from_world() {
 }
 
 #[test]
+#[allow(clippy::similar_names)]
 fn active_topology_does_not_insert_self_when_missing_from_baseline_with_pops() {
     let (me_peer, me_pop, _kp) = bls_peer("127.0.0.1:7070");
     let (peer_a, pop_a, _kp_a) = bls_peer("127.0.0.1:7071");
@@ -9092,7 +9273,7 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
     );
     {
         let mut journal = state.commit_roster_journal.write();
-        journal.upsert(commit_certificate.clone(), checkpoint.clone());
+        journal.upsert(commit_certificate.clone(), checkpoint.clone(), None);
     }
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
@@ -9176,7 +9357,7 @@ fn block_sync_update_uses_journal_roster() {
     );
     {
         let mut journal = state.commit_roster_journal.write();
-        journal.upsert(commit_certificate.clone(), checkpoint.clone());
+        journal.upsert(commit_certificate.clone(), checkpoint.clone(), None);
     }
 
     let kura = Kura::blank_kura_for_testing();
@@ -9471,9 +9652,11 @@ fn block_sync_update_uses_activation_height_mode_tag() {
     let roster_len = roster.len();
     let view = (0_u64..32)
         .find(|candidate| {
-            let mut topo = super::network_topology::Topology::new(roster.clone());
+            let topo = super::network_topology::Topology::new(roster.clone());
             let npos_leader = topo.leader_index_prf(seed, height, *candidate);
-            npos_leader != (*candidate as usize % roster_len)
+            let candidate_usize =
+                usize::try_from(*candidate).expect("candidate view fits usize");
+            npos_leader != (candidate_usize % roster_len)
         })
         .expect("find view with differing rotations");
     let signature_topology =
@@ -9520,7 +9703,11 @@ fn block_sync_update_uses_activation_height_mode_tag() {
         .expect("checkpoint should be synthesized");
     assert_eq!(checkpoint.validator_set, roster);
     assert_eq!(checkpoint.signatures.len(), 1);
-    assert_eq!(checkpoint.signatures[0].index() as usize, signer_index);
+    assert_eq!(
+        usize::try_from(checkpoint.signatures[0].index())
+            .expect("signature index fits usize"),
+        signer_index
+    );
 }
 
 #[test]
@@ -9904,10 +10091,11 @@ fn block_sync_roster_selection_uses_persisted_journal() {
         VALIDATOR_SET_HASH_VERSION_V1,
         None,
     );
-    state
-        .commit_roster_journal
-        .write()
-        .upsert(commit_certificate.clone(), checkpoint.clone());
+    state.commit_roster_journal.write().upsert(
+        commit_certificate.clone(),
+        checkpoint.clone(),
+        None,
+    );
     // Simulate a restart by clearing in-memory status caches; persisted journal entries
     // should still allow roster recovery for block sync.
     super::status::reset_block_sync_counters_for_tests();
@@ -10143,9 +10331,6 @@ fn block_sync_update_omits_roster_artifacts_without_metadata() {
 
 #[test]
 fn validate_commit_certificate_roster_accepts_valid_cert() {
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let block_hash =
@@ -10169,7 +10354,7 @@ fn validate_commit_certificate_roster_accepts_valid_cert() {
         cert.height,
         Some(cert.view),
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
-        &state.view(),
+        None,
     )
     .expect("valid cert roster");
     assert_eq!(roster, vec![peer]);
@@ -10177,9 +10362,6 @@ fn validate_commit_certificate_roster_accepts_valid_cert() {
 
 #[test]
 fn validate_commit_certificate_roster_rejects_hash_version_mismatch() {
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let block_hash =
@@ -10203,7 +10385,7 @@ fn validate_commit_certificate_roster_rejects_hash_version_mismatch() {
         cert.height,
         Some(cert.view),
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
-        &state.view(),
+        None,
     );
     assert!(
         matches!(
@@ -10216,9 +10398,6 @@ fn validate_commit_certificate_roster_rejects_hash_version_mismatch() {
 
 #[test]
 fn validate_commit_certificate_roster_rejects_height_mismatch() {
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let block_hash =
@@ -10242,7 +10421,7 @@ fn validate_commit_certificate_roster_rejects_height_mismatch() {
         cert.height.saturating_add(1),
         Some(cert.view),
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
-        &state.view(),
+        None,
     );
     assert!(
         matches!(
@@ -10255,9 +10434,6 @@ fn validate_commit_certificate_roster_rejects_height_mismatch() {
 
 #[test]
 fn validate_commit_certificate_roster_rejects_view_mismatch() {
-    let kura = Arc::new(Kura::blank_kura_for_testing());
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let block_hash =
@@ -10281,7 +10457,7 @@ fn validate_commit_certificate_roster_rejects_view_mismatch() {
         cert.height,
         Some(cert.view.saturating_sub(1)),
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
-        &state.view(),
+        None,
     );
     assert!(
         matches!(
@@ -10299,7 +10475,7 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
     let domain: DomainId = "validators".parse().expect("domain id");
-    let keypairs = vec![
+    let keypairs = [
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -10311,8 +10487,9 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
         let mut block = state.world.public_lane_validators.block();
         for (idx, (keypair, stake)) in keypairs.iter().zip(stakes).enumerate() {
             let account_id = AccountId::new(domain.clone(), keypair.public_key().clone());
+            let lane_id = LaneId::new(u32::try_from(idx).expect("lane index fits u32"));
             let record = iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
-                lane_id: LaneId::new(idx as u32),
+                lane_id,
                 validator: account_id.clone(),
                 stake_account: account_id.clone(),
                 total_stake: iroha_primitives::numeric::Numeric::new(stake, 0),
@@ -10333,10 +10510,17 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
     let mut strong = BTreeSet::new();
     strong.insert(roster[0].clone());
     strong.insert(roster[1].clone());
+    let snapshot = super::stake_snapshot::CommitStakeSnapshot::from_roster(view.world(), &roster)
+        .expect("stake snapshot");
     assert!(
         super::stake_quorum_reached_for_peers(&view, &roster, &strong)
             .expect("stake quorum computed"),
         "2/3 stake should satisfy quorum"
+    );
+    assert!(
+        super::stake_quorum_reached_for_snapshot(&snapshot, &roster, &strong)
+            .expect("stake quorum computed"),
+        "2/3 stake should satisfy quorum for snapshot"
     );
 
     let mut weak = BTreeSet::new();
@@ -10347,6 +10531,21 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
             .expect("stake quorum computed"),
         "1/2 stake should not satisfy quorum"
     );
+    assert!(
+        !super::stake_quorum_reached_for_snapshot(&snapshot, &roster, &weak)
+            .expect("stake quorum computed"),
+        "1/2 stake should not satisfy quorum for snapshot"
+    );
+
+    let mut reversed = roster.clone();
+    reversed.reverse();
+    assert!(
+        matches!(
+            super::stake_quorum_reached_for_snapshot(&snapshot, &reversed, &strong),
+            Err(super::StakeQuorumError::SnapshotMismatch)
+        ),
+        "snapshot mismatch should be rejected"
+    );
 }
 
 #[test]
@@ -10356,7 +10555,7 @@ fn validate_commit_certificate_roster_requires_stake_quorum() {
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
     let domain: DomainId = "validators".parse().expect("domain id");
-    let keypairs = vec![
+    let keypairs = [
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -10368,8 +10567,9 @@ fn validate_commit_certificate_roster_requires_stake_quorum() {
         let mut block = state.world.public_lane_validators.block();
         for (idx, (keypair, stake)) in keypairs.iter().zip(stakes).enumerate() {
             let account_id = AccountId::new(domain.clone(), keypair.public_key().clone());
+            let lane_id = LaneId::new(u32::try_from(idx).expect("lane index fits u32"));
             let record = iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
-                lane_id: LaneId::new(idx as u32),
+                lane_id,
                 validator: account_id.clone(),
                 stake_account: account_id.clone(),
                 total_stake: iroha_primitives::numeric::Numeric::new(stake, 0),
@@ -10408,6 +10608,10 @@ fn validate_commit_certificate_roster_requires_stake_quorum() {
         validator_set: roster,
         signatures,
     };
+    let view = state.view();
+    let snapshot =
+        super::stake_snapshot::CommitStakeSnapshot::from_roster(view.world(), &cert.validator_set)
+            .expect("stake snapshot");
 
     let result = super::validate_commit_certificate_roster(
         &cert,
@@ -10415,7 +10619,7 @@ fn validate_commit_certificate_roster_requires_stake_quorum() {
         cert.height,
         Some(cert.view),
         ConsensusMode::Npos,
-        &state.view(),
+        Some(&snapshot),
     );
     assert!(
         matches!(
@@ -10516,7 +10720,7 @@ fn synthesize_commit_certificate_accepts_valid_roster() {
     .into();
     let state = state_with_peers(roster.clone());
 
-    let cert = super::Actor::synthesize_commit_certificate(
+    let (cert, _stake_snapshot) = super::Actor::synthesize_commit_certificate(
         &state,
         &block,
         &roster,
@@ -14238,6 +14442,7 @@ fn stale_qc_candidates_skip_unknown_and_present_qcs() {
     assert!(candidates.is_empty());
 }
 
+#[derive(Clone, Copy)]
 struct VoteFilter {
     phase: Phase,
     block_hash: HashOf<BlockHeader>,
@@ -14908,7 +15113,7 @@ async fn exec_vote_emission_uses_persisted_roster_after_topology_change() {
     );
     {
         let mut journal = actor.state.commit_roster_journal.write();
-        journal.upsert(commit_certificate, checkpoint);
+        journal.upsert(commit_certificate, checkpoint, None);
     }
 
     let mut roster_new = roster.clone();
@@ -15070,9 +15275,11 @@ async fn exec_vote_targets_deterministic_collectors() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. } if matches!(msg, BlockMessage::ExecVote(_)) => {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::ExecVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -15600,7 +15807,7 @@ async fn handle_new_view_uses_roster_snapshot_after_topology_change() {
     );
     {
         let mut journal = actor.state.commit_roster_journal.write();
-        journal.upsert(commit_certificate, checkpoint);
+        journal.upsert(commit_certificate, checkpoint, None);
     }
 
     let mut roster_new = roster.clone();
@@ -15802,7 +16009,7 @@ async fn handle_new_view_accepts_signature_from_prev_commit_topology() {
     );
     {
         let mut journal = actor.state.commit_roster_journal.write();
-        journal.upsert(commit_certificate, checkpoint);
+        journal.upsert(commit_certificate, checkpoint, None);
     }
 
     let mut roster_new = roster.clone();
@@ -15938,7 +16145,7 @@ async fn roster_for_vote_prefers_snapshot_for_committed_height() {
     );
     {
         let mut journal = actor.state.commit_roster_journal.write();
-        journal.upsert(commit_certificate, checkpoint);
+        journal.upsert(commit_certificate, checkpoint, None);
     }
 
     let mut roster_new = roster.clone();
@@ -16011,6 +16218,56 @@ async fn roster_for_vote_falls_back_to_prev_commit_topology_without_snapshot() {
     let qc_roster = actor.roster_for_vote(block_hash, height, 0);
     assert_eq!(
         qc_roster, roster,
+        "committed height should fall back to the previous commit topology"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_session_roster_falls_back_to_prev_commit_topology_without_snapshot() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 2u64;
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD2; Hash::LENGTH]));
+    let key: SessionKey = (block_hash, height, view);
+
+    let roster = actor.effective_commit_topology();
+    let local_peer_id = actor.common_config.peer.id();
+    let removed_peer = roster
+        .iter()
+        .find(|peer| *peer != local_peer_id)
+        .cloned()
+        .expect("non-local roster entry");
+
+    let mut roster_new = roster.clone();
+    roster_new.retain(|peer| peer != &removed_peer);
+    assert!(!roster_new.is_empty(), "roster should remain non-empty");
+    {
+        let mut prev_block = actor.state.prev_commit_topology.block();
+        prev_block.mutate_vec(|vec| *vec = roster.clone());
+        prev_block.commit();
+    }
+    {
+        let mut topo_block = actor.state.commit_topology.block();
+        topo_block.mutate_vec(|vec| *vec = roster_new);
+        topo_block.commit();
+    }
+    {
+        let mut hashes = actor.state.block_hashes.block();
+        hashes.push(HashOf::from_untyped_unchecked(Hash::prehashed(
+            [0xD1; Hash::LENGTH],
+        )));
+        hashes.push(block_hash);
+        hashes.commit_for_tests();
+    }
+
+    let rbc_roster = actor.rbc_session_roster(key);
+    assert_eq!(
+        rbc_roster, roster,
         "committed height should fall back to the previous commit topology"
     );
 
@@ -17538,10 +17795,12 @@ async fn load_npos_epoch_params_prefers_world_values() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        let mut npos_params = SumeragiNposParameters::default();
-        npos_params.epoch_length_blocks = 9;
-        npos_params.vrf_commit_window_blocks = 5;
-        npos_params.vrf_reveal_window_blocks = 4;
+        let npos_params = SumeragiNposParameters {
+            epoch_length_blocks: 9,
+            vrf_commit_window_blocks: 5,
+            vrf_reveal_window_blocks: 4,
+            ..SumeragiNposParameters::default()
+        };
         params.custom.insert(
             SumeragiNposParameters::parameter_id(),
             npos_params.into_custom_parameter(),
@@ -17635,12 +17894,14 @@ async fn refresh_npos_seed_updates_collector_params_from_world() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        let mut npos_params = SumeragiNposParameters::default();
-        npos_params.k_aggregators = 3;
-        npos_params.redundant_send_r = 2;
-        npos_params.epoch_length_blocks = 12;
-        npos_params.vrf_commit_window_blocks = 4;
-        npos_params.vrf_reveal_window_blocks = 6;
+        let npos_params = SumeragiNposParameters {
+            k_aggregators: 3,
+            redundant_send_r: 2,
+            epoch_length_blocks: 12,
+            vrf_commit_window_blocks: 4,
+            vrf_reveal_window_blocks: 6,
+            ..SumeragiNposParameters::default()
+        };
         params.custom.insert(
             SumeragiNposParameters::parameter_id(),
             npos_params.into_custom_parameter(),
@@ -17728,11 +17989,12 @@ async fn on_block_commit_persists_new_epoch_seed_record() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        let mut npos_params =
-            iroha_data_model::parameter::system::SumeragiNposParameters::default();
-        npos_params.epoch_length_blocks = epoch_len;
-        npos_params.epoch_seed = seed_epoch0;
-        npos_params.evidence_horizon_blocks = 0;
+        let npos_params = iroha_data_model::parameter::system::SumeragiNposParameters {
+            epoch_length_blocks: epoch_len,
+            epoch_seed: seed_epoch0,
+            evidence_horizon_blocks: 0,
+            ..iroha_data_model::parameter::system::SumeragiNposParameters::default()
+        };
         params.custom.insert(
             iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
             npos_params.into_custom_parameter(),
@@ -17805,10 +18067,10 @@ async fn maybe_broadcast_new_view_emits_control_flow() {
     let new_views: Vec<_> = posts
         .iter()
         .filter_map(|post| match post {
-            BackgroundPost::PostControlFlow { frame, .. } => match frame {
-                super::message::ControlFlow::NewView(frame) => Some(frame),
-                _ => None,
-            },
+            BackgroundPost::PostControlFlow {
+                frame: super::message::ControlFlow::NewView(frame),
+                ..
+            } => Some(frame),
             _ => None,
         })
         .collect();
@@ -17877,14 +18139,13 @@ async fn maybe_broadcast_new_view_uses_activation_height_mode_tag() {
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     let new_view = posts
         .iter()
-        .filter_map(|post| match post {
-            BackgroundPost::PostControlFlow { frame, .. } => match frame {
-                super::message::ControlFlow::NewView(frame) => Some(frame),
-                _ => None,
-            },
+        .find_map(|post| match post {
+            BackgroundPost::PostControlFlow {
+                frame: super::message::ControlFlow::NewView(frame),
+                ..
+            } => Some(frame),
             _ => None,
         })
-        .next()
         .expect("expected NEW_VIEW post");
     let topology_peers = actor.effective_commit_topology();
 
@@ -17969,10 +18230,11 @@ async fn maybe_broadcast_new_view_includes_leader_with_sampling() {
     let targets: Vec<_> = posts
         .iter()
         .filter_map(|post| match post {
-            BackgroundPost::PostControlFlow { peer, frame, .. } => match frame {
-                super::message::ControlFlow::NewView(_) => Some(peer.clone()),
-                _ => None,
-            },
+            BackgroundPost::PostControlFlow {
+                peer,
+                frame: super::message::ControlFlow::NewView(_),
+                ..
+            } => Some(peer.clone()),
             _ => None,
         })
         .collect();
@@ -18019,10 +18281,10 @@ async fn maybe_broadcast_new_view_uses_genesis_stub_when_cache_empty() {
     let new_views: Vec<_> = posts
         .iter()
         .filter_map(|post| match post {
-            BackgroundPost::PostControlFlow { frame, .. } => match frame {
-                super::message::ControlFlow::NewView(frame) => Some(frame),
-                _ => None,
-            },
+            BackgroundPost::PostControlFlow {
+                frame: super::message::ControlFlow::NewView(frame),
+                ..
+            } => Some(frame),
             _ => None,
         })
         .collect();
@@ -18063,9 +18325,8 @@ async fn maybe_broadcast_new_view_skips_without_precommit_highest_qc() {
     let highest_qc_ref = sample_qc_ref(1, 0);
     actor.maybe_broadcast_new_view(highest_qc_ref, None, None);
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
-        posts.is_empty(),
+        harness.background_rx.try_iter().next().is_none(),
         "expected NEW_VIEW broadcast to skip without precommit HighestQC"
     );
 
@@ -18113,9 +18374,8 @@ async fn maybe_broadcast_new_view_skips_within_cooldown() {
 
     actor.maybe_broadcast_new_view(highest_qc_ref, Some(target_height), Some(target_view));
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
-        posts.is_empty(),
+        harness.background_rx.try_iter().next().is_none(),
         "expected NEW_VIEW broadcast to respect cooldown"
     );
 
@@ -18571,16 +18831,25 @@ async fn handle_new_view_gossips_new_view_frames() {
     );
     actor.handle_new_view(frame).expect("handle_new_view");
 
+    let qc_key = (Phase::Precommit, block_hash, 1, 0, 0);
+    assert!(
+        actor.qc_cache.contains_key(&qc_key),
+        "expected highest QC to be cached from NEW_VIEW"
+    );
+    assert!(
+        actor.qc_signer_tally.contains_key(&qc_key),
+        "expected NEW_VIEW QC signer tally to be cached"
+    );
     assert_eq!(actor.phase_tracker.current_view(height), Some(view));
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     let new_views: Vec<_> = posts
         .iter()
         .filter_map(|post| match post {
-            BackgroundPost::PostControlFlow { frame, .. } => match frame {
-                super::message::ControlFlow::NewView(frame) => Some(frame),
-                _ => None,
-            },
+            BackgroundPost::PostControlFlow {
+                frame: super::message::ControlFlow::NewView(frame),
+                ..
+            } => Some(frame),
             _ => None,
         })
         .collect();
@@ -18720,7 +18989,11 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
         .unwrap_or(now);
     actor.phase_tracker.start_new_round(tracked_height, start);
 
-    let pending_block = sample_block(tracked_height, view as u32, Some(block1.hash()));
+    let pending_block = sample_block(
+        tracked_height,
+        u32::try_from(view).expect("view fits u32"),
+        Some(block1.hash()),
+    );
     let payload_bytes = super::proposals::block_payload_bytes(&pending_block);
     let payload_hash = Hash::new(&payload_bytes);
     actor.pending.pending_blocks.insert(
@@ -18834,7 +19107,11 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
         },
     );
 
-    let pending_block = sample_block(tracked_height, view as u32, Some(block1.hash()));
+    let pending_block = sample_block(
+        tracked_height,
+        u32::try_from(view).expect("view fits u32"),
+        Some(block1.hash()),
+    );
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&pending_block));
     let mut pending = PendingBlock::new(pending_block, payload_hash, tracked_height, view);
     pending.mark_aborted();
@@ -18915,7 +19192,7 @@ async fn pacemaker_allows_proposal_with_stale_precommit_votes() {
     let epoch = actor.current_epoch();
     let vote_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x46; Hash::LENGTH]));
-    let stale_view = if view == 0 { 1 } else { 0 };
+    let stale_view = u64::from(view == 0);
     actor.vote_log.insert(
         (
             Phase::Precommit,
@@ -19461,6 +19738,44 @@ async fn block_created_skips_pending_insert_while_processing() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_created_requests_missing_parent_on_height_gap() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let state_height = actor.state.view().height() as u64;
+    let block_height = state_height.saturating_add(2);
+    let mut missing_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x45; Hash::LENGTH]));
+    if actor.block_known_locally(missing_parent) {
+        missing_parent =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x46; Hash::LENGTH]));
+    }
+    let block = sample_block(block_height, 0, Some(missing_parent));
+    let block_hash = block.hash();
+
+    actor
+        .handle_block_created(super::message::BlockCreated { block })
+        .expect("handle BlockCreated");
+
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "BlockCreated should store the pending block"
+    );
+    let request = actor
+        .pending
+        .missing_block_requests
+        .get(&missing_parent)
+        .expect("missing-parent request should be recorded");
+    assert_eq!(
+        request.height,
+        block_height.saturating_sub(1),
+        "missing-parent request should track parent height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_quorum_reschedule_respects_backoff() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -19561,6 +19876,72 @@ async fn validation_defers_block_ahead_of_local_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn gap_sweep_requests_missing_parents_for_pending_blocks() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let state_height = actor.state.view().height() as u64;
+    let first_height = state_height.saturating_add(2);
+    let second_height = state_height.saturating_add(3);
+    let mut first_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x51; Hash::LENGTH]));
+    if actor.block_known_locally(first_parent) {
+        first_parent =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x52; Hash::LENGTH]));
+    }
+    let mut second_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x53; Hash::LENGTH]));
+    if second_parent == first_parent || actor.block_known_locally(second_parent) {
+        second_parent =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x54; Hash::LENGTH]));
+    }
+
+    let first_block = sample_block(first_height, 0, Some(first_parent));
+    let first_hash = first_block.hash();
+    let first_payload = super::proposals::block_payload_bytes(&first_block);
+    let first_payload_hash = Hash::new(&first_payload);
+    let first_view = u64::from(first_block.header().view_change_index());
+    actor.pending.pending_blocks.insert(
+        first_hash,
+        PendingBlock::new(first_block, first_payload_hash, first_height, first_view),
+    );
+
+    let second_block = sample_block(second_height, 0, Some(second_parent));
+    let second_hash = second_block.hash();
+    let second_payload = super::proposals::block_payload_bytes(&second_block);
+    let second_payload_hash = Hash::new(&second_payload);
+    let second_view = u64::from(second_block.header().view_change_index());
+    actor.pending.pending_blocks.insert(
+        second_hash,
+        PendingBlock::new(
+            second_block,
+            second_payload_hash,
+            second_height,
+            second_view,
+        ),
+    );
+
+    actor.request_missing_parents_for_gap(&[], None, "gap_test");
+
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&first_parent),
+        "gap sweep should request the first missing parent"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&second_parent),
+        "gap sweep should request the second missing parent"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn validation_rejects_block_with_wrong_parent_hash() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -19593,7 +19974,7 @@ async fn validation_rejects_block_with_wrong_parent_hash() {
         "mismatched parent hash should be rejected"
     );
     assert!(
-        actor.pending.pending_blocks.get(&block_hash).is_none(),
+        !actor.pending.pending_blocks.contains_key(&block_hash),
         "invalid blocks should be removed from pending"
     );
 
@@ -24582,20 +24963,29 @@ fn availability_timeout_from_quorum_scales_for_da() {
 #[test]
 fn pacemaker_interval_respects_rtt_floor_and_cap() {
     let mut cfg = test_sumeragi_config();
-    cfg.npos.block_time = Duration::from_millis(800);
     cfg.npos.timeouts.propose = Duration::from_millis(300);
     cfg.npos.pacemaker_rtt_floor_multiplier = 3; // 900ms floor from propose
     cfg.npos.pacemaker_max_backoff = Duration::from_millis(1_200);
+    let block_time = Duration::from_millis(800);
 
-    assert_eq!(pacemaker_base_interval(&cfg), Duration::from_millis(900));
+    assert_eq!(
+        pacemaker_base_interval(block_time, &cfg),
+        Duration::from_millis(900)
+    );
 
     cfg.npos.pacemaker_rtt_floor_multiplier = 5; // 1_500ms floor → capped by max_backoff
-    assert_eq!(pacemaker_base_interval(&cfg), Duration::from_millis(1_200));
+    assert_eq!(
+        pacemaker_base_interval(block_time, &cfg),
+        Duration::from_millis(1_200)
+    );
 
     cfg.npos.pacemaker_rtt_floor_multiplier = 1;
-    cfg.npos.block_time = Duration::from_millis(1_500);
     cfg.npos.pacemaker_max_backoff = Duration::from_millis(5_000);
-    assert_eq!(pacemaker_base_interval(&cfg), Duration::from_millis(1_500));
+    let block_time = Duration::from_millis(1_500);
+    assert_eq!(
+        pacemaker_base_interval(block_time, &cfg),
+        Duration::from_millis(1_500)
+    );
 }
 
 #[test]
@@ -29149,7 +29539,7 @@ async fn availability_vote_gossips_to_sampled_peers() {
 
     let _ = harness.background_rx.try_iter().count();
 
-    let vote = super::build_availability_vote(super::AvailabilityVoteInputs {
+    let vote = super::build_availability_vote(&super::AvailabilityVoteInputs {
         chain_id: &actor.common_config.chain,
         mode_tag: actor.mode_tag(),
         private_key: sender_keypair.private_key(),
@@ -29165,11 +29555,11 @@ async fn availability_vote_gossips_to_sampled_peers() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::AvailabilityVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::AvailabilityVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -29201,15 +29591,16 @@ async fn availability_vote_targets_collectors_without_broadcast() {
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signature_topology =
         super::topology_for_view(&topology, 1, 0, actor.mode_tag(), actor.npos_prf_seed());
+    let (collectors_k, redundant_r) = on_chain_permissioned_collector_params(actor);
     let collectors = super::collectors::deterministic_collectors(
         &signature_topology,
         ConsensusMode::Permissioned,
-        actor.config.collectors_k,
+        collectors_k,
         None,
         1,
         0,
     );
-    let limit = usize::from(actor.config.collectors_redundant_send_r.max(1));
+    let limit = usize::from(redundant_r.max(1));
     let required = signature_topology.min_votes_for_commit();
     let mut expected_targets: Vec<_> = if collectors.is_empty() {
         signature_topology.as_ref().to_vec()
@@ -29228,11 +29619,11 @@ async fn availability_vote_targets_collectors_without_broadcast() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::AvailabilityVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::AvailabilityVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -29271,10 +29662,11 @@ async fn availability_vote_reinitializes_collectors_for_new_view() {
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signature_topology =
         super::topology_for_view(&topology, 1, 1, actor.mode_tag(), actor.npos_prf_seed());
+    let (collectors_k, redundant_r) = on_chain_permissioned_collector_params(actor);
     let expected_plan_targets = super::collectors::deterministic_collectors(
         &signature_topology,
         ConsensusMode::Permissioned,
-        actor.config.collectors_k,
+        collectors_k,
         None,
         1,
         1,
@@ -29289,7 +29681,7 @@ async fn availability_vote_reinitializes_collectors_for_new_view() {
         "collector plan should be reinitialized for the new view"
     );
 
-    let limit = usize::from(actor.config.collectors_redundant_send_r.max(1));
+    let limit = usize::from(redundant_r.max(1));
     let required = signature_topology.min_votes_for_commit();
     let mut expected_targets: Vec<_> = if expected_plan_targets.is_empty() {
         signature_topology.as_ref().to_vec()
@@ -29307,11 +29699,11 @@ async fn availability_vote_reinitializes_collectors_for_new_view() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::AvailabilityVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::AvailabilityVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -29359,11 +29751,11 @@ async fn availability_vote_falls_back_to_topology_when_collectors_local_only() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::AvailabilityVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::AvailabilityVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -29412,11 +29804,11 @@ async fn rebroadcast_availability_votes_fall_back_to_topology_when_collectors_lo
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::AvailabilityVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::AvailabilityVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -29435,7 +29827,7 @@ fn build_availability_vote_signs_payload() {
     let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let (public_key, private_key) = key_pair.into_parts();
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCB; 32]));
-    let vote = super::build_availability_vote(super::AvailabilityVoteInputs {
+    let vote = super::build_availability_vote(&super::AvailabilityVoteInputs {
         chain_id: &chain,
         mode_tag: super::PERMISSIONED_TAG,
         private_key: &private_key,

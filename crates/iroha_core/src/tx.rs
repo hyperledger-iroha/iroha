@@ -382,11 +382,11 @@ fn heartbeat_marker_value(tx: &SignedTransaction) -> Result<Option<bool>, Transa
 
 fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
     let any = instruction.as_any();
-    if let Some(register) = any.downcast_ref::<iroha_data_model::isi::register::RegisterBox>() {
-        if let iroha_data_model::isi::register::RegisterBox::Trigger(register) = register {
-            let trigger = &register.object;
-            return is_time_sensitive_executable(trigger.action().executable());
-        }
+    if let Some(iroha_data_model::isi::register::RegisterBox::Trigger(register)) =
+        any.downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+    {
+        let trigger = &register.object;
+        return is_time_sensitive_executable(trigger.action().executable());
     }
     if let Some(register) = any.downcast_ref::<
         iroha_data_model::isi::register::Register<iroha_data_model::trigger::Trigger>,
@@ -417,9 +417,9 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
 
 fn is_time_sensitive_executable(executable: &Executable) -> bool {
     match executable {
-        Executable::Instructions(instructions) => instructions
-            .iter()
-            .any(|instruction| is_time_sensitive_instruction(instruction)),
+        Executable::Instructions(instructions) => {
+            instructions.iter().any(is_time_sensitive_instruction)
+        }
         Executable::Ivm(_) => true,
     }
 }
@@ -3322,6 +3322,7 @@ pub mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn time_sensitive_instruction_detects_governance_and_non_sensitive() {
         let (authority, _keypair) = gen_account_in("wonderland");
         let (counterparty, _keypair) = gen_account_in("wonderland");

@@ -239,6 +239,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn try_form_qc_from_votes(
         &mut self,
         phase: crate::sumeragi::consensus::Phase,
@@ -387,6 +388,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn qc_signer_snapshot(
         &self,
         phase: crate::sumeragi::consensus::Phase,
@@ -443,6 +445,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn qc_missing_block_defer(
         &mut self,
         phase: crate::sumeragi::consensus::Phase,
@@ -1404,6 +1407,7 @@ impl Actor {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn handle_execution_qc(
         &mut self,
         qc: crate::sumeragi::consensus::ExecutionQC,

@@ -874,6 +874,7 @@ impl StateTelemetry {
     }
 
     /// Record the configured caps and frame limits for transaction gossip.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_tx_gossip_caps(
         &self,
         frame_cap_bytes: usize,
@@ -11958,6 +11959,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn torii_pre_auth_metrics_track_usage() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(Arc::clone(&metrics), true);

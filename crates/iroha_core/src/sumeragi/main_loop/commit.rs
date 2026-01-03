@@ -12,13 +12,13 @@ use super::*;
 
 const COMMIT_WORK_QUEUE_CAP: usize = 1;
 const COMMIT_RESULT_QUEUE_CAP: usize = 1;
-const NEW_VIEW_GOSSIP_SEED_DOMAIN: u64 = 0x4E45575F56494557;
+const NEW_VIEW_GOSSIP_SEED_DOMAIN: u64 = 0x4E45_575F_5649_4557;
 
 fn splitmix64(mut state: u64) -> u64 {
-    state = state.wrapping_add(0x9E3779B97F4A7C15);
+    state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
 }
 
@@ -1550,15 +1550,7 @@ impl Actor {
                     )
                     .next()
                     .is_some();
-                if !leader_signed {
-                    warn!(
-                        height = pending_height,
-                        view = pending_view,
-                        block = %block_hash,
-                        "skipping commit: leader signature missing"
-                    );
-                    false
-                } else {
+                if leader_signed {
                     let mut signer_peers = BTreeSet::new();
                     for signer in &validated_signers {
                         let Ok(idx) = usize::try_from(*signer) else {
@@ -1591,6 +1583,14 @@ impl Actor {
                             false
                         }
                     }
+                } else {
+                    warn!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %block_hash,
+                        "skipping commit: leader signature missing"
+                    );
+                    false
                 }
             }
         };
@@ -2676,7 +2676,7 @@ impl Actor {
                     }
                     self.schedule_background(BackgroundRequest::Post {
                         peer: peer.clone(),
-                        msg: BlockMessage::RbcInit(init.clone()),
+                        msg: BlockMessage::RbcInit(init),
                     });
                 }
             }
@@ -2876,7 +2876,7 @@ impl Actor {
             self.note_collector_contact(peer.clone(), true);
         }
 
-        let vote = build_availability_vote(AvailabilityVoteInputs {
+        let vote = build_availability_vote(&AvailabilityVoteInputs {
             chain_id: &self.chain_id,
             mode_tag,
             private_key: self.common_config.key_pair.private_key(),
@@ -3219,6 +3219,7 @@ impl Actor {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn emit_commit_vote(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -3361,6 +3362,7 @@ impl Actor {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn handle_commit_vote(
         &mut self,
         vote: crate::sumeragi::consensus::CommitVote,
@@ -3526,6 +3528,7 @@ impl Actor {
             .collect()
     }
 
+    #[allow(clippy::too_many_lines)]
     fn try_apply_commit_votes_for_epoch(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -3625,7 +3628,7 @@ impl Actor {
                 consensus_mode,
             )
         };
-        let Some(cert) = cert else {
+        let Some((cert, stake_snapshot)) = cert else {
             warn!(
                 height,
                 view,
@@ -3647,6 +3650,7 @@ impl Actor {
         };
         let mut update = super::message::BlockSyncUpdate::from(&block_for_sync);
         update.commit_certificate = Some(cert.clone());
+        update.stake_snapshot = stake_snapshot.clone();
         self.broadcast_block_sync_update(update, commit_topology);
         self.apply_commit_certificate(&cert, commit_topology, block_hash, height, view);
         Ok(true)
@@ -4593,9 +4597,7 @@ impl Actor {
         let local_peer_id = self.common_config.peer.id();
         let candidates: Vec<PeerId> = topology_peers
             .iter()
-            .filter(|peer| {
-                *peer != local_peer_id && sender_peer.map_or(true, |sender| *peer != sender)
-            })
+            .filter(|peer| *peer != local_peer_id && sender_peer != Some(*peer))
             .cloned()
             .collect();
         if candidates.is_empty() {
@@ -4633,6 +4635,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn maybe_broadcast_new_view(
         &mut self,
         highest_qc: crate::sumeragi::consensus::QcHeaderRef,
@@ -4736,13 +4739,14 @@ impl Actor {
 
         let now = Instant::now();
         let cooldown = self.rebroadcast_cooldown().max(REBROADCAST_COOLDOWN_FLOOR);
-        let mut cursor = 0usize;
-        if let Some(state) = self.subsystems.propose.broadcast_new_views.get(&key) {
+        let cursor = if let Some(state) = self.subsystems.propose.broadcast_new_views.get(&key) {
             if now.saturating_duration_since(state.last_sent) < cooldown {
                 return;
             }
-            cursor = state.cursor;
-        }
+            state.cursor
+        } else {
+            0
+        };
 
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(target_height);
         let mut frame = crate::sumeragi::consensus::NewView {
