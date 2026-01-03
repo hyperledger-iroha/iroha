@@ -14,8 +14,8 @@ use iroha_config::parameters::actual::{
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
-    ChainId, block::BlockHeader, merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope,
-    parameter::system::SumeragiConsensusMode, peer::PeerId,
+    ChainId, block::BlockHeader, consensus::VrfEpochRecord, merge::MergeCommitteeSignature,
+    nexus::LaneRelayEnvelope, parameter::system::SumeragiConsensusMode, peer::PeerId,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
@@ -194,6 +194,27 @@ fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) 
         })
 }
 
+fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
+    use iroha_crypto::blake2::{Blake2b512, Digest as _};
+
+    let mut h = Blake2b512::new();
+    iroha_crypto::blake2::digest::Update::update(&mut h, &record.seed);
+    let mut reveals: Vec<(u32, [u8; 32])> = record
+        .participants
+        .iter()
+        .filter_map(|p| p.reveal.map(|reveal| (p.signer, reveal)))
+        .collect();
+    reveals.sort_by_key(|(signer, _)| *signer);
+    for (signer, reveal) in reveals {
+        iroha_crypto::blake2::digest::Update::update(&mut h, &signer.to_be_bytes());
+        iroha_crypto::blake2::digest::Update::update(&mut h, &reveal);
+    }
+    let digest = iroha_crypto::blake2::Digest::finalize(h);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest[..32]);
+    out
+}
+
 /// Resolve the `NPoS` PRF seed for the epoch containing `height`.
 pub fn npos_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
     npos_seed_for_height_from_world(&view.world, view.chain_id(), height)
@@ -211,6 +232,13 @@ pub(crate) fn npos_seed_for_height_from_world(
             let epoch = (height - 1) / epoch_len;
             if let Some(record) = world.vrf_epochs().get(&epoch) {
                 return record.seed;
+            }
+            if let Some((_last_epoch, record)) = world.vrf_epochs().iter().last() {
+                if record.finalized && epoch == record.epoch.saturating_add(1) {
+                    // Crash recovery: derive the next-epoch seed if the in-progress snapshot
+                    // was not persisted before restart.
+                    return next_epoch_seed_from_record(record);
+                }
             }
         }
         return params.epoch_seed();
@@ -1036,12 +1064,12 @@ mod tests {
         };
         cache.insert(block_key, now);
 
-        for idx in 0..3 {
+        for idx in 0_u8..3 {
             cache.insert(
                 BlockPayloadDedupKey::Proposal {
-                    height: idx + 2,
+                    height: u64::from(idx) + 2,
                     view: 0,
-                    payload_hash: Hash::prehashed([idx as u8; 32]),
+                    payload_hash: Hash::prehashed([idx; 32]),
                 },
                 now,
             );

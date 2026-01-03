@@ -122,7 +122,7 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
             let body = resp.body();
             let decoded = norito::decode_from_bytes::<ValidationFail>(body).or_else(|_| {
                 let mut cursor = body.as_slice();
-                ValidationFail::decode_all(&mut cursor).map_err(|err| err)
+                ValidationFail::decode_all(&mut cursor)
             });
             match decoded {
                 Ok(fail) => Err(QueryError::Validation(fail)),

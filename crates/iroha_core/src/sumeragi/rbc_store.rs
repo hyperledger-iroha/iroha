@@ -8,10 +8,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{block::BlockHeader, peer::PeerId};
 use iroha_logger::prelude::*;
 use norito::codec::{Decode, Encode};
+use sha2::{Digest as _, Sha256};
 
 use crate::panic_hook;
 
@@ -814,6 +815,30 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
         }
     }
 
+    if expected > 0 && session.chunks.len() == expected {
+        let mut digests = Vec::with_capacity(expected);
+        for chunk in &chunks {
+            let digest = Sha256::digest(&chunk.bytes);
+            let mut hashed = [0u8; 32];
+            hashed.copy_from_slice(&digest);
+            digests.push(hashed);
+        }
+        let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests);
+        let Some(root) = tree.root().map(Hash::from) else {
+            return Err("failed to compute chunk root");
+        };
+        if let Some(expected_root) = &session.expected_chunk_root {
+            if expected_root != &root {
+                return Err("chunk root mismatch");
+            }
+        }
+        if let Some(computed_root) = &session.computed_chunk_root {
+            if computed_root != &root {
+                return Err("computed chunk root mismatch");
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1106,6 +1131,48 @@ mod tests {
         let rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
         assert!(rebuilt.is_invalid());
         assert!(rebuilt.recovered_from_disk());
+    }
+
+    #[test]
+    fn persisted_session_with_chunk_root_mismatch_is_dropped() {
+        let dir = tempdir().unwrap();
+        let key = session_key(11);
+        let store = ChunkStore::new(
+            dir.path().to_path_buf(),
+            Duration::from_secs(120),
+            2,
+            1 << 19,
+            4,
+            1 << 20,
+        )
+        .expect("chunk store init");
+
+        let chunk0 = vec![1u8, 2, 3];
+        let chunk1 = vec![4u8, 5, 6];
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&chunk0);
+        payload.extend_from_slice(&chunk1);
+        let payload_hash = Hash::new(&payload);
+
+        let mut session = RbcSession::test_new(2, Some(payload_hash), None, 0);
+        session.test_note_chunk(0, chunk0, 0);
+        session.test_note_chunk(1, chunk1, 0);
+
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let roster = vec![test_peer_id(1)];
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
+        persisted.expected_chunk_root = Some(Hash::prehashed([0xEE; 32]));
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let encoded = <PersistedSession as Encode>::encode(&persisted);
+        fs::write(&path, &encoded).expect("write persisted session");
+
+        let load = store
+            .load(&chain_hash, &manifest)
+            .expect("load persisted sessions");
+        assert!(load.sessions.is_empty(), "invalid root should be dropped");
+        assert!(!path.exists(), "store should delete invalid session files");
     }
 
     #[test]

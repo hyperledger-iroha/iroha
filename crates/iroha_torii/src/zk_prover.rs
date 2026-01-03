@@ -152,6 +152,7 @@ static TEST_PROCESSING_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 static MAX_INFLIGHT_OBSERVED: AtomicUsize = AtomicUsize::new(0);
 
 /// Configure prover enable, scan period (seconds), and reports TTL (seconds) from Torii config.
+#[allow(clippy::too_many_arguments)]
 pub fn configure(
     enabled: bool,
     scan_period_secs: u64,

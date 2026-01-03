@@ -270,6 +270,7 @@ pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWrite
     generate_localnet_with_line(opts, build_line, writer)
 }
 
+#[allow(clippy::too_many_lines)]
 fn generate_localnet_with_line<T: Write>(
     opts: &LocalnetOptions,
     build_line: BuildLine,
@@ -1312,9 +1313,10 @@ mod tests {
         let commit_ms = commit_ms.expect("localnet defaults provide commit_time_ms");
         let total_ms = block_ms.saturating_add(commit_ms);
         let scaled = total_ms.saturating_mul(LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MULTIPLIER);
-        let expected_timeout = scaled
-            .min(LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS)
-            .max(LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS);
+        let expected_timeout = scaled.clamp(
+            LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS,
+            LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS,
+        );
         assert_eq!(
             parsed.sumeragi.commit_inflight_timeout,
             Duration::from_millis(expected_timeout),
@@ -1329,9 +1331,10 @@ mod tests {
             .expect("localnet defaults provide block_time_ms")
             .saturating_add(commit_ms.expect("localnet defaults provide commit_time_ms"));
         let scaled = total_ms.saturating_mul(LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MULTIPLIER);
-        let expected = scaled
-            .min(LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS)
-            .max(LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS);
+        let expected = scaled.clamp(
+            LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS,
+            LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS,
+        );
 
         assert_eq!(localnet_commit_inflight_timeout_ms(None, None), expected);
     }

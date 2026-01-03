@@ -524,7 +524,7 @@ mod signature_topology_tests {
         let expected_leader = topology.leader_index_prf(seed, 3, 2);
 
         assert_eq!(
-            rotated.as_ref().get(0),
+            rotated.as_ref().first(),
             topology.as_ref().get(expected_leader),
             "PRF leader should be at index 0"
         );
@@ -536,7 +536,7 @@ mod prf_seed_tests {
     use std::sync::Arc;
 
     use iroha_data_model::{
-        consensus::VrfEpochRecord,
+        consensus::{VrfEpochRecord, VrfParticipantRecord},
         parameter::{Parameter, system::SumeragiNposParameters},
     };
 
@@ -580,8 +580,10 @@ mod prf_seed_tests {
             LiveQueryStore::start_test(),
         );
         let mut world = state.world.block();
-        let mut params = SumeragiNposParameters::default();
-        params.epoch_length_blocks = 10;
+        let params = SumeragiNposParameters {
+            epoch_length_blocks: 10,
+            ..Default::default()
+        };
         world
             .parameters
             .set_parameter(Parameter::Custom(params.into_custom_parameter()));
@@ -636,6 +638,81 @@ mod prf_seed_tests {
             crate::sumeragi::npos_seed_for_height_from_world(view.world(), view.chain_id(), 1);
         assert_eq!(seed, [0xEE; 32]);
         assert_eq!(seed_from_world, [0xEE; 32]);
+    }
+
+    #[test]
+    fn npos_seed_for_height_derives_next_epoch_seed_after_restart_gap() {
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let mut world = state.world.block();
+        let params = SumeragiNposParameters {
+            epoch_length_blocks: 10,
+            epoch_seed: [0xEE; 32],
+            ..Default::default()
+        };
+        world
+            .parameters
+            .set_parameter(Parameter::Custom(params.into_custom_parameter()));
+        let record = VrfEpochRecord {
+            epoch: 0,
+            seed: [0x11; 32],
+            epoch_length: 10,
+            commit_deadline_offset: 3,
+            reveal_deadline_offset: 6,
+            roster_len: 3,
+            finalized: true,
+            updated_at_height: 10,
+            participants: vec![
+                VrfParticipantRecord {
+                    signer: 2,
+                    commitment: Some([0x22; 32]),
+                    reveal: Some([0x33; 32]),
+                    last_updated_height: 10,
+                },
+                VrfParticipantRecord {
+                    signer: 0,
+                    commitment: Some([0x44; 32]),
+                    reveal: Some([0x55; 32]),
+                    last_updated_height: 10,
+                },
+            ],
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+        world.vrf_epochs.insert(0, record.clone());
+        world.commit();
+
+        let expected = {
+            use iroha_crypto::blake2::{Blake2b512, Digest as _};
+
+            let mut h = Blake2b512::new();
+            iroha_crypto::blake2::digest::Update::update(&mut h, &record.seed);
+            let mut reveals = vec![(2_u32, [0x33; 32]), (0_u32, [0x55; 32])];
+            reveals.sort_by_key(|(signer, _)| *signer);
+            for (signer, reveal) in reveals {
+                iroha_crypto::blake2::digest::Update::update(&mut h, &signer.to_be_bytes());
+                iroha_crypto::blake2::digest::Update::update(&mut h, &reveal);
+            }
+            let digest = iroha_crypto::blake2::Digest::finalize(h);
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&digest[..32]);
+            out
+        };
+
+        let view = state.view();
+        let seed = npos_seed_for_height(&view, 11);
+        let seed_from_world =
+            crate::sumeragi::npos_seed_for_height_from_world(view.world(), view.chain_id(), 11);
+        assert_eq!(seed, expected);
+        assert_eq!(seed_from_world, expected);
     }
 }
 
@@ -696,10 +773,11 @@ mod roster_metadata_tests {
         let (commit_certificate, checkpoint) = sample_roster_artifacts();
         let block_hash = commit_certificate.block_hash;
         let roster = commit_certificate.validator_set.clone();
-        state
-            .commit_roster_journal
-            .write()
-            .upsert(commit_certificate.clone(), checkpoint.clone(), None);
+        state.commit_roster_journal.write().upsert(
+            commit_certificate.clone(),
+            checkpoint.clone(),
+            None,
+        );
 
         let metadata =
             super::message::roster_metadata_from_state(&state, kura.as_ref(), 1, block_hash)

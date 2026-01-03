@@ -163,7 +163,7 @@ fn execution_qc_with_signers(
                 .to_vec()
         })
         .collect();
-    let sig_refs: Vec<&[u8]> = signatures.iter().map(|sig| sig.as_slice()).collect();
+    let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
     let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
         .expect("aggregate execution QC signatures");
     ExecutionQcRecord {
@@ -307,10 +307,12 @@ fn seed_npos_epochs(
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     let mut block = state.world.block();
     let params = block.parameters.get_mut();
-    let mut npos_params = iroha_data_model::parameter::system::SumeragiNposParameters::default();
-    npos_params.epoch_length_blocks = epoch_len;
-    npos_params.epoch_seed = seed_epoch0;
-    npos_params.evidence_horizon_blocks = 0;
+    let npos_params = iroha_data_model::parameter::system::SumeragiNposParameters {
+        epoch_length_blocks: epoch_len,
+        epoch_seed: seed_epoch0,
+        evidence_horizon_blocks: 0,
+        ..iroha_data_model::parameter::system::SumeragiNposParameters::default()
+    };
     params.custom.insert(
         iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
         npos_params.into_custom_parameter(),
@@ -962,10 +964,12 @@ async fn apply_mode_flip_uses_world_epoch_params() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        let mut npos_params = SumeragiNposParameters::default();
-        npos_params.epoch_length_blocks = 11;
-        npos_params.vrf_commit_window_blocks = 4;
-        npos_params.vrf_reveal_window_blocks = 5;
+        let npos_params = SumeragiNposParameters {
+            epoch_length_blocks: 11,
+            vrf_commit_window_blocks: 4,
+            vrf_reveal_window_blocks: 5,
+            ..SumeragiNposParameters::default()
+        };
         params.custom.insert(
             SumeragiNposParameters::parameter_id(),
             npos_params.into_custom_parameter(),
@@ -1498,7 +1502,7 @@ async fn merge_committee_signatures_commit_merge_entry() {
     let actor = &mut harness.actor;
 
     actor.state.nexus.write().enabled = true;
-    let lane_keypairs = vec![
+    let lane_keypairs = [
         harness.key_pairs[0].clone(),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -1550,7 +1554,7 @@ async fn merge_committee_accepts_remote_signature() {
     let actor = &mut harness.actor;
 
     actor.state.nexus.write().enabled = true;
-    let lane_keypairs = vec![
+    let lane_keypairs = [
         harness.key_pairs[0].clone(),
         harness.key_pairs[1].clone(),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -2186,7 +2190,9 @@ async fn block_sync_update_accepts_pre_activation_signature_after_mode_flip() {
         .find(|candidate| {
             let topo = super::network_topology::Topology::new(roster.clone());
             let npos_leader = topo.leader_index_prf(seed, height, *candidate);
-            npos_leader != (*candidate as usize % roster_len)
+            let candidate_usize =
+                usize::try_from(*candidate).expect("candidate view fits usize");
+            npos_leader != (candidate_usize % roster_len)
         })
         .expect("find view with differing rotations");
     let signature_topology =
@@ -4066,12 +4072,11 @@ async fn commit_inflight_timeout_triggers_view_change_and_drops_pending() {
 
     assert!(harness.actor.subsystems.commit.inflight.is_none());
     assert!(
-        harness
+        !harness
             .actor
             .pending
             .pending_blocks
-            .get(&block_hash)
-            .is_none()
+            .contains_key(&block_hash)
     );
     assert_eq!(
         harness.actor.phase_tracker.current_view(height),
@@ -4326,11 +4331,11 @@ async fn commit_vote_targets_collectors_or_topology() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::CommitVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::CommitVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -4954,7 +4959,7 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
     let signature_topology =
         super::topology_for_view(&topology, 1, 0, actor.mode_tag(), actor.npos_prf_seed());
     let local_peer_id = actor.common_config.peer.id().clone();
-    let mut planned_collectors: Vec<_> = signature_topology
+    let planned_collectors: Vec<_> = signature_topology
         .as_ref()
         .iter()
         .filter(|peer| *peer != &local_peer_id)
@@ -4976,7 +4981,7 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
         .subsystems
         .propose
         .collectors_contacted
-        .extend(planned_collectors.drain(..));
+        .extend(planned_collectors.into_iter());
 
     let _ = actor.rebroadcast_block_votes(Phase::Precommit, block_hash, 1, 0);
 
@@ -4988,11 +4993,11 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::PrecommitVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::PrecommitVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -7258,9 +7263,9 @@ async fn rbc_ready_gossips_to_sampled_peers() {
         .handle_rbc_ready(ready)
         .expect("ready accepted");
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let ready_posts: Vec<_> = posts
-        .iter()
+    let ready_posts = harness
+        .background_rx
+        .try_iter()
         .filter(|post| {
             matches!(
                 post,
@@ -7270,7 +7275,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
                 }
             )
         })
-        .collect();
+        .count();
     let topology = super::network_topology::Topology::new(roster);
     let signature_topology =
         super::topology_for_view(&topology, key.1, key.2, harness.actor.mode_tag(), None);
@@ -7284,7 +7289,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
         .filter(|peer| *peer != local_peer_id)
         .count();
     assert_eq!(
-        ready_posts.len(),
+        ready_posts,
         expected_rebroadcast_targets + expected_gossip_targets.len()
     );
 
@@ -8126,9 +8131,9 @@ async fn init_collector_plan_broadcasts_membership_advert() {
     let _ = harness.background_rx.try_iter().count();
     harness.actor.init_collector_plan(&topology, height, view);
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let advert = posts
-        .into_iter()
+    let advert = harness
+        .background_rx
+        .try_iter()
         .find_map(|post| match post {
             BackgroundPost::Broadcast {
                 msg: BlockMessage::ConsensusParams(advert),
@@ -8197,16 +8202,16 @@ async fn consensus_params_expectation_uses_on_chain_values() {
     let advert = super::message::ConsensusParamsAdvert {
         collectors_k: 9,
         redundant_send_r: 9,
-        membership: Some(iroha_data_model::block::consensus::SumeragiMembershipStatus {
-            height: 5,
-            view: 1,
-            epoch: 0,
-            view_hash: None,
-        }),
+        membership: Some(
+            iroha_data_model::block::consensus::SumeragiMembershipStatus {
+                height: 5,
+                view: 1,
+                epoch: 0,
+                view_hash: None,
+            },
+        ),
     };
-    let (expected_k, expected_r) = harness
-        .actor
-        .expected_collector_params_for_advert(&advert);
+    let (expected_k, expected_r) = harness.actor.expected_collector_params_for_advert(&advert);
     assert_eq!(expected_k, 2);
     assert_eq!(expected_r, 3);
 
@@ -9649,7 +9654,9 @@ fn block_sync_update_uses_activation_height_mode_tag() {
         .find(|candidate| {
             let topo = super::network_topology::Topology::new(roster.clone());
             let npos_leader = topo.leader_index_prf(seed, height, *candidate);
-            npos_leader != (*candidate as usize % roster_len)
+            let candidate_usize =
+                usize::try_from(*candidate).expect("candidate view fits usize");
+            npos_leader != (candidate_usize % roster_len)
         })
         .expect("find view with differing rotations");
     let signature_topology =
@@ -9696,7 +9703,11 @@ fn block_sync_update_uses_activation_height_mode_tag() {
         .expect("checkpoint should be synthesized");
     assert_eq!(checkpoint.validator_set, roster);
     assert_eq!(checkpoint.signatures.len(), 1);
-    assert_eq!(checkpoint.signatures[0].index() as usize, signer_index);
+    assert_eq!(
+        usize::try_from(checkpoint.signatures[0].index())
+            .expect("signature index fits usize"),
+        signer_index
+    );
 }
 
 #[test]
@@ -10080,10 +10091,11 @@ fn block_sync_roster_selection_uses_persisted_journal() {
         VALIDATOR_SET_HASH_VERSION_V1,
         None,
     );
-    state
-        .commit_roster_journal
-        .write()
-        .upsert(commit_certificate.clone(), checkpoint.clone(), None);
+    state.commit_roster_journal.write().upsert(
+        commit_certificate.clone(),
+        checkpoint.clone(),
+        None,
+    );
     // Simulate a restart by clearing in-memory status caches; persisted journal entries
     // should still allow roster recovery for block sync.
     super::status::reset_block_sync_counters_for_tests();
@@ -10463,7 +10475,7 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
     let domain: DomainId = "validators".parse().expect("domain id");
-    let keypairs = vec![
+    let keypairs = [
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -10475,8 +10487,9 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
         let mut block = state.world.public_lane_validators.block();
         for (idx, (keypair, stake)) in keypairs.iter().zip(stakes).enumerate() {
             let account_id = AccountId::new(domain.clone(), keypair.public_key().clone());
+            let lane_id = LaneId::new(u32::try_from(idx).expect("lane index fits u32"));
             let record = iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
-                lane_id: LaneId::new(idx as u32),
+                lane_id,
                 validator: account_id.clone(),
                 stake_account: account_id.clone(),
                 total_stake: iroha_primitives::numeric::Numeric::new(stake, 0),
@@ -10497,7 +10510,7 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
     let mut strong = BTreeSet::new();
     strong.insert(roster[0].clone());
     strong.insert(roster[1].clone());
-    let snapshot = super::stake_snapshot::CommitStakeSnapshot::from_roster(&view, &roster)
+    let snapshot = super::stake_snapshot::CommitStakeSnapshot::from_roster(view.world(), &roster)
         .expect("stake snapshot");
     assert!(
         super::stake_quorum_reached_for_peers(&view, &roster, &strong)
@@ -10542,7 +10555,7 @@ fn validate_commit_certificate_roster_requires_stake_quorum() {
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
     let domain: DomainId = "validators".parse().expect("domain id");
-    let keypairs = vec![
+    let keypairs = [
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
         KeyPair::random_with_algorithm(Algorithm::BlsNormal),
@@ -10554,8 +10567,9 @@ fn validate_commit_certificate_roster_requires_stake_quorum() {
         let mut block = state.world.public_lane_validators.block();
         for (idx, (keypair, stake)) in keypairs.iter().zip(stakes).enumerate() {
             let account_id = AccountId::new(domain.clone(), keypair.public_key().clone());
+            let lane_id = LaneId::new(u32::try_from(idx).expect("lane index fits u32"));
             let record = iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
-                lane_id: LaneId::new(idx as u32),
+                lane_id,
                 validator: account_id.clone(),
                 stake_account: account_id.clone(),
                 total_stake: iroha_primitives::numeric::Numeric::new(stake, 0),
@@ -10595,11 +10609,9 @@ fn validate_commit_certificate_roster_requires_stake_quorum() {
         signatures,
     };
     let view = state.view();
-    let snapshot = super::stake_snapshot::CommitStakeSnapshot::from_roster(
-        &view,
-        &cert.validator_set,
-    )
-    .expect("stake snapshot");
+    let snapshot =
+        super::stake_snapshot::CommitStakeSnapshot::from_roster(view.world(), &cert.validator_set)
+            .expect("stake snapshot");
 
     let result = super::validate_commit_certificate_roster(
         &cert,
@@ -14430,6 +14442,7 @@ fn stale_qc_candidates_skip_unknown_and_present_qcs() {
     assert!(candidates.is_empty());
 }
 
+#[derive(Clone, Copy)]
 struct VoteFilter {
     phase: Phase,
     block_hash: HashOf<BlockHeader>,
@@ -15262,9 +15275,11 @@ async fn exec_vote_targets_deterministic_collectors() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. } if matches!(msg, BlockMessage::ExecVote(_)) => {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::ExecVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -17780,10 +17795,12 @@ async fn load_npos_epoch_params_prefers_world_values() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        let mut npos_params = SumeragiNposParameters::default();
-        npos_params.epoch_length_blocks = 9;
-        npos_params.vrf_commit_window_blocks = 5;
-        npos_params.vrf_reveal_window_blocks = 4;
+        let npos_params = SumeragiNposParameters {
+            epoch_length_blocks: 9,
+            vrf_commit_window_blocks: 5,
+            vrf_reveal_window_blocks: 4,
+            ..SumeragiNposParameters::default()
+        };
         params.custom.insert(
             SumeragiNposParameters::parameter_id(),
             npos_params.into_custom_parameter(),
@@ -17877,12 +17894,14 @@ async fn refresh_npos_seed_updates_collector_params_from_world() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        let mut npos_params = SumeragiNposParameters::default();
-        npos_params.k_aggregators = 3;
-        npos_params.redundant_send_r = 2;
-        npos_params.epoch_length_blocks = 12;
-        npos_params.vrf_commit_window_blocks = 4;
-        npos_params.vrf_reveal_window_blocks = 6;
+        let npos_params = SumeragiNposParameters {
+            k_aggregators: 3,
+            redundant_send_r: 2,
+            epoch_length_blocks: 12,
+            vrf_commit_window_blocks: 4,
+            vrf_reveal_window_blocks: 6,
+            ..SumeragiNposParameters::default()
+        };
         params.custom.insert(
             SumeragiNposParameters::parameter_id(),
             npos_params.into_custom_parameter(),
@@ -17970,11 +17989,12 @@ async fn on_block_commit_persists_new_epoch_seed_record() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        let mut npos_params =
-            iroha_data_model::parameter::system::SumeragiNposParameters::default();
-        npos_params.epoch_length_blocks = epoch_len;
-        npos_params.epoch_seed = seed_epoch0;
-        npos_params.evidence_horizon_blocks = 0;
+        let npos_params = iroha_data_model::parameter::system::SumeragiNposParameters {
+            epoch_length_blocks: epoch_len,
+            epoch_seed: seed_epoch0,
+            evidence_horizon_blocks: 0,
+            ..iroha_data_model::parameter::system::SumeragiNposParameters::default()
+        };
         params.custom.insert(
             iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
             npos_params.into_custom_parameter(),
@@ -18047,10 +18067,10 @@ async fn maybe_broadcast_new_view_emits_control_flow() {
     let new_views: Vec<_> = posts
         .iter()
         .filter_map(|post| match post {
-            BackgroundPost::PostControlFlow { frame, .. } => match frame {
-                super::message::ControlFlow::NewView(frame) => Some(frame),
-                _ => None,
-            },
+            BackgroundPost::PostControlFlow {
+                frame: super::message::ControlFlow::NewView(frame),
+                ..
+            } => Some(frame),
             _ => None,
         })
         .collect();
@@ -18119,14 +18139,13 @@ async fn maybe_broadcast_new_view_uses_activation_height_mode_tag() {
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     let new_view = posts
         .iter()
-        .filter_map(|post| match post {
-            BackgroundPost::PostControlFlow { frame, .. } => match frame {
-                super::message::ControlFlow::NewView(frame) => Some(frame),
-                _ => None,
-            },
+        .find_map(|post| match post {
+            BackgroundPost::PostControlFlow {
+                frame: super::message::ControlFlow::NewView(frame),
+                ..
+            } => Some(frame),
             _ => None,
         })
-        .next()
         .expect("expected NEW_VIEW post");
     let topology_peers = actor.effective_commit_topology();
 
@@ -18211,10 +18230,11 @@ async fn maybe_broadcast_new_view_includes_leader_with_sampling() {
     let targets: Vec<_> = posts
         .iter()
         .filter_map(|post| match post {
-            BackgroundPost::PostControlFlow { peer, frame, .. } => match frame {
-                super::message::ControlFlow::NewView(_) => Some(peer.clone()),
-                _ => None,
-            },
+            BackgroundPost::PostControlFlow {
+                peer,
+                frame: super::message::ControlFlow::NewView(_),
+                ..
+            } => Some(peer.clone()),
             _ => None,
         })
         .collect();
@@ -18261,10 +18281,10 @@ async fn maybe_broadcast_new_view_uses_genesis_stub_when_cache_empty() {
     let new_views: Vec<_> = posts
         .iter()
         .filter_map(|post| match post {
-            BackgroundPost::PostControlFlow { frame, .. } => match frame {
-                super::message::ControlFlow::NewView(frame) => Some(frame),
-                _ => None,
-            },
+            BackgroundPost::PostControlFlow {
+                frame: super::message::ControlFlow::NewView(frame),
+                ..
+            } => Some(frame),
             _ => None,
         })
         .collect();
@@ -18305,9 +18325,8 @@ async fn maybe_broadcast_new_view_skips_without_precommit_highest_qc() {
     let highest_qc_ref = sample_qc_ref(1, 0);
     actor.maybe_broadcast_new_view(highest_qc_ref, None, None);
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
-        posts.is_empty(),
+        harness.background_rx.try_iter().next().is_none(),
         "expected NEW_VIEW broadcast to skip without precommit HighestQC"
     );
 
@@ -18355,9 +18374,8 @@ async fn maybe_broadcast_new_view_skips_within_cooldown() {
 
     actor.maybe_broadcast_new_view(highest_qc_ref, Some(target_height), Some(target_view));
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
-        posts.is_empty(),
+        harness.background_rx.try_iter().next().is_none(),
         "expected NEW_VIEW broadcast to respect cooldown"
     );
 
@@ -18813,16 +18831,25 @@ async fn handle_new_view_gossips_new_view_frames() {
     );
     actor.handle_new_view(frame).expect("handle_new_view");
 
+    let qc_key = (Phase::Precommit, block_hash, 1, 0, 0);
+    assert!(
+        actor.qc_cache.contains_key(&qc_key),
+        "expected highest QC to be cached from NEW_VIEW"
+    );
+    assert!(
+        actor.qc_signer_tally.contains_key(&qc_key),
+        "expected NEW_VIEW QC signer tally to be cached"
+    );
     assert_eq!(actor.phase_tracker.current_view(height), Some(view));
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     let new_views: Vec<_> = posts
         .iter()
         .filter_map(|post| match post {
-            BackgroundPost::PostControlFlow { frame, .. } => match frame {
-                super::message::ControlFlow::NewView(frame) => Some(frame),
-                _ => None,
-            },
+            BackgroundPost::PostControlFlow {
+                frame: super::message::ControlFlow::NewView(frame),
+                ..
+            } => Some(frame),
             _ => None,
         })
         .collect();
@@ -18962,7 +18989,11 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
         .unwrap_or(now);
     actor.phase_tracker.start_new_round(tracked_height, start);
 
-    let pending_block = sample_block(tracked_height, view as u32, Some(block1.hash()));
+    let pending_block = sample_block(
+        tracked_height,
+        u32::try_from(view).expect("view fits u32"),
+        Some(block1.hash()),
+    );
     let payload_bytes = super::proposals::block_payload_bytes(&pending_block);
     let payload_hash = Hash::new(&payload_bytes);
     actor.pending.pending_blocks.insert(
@@ -19076,7 +19107,11 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
         },
     );
 
-    let pending_block = sample_block(tracked_height, view as u32, Some(block1.hash()));
+    let pending_block = sample_block(
+        tracked_height,
+        u32::try_from(view).expect("view fits u32"),
+        Some(block1.hash()),
+    );
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&pending_block));
     let mut pending = PendingBlock::new(pending_block, payload_hash, tracked_height, view);
     pending.mark_aborted();
@@ -19157,7 +19192,7 @@ async fn pacemaker_allows_proposal_with_stale_precommit_votes() {
     let epoch = actor.current_epoch();
     let vote_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x46; Hash::LENGTH]));
-    let stale_view = if view == 0 { 1 } else { 0 };
+    let stale_view = u64::from(view == 0);
     actor.vote_log.insert(
         (
             Phase::Precommit,
@@ -19939,7 +19974,7 @@ async fn validation_rejects_block_with_wrong_parent_hash() {
         "mismatched parent hash should be rejected"
     );
     assert!(
-        actor.pending.pending_blocks.get(&block_hash).is_none(),
+        !actor.pending.pending_blocks.contains_key(&block_hash),
         "invalid blocks should be removed from pending"
     );
 
@@ -29520,11 +29555,11 @@ async fn availability_vote_gossips_to_sampled_peers() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::AvailabilityVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::AvailabilityVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -29584,11 +29619,11 @@ async fn availability_vote_targets_collectors_without_broadcast() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::AvailabilityVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::AvailabilityVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -29664,11 +29699,11 @@ async fn availability_vote_reinitializes_collectors_for_new_view() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::AvailabilityVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::AvailabilityVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -29716,11 +29751,11 @@ async fn availability_vote_falls_back_to_topology_when_collectors_local_only() {
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::AvailabilityVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::AvailabilityVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();
@@ -29769,11 +29804,11 @@ async fn rebroadcast_availability_votes_fall_back_to_topology_when_collectors_lo
         .background_rx
         .try_iter()
         .filter_map(|post| match post {
-            BackgroundPost::Post { peer, msg, .. }
-                if matches!(msg, BlockMessage::AvailabilityVote(_)) =>
-            {
-                Some(peer)
-            }
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::AvailabilityVote(_),
+                ..
+            } => Some(peer),
             _ => None,
         })
         .collect();

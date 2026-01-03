@@ -3322,6 +3322,7 @@ pub mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn time_sensitive_instruction_detects_governance_and_non_sensitive() {
         let (authority, _keypair) = gen_account_in("wonderland");
         let (counterparty, _keypair) = gen_account_in("wonderland");

@@ -11116,10 +11116,9 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("collectors_k=0 must be rejected");
             match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert_eq!(
-                    msg,
-                    "sumeragi.collectors_k must be greater than zero"
-                ),
+                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+                    assert_eq!(msg, "sumeragi.collectors_k must be greater than zero")
+                }
                 other => panic!("unexpected error type: {other:?}"),
             }
         }

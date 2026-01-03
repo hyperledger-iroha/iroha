@@ -634,7 +634,7 @@ pub mod kura {
     /// Number of blocks cached in memory to accelerate lookups.
     pub const BLOCKS_IN_MEMORY: NonZeroUsize = nonzero!(1024_usize);
     /// Number of recent roster records retained for block-sync validation.
-    pub const BLOCK_SYNC_ROSTER_RETENTION: NonZeroUsize = nonzero!(512_usize);
+    pub const BLOCK_SYNC_ROSTER_RETENTION: NonZeroUsize = nonzero!(7_200_usize);
     /// Number of recent roster sidecars retained alongside the block store.
     pub const ROSTER_SIDECAR_RETENTION: NonZeroUsize = nonzero!(512_usize);
     /// Default number of merge-ledger entries cached in memory.

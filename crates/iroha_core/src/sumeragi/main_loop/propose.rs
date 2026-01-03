@@ -744,7 +744,7 @@ impl Actor {
                 }
                 self.schedule_background(BackgroundRequest::Post {
                     peer: peer.clone(),
-                    msg: BlockMessage::ProposalHint(proposal_hint.clone()),
+                    msg: BlockMessage::ProposalHint(proposal_hint),
                 });
             }
             for peer in topology_peers {

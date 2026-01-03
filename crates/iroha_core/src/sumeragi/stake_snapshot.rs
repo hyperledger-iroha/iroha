@@ -8,7 +8,7 @@ use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 
-use crate::state::{StateView, WorldReadOnly};
+use crate::state::WorldReadOnly;
 
 /// Stake snapshot entry for a single validator.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -29,13 +29,13 @@ pub struct CommitStakeSnapshot {
 }
 
 impl CommitStakeSnapshot {
-    /// Build a stake snapshot for the provided roster using the supplied state view.
+    /// Build a stake snapshot for the provided roster using the supplied world view.
     #[must_use]
-    pub fn from_roster(view: &StateView<'_>, roster: &[PeerId]) -> Option<Self> {
+    pub fn from_roster(world: &impl WorldReadOnly, roster: &[PeerId]) -> Option<Self> {
         if roster.is_empty() {
             return None;
         }
-        let stake_map = stake_map_from_state(view);
+        let stake_map = stake_map_from_world(world);
         let mut entries = Vec::with_capacity(roster.len());
         for peer in roster {
             let stake = stake_map.get(peer)?.clone();
@@ -59,9 +59,9 @@ impl CommitStakeSnapshot {
 
 /// Build a stake map keyed by peer id using the largest stake seen per peer.
 #[must_use]
-pub(super) fn stake_map_from_state(view: &StateView<'_>) -> BTreeMap<PeerId, Numeric> {
+pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerId, Numeric> {
     let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
-    for ((_lane_id, validator_id), record) in view.world.public_lane_validators().iter() {
+    for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
         let Some(pk) = validator_id.try_signatory() else {
             continue;
         };
@@ -159,14 +159,14 @@ mod tests {
         }
 
         let view = state.view();
-        let stake_map = stake_map_from_state(&view);
+        let stake_map = stake_map_from_world(view.world());
         assert_eq!(stake_map.get(&peer_a), Some(&Numeric::new(25, 0)));
         assert_eq!(stake_map.get(&peer_b), Some(&Numeric::new(15, 0)));
 
         let roster = vec![peer_b.clone(), peer_a.clone()];
-        let snapshot = CommitStakeSnapshot::from_roster(&view, &roster).expect("snapshot");
+        let snapshot = CommitStakeSnapshot::from_roster(view.world(), &roster).expect("snapshot");
         assert!(snapshot.matches_roster(&roster));
-        assert!(!snapshot.matches_roster(&vec![peer_a.clone(), peer_b.clone()]));
+        assert!(!snapshot.matches_roster(&[peer_a.clone(), peer_b.clone()]));
         assert_eq!(snapshot.entries[0].peer_id, peer_b);
         assert_eq!(snapshot.entries[1].peer_id, peer_a);
         assert_eq!(snapshot.entries[1].stake, Numeric::new(25, 0));
@@ -205,7 +205,7 @@ mod tests {
 
         let view = state.view();
         let missing_peer = PeerId::new(KeyPair::random().public_key().clone());
-        assert!(CommitStakeSnapshot::from_roster(&view, &[missing_peer]).is_none());
-        assert!(CommitStakeSnapshot::from_roster(&view, &[peer]).is_some());
+        assert!(CommitStakeSnapshot::from_roster(view.world(), &[missing_peer]).is_none());
+        assert!(CommitStakeSnapshot::from_roster(view.world(), &[peer]).is_some());
     }
 }

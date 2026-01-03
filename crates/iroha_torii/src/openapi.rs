@@ -9500,6 +9500,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn helper_builders_emit_expected_shapes() {
         let body = binary_request_body("binary payload");
         let body_obj = body.as_object().expect("binary request body object");

@@ -53,7 +53,7 @@ fn proof_records_pruned_to_cap_per_backend() {
         .world()
         .proofs()
         .iter()
-        .filter(|(id, _)| id.backend.to_string() == backend)
+        .filter(|(id, _)| id.backend.as_str() == backend.as_str())
         .count();
     assert!(count_bn254 <= 3, "retained {count_bn254} > cap");
 }
@@ -115,7 +115,7 @@ fn manual_prune_instruction_applies_new_cap() {
         .world()
         .proofs()
         .iter()
-        .filter(|(id, _)| id.backend.to_string() == backend)
+        .filter(|(id, _)| id.backend.as_str() == backend.as_str())
         .count();
     assert!(
         remaining <= 1,
