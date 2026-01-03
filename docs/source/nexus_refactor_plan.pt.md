@@ -14,7 +14,7 @@ translation_last_reviewed: 2026-01-01
 Este documento captura o roadmap imediato para a refatoracao do Sora Nexus Ledger ("Iroha 3"). Ele
 reflete o layout atual do repositorio e as regressoes observadas na contabilidade de genesis/WSV,
 consenso Sumeragi, triggers de smart-contract, consultas de snapshot, bindings de host pointer-ABI
- e codecs Norito. O objetivo e convergir para uma arquitetura coerente e testavel sem tentar
+e codecs Norito. O objetivo e convergir para uma arquitetura coerente e testavel sem tentar
 entregar todas as correcoes em um patch monolitico.
 
 ## 0. Principios guia
@@ -130,11 +130,11 @@ entregar todas as correcoes em um patch monolitico.
 
 ## 3. Preocupacoes transversais
 - **Estrategia de testes**: Cada fase promove testes unitarios -> testes de crate -> testes de
-  integracao. Testes com falha capturam regress oes atuais; novos testes evitam retorno.
+  integracao. Testes com falha capturam regressoes atuais; novos testes evitam retorno.
 - **Documentacao**: Apos cada fase, atualizar `status.md` e mover itens abertos para `roadmap.md`
-  enquanto remove tarefas conclu idas.
+  enquanto remove tarefas concluidas.
 - **Benchmarks de performance**: Manter benches existentes em `iroha_core`, `ivm`, `norito`; adicionar
-  medidas base pos-refatoracao para validar que nao ha regress oes.
+  medidas base pos-refatoracao para validar que nao ha regressoes.
 - **Feature flags**: Manter toggles de nivel crate apenas para backends que exigem toolchains
   externos (`cuda`, `zk-verify-batch`). Caminhos SIMD de CPU sempre sao construidos e selecionados
   em runtime; fornecer fallbacks escalares deterministas para hardware sem suporte.

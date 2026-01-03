@@ -22,7 +22,7 @@ use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_network::{NetworkBuilder, genesis_factory, init_instruction_registry};
 use norito::json;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use toml::Table;
 
 const COMMIT_CERT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -142,7 +142,17 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
             .start_checked(config_layers.iter().cloned(), None)
             .await
             .wrap_err("restart peer for block sync")?;
-        restart_peer.once_block(expected_height).await;
+        timeout(
+            network.sync_timeout(),
+            restart_peer.once_block(expected_height),
+        )
+        .await
+        .map_err(|_| {
+            eyre!(
+                "restart peer failed to reach height {expected_height} within {:?}",
+                network.sync_timeout()
+            )
+        })?;
 
         let http = reqwest::Client::new();
         let restart_torii = restart_peer.torii_url();

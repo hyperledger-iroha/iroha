@@ -3286,6 +3286,7 @@ impl Signatory {
 struct PeerRun {
     tasks: JoinSet<()>,
     shutdown: oneshot::Sender<()>,
+    fatal_notify: Arc<Notify>,
 }
 
 /// Lifecycle events of a peer
@@ -3874,6 +3875,7 @@ impl NetworkPeer {
         *run_guard = Some(PeerRun {
             tasks,
             shutdown: shutdown_tx,
+            fatal_notify: fatal_notify.clone(),
         });
         Ok(())
     }
@@ -3889,6 +3891,8 @@ impl NetworkPeer {
         };
         // Immediately drop the running flag so watchdog loops and status polls exit promptly.
         self.is_running.store(false, Ordering::Relaxed);
+        // Wake any background watchers so they stop promptly during shutdown.
+        run.fatal_notify.notify_waiters();
         let _ = run.shutdown.send(());
         let join_all = async {
             while let Some(res) = run.tasks.join_next().await {
@@ -5732,19 +5736,26 @@ mod tests {
 
         let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
         let tasks = tokio::task::JoinSet::new();
+        let fatal_notify = Arc::new(Notify::new());
         {
             let mut guard = peer.run.lock().await;
             *guard = Some(PeerRun {
                 tasks,
                 shutdown: shutdown_tx,
+                fatal_notify: fatal_notify.clone(),
             });
         }
         peer.is_running.store(true, Ordering::Relaxed);
 
+        let notify_wait = fatal_notify.notified();
+        tokio::pin!(notify_wait);
         peer.shutdown().await;
 
         assert!(!peer.is_running());
         assert!(peer.run.lock().await.is_none());
+        tokio::time::timeout(Duration::from_secs(1), &mut notify_wait)
+            .await
+            .expect("shutdown should notify fatal listeners");
     }
 
     impl Drop for EnvVarGuard {

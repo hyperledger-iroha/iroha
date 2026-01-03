@@ -1,6 +1,6 @@
 //! Observer/sync-only node catches up behind a small validator swarm.
 
-use eyre::Result;
+use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_config::base::toml::WriteExt as _;
@@ -97,8 +97,20 @@ fn observer_node_catches_up() -> Result<()> {
         return Ok(());
     }
 
+    let sync_timeout = network.sync_timeout();
+    let wait_for_observer = |height| -> Result<()> {
+        rt.block_on(async {
+            tokio::time::timeout(sync_timeout, observer.once_block(height))
+                .await
+                .map_err(|_| {
+                    eyre!("observer did not reach height {height} within {sync_timeout:?}")
+                })
+        })?;
+        Ok(())
+    };
+
     // Observer should have at least the genesis block
-    rt.block_on(async { observer.once_block(1).await });
+    wait_for_observer(1)?;
 
     // Produce non-genesis blocks and verify height parity across all peers
     // Baseline timestamp (ms) to filter POST /v1/accounts/:id/transactions/query later.
@@ -127,7 +139,7 @@ fn observer_node_catches_up() -> Result<()> {
     println!("observer_sync: v1 committed");
     // Wait until validators reach total >= 2 and observer catches up
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 2).await })?;
-    rt.block_on(async { observer.once_block(2).await });
+    wait_for_observer(2)?;
 
     // 2nd block: set note = "v2"
     let _t2_lo = now_ms();
@@ -136,7 +148,7 @@ fn observer_node_catches_up() -> Result<()> {
     println!("observer_sync: v2 committed");
     // Wait until validators reach total >= 3 and observer catches up
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 3).await })?;
-    rt.block_on(async { observer.once_block(3).await });
+    wait_for_observer(3)?;
 
     // 3rd block: change some other metadata to ensure another non-genesis block
     let alice2 = ALICE_ID.clone();
@@ -148,7 +160,7 @@ fn observer_node_catches_up() -> Result<()> {
 
     // Wait until validators reach total >= 4 and observer catches up
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 4).await })?;
-    rt.block_on(async { observer.once_block(4).await });
+    wait_for_observer(4)?;
 
     // 4th block: set note = "v4"
     let t4_lo = now_ms();
@@ -160,7 +172,7 @@ fn observer_node_catches_up() -> Result<()> {
     ))?;
     println!("observer_sync: v4 committed");
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 5).await })?;
-    rt.block_on(async { observer.once_block(5).await });
+    wait_for_observer(5)?;
 
     // 5th block: set znote = "v5"
     let t5_lo = now_ms();
@@ -172,7 +184,7 @@ fn observer_node_catches_up() -> Result<()> {
     ))?;
     println!("observer_sync: v5 committed");
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 6).await })?;
-    rt.block_on(async { observer.once_block(6).await });
+    wait_for_observer(6)?;
     let t_hi = now_ms();
 
     // Verify exact height parity across validators and observer
@@ -184,7 +196,7 @@ fn observer_node_catches_up() -> Result<()> {
         validator_totals.push(s.blocks);
     }
     let target_height = *validator_totals.iter().max().unwrap_or(&0);
-    rt.block_on(async { observer.once_block(target_height).await });
+    wait_for_observer(target_height)?;
 
     let mut all_totals = Vec::new();
     for p in network.peers() {

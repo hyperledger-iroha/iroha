@@ -6696,6 +6696,50 @@ async fn duplicate_rbc_ready_is_ignored() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_ready_skips_invalid_session() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let mut session = RbcSession::test_new(
+        0,
+        Some(Hash::prehashed([0x33; 32])),
+        Some(Hash::prehashed([0x44; 32])),
+        0,
+    );
+
+    let ready = harness.actor.build_rbc_ready(key, &session).expect("ready");
+    session.record_ready(ready.sender, vec![0xAA]);
+    session.record_ready(ready.sender, vec![0xBB]);
+    assert!(session.is_invalid());
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+
+    harness
+        .actor
+        .maybe_emit_rbc_ready(key)
+        .expect("maybe emit ready");
+
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(stored.is_invalid());
+    assert!(!stored.sent_ready);
+    assert_eq!(stored.ready_signatures.len(), 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_ready_uses_activation_height_mode_tag() {
     use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
@@ -26978,6 +27022,496 @@ async fn clean_rbc_sessions_for_block_clears_rebroadcast_and_persisted_state() {
             .pending
             .availability_rebroadcast_last_sent
             .contains_key(&other_hash)
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn clear_payload_mismatch_state_drops_rbc_and_replay_caches() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 7u64;
+    let view = 2u32;
+    let block = sample_block(height, view, None);
+    let block_hash = block.hash();
+    let key: SessionKey = (block_hash, height, u64::from(view));
+
+    let other_height = 8u64;
+    let other_view = 3u32;
+    let other_block = sample_block(other_height, other_view, None);
+    let other_hash = other_block.hash();
+    let other_key: SessionKey = (other_hash, other_height, u64::from(other_view));
+
+    let session = RbcSession::test_new(2, Some(Hash::prehashed([0x24; 32])), None, 0);
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(other_key, session.clone());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .insert(key, PendingRbcMessages::new(Instant::now()));
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .insert(other_key, PendingRbcMessages::new(Instant::now()));
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .session_rosters
+        .insert(key, Vec::new());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .session_rosters
+        .insert(other_key, Vec::new());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .insert(key, Instant::now());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .insert(other_key, Instant::now());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .insert(key, Instant::now());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .insert(other_key, Instant::now());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .persisted_full_sessions
+        .insert(key);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .persisted_full_sessions
+        .insert(other_key);
+
+    actor.subsystems.da_rbc.rbc.status_handle.update(
+        rbc_status::Summary {
+            block_hash,
+            height: key.1,
+            view: key.2,
+            total_chunks: session.total_chunks(),
+            received_chunks: session.received_chunks(),
+            ready_count: 0,
+            delivered: session.delivered,
+            payload_hash: session.payload_hash(),
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: session.lane_backlog_entries(),
+            dataspace_backlog: session.dataspace_backlog_entries(),
+        },
+        SystemTime::now(),
+    );
+    actor.subsystems.da_rbc.rbc.status_handle.update(
+        rbc_status::Summary {
+            block_hash: other_hash,
+            height: other_key.1,
+            view: other_key.2,
+            total_chunks: session.total_chunks(),
+            received_chunks: session.received_chunks(),
+            ready_count: 0,
+            delivered: session.delivered,
+            payload_hash: session.payload_hash(),
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: session.lane_backlog_entries(),
+            dataspace_backlog: session.dataspace_backlog_entries(),
+        },
+        SystemTime::now(),
+    );
+
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let pending = PendingBlock::new(block, payload_hash, height, u64::from(view));
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor
+        .pending
+        .pending_replay_last_sent
+        .insert(block_hash, Instant::now());
+    actor
+        .pending
+        .pending_replay_last_sent
+        .insert(other_hash, Instant::now());
+    actor
+        .pending
+        .availability_rebroadcast_last_sent
+        .insert(block_hash, Instant::now());
+    actor
+        .pending
+        .availability_rebroadcast_last_sent
+        .insert(other_hash, Instant::now());
+
+    actor.clear_payload_mismatch_state(key, block_hash, height, u64::from(view));
+
+    assert!(!actor.pending.pending_blocks.contains_key(&block_hash));
+    assert!(
+        !actor
+            .pending
+            .pending_replay_last_sent
+            .contains_key(&block_hash)
+    );
+    assert!(
+        actor
+            .pending
+            .pending_replay_last_sent
+            .contains_key(&other_hash)
+    );
+    assert!(
+        !actor
+            .pending
+            .availability_rebroadcast_last_sent
+            .contains_key(&block_hash)
+    );
+    assert!(
+        actor
+            .pending
+            .availability_rebroadcast_last_sent
+            .contains_key(&other_hash)
+    );
+    assert!(!actor.subsystems.da_rbc.rbc.sessions.contains_key(&key));
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&other_key)
+    );
+    assert!(!actor.subsystems.da_rbc.rbc.pending.contains_key(&key));
+    assert!(actor.subsystems.da_rbc.rbc.pending.contains_key(&other_key));
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .contains_key(&key)
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .contains_key(&other_key)
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .get(&key)
+            .is_none()
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .get(&other_key)
+            .is_some()
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .contains_key(&key)
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .contains_key(&other_key)
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .contains_key(&key)
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .contains_key(&other_key)
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&key)
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&other_key)
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_store_evictions_clears_session_caches() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x58; 32]));
+    let other_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x59; 32]));
+    let key: SessionKey = (block_hash, 7, 2);
+    let other_key: SessionKey = (other_hash, 8, 3);
+    let session = RbcSession::test_new(2, Some(Hash::prehashed([0x24; 32])), None, 0);
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(other_key, session.clone());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .insert(key, PendingRbcMessages::new(Instant::now()));
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .pending
+        .insert(other_key, PendingRbcMessages::new(Instant::now()));
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .session_rosters
+        .insert(key, Vec::new());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .session_rosters
+        .insert(other_key, Vec::new());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .insert(key, Instant::now());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .insert(other_key, Instant::now());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .insert(key, Instant::now());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .insert(other_key, Instant::now());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .persisted_full_sessions
+        .insert(key);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .persisted_full_sessions
+        .insert(other_key);
+
+    actor.subsystems.da_rbc.rbc.status_handle.update(
+        rbc_status::Summary {
+            block_hash,
+            height: key.1,
+            view: key.2,
+            total_chunks: session.total_chunks(),
+            received_chunks: session.received_chunks(),
+            ready_count: 0,
+            delivered: session.delivered,
+            payload_hash: session.payload_hash(),
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: session.lane_backlog_entries(),
+            dataspace_backlog: session.dataspace_backlog_entries(),
+        },
+        SystemTime::now(),
+    );
+    actor.subsystems.da_rbc.rbc.status_handle.update(
+        rbc_status::Summary {
+            block_hash: other_hash,
+            height: other_key.1,
+            view: other_key.2,
+            total_chunks: session.total_chunks(),
+            received_chunks: session.received_chunks(),
+            ready_count: 0,
+            delivered: session.delivered,
+            payload_hash: session.payload_hash(),
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: session.lane_backlog_entries(),
+            dataspace_backlog: session.dataspace_backlog_entries(),
+        },
+        SystemTime::now(),
+    );
+
+    actor.handle_rbc_store_evictions(&[key]);
+
+    assert!(!actor.subsystems.da_rbc.rbc.sessions.contains_key(&key));
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&other_key)
+    );
+    assert!(!actor.subsystems.da_rbc.rbc.pending.contains_key(&key));
+    assert!(actor.subsystems.da_rbc.rbc.pending.contains_key(&other_key));
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .contains_key(&key)
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .contains_key(&other_key)
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .get(&key)
+            .is_none()
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .get(&other_key)
+            .is_some()
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .contains_key(&key)
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .contains_key(&other_key)
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .contains_key(&key)
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .contains_key(&other_key)
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&key)
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&other_key)
     );
 
     harness.shutdown.send();

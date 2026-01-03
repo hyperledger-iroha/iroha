@@ -2,6 +2,8 @@
 
 use iroha_logger::prelude::*;
 
+use crate::sumeragi::rbc_store::SessionKey;
+
 use super::*;
 
 pub(super) fn invalid_proposal_evidence(
@@ -798,23 +800,7 @@ impl Actor {
                         "payload hash mismatch: expected {expected_hash:?}, observed {payload_hash:?}",
                     ),
                 )?;
-                self.pending.pending_blocks.remove(&block_hash);
-                self.subsystems.da_rbc.rbc.sessions.remove(&session_key);
-                self.subsystems.da_rbc.rbc.status_handle.remove(&session_key);
-                if self.ensure_rbc_chunk_store() {
-                    if let Some(store) = self.subsystems.da_rbc.rbc.chunk_store.as_ref() {
-                        if let Err(err) = store.remove(&session_key) {
-                            warn!(
-                            ?err,
-                                    block_hash = ?block_hash,
-                                    height,
-                                    view,
-                                    "failed to purge persisted RBC session after payload mismatch"
-                                );
-                        }
-                    }
-                }
-                self.publish_rbc_backlog_snapshot();
+                self.clear_payload_mismatch_state(session_key, block_hash, height, view);
                 self.finalize_collector_plan(false);
                 return Ok(());
             }
@@ -891,6 +877,21 @@ impl Actor {
             );
         }
         Ok(())
+    }
+
+    pub(super) fn clear_payload_mismatch_state(
+        &mut self,
+        session_key: SessionKey,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) {
+        self.pending.pending_blocks.remove(&block_hash);
+        self.pending.pending_replay_last_sent.remove(&block_hash);
+        self.pending
+            .availability_rebroadcast_last_sent
+            .remove(&block_hash);
+        self.purge_rbc_state(session_key, block_hash, height, view);
     }
 }
 
