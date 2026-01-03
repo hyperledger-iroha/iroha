@@ -116,6 +116,8 @@ IrohaSwift/(A\ Document\ Being\ Saved\ By\ swift-test*/
 
 .*.log
 **/*.log
+# Keep CBDC rollout fixture logs tracked for validation fixtures.
+!fixtures/nexus/cbdc_rollouts/**/tests/*.log
 .*.out
 .cargo/*
 !.cargo/config.toml

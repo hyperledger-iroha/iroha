@@ -144,13 +144,8 @@ Capability manifests (`AssetPermissionManifest` in `crates/iroha_data_model/src/
 
 ```json
 {
-  "version": {
-    "state": null,
-    "version": "V1"
-  },
-  "uaid": [
-    "hash:5F77B4FCB89CB03A0AB8F46D98A72D585E3B115A55B6BDB2E893D3F49D9342F1#FFCB"
-  ],
+  "version": 1,
+  "uaid": "uaid:5f77b4fcb89cb03a0ab8f46d98a72d585e3b115a55b6bdb2e893d3f49d9342f1",
   "dataspace": 11,
   "issued_ms": 1762723200000,
   "activation_epoch": 2050,
@@ -159,24 +154,15 @@ Capability manifests (`AssetPermissionManifest` in `crates/iroha_data_model/src/
     {
       "scope": {
         "dataspace": 11,
-        "program": [
-          "cbdc.transfer"
-        ],
+        "program": "cbdc.transfer",
         "method": "transfer",
         "asset": "CBDC#centralbank",
-        "role": {
-          "details": null,
-          "role": "Initiator"
-        }
+        "role": "Initiator"
       },
       "effect": {
-        "decision": "Allow",
-        "details": {
+        "Allow": {
           "max_amount": "1000000000",
-          "window": {
-            "details": null,
-            "window": "PerDay"
-          }
+          "window": "PerDay"
         }
       },
       "notes": "Wholesale transfer allowance (per UAID)"
@@ -184,20 +170,14 @@ Capability manifests (`AssetPermissionManifest` in `crates/iroha_data_model/src/
     {
       "scope": {
         "dataspace": 11,
-        "program": [
-          "cbdc.kit"
-        ],
-        "method": "withdraw",
-        "asset": null,
-        "role": null
+        "program": "cbdc.kit",
+        "method": "withdraw"
       },
       "effect": {
-        "decision": "Deny",
-        "details": {
+        "Deny": {
           "reason": "Withdrawals disabled for this UAID"
         }
-      },
-      "notes": null
+      }
     }
   ]
 }

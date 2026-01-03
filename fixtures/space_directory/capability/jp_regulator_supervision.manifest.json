@@ -1,80 +1,52 @@
 {
-  "activation_epoch": 5128,
+  "version": 1,
+  "uaid": "uaid:1f5d100a379a842224a2021aa7e37e99781602a7bc492bb7b1b1e1c2354779cd",
   "dataspace": 32,
+  "issued_ms": 1765238400000,
+  "activation_epoch": 5128,
+  "expiry_epoch": 6100,
   "entries": [
     {
+      "scope": {
+        "dataspace": 32,
+        "program": "compliance.audit",
+        "method": "stream_reports"
+      },
       "effect": {
-        "decision": "Allow",
-        "details": {
-          "max_amount": null,
-          "window": {
-            "details": null,
-            "window": "PerDay"
-          }
+        "Allow": {
+          "window": "PerDay"
         }
       },
-      "notes": "JFSA real-time feed for reporting obligations.",
-      "scope": {
-        "asset": null,
-        "dataspace": 32,
-        "method": "stream_reports",
-        "program": [
-          "compliance.audit"
-        ],
-        "role": null
-      }
+      "notes": "JFSA real-time feed for reporting obligations."
     },
     {
-      "effect": {
-        "decision": "Allow",
-        "details": {
-          "max_amount": "100000000",
-          "window": {
-            "details": null,
-            "window": "PerDay"
-          }
-        }
-      },
-      "notes": "Authorises capped stop orders per JFSA guidelines.",
       "scope": {
-        "asset": "CBDC#yen",
         "dataspace": 32,
+        "program": "cbdc.supervision",
         "method": "issue_stop_order",
-        "program": [
-          "cbdc.supervision"
-        ],
-        "role": {
-          "details": null,
-          "role": "Initiator"
+        "asset": "CBDC#yen",
+        "role": "Initiator"
+      },
+      "effect": {
+        "Allow": {
+          "max_amount": "100000000",
+          "window": "PerDay"
         }
-      }
+      },
+      "notes": "Authorises capped stop orders per JFSA guidelines."
     },
     {
+      "scope": {
+        "dataspace": 32,
+        "program": "cbdc.supervision",
+        "method": "force_liquidation"
+      },
       "effect": {
-        "decision": "Deny",
-        "details": {
+        "Deny": {
           "reason": "Requires dual controls inside the CBDC lane."
         }
       },
-      "notes": "Deny-wins entry guards destructive operations.",
-      "scope": {
-        "asset": null,
-        "dataspace": 32,
-        "method": "force_liquidation",
-        "program": [
-          "cbdc.supervision"
-        ],
-        "role": null
-      }
+      "notes": "Deny-wins entry guards destructive operations."
     }
-  ],
-  "expiry_epoch": 6100,
-  "issued_ms": 1765238400000,
-  "uaid": [
-    "hash:1F5D100A379A842224A2021AA7E37E99781602A7BC492BB7B1B1E1C2354779CD#3A50"
-  ],
-  "version": {
-    "state": null,
-    "version": "V1"
-  }
+  ]
 }

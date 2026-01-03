@@ -195,7 +195,7 @@ Sample response:
       },
       "accounts": ["wholesale@cbdc"],
       "manifest": {
-        "version": "V1",
+        "version": 1,
         "uaid": "uaid:0f4d…ab11",
         "dataspace": 11,
         "issued_ms": 1762723200000,
@@ -256,7 +256,7 @@ Example payload:
   "authority": "ops@cbdc",
   "private_key": "ed25519:CiC7…",
   "manifest": {
-    "version": "V1",
+    "version": 1,
     "uaid": "uaid:0f4d…ab11",
     "dataspace": 11,
     "issued_ms": 1762723200000,
