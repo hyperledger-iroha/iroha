@@ -1289,7 +1289,9 @@ impl RawGenesisTx {
 }
 
 /// Peer PoP entry used to merge PoPs into topology entries.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode,
+)]
 pub struct GenesisPeerPop {
     /// Peer public key.
     pub public_key: PublicKey,
@@ -1309,7 +1311,10 @@ pub struct GenesisTopologyEntry {
 
 impl From<PeerId> for GenesisTopologyEntry {
     fn from(peer: PeerId) -> Self {
-        Self { peer, pop_hex: None }
+        Self {
+            peer,
+            pop_hex: None,
+        }
     }
 }
 
@@ -1363,20 +1368,19 @@ impl norito::json::JsonDeserialize for GenesisTopologyEntry {
                         .ok_or_else(|| norito::json::Error::missing_field("peer"))?;
                     let peer: PeerId =
                         norito::json::value::from_value(peer_value).map_err(|err| {
-                            norito::json::Error::Message(format!(
-                                "failed to decode `peer`: {err}"
-                            ))
+                            norito::json::Error::Message(format!("failed to decode `peer`: {err}"))
                         })?;
                     let pop_hex = match map.remove("pop_hex") {
                         None | Some(norito::json::Value::Null) => None,
                         Some(norito::json::Value::String(raw)) => Some(normalize_pop_hex(&raw)?),
                         Some(other) => {
-                            let raw =
-                                norito::json::value::from_value::<String>(other).map_err(|err| {
+                            let raw = norito::json::value::from_value::<String>(other).map_err(
+                                |err| {
                                     norito::json::Error::Message(format!(
                                         "failed to decode `pop_hex`: {err}"
                                     ))
-                                })?;
+                                },
+                            )?;
                             Some(normalize_pop_hex(&raw)?)
                         }
                     };
@@ -1385,24 +1389,28 @@ impl norito::json::JsonDeserialize for GenesisTopologyEntry {
                     }
                     Ok(Self { peer, pop_hex })
                 } else {
-                    let peer: PeerId =
-                        norito::json::value::from_value(norito::json::Value::Object(map))
-                            .map_err(|err| {
-                                norito::json::Error::Message(format!(
-                                    "failed to decode topology peer: {err}"
-                                ))
-                            })?;
-                    Ok(Self { peer, pop_hex: None })
-                }
-            }
-            other => {
-                let peer: PeerId =
-                    norito::json::value::from_value(other).map_err(|err| {
+                    let peer: PeerId = norito::json::value::from_value(
+                        norito::json::Value::Object(map),
+                    )
+                    .map_err(|err| {
                         norito::json::Error::Message(format!(
                             "failed to decode topology peer: {err}"
                         ))
                     })?;
-                Ok(Self { peer, pop_hex: None })
+                    Ok(Self {
+                        peer,
+                        pop_hex: None,
+                    })
+                }
+            }
+            other => {
+                let peer: PeerId = norito::json::value::from_value(other).map_err(|err| {
+                    norito::json::Error::Message(format!("failed to decode topology peer: {err}"))
+                })?;
+                Ok(Self {
+                    peer,
+                    pop_hex: None,
+                })
             }
         }
     }
@@ -1413,9 +1421,8 @@ fn normalize_pop_hex(raw: &str) -> Result<String, norito::json::Error> {
         .strip_prefix("0x")
         .or_else(|| raw.strip_prefix("0X"))
         .unwrap_or(raw);
-    let bytes = hex::decode(trimmed).map_err(|err| {
-        norito::json::Error::Message(format!("invalid `pop_hex`: {err}"))
-    })?;
+    let bytes = hex::decode(trimmed)
+        .map_err(|err| norito::json::Error::Message(format!("invalid `pop_hex`: {err}")))?;
     if bytes.is_empty() {
         return Err(norito::json::Error::Message(
             "`pop_hex` must not be empty".to_string(),
@@ -2615,8 +2622,8 @@ mod tests2 {
         );
 
         let manifest = norito::json::Value::Object(manifest_fields);
-        let parsed = RawGenesisTransaction::from_json_value(manifest)
-            .expect("topology entry should parse");
+        let parsed =
+            RawGenesisTransaction::from_json_value(manifest).expect("topology entry should parse");
         assert_eq!(parsed.transactions.len(), 1);
         let tx = &parsed.transactions[0];
         assert_eq!(tx.topology.len(), 1);
@@ -3301,9 +3308,7 @@ impl RawGenesisTransaction {
                 for entry in tx.topology {
                     let pk = entry.peer.public_key().clone();
                     if !seen.insert(pk.clone()) {
-                        return Err(eyre!(
-                            "duplicate `topology` entry for peer {pk}"
-                        ));
+                        return Err(eyre!("duplicate `topology` entry for peer {pk}"));
                     }
                     let pop = entry.pop_bytes()?.ok_or_else(|| {
                         eyre!(
@@ -4076,13 +4081,14 @@ mod tests {
         let pop =
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation");
         let peer = PeerId::new(bls.public_key().clone());
-        let manifest = GenesisBuilder::new_without_executor(ChainId::from("test-topology-pop"), ".")
-            .set_topology(vec![peer.clone()])
-            .set_topology_pop(vec![GenesisPeerPop {
-                public_key: peer.public_key().clone(),
-                pop: pop.clone(),
-            }])
-            .build_raw();
+        let manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("test-topology-pop"), ".")
+                .set_topology(vec![peer.clone()])
+                .set_topology_pop(vec![GenesisPeerPop {
+                    public_key: peer.public_key().clone(),
+                    pop: pop.clone(),
+                }])
+                .build_raw();
         let tx = &manifest.transactions()[0];
         assert_eq!(tx.topology().len(), 1);
         assert_eq!(tx.topology()[0].peer, peer);
@@ -4134,7 +4140,8 @@ mod tests {
             .with_consensus_meta();
         let err = manifest.parse().expect_err("missing pop must error");
         assert!(
-            err.to_string().contains("missing `pop_hex` entry for topology peer"),
+            err.to_string()
+                .contains("missing `pop_hex` entry for topology peer"),
             "{err}"
         );
     }

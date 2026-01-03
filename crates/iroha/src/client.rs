@@ -2313,9 +2313,8 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            return decode_from_bytes::<SumeragiStatusWire>(resp.body()).map_err(|err| {
-                eyre!("Failed to decode sumeragi status Norito payload: {err}")
-            });
+            return decode_from_bytes::<SumeragiStatusWire>(resp.body())
+                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"));
         }
         norito::json::from_slice(resp.body())
             .map_err(|e| eyre!("Failed to decode sumeragi status JSON payload: {e}"))
@@ -2344,9 +2343,8 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            let wire = decode_from_bytes::<SumeragiStatusWire>(resp.body()).map_err(|err| {
-                eyre!("Failed to decode sumeragi status Norito payload: {err}")
-            })?;
+            let wire = decode_from_bytes::<SumeragiStatusWire>(resp.body())
+                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?;
             return Ok(sumeragi_status_json_payload(&wire));
         }
         Ok(norito::json::from_slice(resp.body())?)
@@ -2379,9 +2377,8 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         let wire = if content_type.starts_with(APPLICATION_NORITO) {
-            decode_from_bytes::<SumeragiStatusWire>(resp.body()).map_err(|err| {
-                eyre!("Failed to decode sumeragi status Norito payload: {err}")
-            })?
+            decode_from_bytes::<SumeragiStatusWire>(resp.body())
+                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?
         } else {
             norito::json::from_slice(resp.body())?
         };

@@ -141,7 +141,12 @@ pub fn genesis_with_keypair(
     // first transaction shape predictable (e.g., single Upgrade when a sample
     // executor is available).
     init_instruction_registry();
-    build_minimal_genesis(extra_transactions, topology, topology_entries, genesis_key_pair)
+    build_minimal_genesis(
+        extra_transactions,
+        topology,
+        topology_entries,
+        genesis_key_pair,
+    )
 }
 
 fn build_minimal_genesis(
@@ -408,9 +413,7 @@ fn build_minimal_genesis_unexecuted(
         }
 
         if let Some((dangling_pk, _)) = pop_map.into_iter().next() {
-            panic!(
-                "topology entry present for peer {dangling_pk} that is absent from topology"
-            );
+            panic!("topology entry present for peer {dangling_pk} that is absent from topology");
         }
     }
 

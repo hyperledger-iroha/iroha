@@ -8,7 +8,7 @@ use iroha::{
     client::Client,
     data_model::{isi::register::RegisterPeerWithPop, parameter::BlockParameter, prelude::*},
 };
-use iroha_test_network::{BlockHeight, Network, NetworkBuilder, NetworkPeer};
+use iroha_test_network::{BlockHeight, NetworkBuilder, NetworkPeer};
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 use tokio::{
@@ -64,17 +64,21 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
 
     // When assets are minted
     mint(&client, &asset_def, &account, numeric!(100), tx_timeout).await?;
-    if ensure_blocks_or_skip(
-        &network,
-        3,
-        sync_timeout,
+    let main_bootstrap_asset = match sandbox::handle_result(
+        wait_for_asset(
+            &client,
+            &account,
+            &asset_def,
+            sync_timeout,
+            Some(numeric!(100)),
+        )
+        .await,
         stringify!(network_stable_after_add_and_after_remove_peer),
-    )
-    .await?
-    .is_none()
-    {
-        return Ok(());
-    }
+    )? {
+        Some(value) => value,
+        None => return Ok(()),
+    };
+    assert_eq!(main_bootstrap_asset, numeric!(100));
     // and a new peer is registered
     let new_peer = NetworkPeer::builder().build(network.env());
     let new_peer_id = new_peer.id();
@@ -93,13 +97,10 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         "network_stable_after_add_and_after_remove_peer register_peer",
     )
     .await?;
-    if ensure_blocks_or_skip(
-        &network,
-        4,
-        sync_timeout,
+    if sandbox::handle_result(
+        wait_for_peer_count(&client, 5, sync_timeout).await,
         stringify!(network_stable_after_add_and_after_remove_peer),
-    )
-    .await?
+    )?
     .is_none()
     {
         return Ok(());
@@ -171,22 +172,10 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     {
         return Ok(());
     }
-    // blocks=6
     network.remove_peer(&new_peer);
     // We can mint without an error.
     mint(&client, &asset_def, &account, numeric!(200), tx_timeout).await?;
     // Assets are increased on the main network.
-    if ensure_blocks_or_skip(
-        &network,
-        6,
-        sync_timeout,
-        stringify!(network_stable_after_add_and_after_remove_peer),
-    )
-    .await?
-    .is_none()
-    {
-        return Ok(());
-    }
     let main_asset = match sandbox::handle_result(
         wait_for_asset(
             &client,
@@ -309,19 +298,6 @@ where
     .await
 }
 
-async fn ensure_blocks_or_skip(
-    network: &Network,
-    height: u64,
-    timeout_duration: Duration,
-    context: &str,
-) -> Result<Option<()>> {
-    let result = timeout(timeout_duration, network.ensure_blocks(height))
-        .await
-        .map_err(Report::new)?
-        .map(|_| ());
-    sandbox::handle_result(result, context)
-}
-
 async fn run_blocking_with_timeout<T, F>(
     task: F,
     timeout_duration: Duration,
@@ -340,23 +316,22 @@ where
 
 async fn wait_for_peer_count(
     client: &Client,
-    expected: u64,
+    expected: usize,
     timeout_duration: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + timeout_duration;
     loop {
-        let status = spawn_blocking({
+        let count = spawn_blocking({
             let client = client.clone();
-            move || client.get_status()
+            move || client.query(FindPeers).execute_all().map(|peers| peers.len())
         })
         .await??;
-        if status.peers == expected {
+        if count == expected {
             return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "timed out waiting for peer count {expected}, last seen {}",
-                status.peers
+                "timed out waiting for peer count {expected}, last seen {count}"
             ));
         }
         sleep(Duration::from_millis(200)).await;

@@ -5668,15 +5668,18 @@ impl Sumeragi {
 
         let msg_channel_cap_votes = msg_channel_cap_votes
             .map_or(defaults::sumeragi::MSG_CHANNEL_CAP_VOTES, NonZeroUsize::get);
-        let msg_channel_cap_block_payload = msg_channel_cap_block_payload
-            .map_or(
-                defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
-                NonZeroUsize::get,
-            );
-        let msg_channel_cap_rbc_chunks = msg_channel_cap_rbc_chunks
-            .map_or(defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS, NonZeroUsize::get);
-        let msg_channel_cap_blocks = msg_channel_cap_blocks
-            .map_or(defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS, NonZeroUsize::get);
+        let msg_channel_cap_block_payload = msg_channel_cap_block_payload.map_or(
+            defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
+            NonZeroUsize::get,
+        );
+        let msg_channel_cap_rbc_chunks = msg_channel_cap_rbc_chunks.map_or(
+            defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS,
+            NonZeroUsize::get,
+        );
+        let msg_channel_cap_blocks = msg_channel_cap_blocks.map_or(
+            defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
+            NonZeroUsize::get,
+        );
 
         let collectors_ok = if collectors_k == 0 {
             emitter.emit(

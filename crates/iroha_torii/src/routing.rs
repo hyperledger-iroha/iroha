@@ -5166,7 +5166,9 @@ pub async fn handle_queries_with_opts(
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
     use iroha_core::{
-        query::snapshot::{CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode},
+        query::snapshot::{
+            CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode,
+        },
         smartcontracts::isi::query::QueryLimits,
     };
     #[cfg(feature = "telemetry")]
@@ -5265,9 +5267,7 @@ pub async fn handle_queries_with_opts(
     .and_then(|r| {
         r.map_err(|e| match e {
             SnapshotQueryError::Validation(v) => v,
-            SnapshotQueryError::Execution(exec) => {
-                ValidationFail::QueryFailed(exec)
-            }
+            SnapshotQueryError::Execution(exec) => ValidationFail::QueryFailed(exec),
         })
     })?;
 

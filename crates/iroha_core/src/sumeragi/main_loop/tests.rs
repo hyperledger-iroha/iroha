@@ -4639,7 +4639,10 @@ async fn rebroadcast_highest_pending_block_skips_aborted() {
             } if created.block.hash() == high.hash()
         )
     });
-    assert!(broadcast_low, "expected non-aborted pending block to be rebroadcast");
+    assert!(
+        broadcast_low,
+        "expected non-aborted pending block to be rebroadcast"
+    );
     assert!(
         !broadcast_high,
         "aborted pending block should not be rebroadcast"
@@ -4924,12 +4927,7 @@ async fn precommit_vote_skips_block_sync_update_for_aborted_pending() {
         bls_sig: Vec::new(),
         signature: Vec::new(),
     };
-    sign_vote_for_view(
-        &mut vote,
-        &chain,
-        &topology,
-        std::slice::from_ref(&keypair),
-    );
+    sign_vote_for_view(&mut vote, &chain, &topology, std::slice::from_ref(&keypair));
     actor.handle_vote(vote);
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
@@ -5645,7 +5643,9 @@ async fn try_form_qc_from_votes_skips_aborted_pending_block() {
     }
 
     assert!(
-        !actor.qc_cache.contains_key(&(Phase::Precommit, block_hash, height, 0, epoch)),
+        !actor
+            .qc_cache
+            .contains_key(&(Phase::Precommit, block_hash, height, 0, epoch)),
         "aborted pending blocks must not aggregate QCs"
     );
 
@@ -24275,7 +24275,10 @@ fn dispatch_background_request_rbc_chunk_drops_when_full() {
     assert!(result.is_err());
     handle.join().expect("thread joins");
 
-    match rx.try_recv().expect("prefilled message should remain queued") {
+    match rx
+        .try_recv()
+        .expect("prefilled message should remain queued")
+    {
         BackgroundPost::Broadcast {
             msg: BlockMessage::ConsensusParams(_),
             ..
@@ -24460,7 +24463,10 @@ fn dispatch_background_request_rbc_chunk_drops_when_full() {
     assert!(result.is_err());
     handle.join().expect("thread joins");
 
-    match rx.try_recv().expect("prefilled message should remain queued") {
+    match rx
+        .try_recv()
+        .expect("prefilled message should remain queued")
+    {
         BackgroundPost::Broadcast {
             msg: BlockMessage::ConsensusParams(_),
             ..
@@ -30138,10 +30144,7 @@ fn pending_block_replace_new_subject_resets_vote_and_timestamp() {
         pending.last_gate_satisfied.is_none(),
         "gate satisfaction must reset on new subject"
     );
-    assert!(
-        !pending.aborted,
-        "aborted state must reset on new subject"
-    );
+    assert!(!pending.aborted, "aborted state must reset on new subject");
     assert!(
         !pending.kura_aborted,
         "kura aborted state must reset on new subject"

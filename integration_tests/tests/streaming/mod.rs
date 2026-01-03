@@ -746,7 +746,10 @@ mod tests {
             Some(Value::Number(Number::U64(value))) => *value,
             _ => panic!("policy.max_relays must be a number"),
         };
-        assert_eq!(max_relays, u64::from(vector.ticket.policy.as_ref().unwrap().max_relays));
+        assert_eq!(
+            max_relays,
+            u64::from(vector.ticket.policy.as_ref().unwrap().max_relays)
+        );
 
         let revocation = root
             .get("ticket_revocation")
@@ -776,7 +779,10 @@ mod tests {
             revocation_signature,
             &hex_encode(vector.ticket_revocation.revocation_signature)
         );
-        assert_eq!(revocation_reason, u64::from(vector.ticket_revocation.reason_code));
+        assert_eq!(
+            revocation_reason,
+            u64::from(vector.ticket_revocation.reason_code)
+        );
     }
 
     #[test]

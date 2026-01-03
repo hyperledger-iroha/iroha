@@ -1274,9 +1274,7 @@ pub enum AccountAddressError {
     #[error("invalid compressed digit value: {0}")]
     InvalidCompressedDigit(u8),
     /// Local-domain selector digest shorter than the 12-byte requirement.
-    #[error(
-        "local domain digest too short: expected {expected} bytes, found {found}"
-    )]
+    #[error("local domain digest too short: expected {expected} bytes, found {found}")]
     LocalDigestTooShort {
         /// Required digest length (always 12 bytes for Norm v1).
         expected: usize,

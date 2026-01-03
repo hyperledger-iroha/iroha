@@ -844,8 +844,7 @@ mod tests {
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer_id, 1)]),
             quorum: NonZeroU16::new(1).expect("nonzero quorum"),
-            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
-                .expect("nonzero ttl"),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
         };
 
         assert_eq!(
@@ -992,7 +991,6 @@ mod tests {
             other => panic!("expected TTL violation, got {other:?}"),
         }
     }
-
 
     #[test]
     fn multisig_signatory_can_propose_without_roles() {

@@ -7,13 +7,16 @@ use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 
 #[test]
 fn config_layer_overrides_concurrency_settings() {
-    let network = NetworkBuilder::new()
-        .with_config_layer(|c| {
+    let Some(network) = sandbox::build_network_or_skip(
+        NetworkBuilder::new().with_config_layer(|c| {
             c.write(["concurrency", "scheduler_min_threads"], 3i64)
                 .write(["concurrency", "scheduler_max_threads"], 7i64)
                 .write(["logger", "level"], "TRACE");
-        })
-        .build();
+        }),
+        stringify!(config_layer_overrides_concurrency_settings),
+    ) else {
+        return;
+    };
 
     let mut layers = network.config_layers();
 

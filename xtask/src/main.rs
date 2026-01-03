@@ -46,8 +46,7 @@ use iroha_crypto::{
     soranet::certificate::CertificateValidationPhase,
 };
 use iroha_data_model::{
-    account::address::compliance_vectors::compliance_vectors_json,
-    nexus::AssetPermissionManifest,
+    account::address::compliance_vectors::compliance_vectors_json, nexus::AssetPermissionManifest,
 };
 use iroha_torii::{
     MaybeTelemetry, OnlinePeersProvider,

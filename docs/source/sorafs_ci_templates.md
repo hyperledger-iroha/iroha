@@ -49,7 +49,7 @@ steps:
   - uses: actions/checkout@v4
   - uses: actions/setup-rust@v1
     with:
-      rust-version: 1.91
+      rust-version: 1.92
   - name: Install SoraFS CLI
     run: cargo install --path crates/sorafs_car --features cli --bin sorafs_cli --force
   - name: Package payload
@@ -100,7 +100,7 @@ stages:
   - verify
 
 variables:
-  RUST_VERSION: "1.91"
+  RUST_VERSION: "1.92"
 
 build_manifest:
   stage: build
