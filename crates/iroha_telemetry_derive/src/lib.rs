@@ -350,22 +350,17 @@ fn write_metrics(
     specs: &MetricSpecs,
 ) -> (TokenStream, TokenStream, TokenStream, bool) {
     let record_total = |spec: &MetricSpec| {
-        wrap_metrics(
-            metric_arg_ident,
-            quote!(#metric_arg_ident.metrics().record_isi_total(#spec);),
-        )
+        let body = quote!(#metric_arg_ident.metrics().record_isi_total(#spec););
+        wrap_metrics(metric_arg_ident, &body)
     };
     let record_success = |spec: &MetricSpec| {
-        wrap_metrics(
-            metric_arg_ident,
-            quote!(#metric_arg_ident.metrics().record_isi_success(#spec);),
-        )
+        let body = quote!(#metric_arg_ident.metrics().record_isi_success(#spec););
+        wrap_metrics(metric_arg_ident, &body)
     };
     let record_time = |spec: &MetricSpec| {
-        wrap_metrics(
-            metric_arg_ident,
-            quote!(#metric_arg_ident.metrics().record_isi_time(#spec, started_at.elapsed());),
-        )
+        let body =
+            quote!(#metric_arg_ident.metrics().record_isi_time(#spec, started_at.elapsed()););
+        wrap_metrics(metric_arg_ident, &body)
     };
     let totals: TokenStream = specs.0.iter().map(record_total).collect();
     let successes: TokenStream = specs.0.iter().map(record_success).collect();
@@ -380,7 +375,7 @@ fn write_metrics(
 }
 
 #[cfg(feature = "metric-instrumentation")]
-fn wrap_metrics(metric_arg_ident: &proc_macro2::Ident, body: TokenStream) -> TokenStream {
+fn wrap_metrics(metric_arg_ident: &proc_macro2::Ident, body: &TokenStream) -> TokenStream {
     quote!(
         #[cfg(feature = "telemetry")]
         {
@@ -411,5 +406,23 @@ mod tests {
         assert_eq!(spec.metric_name.value(), "plain_metric");
         #[cfg(feature = "metric-instrumentation")]
         assert!(!spec.timing);
+    }
+
+    #[cfg(feature = "metric-instrumentation")]
+    #[test]
+    fn wrap_metrics_emits_cfg_blocks() {
+        let metric_ident = proc_macro2::Ident::new("state_tx", proc_macro2::Span::call_site());
+        let body = quote!(state_tx.metrics().record_isi_total("x"););
+        let wrapped = wrap_metrics(&metric_ident, &body);
+        let compact: String = wrapped
+            .to_string()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+
+        assert!(compact.contains("record_isi_total"));
+        assert!(compact.contains("cfg(feature=\"telemetry\")"));
+        assert!(compact.contains("cfg(not(feature=\"telemetry\"))"));
+        assert!(compact.contains("let_=&state_tx;"));
     }
 }

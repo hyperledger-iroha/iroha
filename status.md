@@ -1,9 +1,51 @@
 # Status
 
 ## Latest Updates
+- Resolved merge conflicts across status/roadmap docs and Sumeragi RBC store-eviction visibility.
+- Tests: not run (merge resolution only).
+- Format: not run (not requested).
 - Extended tx confirmation polling to track queued/approved states, backfill rejection reasons from committed queries, and added unit coverage for non-terminal polling/queued timeouts.
 - Tests: not run (not requested).
 - Format: not run (not requested).
+- Translated the Sumeragi pacemaker doc across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Request missing parent blocks when validation defers a block ahead of local height, so lagging peers can sync and resume voting; added unit coverage for the new fetch path.
+- Tests: `cargo test -p iroha_core validation_defers_block_ahead_of_local_height -- --nocapture` (timed out after 120s; build lock while compiling `iroha_core`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Switched commit-pipeline and precommit block-sync cooldowns to use on-chain block_time instead of config defaults, with added throttling coverage.
+- Tests: not run (not requested).
+- Kept configured trusted peers (e.g., observers) in the P2P topology set so they remain dialable even when excluded from world-state topology; expanded gossiper test assertions to cover static topology retention.
+- Tests: `cargo check -p iroha_core --lib` (warning: dead-code `rotate_set_a` in `crates/iroha_core/src/sumeragi/network_topology.rs:330`).
+- Tests: `cargo test -p integration_tests --test observer_sync -- --nocapture` (failed: local socket bind denied on 127.0.0.1:30000).
+- Tests: `cargo test -p integration_tests --no-run` (timed out after 120s during compile; warnings: dead-code `rotate_set_a`, deprecated `tempfile::TempDir::into_path` in `integration_tests/tests/sumeragi_kagami_localnet.rs:77`).
+- Translated the runtime upgrades doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Translated the bridge finality proofs doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Applied backpressure for `BlockSyncUpdate` ingestion to avoid dropping commit/QC evidence under block-queue saturation, added blocking test coverage, and documented the backpressure behavior; Kagami localnet failures can now retain artifacts via `IROHA_KAGAMI_LOCALNET_KEEP`.
+- Tests: `CARGO_TARGET_DIR=target/codex-check cargo check -p iroha_core` (warning: dead-code `rotate_set_a` in `crates/iroha_core/src/sumeragi/network_topology.rs:330`).
+- Translated the bridge proofs doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Aligned vote roster lookups with block-view resolution, fixed Option signatures in block-sync roster selection, and updated commit-certificate validation tests for view-aware parameters.
+- Tests: not run (not requested).
+- Resolved block-view optionality mismatches in block-sync roster selection and vote roster lookup so view-aware validation stays consistent across call sites.
+- Tests: `cargo test -p iroha_core --lib consensus_penalties_defer_censorship_evidence -- --nocapture` (passed; warnings about unused import in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs:9`, unused `mut` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:2130` and `crates/iroha_core/src/sumeragi/main_loop/tests.rs:9337`, and unused variable in `crates/iroha_core/src/sumeragi/mod.rs:4082`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Docker builder image doc across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Translated the Iroha release artifact selection doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Hardened block-sync roster validation (hash version, cert height/view, checkpoint expiry), removed unvalidated roster-hint fallbacks, and added unit coverage for the new validation paths and invalid hint rejection.
+- Tests: not run (not requested).
+- Translated the Testing and Troubleshooting guide across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Rejected missing-block block-sync updates without commit-role signatures, and kept censorship evidence pending until attribution is implemented; added unit coverage for unsigned missing-block requests and censorship penalty deferral.
+- Tests: `cargo test -p iroha_core block_sync_quorum_allows_missing_block_request_with_sparse_signatures -- --nocapture` (timed out after 120s; build lock; warnings about unused import/dead code/unused-mut in `crates/iroha_core/src/sumeragi/`).
+- Tests: `cargo test -p iroha_core consensus_penalties_defer_censorship_evidence -- --nocapture` (timed out after 120s; build lock; same warnings).
+- Tests: `cargo test --workspace` (timed out after 120s; build lock).
+- Format: `cargo fmt --all` (timed out after 10s; stable toolchain warns about unstable fmt options).
+- Translated the account address compliance status doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
 - Split static block validation into state-dependent snapshot + transaction-only pass so keep-voting validation drops `StateView` earlier; added unit coverage for the snapshot path.
 - Tests: `cargo test -p iroha_core validate_static_snapshot_accepts_valid_block -- --nocapture` (failed: `crates/iroha_core/src/sumeragi/main_loop/tests.rs` calls private `handle_rbc_store_evictions`).
 - Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).

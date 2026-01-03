@@ -3624,6 +3624,40 @@ async fn commit_pipeline_throttle_skips_recent_run() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_cooldown_uses_chain_block_time() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.config.npos.block_time = Duration::from_secs(10);
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut params_block = state.world.parameters.block();
+        params_block.sumeragi.block_time_ms = 200;
+        params_block.commit();
+    }
+
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, 1, 0);
+    pending.validation_status = ValidationStatus::Valid;
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let now = Instant::now();
+    let last_run = now.checked_sub(Duration::from_millis(500)).unwrap_or(now);
+    actor.pending.last_commit_pipeline_run = last_run;
+
+    actor.process_commit_candidates();
+
+    assert!(
+        actor.pending.last_commit_pipeline_run > last_run,
+        "commit pipeline cooldown should follow chain block_time"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_throttle_still_emits_availability_vote() {
     let mut harness = test_actor_harness(4).await;
 
@@ -4572,6 +4606,109 @@ async fn precommit_vote_block_sync_update_is_rate_limited() {
     assert_eq!(
         sync_updates, expected_targets,
         "block sync updates should be throttled across rapid precommit votes"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn precommit_vote_block_sync_update_cooldown_uses_chain_block_time() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.config.npos.block_time = Duration::from_secs(10);
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut params_block = state.world.parameters.block();
+        params_block.sumeragi.block_time_ms = 200;
+        params_block.commit();
+    }
+
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, PendingBlock::new(block, payload_hash, 1, 0));
+
+    let _ = harness.background_rx.try_iter().count();
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let view = 0;
+    let rotated = super::topology_for_view(&topology, 1, view, super::PERMISSIONED_TAG, None);
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_idx = rotated
+        .as_ref()
+        .iter()
+        .position(|peer| peer == &local_peer)
+        .expect("local peer in topology");
+    let chain = actor.common_config.chain.clone();
+    let keypair = actor.common_config.key_pair.clone();
+
+    let mut vote_a = crate::sumeragi::consensus::Vote {
+        phase: Phase::Precommit,
+        block_hash,
+        height: 1,
+        view,
+        epoch: 0,
+        signer: u32::try_from(signer_idx).expect("signer index fits u32"),
+        bls_sig: Vec::new(),
+        signature: Vec::new(),
+    };
+    sign_vote_for_view(
+        &mut vote_a,
+        &chain,
+        &topology,
+        std::slice::from_ref(&keypair),
+    );
+    actor.handle_vote(vote_a);
+
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .block_sync_rebroadcast_log
+        .last_sent
+        .insert(block_hash, {
+            let now = Instant::now();
+            now.checked_sub(Duration::from_millis(400)).unwrap_or(now)
+        });
+
+    let mut vote_b = crate::sumeragi::consensus::Vote {
+        phase: Phase::Precommit,
+        block_hash,
+        height: 1,
+        view,
+        epoch: 1,
+        signer: u32::try_from(signer_idx).expect("signer index fits u32"),
+        bls_sig: Vec::new(),
+        signature: Vec::new(),
+    };
+    sign_vote_for_view(
+        &mut vote_b,
+        &chain,
+        &topology,
+        std::slice::from_ref(&keypair),
+    );
+    actor.handle_vote(vote_b);
+
+    let topology_peers = actor.effective_commit_topology();
+    let expected_targets = expected_block_sync_update_targets(actor, &topology_peers);
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let sync_updates = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::BlockSyncUpdate(update),
+                    ..
+                } if update.block.hash() == block_hash
+            )
+        })
+        .count();
+    assert_eq!(
+        sync_updates, expected_targets,
+        "block sync update cooldown should follow chain block_time"
     );
 
     harness.shutdown.send();
@@ -8793,7 +8930,7 @@ fn block_sync_selection_prefers_matching_commit_certificate_history() {
     let cert = iroha_data_model::consensus::CommitCertificate {
         height: 5,
         block_hash,
-        view: 1,
+        view: 0,
         epoch: 0,
         validator_set_hash: HashOf::new(&vec![me_peer.id().clone()]),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
@@ -8853,7 +8990,7 @@ fn block_sync_selection_prefers_paired_hints() {
     let commit_certificate = iroha_data_model::consensus::CommitCertificate {
         height: 3,
         block_hash,
-        view: 1,
+        view: 0,
         epoch: 0,
         validator_set_hash: HashOf::new(&roster),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
@@ -9598,6 +9735,61 @@ fn block_sync_roster_requires_certificate_or_checkpoint() {
 }
 
 #[test]
+fn block_sync_roster_rejects_invalid_hint_roster() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7099");
+    let mut pops = BTreeMap::new();
+    pops.insert(me_peer.id().public_key().clone(), me_pop);
+    let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
+    let state = state_with_peers(Vec::new());
+
+    let header = BlockHeader::new(nonzero!(9_u64), None, None, None, 0, 0);
+    let block_hash = header.hash();
+    let block = SignedBlock::presigned(
+        BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash)),
+        header,
+        Vec::new(),
+    );
+    let roster = vec![me_peer.id().clone()];
+    let commit_certificate = CommitCertificate {
+        height: 9,
+        block_hash,
+        view: 0,
+        epoch: 0,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1.saturating_add(1),
+        validator_set: roster,
+        signatures: vec![BlockSignature::new(
+            0,
+            SignatureOf::from_hash(me_kp.private_key(), block_hash),
+        )],
+    };
+
+    let selection = select_block_sync_roster(
+        &block,
+        block_hash,
+        block.header().height().get(),
+        None,
+        Some(&commit_certificate),
+        None,
+        &state,
+        &trusted,
+        me_peer.id(),
+        super::PERMISSIONED_TAG,
+        false,
+    );
+    assert!(
+        selection.is_none(),
+        "invalid roster hints should not be accepted"
+    );
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+}
+
+#[test]
 fn block_sync_ready_for_qc_rejects_creation_error() {
     let err: Result<()> = Err(eyre!("test error"));
 
@@ -9822,6 +10014,7 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
         4,
         block_hash,
+        Some(u64::from(block.header().view_change_index())),
     )
     .expect("sidecar");
     let selection = select_block_sync_roster(
@@ -9973,11 +10166,130 @@ fn validate_commit_certificate_roster_accepts_valid_cert() {
     let roster = super::validate_commit_certificate_roster(
         &cert,
         block_hash,
+        cert.height,
+        Some(cert.view),
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
         &state.view(),
     )
     .expect("valid cert roster");
     assert_eq!(roster, vec![peer]);
+}
+
+#[test]
+fn validate_commit_certificate_roster_rejects_hash_version_mismatch() {
+    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC6; Hash::LENGTH]));
+    let signature = SignatureOf::from_hash(kp.private_key(), block_hash);
+    let block_sig = BlockSignature::new(0, signature);
+    let cert = CommitCertificate {
+        height: 2,
+        block_hash,
+        view: 0,
+        epoch: 0,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1.saturating_add(1),
+        validator_set: vec![peer],
+        signatures: vec![block_sig],
+    };
+
+    let result = super::validate_commit_certificate_roster(
+        &cert,
+        block_hash,
+        cert.height,
+        Some(cert.view),
+        iroha_config::parameters::actual::ConsensusMode::Permissioned,
+        &state.view(),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(super::RosterValidationError::ValidatorSetHashVersionMismatch { .. })
+        ),
+        "unsupported validator set hash version should reject commit certificate"
+    );
+}
+
+#[test]
+fn validate_commit_certificate_roster_rejects_height_mismatch() {
+    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC7; Hash::LENGTH]));
+    let signature = SignatureOf::from_hash(kp.private_key(), block_hash);
+    let block_sig = BlockSignature::new(0, signature);
+    let cert = CommitCertificate {
+        height: 3,
+        block_hash,
+        view: 0,
+        epoch: 0,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: vec![peer],
+        signatures: vec![block_sig],
+    };
+
+    let result = super::validate_commit_certificate_roster(
+        &cert,
+        block_hash,
+        cert.height.saturating_add(1),
+        Some(cert.view),
+        iroha_config::parameters::actual::ConsensusMode::Permissioned,
+        &state.view(),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(super::RosterValidationError::HeightMismatch { .. })
+        ),
+        "height mismatch should reject commit certificate"
+    );
+}
+
+#[test]
+fn validate_commit_certificate_roster_rejects_view_mismatch() {
+    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC8; Hash::LENGTH]));
+    let signature = SignatureOf::from_hash(kp.private_key(), block_hash);
+    let block_sig = BlockSignature::new(0, signature);
+    let cert = CommitCertificate {
+        height: 4,
+        block_hash,
+        view: 1,
+        epoch: 0,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: vec![peer],
+        signatures: vec![block_sig],
+    };
+
+    let result = super::validate_commit_certificate_roster(
+        &cert,
+        block_hash,
+        cert.height,
+        Some(cert.view.saturating_sub(1)),
+        iroha_config::parameters::actual::ConsensusMode::Permissioned,
+        &state.view(),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(super::RosterValidationError::ViewMismatch { .. })
+        ),
+        "view mismatch should reject commit certificate"
+    );
 }
 
 #[test]
@@ -10100,6 +10412,8 @@ fn validate_commit_certificate_roster_requires_stake_quorum() {
     let result = super::validate_commit_certificate_roster(
         &cert,
         block_hash,
+        cert.height,
+        Some(cert.view),
         ConsensusMode::Npos,
         &state.view(),
     );
@@ -10131,8 +10445,64 @@ fn validate_checkpoint_roster_rejects_hash_mismatch() {
     };
 
     assert!(
-        super::validate_checkpoint_roster(&checkpoint, block_hash).is_err(),
+        super::validate_checkpoint_roster(&checkpoint, block_hash, checkpoint.height).is_err(),
         "hash mismatch should reject checkpoint roster"
+    );
+}
+
+#[test]
+fn validate_checkpoint_roster_rejects_hash_version_mismatch() {
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC5; Hash::LENGTH]));
+    let signature = SignatureOf::from_hash(kp.private_key(), block_hash);
+    let block_sig = BlockSignature::new(0, signature);
+    let checkpoint = iroha_data_model::consensus::ValidatorSetCheckpoint {
+        height: 3,
+        block_hash,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1.saturating_add(1),
+        validator_set: vec![peer],
+        signatures: vec![block_sig],
+        expires_at_height: None,
+    };
+
+    let result = super::validate_checkpoint_roster(&checkpoint, block_hash, checkpoint.height);
+    assert!(
+        matches!(
+            result,
+            Err(super::RosterValidationError::ValidatorSetHashVersionMismatch { .. })
+        ),
+        "unsupported hash version should reject checkpoint roster"
+    );
+}
+
+#[test]
+fn validate_checkpoint_roster_rejects_expired_checkpoint() {
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC9; Hash::LENGTH]));
+    let signature = SignatureOf::from_hash(kp.private_key(), block_hash);
+    let block_sig = BlockSignature::new(0, signature);
+    let checkpoint = iroha_data_model::consensus::ValidatorSetCheckpoint {
+        height: 4,
+        block_hash,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: vec![peer],
+        signatures: vec![block_sig],
+        expires_at_height: Some(4),
+    };
+
+    let result = super::validate_checkpoint_roster(&checkpoint, block_hash, checkpoint.height);
+    assert!(
+        matches!(
+            result,
+            Err(super::RosterValidationError::CheckpointExpired { .. })
+        ),
+        "expired checkpoint should be rejected"
     );
 }
 
@@ -15303,8 +15673,11 @@ async fn handle_new_view_uses_roster_snapshot_after_topology_change() {
         .is_ok(),
         "NEW_VIEW signature should validate against current topology"
     );
-    let qc_roster =
-        actor.roster_for_vote(frame.highest_qc.subject_block_hash, frame.highest_qc.height);
+    let qc_roster = actor.roster_for_vote(
+        frame.highest_qc.subject_block_hash,
+        frame.highest_qc.height,
+        frame.highest_qc.view,
+    );
     assert_eq!(
         qc_roster, roster,
         "HighestQC roster should come from the persisted snapshot"
@@ -15588,7 +15961,7 @@ async fn roster_for_vote_prefers_snapshot_for_committed_height() {
         hashes.commit_for_tests();
     }
 
-    let qc_roster = actor.roster_for_vote(block_hash, height);
+    let qc_roster = actor.roster_for_vote(block_hash, height, 0);
     assert_eq!(
         qc_roster, roster,
         "committed height should use the persisted roster snapshot"
@@ -15635,7 +16008,7 @@ async fn roster_for_vote_falls_back_to_prev_commit_topology_without_snapshot() {
         hashes.commit_for_tests();
     }
 
-    let qc_roster = actor.roster_for_vote(block_hash, height);
+    let qc_roster = actor.roster_for_vote(block_hash, height, 0);
     assert_eq!(
         qc_roster, roster,
         "committed height should fall back to the previous commit topology"
@@ -19143,7 +19516,13 @@ async fn validation_defers_block_ahead_of_local_height() {
 
     let state_height = actor.state.view().height() as u64;
     let block_height = state_height.saturating_add(2);
-    let block = sample_block(block_height, 0, None);
+    let mut missing_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; Hash::LENGTH]));
+    if actor.block_known_locally(missing_parent) {
+        missing_parent =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x56; Hash::LENGTH]));
+    }
+    let block = sample_block(block_height, 0, Some(missing_parent));
     let block_hash = block.hash();
     let payload_bytes = super::proposals::block_payload_bytes(&block);
     let payload_hash = Hash::new(&payload_bytes);
@@ -19169,6 +19548,13 @@ async fn validation_defers_block_ahead_of_local_height() {
         pending.validation_status,
         ValidationStatus::Pending,
         "deferred validation should not mark block invalid"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&missing_parent),
+        "validation should request missing parent block"
     );
 
     harness.shutdown.send();
@@ -19962,6 +20348,19 @@ fn block_sync_quorum_allows_missing_block_request_with_sparse_signatures() {
             local_height
         ),
         "sparse signatures should be allowed when catching up to a higher block height"
+    );
+    assert!(
+        !super::block_sync_quorum_available(
+            0,
+            3,
+            false,
+            false,
+            false,
+            true,
+            block_height,
+            local_height
+        ),
+        "missing-block request must not accept unsigned block sync updates"
     );
     assert!(
         !super::block_sync_quorum_available(

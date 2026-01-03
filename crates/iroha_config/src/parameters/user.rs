@@ -1108,16 +1108,16 @@ pub struct TelemetryIntegrity {
 
 impl TelemetryIntegrity {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::TelemetryIntegrity {
-        let signing_key = match self.signing_key_hex {
-            Some(raw) => match parse_telemetry_signing_key(&raw) {
-                Ok(key) => Some(key),
-                Err(message) => {
-                    emitter.emit(Report::new(ParseError::InvalidTelemetryConfig).attach(message));
-                    None
-                }
-            },
-            None => None,
-        };
+        let signing_key =
+            self.signing_key_hex
+                .and_then(|raw| match parse_telemetry_signing_key(&raw) {
+                    Ok(key) => Some(key),
+                    Err(message) => {
+                        emitter
+                            .emit(Report::new(ParseError::InvalidTelemetryConfig).attach(message));
+                        None
+                    }
+                });
 
         let state_dir = self.state_dir.map(|path| path.resolve_relative_path());
 

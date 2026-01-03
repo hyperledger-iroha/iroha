@@ -309,14 +309,12 @@ impl<T> CompoundPredicate<T> {
                 if let (Some(left_json), Some(right_json)) = (
                     left.as_ref().downcast_ref::<PredicateJsonPayload>(),
                     right.as_ref().downcast_ref::<PredicateJsonPayload>(),
+                ) && let (Some(left_pred), Some(right_pred)) = (
+                    predicate_json_from_raw(left_json.as_str()),
+                    predicate_json_from_raw(right_json.as_str()),
                 ) {
-                    if let (Some(left_pred), Some(right_pred)) = (
-                        predicate_json_from_raw(left_json.as_str()),
-                        predicate_json_from_raw(right_json.as_str()),
-                    ) {
-                        let merged = merge_predicate_json(left_pred, right_pred);
-                        return merged.into_predicate();
-                    }
+                    let merged = merge_predicate_json(left_pred, right_pred);
+                    return merged.into_predicate();
                 }
 
                 if let (Some(left_tree), Some(right_tree)) = (
@@ -744,12 +742,11 @@ impl CompoundPredicate<crate::query::CommittedTransaction> {
                 return filters.applies(input);
             }
             #[cfg(feature = "json")]
-            if let Some(json) = payload.downcast_ref::<PredicateJsonPayload>() {
-                if let Some(predicate) = predicate_json_from_raw(json.as_str())
-                    && let Ok(value) = json::to_value(input)
-                {
-                    return predicate_json_applies(&predicate, &value);
-                }
+            if let Some(json) = payload.downcast_ref::<PredicateJsonPayload>()
+                && let Some(predicate) = predicate_json_from_raw(json.as_str())
+                && let Ok(value) = json::to_value(input)
+            {
+                return predicate_json_applies(&predicate, &value);
             }
         }
         true

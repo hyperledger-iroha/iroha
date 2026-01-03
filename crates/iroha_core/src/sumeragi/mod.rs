@@ -1559,7 +1559,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_drops_block_sync_update_when_block_queue_full() {
+    fn incoming_block_message_blocks_block_sync_update_when_block_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(CAP);
@@ -1621,15 +1621,18 @@ mod tests {
 
         done_rx
             .recv_timeout(Duration::from_millis(200))
-            .expect("BlockSyncUpdate should not block when block queue is full");
+            .expect_err("BlockSyncUpdate should block when block queue is full");
         let received = block_rx
             .try_recv()
             .expect("original BlockSyncUpdate should remain in the block queue");
         assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
-        assert!(
-            matches!(block_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
-            "overflow BlockSyncUpdate should be dropped when the block queue is full"
-        );
+        done_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("BlockSyncUpdate should enqueue after capacity frees");
+        let received = block_rx
+            .try_recv()
+            .expect("overflow BlockSyncUpdate should be enqueued after capacity frees");
+        assert!(matches!(received, BlockMessage::BlockSyncUpdate(_)));
         join.join().expect("join BlockSyncUpdate sender");
     }
 
@@ -3955,8 +3958,17 @@ impl SumeragiHandle {
 
     /// Enqueue an incoming block message without blocking the caller.
     /// Returns `true` if the message was accepted by the queue.
+    ///
+    /// Note: `BlockSyncUpdate` payloads may block under backpressure to avoid dropping
+    /// commit/QC evidence needed for recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
-        self.incoming_block_message_with_mode(msg, IngressMode::NonBlocking)
+        match msg {
+            BlockMessage::BlockSyncUpdate(update) => self.incoming_block_message_with_mode(
+                BlockMessage::BlockSyncUpdate(update),
+                IngressMode::Blocking,
+            ),
+            other => self.incoming_block_message_with_mode(other, IngressMode::NonBlocking),
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -4067,26 +4079,6 @@ impl SumeragiHandle {
                     }
                 },
             };
-        let enqueue_nonblocking =
-            |tx: &mpsc::SyncSender<BlockMessage>,
-             msg: BlockMessage,
-             kind: &'static str,
-             queue: status::WorkerQueueKind| match tx.try_send(msg) {
-                Ok(()) => {
-                    status::record_worker_queue_enqueue(queue);
-                    true
-                }
-                Err(mpsc::TrySendError::Full(msg)) => {
-                    status::record_worker_queue_drop(queue);
-                    log_drop(kind, queue, &msg, "channel_full");
-                    false
-                }
-                Err(mpsc::TrySendError::Disconnected(msg)) => {
-                    status::record_worker_queue_drop(queue);
-                    log_drop(kind, queue, &msg, "channel_disconnected");
-                    false
-                }
-            };
         match msg {
             BlockMessage::PrecommitVote(vote) => {
                 let vote_ref = &vote.0;
@@ -4119,12 +4111,12 @@ impl SumeragiHandle {
                     block_hash = %vote_ref.block_hash,
                     "enqueueing precommit vote from network"
                 );
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.votes,
                     BlockMessage::PrecommitVote(vote),
                     "PrecommitVote",
                     status::WorkerQueueKind::Votes,
-                );
+                )
             }
             BlockMessage::CommitVote(vote) => {
                 let signer = match crate::sumeragi::consensus::ValidatorIndex::try_from(
@@ -4171,12 +4163,12 @@ impl SumeragiHandle {
                     block_hash = %vote.block_hash,
                     "enqueueing commit vote from network"
                 );
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.votes,
                     BlockMessage::CommitVote(vote),
                     "CommitVote",
                     status::WorkerQueueKind::Votes,
-                );
+                )
             }
             BlockMessage::PrevoteVote(vote) => {
                 let vote_ref = &vote.0;
@@ -4209,12 +4201,12 @@ impl SumeragiHandle {
                     block_hash = %vote_ref.block_hash,
                     "enqueueing prevote from network"
                 );
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.votes,
                     BlockMessage::PrevoteVote(vote),
                     "PrevoteVote",
                     status::WorkerQueueKind::Votes,
-                );
+                )
             }
             BlockMessage::AvailabilityVote(vote) => {
                 let duplicate = !self.dedup_vote((
@@ -4244,60 +4236,60 @@ impl SumeragiHandle {
                     block = %vote.block_hash,
                     "enqueueing availability vote from network"
                 );
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.votes,
                     BlockMessage::AvailabilityVote(vote),
                     "AvailabilityVote",
                     status::WorkerQueueKind::Votes,
-                );
+                )
             }
             BlockMessage::ExecVote(vote) => {
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.votes,
                     BlockMessage::ExecVote(vote),
                     "ExecVote",
                     status::WorkerQueueKind::Votes,
-                );
+                )
             }
             BlockMessage::ExecutionQC(qc) => {
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.votes,
                     BlockMessage::ExecutionQC(qc),
                     "ExecutionQC",
                     status::WorkerQueueKind::Votes,
-                );
+                )
             }
             BlockMessage::PrecommitQC(qc) => {
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.votes,
                     BlockMessage::PrecommitQC(qc),
                     "VoteLike",
                     status::WorkerQueueKind::Votes,
-                );
+                )
             }
             BlockMessage::PrevoteQC(qc) => {
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.votes,
                     BlockMessage::PrevoteQC(qc),
                     "VoteLike",
                     status::WorkerQueueKind::Votes,
-                );
+                )
             }
             BlockMessage::AvailabilityQC(qc) => {
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.votes,
                     BlockMessage::AvailabilityQC(qc),
                     "VoteLike",
                     status::WorkerQueueKind::Votes,
-                );
+                )
             }
             BlockMessage::ProposalHint(hint) => {
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.votes,
                     BlockMessage::ProposalHint(hint),
                     "ProposalHint",
                     status::WorkerQueueKind::Votes,
-                );
+                )
             }
             BlockMessage::RbcReady(message) => {
                 let height = message.height;
@@ -4322,12 +4314,12 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.block_payload,
                     BlockMessage::RbcReady(message),
                     "RbcReady",
                     status::WorkerQueueKind::BlockPayload,
-                );
+                )
             }
             BlockMessage::RbcDeliver(message) => {
                 let height = message.height;
@@ -4352,12 +4344,12 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.block_payload,
                     BlockMessage::RbcDeliver(message),
                     "RbcDeliver",
                     status::WorkerQueueKind::BlockPayload,
-                );
+                )
             }
             BlockMessage::BlockCreated(created) => {
                 let header = created.block.header();
@@ -4378,12 +4370,12 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.block_payload,
                     BlockMessage::BlockCreated(created),
                     "BlockPayload",
                     status::WorkerQueueKind::BlockPayload,
-                );
+                )
             }
             BlockMessage::Proposal(proposal) => {
                 let height = proposal.header.height;
@@ -4403,45 +4395,45 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.block_payload,
                     BlockMessage::Proposal(proposal),
                     "BlockPayload",
                     status::WorkerQueueKind::BlockPayload,
-                );
+                )
             }
             BlockMessage::BlockSyncUpdate(update) => {
-                // Treat block sync updates as best-effort to avoid stalling vote/proposal traffic.
-                return enqueue_nonblocking(
+                // Block sync updates carry commit/QC evidence; dropping them can stall recovery.
+                enqueue_blocking(
                     &self.block,
                     BlockMessage::BlockSyncUpdate(update),
                     "BlockSyncUpdate",
                     status::WorkerQueueKind::Blocks,
-                );
+                )
             }
             BlockMessage::RbcInit(init) => {
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.rbc_chunks,
                     BlockMessage::RbcInit(init),
                     "RbcChunk",
                     status::WorkerQueueKind::RbcChunks,
-                );
+                )
             }
             BlockMessage::RbcChunk(chunk) => {
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.rbc_chunks,
                     BlockMessage::RbcChunk(chunk),
                     "RbcChunk",
                     status::WorkerQueueKind::RbcChunks,
-                );
+                )
             }
             other => {
-                return enqueue_blocking(
+                enqueue_blocking(
                     &self.block,
                     other,
                     "BlockMessage",
                     status::WorkerQueueKind::Blocks,
-                );
+                )
             }
         }
     }

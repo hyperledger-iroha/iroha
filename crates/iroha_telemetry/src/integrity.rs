@@ -45,7 +45,7 @@ impl ChainState {
     }
 
     pub fn new_with_kind(config: TelemetryIntegrityConfig, kind: &str) -> Self {
-        let state_path = state_path_for(kind, &config.state_dir);
+        let state_path = state_path_for(kind, config.state_dir.as_ref());
         Self::new_with_state_path(config, state_path)
     }
 
@@ -150,10 +150,8 @@ fn compute_hash(prev_hash: [u8; 32], seq: u64, payload: &[u8]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-fn state_path_for(kind: &str, state_dir: &Option<PathBuf>) -> Option<PathBuf> {
-    state_dir
-        .as_ref()
-        .map(|dir| dir.join(format!("{STATE_FILE_PREFIX}{kind}.json")))
+fn state_path_for(kind: &str, state_dir: Option<&PathBuf>) -> Option<PathBuf> {
+    state_dir.map(|dir| dir.join(format!("{STATE_FILE_PREFIX}{kind}.json")))
 }
 
 fn load_state_snapshot(path: &Path) -> Result<Option<ChainStateSnapshot>, String> {
@@ -364,7 +362,7 @@ mod tests {
     #[test]
     fn state_path_for_kind_uses_prefix() {
         let dir = PathBuf::from("telemetry-state");
-        let path = state_path_for("ws", &Some(dir.clone())).expect("state path");
+        let path = state_path_for("ws", Some(&dir)).expect("state path");
         assert_eq!(path, dir.join("telemetry_integrity_ws.json"));
     }
 }

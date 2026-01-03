@@ -323,12 +323,12 @@ where
             "--genesis-profile" => {
                 let value = next_value_string(&mut iter, "--genesis-profile")?;
                 let profile = parse_genesis_profile_flag(&value)?;
-                if let Some(existing) = overrides.genesis_profile {
-                    if existing != profile {
-                        return Err(CliParseError::new(format!(
-                            "--genesis-profile `{profile}` conflicts with `{existing}`"
-                        )));
-                    }
+                if let Some(existing) = overrides.genesis_profile
+                    && existing != profile
+                {
+                    return Err(CliParseError::new(format!(
+                        "--genesis-profile `{profile}` conflicts with `{existing}`"
+                    )));
                 }
                 overrides.genesis_profile = Some(profile);
             }
@@ -453,12 +453,12 @@ fn parse_env_overrides() -> Result<CliOverrides, CliParseError> {
     }
     if let Some(profile) = env_value("MOCHI_GENESIS_PROFILE")? {
         let parsed = parse_genesis_profile_flag(&profile)?;
-        if let Some(existing) = overrides.genesis_profile {
-            if existing != parsed {
-                return Err(CliParseError::new(format!(
-                    "MOCHI_GENESIS_PROFILE `{parsed}` conflicts with `{existing}`"
-                )));
-            }
+        if let Some(existing) = overrides.genesis_profile
+            && existing != parsed
+        {
+            return Err(CliParseError::new(format!(
+                "MOCHI_GENESIS_PROFILE `{parsed}` conflicts with `{existing}`"
+            )));
         }
         overrides.genesis_profile = Some(parsed);
     }
@@ -534,12 +534,12 @@ fn apply_profile_override(
 ) -> Result<(), CliParseError> {
     overrides.profile = Some(parsed.profile);
     if let Some(genesis_profile) = parsed.genesis_profile {
-        if let Some(existing) = overrides.genesis_profile {
-            if existing != genesis_profile {
-                return Err(CliParseError::new(format!(
-                    "{source} genesis_profile `{genesis_profile}` conflicts with `{existing}`"
-                )));
-            }
+        if let Some(existing) = overrides.genesis_profile
+            && existing != genesis_profile
+        {
+            return Err(CliParseError::new(format!(
+                "{source} genesis_profile `{genesis_profile}` conflicts with `{existing}`"
+            )));
         }
         overrides.genesis_profile = Some(genesis_profile);
     }
@@ -4671,7 +4671,7 @@ impl MochiApp {
             .config
             .set_readiness_smoke(Some(self.settings_readiness_smoke));
 
-        let has_lane_overrides = lane_count.map_or(false, |count| count > 1)
+        let has_lane_overrides = lane_count.is_some_and(|count| count > 1)
             || lane_catalog.is_some()
             || dataspace_catalog.is_some();
         if !self.settings_nexus_enabled && has_lane_overrides {
@@ -4898,10 +4898,12 @@ impl MochiApp {
         let alias = snapshot.lane_alias(lane_id);
         let dataspace_id = snapshot.lane_dataspace_id(lane_id).unwrap_or(0);
 
-        let mut metadata = LaneMetadata::default();
-        metadata.id = LaneId::new(lane_id);
-        metadata.alias = alias;
-        metadata.dataspace_id = DataSpaceId::new(u64::from(dataspace_id));
+        let mut metadata = LaneMetadata {
+            id: LaneId::new(lane_id),
+            alias,
+            dataspace_id: DataSpaceId::new(u64::from(dataspace_id)),
+            ..Default::default()
+        };
 
         let table = nexus
             .and_then(|nexus| nexus.get("lane_catalog"))
@@ -5670,29 +5672,28 @@ impl MochiApp {
                         };
                         if let Some(previews) =
                             self.lane_path_previews(lane_count, lane_catalog.as_deref())
+                            && !previews.is_empty()
                         {
-                            if !previews.is_empty() {
-                                ui.add_space(6.0);
-                                ui.label("Lane storage preview (per peer):");
-                                egui::Grid::new("mochi_lane_storage_preview")
-                                    .num_columns(3)
-                                    .striped(true)
-                                    .show(ui, |ui| {
-                                        ui.label("Lane");
-                                        ui.label("Blocks dir");
-                                        ui.label("Merge log");
+                            ui.add_space(6.0);
+                            ui.label("Lane storage preview (per peer):");
+                            egui::Grid::new("mochi_lane_storage_preview")
+                                .num_columns(3)
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    ui.label("Lane");
+                                    ui.label("Blocks dir");
+                                    ui.label("Merge log");
+                                    ui.end_row();
+                                    for preview in previews {
+                                        ui.label(format!(
+                                            "{} ({})",
+                                            preview.lane_id, preview.alias
+                                        ));
+                                        ui.label(preview.blocks_dir.display().to_string());
+                                        ui.label(preview.merge_log.display().to_string());
                                         ui.end_row();
-                                        for preview in previews {
-                                            ui.label(format!(
-                                                "{} ({})",
-                                                preview.lane_id, preview.alias
-                                            ));
-                                            ui.label(preview.blocks_dir.display().to_string());
-                                            ui.label(preview.merge_log.display().to_string());
-                                            ui.end_row();
-                                        }
-                                    });
-                            }
+                                    }
+                                });
                         }
                         ui.small(
                             "Rendered peer configs include per-lane blocks/merge-log paths in the header.",
@@ -6063,12 +6064,11 @@ impl MochiApp {
                             );
                             if reset_btn.clicked()
                                 && self.begin_maintenance(MaintenanceTask::LaneReset)
+                                && let Some(lane_id) = self.lane_reset_selection
                             {
-                                if let Some(lane_id) = self.lane_reset_selection {
-                                    self.maintenance_command =
-                                        Some(MaintenanceCommand::ResetLane { lane_id });
-                                    self.maintenance_dialog = None;
-                                }
+                                self.maintenance_command =
+                                    Some(MaintenanceCommand::ResetLane { lane_id });
+                                self.maintenance_dialog = None;
                             }
                             if ui.add_enabled(!busy, egui::Button::new("Cancel")).clicked() {
                                 self.maintenance_dialog = None;
@@ -6437,7 +6437,7 @@ impl MochiApp {
                             let Some(snapshot) = self.status_snapshots.get(alias) else {
                                 continue;
                             };
-                            let rows = snapshot.lane_status_rows(&lane_catalog);
+                            let rows = snapshot.lane_status_rows(lane_catalog);
                             if rows.is_empty() {
                                 continue;
                             }
@@ -10898,9 +10898,10 @@ fn lane_catalog_snapshot(nexus: Option<&TomlTable>) -> LaneCatalogSnapshot {
         snapshot.lane_count = Some(max.saturating_add(1));
     }
 
-    if !snapshot.dataspace_aliases.contains_key(&0) {
-        snapshot.dataspace_aliases.insert(0, "global".to_owned());
-    }
+    snapshot
+        .dataspace_aliases
+        .entry(0)
+        .or_insert_with(|| "global".to_owned());
 
     let lane_ids = snapshot.lane_ids();
     for lane_id in lane_ids {
@@ -11286,10 +11287,11 @@ impl PeerStatusView {
             if relay.da_commitment_hash.is_none() {
                 return RelayIngestState::MissingDa;
             }
-            if let Some(governance) = governance {
-                if governance.manifest_required && !governance.manifest_ready {
-                    return RelayIngestState::MissingManifest;
-                }
+            if let Some(governance) = governance
+                && governance.manifest_required
+                && !governance.manifest_ready
+            {
+                return RelayIngestState::MissingManifest;
             }
             if relay.manifest_root.is_none()
                 && governance
@@ -13242,12 +13244,14 @@ mod tests {
     fn lane_status_rows_surface_relay_lag_and_cursor() {
         let mut view = PeerStatusView::default();
         let now = Instant::now();
-        let mut status = TelemetryStatus::default();
-        status.da_receipt_cursors = vec![iroha_telemetry::metrics::DaReceiptCursorStatus {
-            lane_id: 0,
-            epoch: 2,
-            highest_sequence: 7,
-        }];
+        let status = TelemetryStatus {
+            da_receipt_cursors: vec![iroha_telemetry::metrics::DaReceiptCursorStatus {
+                lane_id: 0,
+                epoch: 2,
+                highest_sequence: 7,
+            }],
+            ..TelemetryStatus::default()
+        };
         let snapshot = ToriiStatusSnapshot {
             timestamp: now,
             status: status.clone(),

@@ -151,6 +151,7 @@ impl Actor {
             let qc_roster = self.roster_for_vote_with_mode(
                 frame.highest_qc.subject_block_hash,
                 frame.highest_qc.height,
+                frame.highest_qc.view,
                 qc_consensus_mode,
             );
             if qc_roster.is_empty() {
@@ -430,7 +431,8 @@ impl Actor {
         &mut self,
         evidence: crate::sumeragi::consensus::Evidence,
     ) -> Result<()> {
-        let (subject_height, _) = super::evidence::evidence_subject_height_view(&evidence);
+        let (subject_height, subject_view) =
+            super::evidence::evidence_subject_height_view(&evidence);
         let view = self.state.view();
         let height = subject_height.unwrap_or_else(|| u64::try_from(view.height()).unwrap_or(0));
         let consensus_mode =
@@ -446,8 +448,10 @@ impl Actor {
         };
         drop(view);
         let mut evidence_roster = None;
+        let subject_view = subject_view.unwrap_or(0);
         for (height, block_hash) in super::evidence::evidence_block_refs(&evidence) {
-            let roster = self.roster_for_vote_with_mode(block_hash, height, consensus_mode);
+            let roster =
+                self.roster_for_vote_with_mode(block_hash, height, subject_view, consensus_mode);
             if !roster.is_empty() {
                 evidence_roster = Some(roster);
                 break;
