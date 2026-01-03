@@ -1,6 +1,17 @@
 # Status
 
 ## Latest Updates
+- Clamped RBC chunk size/pending caps to a minimum of 1 byte when `rbc_chunk_max_bytes` is zero and added unit coverage for zero-size configs.
+- Tests: not run (not requested).
+- Format: not run (not requested).
+- Translated the Nexus elastic lane provisioning doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Limited integration-test network concurrency via a sandbox permit guard, added test-only overrides to avoid unsafe env mutations, and documented `IROHA_TEST_NETWORK_PARALLELISM` in the integration test README.
+- Tests: `cargo test -p integration_tests --lib sandbox -- --nocapture` (passed; warnings about unused import/dead code in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` and `crates/iroha_core/src/sumeragi/network_topology.rs`).
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus settlement FAQ doc across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
 - Preserved persisted RBC invalid flags when rebuilding sessions from disk and added unit coverage for invalid-session roundtrips.
 - Tests: not run (not requested).
 - Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
