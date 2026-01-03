@@ -279,6 +279,8 @@ pub struct PeersGossiper {
     consensus_mode: iroha_config::parameters::actual::ConsensusMode,
     /// Trusted peers configured locally
     trusted_peers: BTreeSet<PeerId>,
+    /// Configured peers that stay trusted even if topology excludes them (e.g., observers).
+    static_trusted_peers: BTreeSet<PeerId>,
     /// Peers we can re-promote once trust decays above the floor.
     trust_candidates: BTreeSet<PeerId>,
     /// Peers received via gossiping from other peers
@@ -333,6 +335,7 @@ impl PeersGossiper {
             .map(|peer| (peer.id().clone(), peer.address().clone()))
             .collect();
         let trusted_set: BTreeSet<_> = trusted_list.iter().map(|peer| peer.id().clone()).collect();
+        let static_trusted_peers = trusted_set.clone();
         let initial_topology: BTreeSet<_> = trusted_set.clone();
         let trust_candidates = trusted_set.clone();
         let mut gossiper = Self {
@@ -340,6 +343,7 @@ impl PeersGossiper {
             initial_peers,
             consensus_mode,
             trusted_peers: trusted_set,
+            static_trusted_peers,
             trust_candidates,
             gossip_peers: BTreeMap::new(),
             current_topology: initial_topology.clone(),
@@ -456,6 +460,9 @@ impl PeersGossiper {
         if !removed.is_empty() {
             let mut trust_changed = false;
             for peer in removed {
+                if self.static_trusted_peers.contains(&peer) {
+                    continue;
+                }
                 trust_changed |= self.trusted_peers.remove(&peer);
                 self.trust_candidates.remove(&peer);
                 self.trust.entries.remove(&peer);
@@ -782,11 +789,20 @@ impl<'a> NoritoDeserialize<'a> for PeersGossip {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeSet, HashSet},
+        collections::{BTreeMap, BTreeSet, HashSet},
         time::Instant,
     };
 
+    use iroha_config::{
+        base::WithOrigin,
+        parameters::actual::{
+            ConsensusMode, LaneProfile, Network as NetworkConfig, RelayMode, SoranetHandshake,
+            SoranetPrivacy, SoranetVpn, TrustedPeers as TrustedPeersConfig,
+        },
+    };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::ChainId;
+    use iroha_futures::supervisor::ShutdownSignal;
 
     use super::*;
     #[test]
@@ -908,6 +924,181 @@ mod tests {
         );
         handle.gossip_trust(PeerTrustGossip { trust: Vec::new() }, peer);
         handle.update_topology(UpdateTopology(HashSet::new()));
+    }
+
+    #[tokio::test]
+    async fn topology_update_preserves_static_trusted_peers() {
+        let shutdown = ShutdownSignal::new();
+        let listen_addr: SocketAddr = "127.0.0.1:0".parse().expect("addr");
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::from(key_pair.public_key().clone());
+
+        let network_cfg = NetworkConfig {
+            address: WithOrigin::inline(listen_addr.into()),
+            public_address: WithOrigin::inline(listen_addr.into()),
+            relay_mode: RelayMode::Disabled,
+            relay_hub_address: None,
+            relay_ttl: iroha_config::parameters::defaults::network::RELAY_TTL,
+            soranet_handshake: SoranetHandshake::default(),
+            soranet_privacy: SoranetPrivacy::default(),
+            soranet_vpn: SoranetVpn::default(),
+            lane_profile: LaneProfile::Core,
+            require_sm_handshake_match:
+                iroha_config::parameters::defaults::network::REQUIRE_SM_HANDSHAKE_MATCH,
+            require_sm_openssl_preview_match:
+                iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
+            idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
+            peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            trust_decay_half_life:
+                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
+            trust_penalty_bad_gossip:
+                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
+            trust_penalty_unknown_peer:
+                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
+            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+            dns_refresh_interval: None,
+            dns_refresh_ttl: None,
+            quic_enabled: false,
+            tls_enabled: false,
+            tls_listen_address: None,
+            prefer_ws_fallback: false,
+            p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,
+            p2p_queue_cap_low: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_LOW,
+            p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
+            happy_eyeballs_stagger:
+                iroha_config::parameters::defaults::network::HAPPY_EYEBALLS_STAGGER,
+            addr_ipv6_first: false,
+            max_incoming: None,
+            max_total_connections: None,
+            accept_rate_per_ip_per_sec: None,
+            accept_burst_per_ip: None,
+            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
+            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
+            accept_prefix_v4_bits:
+                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
+            accept_prefix_v6_bits:
+                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
+            accept_rate_per_prefix_per_sec: None,
+            accept_burst_per_prefix: None,
+            low_priority_rate_per_sec: None,
+            low_priority_burst: None,
+            low_priority_bytes_per_sec: None,
+            low_priority_bytes_burst: None,
+            allowlist_only: false,
+            allow_keys: Vec::new(),
+            deny_keys: Vec::new(),
+            allow_cidrs: Vec::new(),
+            deny_cidrs: Vec::new(),
+            disconnect_on_post_overflow:
+                iroha_config::parameters::defaults::network::DISCONNECT_ON_POST_OVERFLOW,
+            max_frame_bytes: iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get(),
+            tcp_nodelay: iroha_config::parameters::defaults::network::TCP_NODELAY,
+            tcp_keepalive: Some(iroha_config::parameters::defaults::network::TCP_KEEPALIVE),
+            max_frame_bytes_consensus:
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get(),
+            max_frame_bytes_control:
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONTROL.get(),
+            max_frame_bytes_block_sync:
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get(),
+            max_frame_bytes_tx_gossip:
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_TX_GOSSIP.get(),
+            max_frame_bytes_peer_gossip:
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
+            max_frame_bytes_health:
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
+            max_frame_bytes_other:
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_OTHER.get(),
+            tls_only_v1_3: true,
+            quic_max_idle_timeout: None,
+        };
+
+        let (network, _child) = IrohaNetwork::start(
+            key_pair.clone(),
+            network_cfg.clone(),
+            Some(ChainId::from("gossiper-topology-test")),
+            None,
+            None,
+            shutdown.clone(),
+        )
+        .await
+        .expect("network starts");
+
+        let local_peer = Peer::new(listen_addr, peer_id.clone());
+        let observer_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let observer_peer = Peer::new(
+            "127.0.0.1:9101".parse().expect("addr"),
+            observer_kp.public_key().clone(),
+        );
+        let trusted_peers = TrustedPeersConfig {
+            myself: local_peer,
+            others: UniqueVec::from_iter(vec![observer_peer.clone()]),
+            pops: BTreeMap::new(),
+        };
+
+        let trusted_list = trusted_peers.others.clone();
+        let initial_peers = trusted_list
+            .iter()
+            .map(|peer| (peer.id().clone(), peer.address().clone()))
+            .collect();
+        let trusted_set: BTreeSet<_> = trusted_list.iter().map(|peer| peer.id().clone()).collect();
+        let current_topology = trusted_set.clone();
+        let trust_candidates = trusted_set.clone();
+        let mut gossiper = PeersGossiper {
+            peer_id,
+            initial_peers,
+            consensus_mode: ConsensusMode::Permissioned,
+            trusted_peers: trusted_set.clone(),
+            static_trusted_peers: trusted_set.clone(),
+            trust_candidates,
+            gossip_peers: BTreeMap::new(),
+            current_topology,
+            key_pair: key_pair.clone(),
+            gossip_period: network_cfg.peer_gossip_period,
+            trust: TrustBook::new(
+                network_cfg.trust_decay_half_life,
+                TrustPenalties {
+                    bad_gossip: i64::from(network_cfg.trust_penalty_bad_gossip),
+                    unknown_peer: i64::from(network_cfg.trust_penalty_unknown_peer),
+                },
+                network_cfg.trust_min_score,
+            ),
+            network: network.clone(),
+        };
+
+        let dynamic_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let dynamic_peer_id = PeerId::from(dynamic_kp.public_key().clone());
+        gossiper.trusted_peers.insert(dynamic_peer_id.clone());
+        gossiper.trust_candidates.insert(dynamic_peer_id.clone());
+        gossiper.current_topology.insert(dynamic_peer_id.clone());
+        gossiper.trust.entries.insert(
+            dynamic_peer_id.clone(),
+            TrustEntry {
+                score: 0,
+                last_updated: Instant::now(),
+            },
+        );
+
+        gossiper.set_current_topology(UpdateTopology(HashSet::new()));
+
+        assert!(
+            gossiper.trusted_peers.contains(observer_peer.id()),
+            "configured observer should remain trusted even if excluded from topology"
+        );
+        assert!(
+            !gossiper.trusted_peers.contains(&dynamic_peer_id),
+            "non-static peer should be dropped from trust when removed from topology"
+        );
+        assert!(
+            gossiper.trust_candidates.contains(observer_peer.id()),
+            "configured observer should remain a trust candidate"
+        );
+        assert!(
+            !gossiper.trust_candidates.contains(&dynamic_peer_id),
+            "removed dynamic peer should not remain a trust candidate"
+        );
+
+        shutdown.send();
     }
 
     #[test]

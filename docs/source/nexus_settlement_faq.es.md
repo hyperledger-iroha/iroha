@@ -60,33 +60,33 @@ settlement, conversion de XOR, telemetria y evidencia de auditoria. Consulte
 ### Como se aplican tarifas y reembolsos?
 
 - Las tarifas se expresan por lane en el manifest:
-  - `base_fee_bps` — se aplica a cada debito de settlement.
-  - `liquidity_haircut_bps` — compensa a proveedores de liquidez compartida.
-  - `rebate_policy` — opcional (p. ej., rebates promocionales CBDC).
+  - `base_fee_bps` - se aplica a cada debito de settlement.
+  - `liquidity_haircut_bps` - compensa a proveedores de liquidez compartida.
+  - `rebate_policy` - opcional (p. ej., rebates promocionales CBDC).
 - El router emite eventos `SettlementApplied` (formato Norito) con desgloses de tarifas para que
   SDKs y auditores concilien entradas del ledger.
 
 ### Que telemetria demuestra que los settlements estan saludables?
 
 - Metricas Prometheus (exportadas via `iroha_telemetry` y settlement router):
-  - `nexus_settlement_latency_seconds{lane_id}` — P99 debe mantenerse por debajo de 900 ms para
+  - `nexus_settlement_latency_seconds{lane_id}` - P99 debe mantenerse por debajo de 900 ms para
     lanes publicas / 1200 ms para lanes privadas.
-  - `settlement_router_conversion_total{source_token}` — confirma volumenes de conversion por token.
-  - `settlement_router_haircut_total{lane_id}` — alertar cuando sea distinto de cero sin una nota de
+  - `settlement_router_conversion_total{source_token}` - confirma volumenes de conversion por token.
+  - `settlement_router_haircut_total{lane_id}` - alertar cuando sea distinto de cero sin una nota de
     gobernanza asociada.
-  - `iroha_settlement_buffer_xor{lane_id,dataspace_id}` — muestra debitos XOR en vivo por lane
+  - `iroha_settlement_buffer_xor{lane_id,dataspace_id}` - muestra debitos XOR en vivo por lane
     (micro unidades). Alertar cuando <25 %/10 % de Bmin.
-  - `iroha_settlement_pnl_xor{lane_id,dataspace_id}` — variacion de haircut realizada para conciliar
+  - `iroha_settlement_pnl_xor{lane_id,dataspace_id}` - variacion de haircut realizada para conciliar
     con P&L de tesoreria.
-  - `iroha_settlement_haircut_bp{lane_id,dataspace_id}` — epsilon efectivo aplicado en el ultimo
+  - `iroha_settlement_haircut_bp{lane_id,dataspace_id}` - epsilon efectivo aplicado en el ultimo
     bloque; auditores comparan contra la politica del router.
-  - `iroha_settlement_swapline_utilisation{lane_id,dataspace_id,profile}` — uso de linea de credito
+  - `iroha_settlement_swapline_utilisation{lane_id,dataspace_id,profile}` - uso de linea de credito
     sponsor/MM; alertar por encima de 80 %.
-- `nexus_lane_block_height{lane,dataspace}` — ultima altura de bloque observada para el par
+- `nexus_lane_block_height{lane,dataspace}` - ultima altura de bloque observada para el par
   lane/dataspace; mantener peers vecinos dentro de pocos slots entre si.
-- `nexus_lane_finality_lag_slots{lane,dataspace}` — slots de separacion entre el head global y el
+- `nexus_lane_finality_lag_slots{lane,dataspace}` - slots de separacion entre el head global y el
   bloque mas reciente de esa lane; alertar cuando >12 fuera de drills.
-- `nexus_lane_settlement_backlog_xor{lane,dataspace}` — backlog esperando settlement en XOR; gatear
+- `nexus_lane_settlement_backlog_xor{lane,dataspace}` - backlog esperando settlement en XOR; gatear
   cargas CBDC/privadas antes de superar umbrales regulatorios.
 
 `settlement_router_conversion_total` lleva las etiquetas `lane_id`, `dataspace_id` y
@@ -132,12 +132,12 @@ Archiva ambos outputs bajo `artifacts/` con la evidencia routed-trace (capturas 
 
 ### Que evidencia esperan los auditores?
 
-1. **Snapshot de config** — captura `config/config.toml` con la seccion `[settlement]` y el catalogo
+1. **Snapshot de config** - captura `config/config.toml` con la seccion `[settlement]` y el catalogo
    de lanes referenciado por el manifest actual.
-2. **Logs del router** — archiva `settlement_router.log` diariamente; incluye IDs de settlement
+2. **Logs del router** - archiva `settlement_router.log` diariamente; incluye IDs de settlement
    con hash, debitos XOR y donde se aplicaron haircuts.
-3. **Exportes de telemetria** — snapshot semanal de las metricas mencionadas arriba.
-4. **Reporte de conciliacion** — opcional pero recomendado: exporta entradas `SettlementRecordV1`
+3. **Exportes de telemetria** - snapshot semanal de las metricas mencionadas arriba.
+4. **Reporte de conciliacion** - opcional pero recomendado: exporta entradas `SettlementRecordV1`
    (ver `docs/source/cbdc_lane_playbook.md`) y compara contra el ledger de tesoreria.
 
 ### Los SDKs necesitan manejo especial para settlement?

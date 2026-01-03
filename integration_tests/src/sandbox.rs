@@ -3,24 +3,22 @@ use std::{
     env,
     ops::{Deref, DerefMut},
     panic::{self, AssertUnwindSafe},
-    sync::{Arc, OnceLock},
+    sync::{Arc, Condvar, Mutex, OnceLock},
     thread,
     time::Duration,
 };
 
 use eyre::{Report, Result};
 use iroha_test_network::{Network, NetworkBuilder};
-use tokio::{
-    runtime::{Handle, Runtime},
-    sync::{Mutex, OwnedMutexGuard},
-};
+use tokio::runtime::{Handle, Runtime};
 
-/// Optional guard that serializes integration tests which spin up a network.
+/// Optional guard that limits concurrent integration tests which spin up a network.
 ///
-/// Set `IROHA_TEST_SERIALIZE_NETWORKS=1` to enable serialization.
+/// Set `IROHA_TEST_SERIALIZE_NETWORKS=1` to force serialization or
+/// `IROHA_TEST_NETWORK_PARALLELISM=<N>` to tune parallelism.
 #[must_use]
 pub struct SerialGuard {
-    _guard: Option<OwnedMutexGuard<()>>,
+    _guard: Option<NetworkPermit>,
 }
 
 /// Network wrapper that keeps the optional serial guard alive for the entire test scope.
@@ -97,17 +95,60 @@ impl Drop for SerializedNetwork {
     }
 }
 
+struct NetworkPermit {
+    state: Arc<NetworkPermitState>,
+}
+
+struct NetworkPermitState {
+    state: Mutex<PermitState>,
+    cvar: Condvar,
+}
+
+struct PermitState {
+    limit: usize,
+    in_use: usize,
+}
+
+impl NetworkPermitState {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(PermitState {
+                limit: network_parallelism_limit(),
+                in_use: 0,
+            }),
+            cvar: Condvar::new(),
+        }
+    }
+}
+
+impl Drop for NetworkPermit {
+    fn drop(&mut self) {
+        let mut state = self
+            .state
+            .state
+            .lock()
+            .expect("network permit mutex poisoned");
+        state.in_use = state.in_use.saturating_sub(1);
+        self.state.cvar.notify_one();
+    }
+}
+
 const SERIAL_GUARD_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
+const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 
-fn serial_lock() -> &'static Arc<Mutex<()>> {
-    static SERIAL_LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
-    SERIAL_LOCK.get_or_init(|| Arc::new(Mutex::default()))
+fn network_permit_state() -> &'static Arc<NetworkPermitState> {
+    static NETWORK_STATE: OnceLock<Arc<NetworkPermitState>> = OnceLock::new();
+    NETWORK_STATE.get_or_init(|| Arc::new(NetworkPermitState::new()))
 }
 
 fn serialize_networks_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(value) = test_override_serialization() {
+        return value;
+    }
     let Ok(raw) = env::var(SERIALIZE_NETWORKS_ENV) else {
         return false;
     };
@@ -117,33 +158,120 @@ fn serialize_networks_enabled() -> bool {
     )
 }
 
-/// Acquire the global integration-test mutex to serialize network startup when enabled.
-pub fn serial_guard() -> SerialGuard {
-    if !serialize_networks_enabled() {
-        return SerialGuard { _guard: None };
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+struct TestOverrides {
+    serialize: Option<bool>,
+    parallelism: Option<usize>,
+}
+
+#[cfg(test)]
+struct OverrideGuard {
+    previous: TestOverrides,
+}
+
+#[cfg(test)]
+fn test_override_state() -> &'static Mutex<TestOverrides> {
+    static OVERRIDES: OnceLock<Mutex<TestOverrides>> = OnceLock::new();
+    OVERRIDES.get_or_init(|| Mutex::new(TestOverrides::default()))
+}
+
+#[cfg(test)]
+fn test_override_serialization() -> Option<bool> {
+    let guard = test_override_state()
+        .lock()
+        .expect("test override mutex poisoned");
+    guard.serialize
+}
+
+#[cfg(test)]
+fn test_override_parallelism() -> Option<usize> {
+    let guard = test_override_state()
+        .lock()
+        .expect("test override mutex poisoned");
+    guard.parallelism
+}
+
+#[cfg(test)]
+fn set_test_overrides(serialize: Option<bool>, parallelism: Option<usize>) -> OverrideGuard {
+    let mut guard = test_override_state()
+        .lock()
+        .expect("test override mutex poisoned");
+    let previous = *guard;
+    guard.serialize = serialize;
+    guard.parallelism = parallelism;
+    OverrideGuard { previous }
+}
+
+#[cfg(test)]
+impl Drop for OverrideGuard {
+    fn drop(&mut self) {
+        let mut guard = test_override_state()
+            .lock()
+            .expect("test override mutex poisoned");
+        *guard = self.previous;
     }
-    let lock = serial_lock();
+}
+
+fn default_network_parallelism() -> usize {
+    let cores = thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1);
+    let per_network = MIN_NETWORK_PEERS.max(1);
+    cores.saturating_div(per_network).max(1)
+}
+
+fn network_parallelism_limit() -> usize {
+    if serialize_networks_enabled() {
+        return 1;
+    }
+    #[cfg(test)]
+    if let Some(value) = test_override_parallelism().filter(|value| *value > 0) {
+        return value;
+    }
+    if let Ok(raw) = env::var(NETWORK_PARALLELISM_ENV) {
+        if let Ok(parsed) = raw.trim().parse::<usize>() {
+            if parsed > 0 {
+                return parsed;
+            }
+        }
+    }
+    default_network_parallelism()
+}
+
+fn acquire_network_permit() -> NetworkPermit {
+    let state = network_permit_state().clone();
     let mut waited = Duration::ZERO;
     let mut next_log = SERIAL_GUARD_LOG_INTERVAL;
+    let mut guard = state.state.lock().expect("network permit mutex poisoned");
     loop {
-        if let Ok(guard) = lock.clone().try_lock_owned() {
-            if waited >= SERIAL_GUARD_LOG_INTERVAL {
-                eprintln!(
-                    "serial guard acquired the global mutex after waiting {waited:?}; continuing with serialized network startup"
-                );
-            }
-            return SerialGuard {
-                _guard: Some(guard),
-            };
+        guard.limit = network_parallelism_limit();
+        if guard.in_use < guard.limit {
+            guard.in_use = guard.in_use.saturating_add(1);
+            drop(guard);
+            return NetworkPermit { state };
         }
         if waited >= next_log {
             eprintln!(
-                "serial guard has waited {waited:?} to serialize network startup; continuing to wait to avoid port contention"
+                "network guard has waited {waited:?}; {in_use}/{limit} permits in use",
+                in_use = guard.in_use,
+                limit = guard.limit
             );
             next_log = next_log.saturating_add(SERIAL_GUARD_LOG_INTERVAL);
         }
-        thread::sleep(SERIAL_GUARD_POLL_INTERVAL);
+        let (next, _) = state
+            .cvar
+            .wait_timeout(guard, SERIAL_GUARD_POLL_INTERVAL)
+            .expect("network permit mutex poisoned during wait");
+        guard = next;
         waited = waited.saturating_add(SERIAL_GUARD_POLL_INTERVAL);
+    }
+}
+
+/// Acquire the global integration-test permit to bound concurrent network startup.
+pub fn serial_guard() -> SerialGuard {
+    SerialGuard {
+        _guard: Some(acquire_network_permit()),
     }
 }
 
@@ -345,10 +473,7 @@ fn is_sandbox_message(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::{
-        env,
-        sync::{Mutex, MutexGuard, OnceLock},
-    };
+    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use super::*;
 
@@ -361,48 +486,10 @@ mod tests {
             .expect("env lock")
     }
 
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<std::ffi::OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let original = env::var_os(key);
-            set_env_var(key, value);
-            Self { key, original }
-        }
-
-        fn clear(key: &'static str) -> Self {
-            let original = env::var_os(key);
-            remove_env_var(key);
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(value) = self.original.as_ref() {
-                set_env_var(self.key, value);
-            } else {
-                remove_env_var(self.key);
-            }
-        }
-    }
-
-    fn set_env_var<K, V>(key: K, value: V)
-    where
-        K: AsRef<std::ffi::OsStr>,
-        V: AsRef<std::ffi::OsStr>,
-    {
-        unsafe { env::set_var(key, value) }
-    }
-
-    fn remove_env_var<K>(key: K)
-    where
-        K: AsRef<std::ffi::OsStr>,
-    {
-        unsafe { env::remove_var(key) }
+    fn network_permit_snapshot() -> (usize, usize) {
+        let state = network_permit_state();
+        let guard = state.state.lock().expect("network permit mutex poisoned");
+        (guard.limit, guard.in_use)
     }
 
     #[test]
@@ -439,59 +526,88 @@ mod tests {
     #[test]
     fn serialized_network_holds_serial_guard() {
         let _env_guard = lock_env_guard();
-        let _serialize_guard = EnvVarGuard::set(SERIALIZE_NETWORKS_ENV, "1");
-        let lock = serial_lock().clone();
+        let _override_guard = set_test_overrides(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new().build();
         let serialized = SerializedNetwork::new(network, guard);
 
-        assert!(
-            lock.clone().try_lock_owned().is_err(),
-            "serial guard should be held while serialized network is alive"
-        );
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(limit, 1);
+        assert_eq!(in_use, 1);
 
         drop(serialized);
-        let released = lock
-            .clone()
-            .try_lock_owned()
-            .expect("serial guard should release after serialized network drops");
-        drop(released);
+        let (_, in_use) = network_permit_snapshot();
+        assert_eq!(in_use, 0);
+    }
+
+    #[test]
+    fn network_permit_releases_mutex_after_acquire() {
+        let _env_guard = lock_env_guard();
+        let _override_guard = set_test_overrides(None, Some(1));
+        let permit = acquire_network_permit();
+        let state = network_permit_state();
+        assert!(
+            state.state.try_lock().is_ok(),
+            "network permit mutex should be released after acquiring"
+        );
+        drop(permit);
     }
 
     #[test]
     fn serialized_network_shutdown_blocking_releases_guard() {
         let _env_guard = lock_env_guard();
-        let _serialize_guard = EnvVarGuard::set(SERIALIZE_NETWORKS_ENV, "1");
-        let lock = serial_lock().clone();
+        let _override_guard = set_test_overrides(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new().build();
         let serialized = SerializedNetwork::new(network, guard);
 
-        assert!(
-            lock.clone().try_lock_owned().is_err(),
-            "serial guard should be held while serialized network is alive"
-        );
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(limit, 1);
+        assert_eq!(in_use, 1);
 
         serialized.shutdown_blocking();
-        let released = lock
-            .clone()
-            .try_lock_owned()
-            .expect("serial guard should release after shutdown_blocking");
-        drop(released);
+        let (_, in_use) = network_permit_snapshot();
+        assert_eq!(in_use, 0);
     }
 
     #[test]
-    fn serial_guard_is_noop_by_default() {
+    fn serial_guard_applies_default_parallelism() {
         let _env_guard = lock_env_guard();
-        let _clear_guard = EnvVarGuard::clear(SERIALIZE_NETWORKS_ENV);
-        let lock = serial_lock().clone();
+        let _override_guard = set_test_overrides(None, None);
+        let (_, in_use_before) = network_permit_snapshot();
         let guard = serial_guard();
-        let probe = lock.clone().try_lock_owned();
+        let (limit, in_use) = network_permit_snapshot();
         assert!(
-            probe.is_ok(),
-            "serial guard should be disabled unless {SERIALIZE_NETWORKS_ENV} is set"
+            limit >= 1,
+            "default network parallelism should be at least 1"
         );
-        drop(probe);
+        assert_eq!(in_use, in_use_before.saturating_add(1));
+        drop(guard);
+        let (_, in_use_after) = network_permit_snapshot();
+        assert_eq!(in_use_after, in_use_before);
+    }
+
+    #[test]
+    fn network_parallelism_env_override_applies() {
+        let _env_guard = lock_env_guard();
+        let _override_guard = set_test_overrides(None, Some(2));
+
+        let guard = serial_guard();
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(limit, 2);
+        assert_eq!(in_use, 1);
+        drop(guard);
+    }
+
+    #[test]
+    fn serialization_overrides_parallelism_limit() {
+        let _env_guard = lock_env_guard();
+        let _override_guard = set_test_overrides(Some(true), Some(4));
+
+        let guard = serial_guard();
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(limit, 1);
+        assert_eq!(in_use, 1);
         drop(guard);
     }
 
