@@ -1,6 +1,9 @@
 # Status
 
 ## Latest Updates
+- Updated the unregister-peer churn integration test to wait for the removed peer to observe the post-unregister mint, matching block-sync behavior.
+- Tests: `cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (skipped: loopback bind denied in sandbox).
+- Tests: `cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (failed: `iroha3d` build error, missing `main` in `crates/irohad/src/main.rs`).
 - Resolved merge conflicts in `integration_tests/tests/debug_genesis.rs`, `integration_tests/tests/extra_functional/offline_peers.rs`, and `status.md`.
 - Tests: not run (merge resolution only).
 - Wait for trigger-completion events while submitting the trigger in the integration notification test and close the WS stream after receipt to avoid missed events and shutdown lag.
