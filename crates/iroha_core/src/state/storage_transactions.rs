@@ -109,6 +109,7 @@ mod view {
     use super::*;
 
     /// Consistent view of the storage at the certain version
+    #[derive(Clone)]
     pub struct TransactionsView<'storage> {
         pub(super) latest_block: Option<Arc<BlockInfo>>,
         /// Some transactions may be added to the map after `Self` is created,

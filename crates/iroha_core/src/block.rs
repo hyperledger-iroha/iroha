@@ -2118,6 +2118,20 @@ pub(crate) mod valid {
 
     type Error = (Box<SignedBlock>, Box<BlockValidationError>);
 
+    #[cfg(feature = "telemetry")]
+    type MetricsRef<'a> = Option<&'a crate::telemetry::StateTelemetry>;
+    #[cfg(not(feature = "telemetry"))]
+    type MetricsRef<'a> = ();
+
+    struct StaticValidationData {
+        expected_block_height: usize,
+        max_clock_drift: Duration,
+        tx_params: iroha_data_model::parameter::TransactionParameters,
+        crypto_cfg: Arc<iroha_config::parameters::actual::Crypto>,
+        pipeline_cfg: iroha_config::parameters::actual::Pipeline,
+        aggregate_lane: LaneId,
+    }
+
     #[allow(clippy::too_many_lines)]
     pub fn validate_axt_envelopes(
         block: &SignedBlock,
@@ -3066,14 +3080,43 @@ pub(crate) mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            if let Err(error) = Self::validate_static(
+            let (static_data, transactions_view) = {
+                let view = state.view();
+                let static_data = match Self::validate_static_state_dependent(
+                    &block,
+                    topology,
+                    expected_chain_id,
+                    genesis_account,
+                    &view,
+                    soft_fork,
+                    time_source,
+                ) {
+                    Ok(data) => data,
+                    Err(error) => {
+                        let ev = PipelineEventBox::from(BlockEvent {
+                            header: block.header(),
+                            status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
+                        });
+                        // No callback available here; rejection is emitted by the caller in
+                        // `_with_events` variants. Keep behavior unchanged.
+                        let _ = ev; // avoid unused warning if optimized out
+                        return WithEvents::new(Err((Box::new(block), Box::new(error))));
+                    }
+                };
+                let transactions_view = view.transactions.clone();
+                (static_data, transactions_view)
+            };
+            #[cfg(feature = "telemetry")]
+            let metrics = Some(&state.telemetry);
+            #[cfg(not(feature = "telemetry"))]
+            let metrics = ();
+            if let Err(error) = Self::validate_static_with_snapshot(
                 &block,
-                topology,
                 expected_chain_id,
                 genesis_account,
-                &state.view(),
-                soft_fork,
-                time_source,
+                &static_data,
+                &transactions_view,
+                metrics,
             ) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -3138,14 +3181,41 @@ pub(crate) mod valid {
             soft_fork: bool,
             mut send_events: F,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
-            if let Err(error) = Self::validate_static(
+            let (static_data, transactions_view) = {
+                let view = state.view();
+                let static_data = match Self::validate_static_state_dependent(
+                    &block,
+                    topology,
+                    expected_chain_id,
+                    genesis_account,
+                    &view,
+                    soft_fork,
+                    time_source,
+                ) {
+                    Ok(data) => data,
+                    Err(error) => {
+                        let ev = PipelineEventBox::from(BlockEvent {
+                            header: block.header(),
+                            status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
+                        });
+                        send_events(ev);
+                        return WithEvents::new(Err((Box::new(block), Box::new(error))));
+                    }
+                };
+                let transactions_view = view.transactions.clone();
+                (static_data, transactions_view)
+            };
+            #[cfg(feature = "telemetry")]
+            let metrics = Some(&state.telemetry);
+            #[cfg(not(feature = "telemetry"))]
+            let metrics = ();
+            if let Err(error) = Self::validate_static_with_snapshot(
                 &block,
-                topology,
                 expected_chain_id,
                 genesis_account,
-                &state.view(),
-                soft_fork,
-                time_source,
+                &static_data,
+                &transactions_view,
+                metrics,
             ) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -3215,14 +3285,14 @@ pub(crate) mod valid {
             WithEvents::new(Ok((ValidBlock(block), state_block)))
         }
 
-        /// All static checks of the block.
+        /// All static checks that require a state snapshot.
         #[allow(
             clippy::too_many_arguments,
             clippy::too_many_lines,
             clippy::explicit_iter_loop,
             clippy::collapsible_else_if
         )]
-        fn validate_static(
+        fn validate_static_state_dependent(
             block: &SignedBlock,
             topology: &Topology,
             chain_id: &ChainId,
@@ -3230,7 +3300,7 @@ pub(crate) mod valid {
             state: &impl StateReadOnlyWithTransactions,
             soft_fork: bool,
             time_source: &TimeSource,
-        ) -> Result<(), BlockValidationError> {
+        ) -> Result<StaticValidationData, BlockValidationError> {
             let state_height = state.block_hashes().len();
             let expected_block_height = if soft_fork {
                 state_height
@@ -3265,8 +3335,11 @@ pub(crate) mod valid {
                 });
             }
 
+            let params = state.world().parameters();
+            let max_clock_drift = params.sumeragi().max_clock_drift();
+            let tx_params = params.transaction();
+
             let now = time_source.now();
-            let max_clock_drift = state.world().parameters().sumeragi().max_clock_drift();
             let block_creation_time = block.header().creation_time();
             if block_creation_time.saturating_sub(now) > max_clock_drift {
                 return Err(BlockValidationError::BlockInTheFuture);
@@ -3286,7 +3359,8 @@ pub(crate) mod valid {
                 });
             }
 
-            let expected_policy_hash = proof_policy_bundle_hash(&state.nexus().lane_config);
+            let nexus = state.nexus();
+            let expected_policy_hash = proof_policy_bundle_hash(&nexus.lane_config);
             if block.header().da_proof_policies_hash() != Some(expected_policy_hash) {
                 return Err(BlockValidationError::ProofPolicyHashMismatch {
                     expected: expected_policy_hash,
@@ -3334,10 +3408,48 @@ pub(crate) mod valid {
                 Self::enforce_consensus_key_lifecycle(block, topology, state)?;
             }
 
-            let (max_clock_drift, tx_params) = {
-                let params = state.world().parameters();
-                (params.sumeragi().max_clock_drift(), params.transaction())
-            };
+            let crypto_cfg = state.crypto();
+            let pipeline_cfg = state.pipeline().clone();
+            let aggregate_lane = nexus.routing_policy.default_lane;
+
+            Ok(StaticValidationData {
+                expected_block_height,
+                max_clock_drift,
+                tx_params,
+                crypto_cfg,
+                pipeline_cfg,
+                aggregate_lane,
+            })
+        }
+
+        /// Static checks that do not require holding a state view.
+        #[allow(
+            clippy::too_many_arguments,
+            clippy::too_many_lines,
+            clippy::explicit_iter_loop,
+            clippy::collapsible_else_if
+        )]
+        fn validate_static_with_snapshot(
+            block: &SignedBlock,
+            chain_id: &ChainId,
+            genesis_account: &AccountId,
+            static_data: &StaticValidationData,
+            transactions: &impl TransactionsReadOnly,
+            metrics: MetricsRef<'_>,
+        ) -> Result<(), BlockValidationError> {
+            let _ = metrics;
+            let _ = static_data.aggregate_lane;
+            #[cfg(feature = "telemetry")]
+            let metrics = metrics.expect("telemetry enabled");
+            #[cfg(all(feature = "telemetry", not(feature = "bls")))]
+            let _ = metrics;
+
+            let max_clock_drift = static_data.max_clock_drift;
+            let tx_params = static_data.tx_params;
+            let expected_block_height = static_data.expected_block_height;
+            let pipeline_cfg = &static_data.pipeline_cfg;
+            let crypto_cfg = &static_data.crypto_cfg;
+            let block_creation_time = block.header().creation_time();
 
             // Deterministic pre-verification of transaction signatures by scheme, using
             // runtime pipeline configuration caps. Successful pre-verification allows
@@ -3390,7 +3502,6 @@ pub(crate) mod valid {
                         sig,
                     });
                 }
-                let pipeline_cfg = state.pipeline();
                 let cap = if pipeline_cfg.signature_batch_max_ed25519 > 0 {
                     pipeline_cfg.signature_batch_max_ed25519
                 } else {
@@ -3527,7 +3638,7 @@ pub(crate) mod valid {
                         sig,
                     });
                 }
-                let cap = state.pipeline().signature_batch_max_secp256k1;
+                let cap = pipeline_cfg.signature_batch_max_secp256k1;
                 if cap > 0 && !items.is_empty() {
                     let derive_seed = |slice: &[&SecpItem]| -> [u8; 32] {
                         let mut tuples: Vec<Vec<u8>> = slice
@@ -3688,8 +3799,8 @@ pub(crate) mod valid {
                     }
                 }
                 #[cfg(feature = "telemetry")]
-                let aggregate_lane = state.nexus().routing_policy.default_lane;
-                let cap = state.pipeline().signature_batch_max_bls;
+                let aggregate_lane = static_data.aggregate_lane;
+                let cap = pipeline_cfg.signature_batch_max_bls;
                 #[allow(unused_mut)]
                 let mut verify_set = |set: &Vec<BlsItem>| -> Result<(), BlockValidationError> {
                     if set.is_empty() {
@@ -3761,11 +3872,7 @@ pub(crate) mod valid {
                                 #[cfg(feature = "telemetry")]
                                 {
                                     bls_agg_same_batches = bls_agg_same_batches.saturating_add(1);
-                                    state.metrics().inc_pipeline_sig_bls_result(
-                                        aggregate_lane,
-                                        true,
-                                        ok,
-                                    );
+                                    metrics.inc_pipeline_sig_bls_result(aggregate_lane, true, ok);
                                 }
                                 if !ok {
                                     // Bisection within the same-message group
@@ -3779,7 +3886,7 @@ pub(crate) mod valid {
                                 #[cfg(feature = "telemetry")]
                                 {
                                     // Record attempted aggregates even on failure
-                                    state.metrics().set_pipeline_sig_bls_counts(
+                                    metrics.set_pipeline_sig_bls_counts(
                                         aggregate_lane,
                                         bls_agg_same_batches,
                                         bls_agg_multi_batches,
@@ -3799,7 +3906,7 @@ pub(crate) mod valid {
                             #[cfg(feature = "telemetry")]
                             {
                                 // Record attempted aggregates even on failure
-                                state.metrics().set_pipeline_sig_bls_counts(
+                                metrics.set_pipeline_sig_bls_counts(
                                     aggregate_lane,
                                     bls_agg_same_batches,
                                     bls_agg_multi_batches,
@@ -3850,9 +3957,7 @@ pub(crate) mod valid {
                                 .is_ok()
                             };
                             #[cfg(feature = "telemetry")]
-                            state
-                                .metrics()
-                                .inc_pipeline_sig_bls_result(aggregate_lane, false, ok);
+                            metrics.inc_pipeline_sig_bls_result(aggregate_lane, false, ok);
                             if !ok {
                                 // Bisection over singleton set only
                                 use std::collections::VecDeque;
@@ -3893,7 +3998,7 @@ pub(crate) mod valid {
                                         #[cfg(feature = "telemetry")]
                                         {
                                             // Record attempted aggregates even on failure
-                                            state.metrics().set_pipeline_sig_bls_counts(
+                                            metrics.set_pipeline_sig_bls_counts(
                                                 aggregate_lane,
                                                 bls_agg_same_batches,
                                                 bls_agg_multi_batches,
@@ -3914,7 +4019,7 @@ pub(crate) mod valid {
                                     #[cfg(feature = "telemetry")]
                                     {
                                         // Record attempted aggregates even on failure
-                                        state.metrics().set_pipeline_sig_bls_counts(
+                                        metrics.set_pipeline_sig_bls_counts(
                                             aggregate_lane,
                                             bls_agg_same_batches,
                                             bls_agg_multi_batches,
@@ -3953,19 +4058,16 @@ pub(crate) mod valid {
                 bls_preverified = (enable_normal_batch && !items_normal.is_empty())
                     || (enable_small_batch && !items_small.is_empty());
                 #[cfg(feature = "telemetry")]
-                {
-                    let aggregate_lane = state.nexus().routing_policy.default_lane;
-                    state.metrics().set_pipeline_sig_bls_counts(
-                        aggregate_lane,
-                        bls_agg_same_batches,
-                        bls_agg_multi_batches,
-                        if bls_preverified {
-                            0
-                        } else {
-                            bls_deterministic_batches
-                        },
-                    );
-                }
+                metrics.set_pipeline_sig_bls_counts(
+                    aggregate_lane,
+                    bls_agg_same_batches,
+                    bls_agg_multi_batches,
+                    if bls_preverified {
+                        0
+                    } else {
+                        bls_deterministic_batches
+                    },
+                );
             }
 
             // PQC (e.g., ML‑DSA Dilithium) deterministic grouping (feature-gated).
@@ -4003,7 +4105,7 @@ pub(crate) mod valid {
                         sig: sig_bytes,
                     });
                 }
-                let cap = state.pipeline().signature_batch_max_pqc;
+                let cap = pipeline_cfg.signature_batch_max_pqc;
                 if cap > 0 && !items.is_empty() {
                     let derive_seed = |slice: &[&PqcItem]| -> [u8; 32] {
                         let mut tuples: Vec<Vec<u8>> = slice
@@ -4097,15 +4199,13 @@ pub(crate) mod valid {
 
             let mut merkle_tree: MerkleTree<TransactionEntrypoint> =
                 core::iter::empty::<HashOf<TransactionEntrypoint>>().collect();
-            let crypto_cfg = state.crypto();
 
             let mut seen_hashes: std::collections::BTreeSet<HashOf<SignedTransaction>> =
                 std::collections::BTreeSet::new();
 
             for tx in block.external_transactions() {
                 let tx_hash = tx.hash();
-                if state
-                    .transactions()
+                if transactions
                     .get(&tx_hash)
                     // In case of soft-fork transaction is check if it was added at the same height as candidate block
                     .is_some_and(|height| height.get() < expected_block_height)
@@ -4205,6 +4305,45 @@ pub(crate) mod valid {
             }
 
             Ok(())
+        }
+
+        /// All static checks of the block.
+        #[allow(
+            clippy::too_many_arguments,
+            clippy::too_many_lines,
+            clippy::explicit_iter_loop,
+            clippy::collapsible_else_if
+        )]
+        fn validate_static(
+            block: &SignedBlock,
+            topology: &Topology,
+            chain_id: &ChainId,
+            genesis_account: &AccountId,
+            state: &impl StateReadOnlyWithTransactions,
+            soft_fork: bool,
+            time_source: &TimeSource,
+        ) -> Result<(), BlockValidationError> {
+            let static_data = Self::validate_static_state_dependent(
+                block,
+                topology,
+                chain_id,
+                genesis_account,
+                state,
+                soft_fork,
+                time_source,
+            )?;
+            #[cfg(feature = "telemetry")]
+            let metrics = Some(state.metrics());
+            #[cfg(not(feature = "telemetry"))]
+            let metrics = ();
+            Self::validate_static_with_snapshot(
+                block,
+                chain_id,
+                genesis_account,
+                &static_data,
+                state.transactions(),
+                metrics,
+            )
         }
 
         /// Validate each transaction in the block, apply resulting state changes,
@@ -7375,6 +7514,66 @@ pub(crate) mod valid {
                 ValidBlock::enforce_consensus_key_lifecycle(block.as_ref(), &topology, &view)
                     .is_ok()
             );
+        }
+
+        #[test]
+        fn validate_static_snapshot_accepts_valid_block() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader.public_key().clone(),
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+
+            let prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let candidate =
+                ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                    header.set_height(nonzero!(2_u64));
+                    header.set_prev_block_hash(Some(prev_hash));
+                    header.creation_time_ms = 2;
+                });
+            let signed: SignedBlock = candidate.into();
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
+            let static_data = {
+                let view = state.view();
+                ValidBlock::validate_static_state_dependent(
+                    &signed,
+                    &topology,
+                    &state.chain_id,
+                    &ALICE_ID,
+                    &view,
+                    false,
+                    &time_source,
+                )
+                .expect("static state-dependent validation should succeed")
+            };
+            let transactions_view = state.transactions.view();
+            #[cfg(feature = "telemetry")]
+            let metrics = Some(&state.telemetry);
+            #[cfg(not(feature = "telemetry"))]
+            let metrics = ();
+            ValidBlock::validate_static_with_snapshot(
+                &signed,
+                &state.chain_id,
+                &ALICE_ID,
+                &static_data,
+                &transactions_view,
+                metrics,
+            )
+            .expect("static snapshot validation should succeed");
         }
 
         #[test]
