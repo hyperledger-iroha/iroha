@@ -585,18 +585,14 @@ mod tests {
         blindings.push(last);
 
         let mut proof = Vec::with_capacity(RANGE_PROOF_BYTES);
-        for bit_index in 0..RANGE_PROOF_BITS {
+        for (bit_index, blinding) in blindings.iter().enumerate() {
             let bit = ((value >> bit_index) & 1) == 1;
             let bit_scalar = Scalar::from(u64::from(bit));
-            let commitment = RISTRETTO_BASEPOINT_POINT * bit_scalar
-                + pedersen_generator_h() * blindings[bit_index];
-            let (a0, a1, e0, s0, s1) = make_range_bit_proof(
-                bit,
-                bit_index as u8,
-                &commitment,
-                &blindings[bit_index],
-                &context,
-            );
+            let commitment =
+                RISTRETTO_BASEPOINT_POINT * bit_scalar + pedersen_generator_h() * blinding;
+            let bit_index_u8 = u8::try_from(bit_index).expect("range proof bit index fits in u8");
+            let (a0, a1, e0, s0, s1) =
+                make_range_bit_proof(bit, bit_index_u8, &commitment, blinding, &context);
             proof.extend_from_slice(commitment.compress().as_bytes());
             proof.extend_from_slice(a0.compress().as_bytes());
             proof.extend_from_slice(a1.compress().as_bytes());
@@ -615,9 +611,9 @@ mod tests {
         context: &[u8; 32],
     ) -> (RistrettoPoint, RistrettoPoint, Scalar, Scalar, Scalar) {
         if bit {
-            let alpha = Scalar::from(40 + bit_index as u64);
-            let e0 = Scalar::from(50 + bit_index as u64);
-            let s0 = Scalar::from(60 + bit_index as u64);
+            let alpha = Scalar::from(40 + u64::from(bit_index));
+            let e0 = Scalar::from(50 + u64::from(bit_index));
+            let s0 = Scalar::from(60 + u64::from(bit_index));
             let a0 = pedersen_generator_h() * s0 - commitment * e0;
             let a1 = pedersen_generator_h() * alpha;
             let challenge = range_proof_challenge(context, bit_index, commitment, &a0, &a1);
@@ -625,9 +621,9 @@ mod tests {
             let s1 = alpha + e1 * blinding;
             (a0, a1, e0, s0, s1)
         } else {
-            let alpha = Scalar::from(70 + bit_index as u64);
-            let e1 = Scalar::from(80 + bit_index as u64);
-            let s1 = Scalar::from(90 + bit_index as u64);
+            let alpha = Scalar::from(70 + u64::from(bit_index));
+            let e1 = Scalar::from(80 + u64::from(bit_index));
+            let s1 = Scalar::from(90 + u64::from(bit_index));
             let a0 = pedersen_generator_h() * alpha;
             let commitment_minus_g = commitment - RISTRETTO_BASEPOINT_POINT;
             let a1 = pedersen_generator_h() * s1 - commitment_minus_g * e1;
@@ -638,11 +634,11 @@ mod tests {
         }
     }
 
-    fn assemble_balance_proof(delta_proof: Vec<u8>, range_proof: Vec<u8>) -> Vec<u8> {
+    fn assemble_balance_proof(delta_proof: &[u8], range_proof: &[u8]) -> Vec<u8> {
         let mut proof = Vec::with_capacity(BALANCE_PROOF_BYTES);
         proof.push(BALANCE_PROOF_VERSION);
-        proof.extend_from_slice(&delta_proof);
-        proof.extend_from_slice(&range_proof);
+        proof.extend_from_slice(delta_proof);
+        proof.extend_from_slice(range_proof);
         proof
     }
 
@@ -669,7 +665,7 @@ mod tests {
         let context = derive_context(&chain_id);
         let delta_proof = make_delta_proof(&c_init, &c_res, delta, blind_delta, context);
         let range_proof = make_range_proof(value + delta, blind_start + blind_delta, context);
-        balance_proof.zk_proof = Some(assemble_balance_proof(delta_proof, range_proof));
+        balance_proof.zk_proof = Some(assemble_balance_proof(&delta_proof, &range_proof));
         let inputs = VerificationInputs {
             balance_proof: &balance_proof,
             chain_id: &chain_id,
@@ -825,7 +821,7 @@ mod tests {
             },
             resulting_commitment: c_res.compress().as_bytes().to_vec(),
             claimed_delta: Numeric::new(100, 1),
-            zk_proof: Some(assemble_balance_proof(delta_proof, range_proof)),
+            zk_proof: Some(assemble_balance_proof(&delta_proof, &range_proof)),
         };
         let inputs = VerificationInputs {
             balance_proof: &balance_proof,
@@ -925,7 +921,7 @@ mod tests {
         let context = derive_context(&chain_id);
         let delta_proof = make_delta_proof(&c_init, &c_res, delta, blind_delta, context);
         let range_proof = make_range_proof(value + delta, blind_start + blind_delta, context);
-        let mut proof = assemble_balance_proof(delta_proof, range_proof);
+        let mut proof = assemble_balance_proof(&delta_proof, &range_proof);
         // Force s_G bytes to be non-canonical (all 0xff).
         let start = 1 + 32;
         let end = 1 + 64;

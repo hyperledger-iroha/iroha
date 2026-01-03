@@ -75,7 +75,7 @@ use super::{
     exec::{build_exec_vote_from_witness, parent_state_from_witness, post_state_from_witness},
     penalties::PenaltyApplier,
     rbc_status,
-    stake_snapshot::{CommitStakeSnapshot, stake_map_from_state},
+    stake_snapshot::{CommitStakeSnapshot, stake_map_from_world},
     *,
 };
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
@@ -1944,7 +1944,7 @@ fn clear_missing_block_request(
 }
 
 impl Actor {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn request_missing_parent(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -3157,7 +3157,7 @@ fn stake_quorum_reached_for_peers(
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
 ) -> Result<bool, StakeQuorumError> {
-    let stake_map = stake_map_from_state(view);
+    let stake_map = stake_map_from_world(view.world());
 
     let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
     let mut total = Numeric::from(0_u64);
@@ -4045,7 +4045,7 @@ impl Actor {
                     let peer = topology.as_ref().get(idx)?;
                     signer_peers.insert(peer.clone());
                 }
-                let snapshot = CommitStakeSnapshot::from_roster(&state_view, roster)?;
+                let snapshot = CommitStakeSnapshot::from_roster(state_view.world(), roster)?;
                 if !stake_quorum_reached_for_snapshot(&snapshot, roster, &signer_peers).ok()? {
                     return None;
                 }
@@ -5896,7 +5896,7 @@ impl Actor {
                 let candidate_matches = entry
                     .candidate
                     .as_ref()
-                    .map_or(true, |existing| existing == &candidate);
+                    .is_none_or(|existing| existing == &candidate);
                 if candidate_matches {
                     if entry.candidate.is_none() {
                         entry.candidate = Some(candidate.clone());

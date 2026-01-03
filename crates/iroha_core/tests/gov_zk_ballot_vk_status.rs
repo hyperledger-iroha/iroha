@@ -3,6 +3,7 @@
 //! ZK ballot should reject when the configured verifying key is not Active.
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn zk_ballot_rejects_when_vk_deprecated() {
     use base64::Engine;
     use iroha_core::{

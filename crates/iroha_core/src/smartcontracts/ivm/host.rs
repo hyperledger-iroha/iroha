@@ -2697,10 +2697,7 @@ impl CoreHost {
         }
     }
 
-    fn flush_durable_state(
-        &mut self,
-        tx: &mut StateTransaction<'_, '_>,
-    ) {
+    fn flush_durable_state(&mut self, tx: &mut StateTransaction<'_, '_>) {
         if self.durable_state_overlay.is_empty() {
             return;
         }
@@ -2718,10 +2715,7 @@ impl CoreHost {
         self.durable_state_overlay.clear();
     }
 
-    fn flush_completed_axt(
-        &mut self,
-        tx: &mut StateTransaction<'_, '_>,
-    ) {
+    fn flush_completed_axt(&mut self, tx: &mut StateTransaction<'_, '_>) {
         self.amx_budget_violation = None;
         if self.completed_axt.is_empty() {
             return;
@@ -3359,8 +3353,8 @@ impl IVMHost for CoreHost {
                 let mut stored = Vec::with_capacity(7 + val_tlv.payload.len() + Hash::LENGTH);
                 stored.extend_from_slice(&(val_tlv.type_id as u16).to_be_bytes());
                 stored.push(val_tlv.version);
-                let payload_len =
-                    u32::try_from(val_tlv.payload.len()).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let payload_len = u32::try_from(val_tlv.payload.len())
+                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
                 stored.extend_from_slice(&payload_len.to_be_bytes());
                 stored.extend_from_slice(val_tlv.payload);
                 let h: [u8; Hash::LENGTH] = Hash::new(val_tlv.payload).into();

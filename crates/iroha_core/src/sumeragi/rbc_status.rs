@@ -604,7 +604,7 @@ mod tests {
         let height = 9;
         let view = 0;
         let summary = Summary {
-            block_hash: block_hash.clone(),
+            block_hash,
             height,
             view,
             total_chunks: 3,

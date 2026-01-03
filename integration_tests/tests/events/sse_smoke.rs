@@ -20,7 +20,8 @@ use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use norito::json::{self, Value as JsonValue};
 
-const SSE_TIMEOUT: Duration = Duration::from_secs(45);
+// Match the client status timeout so slow test networks don't drop SSE readers early.
+const SSE_TIMEOUT: Duration = Duration::from_secs(180);
 
 struct SseReader {
     rx: Receiver<String>,

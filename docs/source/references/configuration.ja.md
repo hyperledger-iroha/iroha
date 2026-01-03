@@ -54,7 +54,7 @@ translator: manual
 - `sorafs.rollout_phase`: PQ ロールアウトのフェーズ（`canary`, `ramp`, `default`）。`sorafs.anonymity_policy` が未設定の場合はこれを継承します。
 - `sorafs.anonymity_policy`: SoraNet PQ ロールアウト段階（`anon-guard-pq`, `anon-majority-pq`, `anon-strict-pq`）。デフォルトは Stage A（`anon-guard-pq`）。カバレッジが十分になったら Stage B/C へ。
 - `[nts]`: Network Time Service のサンプリング周期と平滑化。`sample_interval_ms` は 100ms 以上に制限されます。コンセンサスは依存しません。
-- `[kura]`: ブロックストレージのパスとメモリウィンドウ。`block_sync_roster_retention` は commit‑roster スナップショットの保持数（デフォルト 512）、`roster_sidecar_retention` は `pipeline/roster_sidecars.*` に残る sidecar の数（デフォルト 512）。
+- `[kura]`: ブロックストレージのパスとメモリウィンドウ。`block_sync_roster_retention` は commit‑roster スナップショットの保持数（デフォルト 7200）、`roster_sidecar_retention` は `pipeline/roster_sidecars.*` に残る sidecar の数（デフォルト 512）。
 - `[logger]`: ログレベルとフォーマット。
 - `[queue]`: トランザクションキューの制限と TTL。
 - `[nexus]`: マルチレーンのルーティングカタログ、マニフェストレジストリ、ガバナンスモジュール。レーンは `visibility`, `lane_type`, `governance`, `settlement`, `proof_scheme`（デフォルト `merkle_sha256`。`kzg_bls12_381` レーンは deterministic KZG commitments）と `metadata = { key = "value" }` を受け入れます。`registry` は `manifest_directory`, `cache_directory`, `poll_interval_ms` を管理し、`governance` は `default_module` と `modules` マップを提供します。

@@ -3437,7 +3437,8 @@ pub(crate) mod valid {
             transactions: &impl TransactionsReadOnly,
             metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
-            let _ = metrics;
+            #[cfg(not(feature = "telemetry"))]
+            let () = metrics;
             let _ = static_data.aggregate_lane;
             #[cfg(feature = "telemetry")]
             let metrics = metrics.expect("telemetry enabled");

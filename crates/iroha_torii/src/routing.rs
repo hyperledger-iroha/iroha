@@ -4808,7 +4808,7 @@ mod evidence_submit_tests {
                 SumeragiNposParameters::parameter_id(),
                 params.into_custom_parameter(),
             );
-            block.vrf_epochs().insert(
+            block.vrf_epochs_mut_for_testing().insert(
                 0,
                 VrfEpochRecord {
                     epoch: 0,
@@ -4828,7 +4828,7 @@ mod evidence_submit_tests {
                     validator_election: None,
                 },
             );
-            block.vrf_epochs().insert(
+            block.vrf_epochs_mut_for_testing().insert(
                 1,
                 VrfEpochRecord {
                     epoch: 1,

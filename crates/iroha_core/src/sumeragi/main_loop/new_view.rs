@@ -72,8 +72,7 @@ pub(super) fn check_new_view_freshness(
         }
     }
     match ensure_locked_qc_allows(locked_qc, highest_qc) {
-        Ok(()) => Ok(()),
-        Err(LockedQcRejection::HeightRegressed { .. }) => Ok(()),
+        Ok(()) | Err(LockedQcRejection::HeightRegressed { .. }) => Ok(()),
         Err(reason) => Err(NewViewFreshnessError::LockedQcConflict(Box::new(reason))),
     }
 }

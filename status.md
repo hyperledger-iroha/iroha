@@ -1,6 +1,34 @@
 # Status
 
 ## Latest Updates
+- Cached validated NEW_VIEW HighestQCs (and signer tallies/precommit signer history) so view-change rebroadcasts no longer skip when local votes are missing; added unit coverage in `handle_new_view_gossips_new_view_frames`.
+- Tests: `cargo test -p iroha_core handle_new_view_gossips_new_view_frames -- --nocapture` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (failed: `iroha_torii/tests/zk_attachments_subprocess.rs` imports private `routing` module; warnings about unused `mut` in `crates/iroha_core/src/state.rs:18891` and `crates/iroha_torii/src/routing.rs:4800`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Added crash-recovery PRF seed fallback for NPoS epochs when the seed-only next-epoch snapshot is missing after restart, added a regression test, and documented the restart recompute behavior in `docs/source/sumeragi.md`.
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-check cargo check -p iroha_core --lib` (passed).
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-tests cargo test -p iroha_core prf_seed_tests::npos_seed_for_height_derives_next_epoch_seed_after_restart_gap -- --nocapture` (timed out after 300s while running filtered binaries; target test passed).
+- Guarded VRF commit/reveal note paths against height=0 to prevent epoch window underflow; added unit coverage for zero-height rejections.
+- Tests: not run (not requested).
+- Fixed stake snapshot world-view plumbing (commit roster snapshots, stake quorum helpers, and tests), corrected penalties helper lookup, and removed invalid `?` in lane relay validator pool selection.
+- Tests: `cargo check -p iroha_core --tests` (passed).
+- Tests: `cargo test -p iroha_core block_created_requests_missing_parent_on_height_gap -- --nocapture` (timed out after 240s during compile).
+- Tests: `cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture` (failed: loopback bind denied in sandbox). Re-run with escalated permissions timed out after 10m with the test still running (>60s).
+- Validate persisted RBC chunk roots against stored expected/computed roots when full payload chunks are present, dropping corrupted sessions; added unit coverage for mismatched chunk roots.
+- Tests: not run (not requested).
+- Avoided commit-time view-lock deadlocks by building stake snapshots from world views, updating stake snapshot helpers/callers to use `WorldReadOnly`, and fixing permissioned view-rotation index conversion with new unit coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-check cargo check -p iroha_core --lib` (passed).
+- Tests: `CARGO_TARGET_DIR=target/codex-integration-tests cargo test -p integration_tests --no-run` (passed).
+- Tests: `CARGO_TARGET_DIR=target/codex-integration-tests IROHA_TEST_NETWORK_PARALLELISM=1 cargo test -p integration_tests --test observer_sync -- --nocapture` (failed: loopback bind denied, Operation not permitted).
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-tests cargo test -p iroha_core penalties::tests::canonicalize_index_for_view_permissioned_wraps -- --nocapture` (timed out after 300s while running filtered binaries; target test passed).
+- Persisted NPoS stake snapshots in commit-roster artifacts for block-sync validation, switched NPoS roster checks to snapshot-based stake quorum, tightened consensus penalty attribution (no current-roster fallback; pending on missing rosters/PRF seeds; applied-only on legitimate empty offenders), and aligned roster-retention defaults/validation with evidence horizons (docs updated).
+- Tests: `cargo test --workspace` (timed out after 120s while compiling; build lock while waiting for the build directory).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Aligned RBC session roster selection with vote-roster fallbacks (persisted/previous commit topology) so READY/DELIVER validation can recover after topology changes; added unit coverage for the prev-commit fallback and updated stake-snapshot call sites.
+- Tests: `cargo test -p iroha_core --lib rbc_session_roster_falls_back_to_prev_commit_topology_without_snapshot -- --nocapture` (failed: loopback bind denied on 127.0.0.1:0 in test harness).
+- Tests: `TEST_NETWORK_TMP_DIR=/Users/mtakemiya/dev/iroha/tmp/test_network_rbc_fix IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (skipped: port allocation denied in sandbox loopback bind).
+- Advanced VRF epoch restore to advance seed/epoch when restoring a finalized record and clear stale participation state; added unit coverage for finalized restore.
+- Tests: not run (not requested).
 - Translated the Sumeragi randomness evidence runbook across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
 - Tests: not run (docs-only change).
 - Aligned handshake consensus caps with on-chain K/r parameters and rejected zero collectors/redundant-send updates in `SetParameter`, adding unit coverage for the new validation and caps behavior.

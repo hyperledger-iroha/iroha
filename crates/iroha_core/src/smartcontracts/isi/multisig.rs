@@ -1380,7 +1380,7 @@ mod tests {
             "parent TTL should remain unchanged"
         );
 
-        let relay = MultisigApprove::new(parent_id.clone(), instructions_hash.clone());
+        let relay = MultisigApprove::new(parent_id.clone(), instructions_hash);
         let relay_hash = HashOf::new(&vec![InstructionBox::from(relay)]);
         let child_value =
             proposal_value(&state_transaction, &child_id, &relay_hash).expect("child value");

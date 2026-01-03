@@ -428,8 +428,7 @@ fn sniff_format(bytes: &[u8]) -> SniffedFormat {
     }
     if bytes
         .iter()
-        .skip_while(|b| b.is_ascii_whitespace())
-        .next()
+        .find(|b| !b.is_ascii_whitespace())
         .is_some_and(|b| matches!(b, b'{' | b'['))
     {
         return SniffedFormat::Json;
@@ -1350,6 +1349,7 @@ static ATTACH_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// Configure attachments TTL, per-item size cap, and per-tenant quotas from Torii config.
 /// The sanitizer executable override is intended for tests and tooling.
+#[allow(clippy::too_many_arguments)]
 pub fn configure(
     ttl_secs: u64,
     max_bytes: u64,
@@ -1452,9 +1452,7 @@ fn sanitize_timeout_cfg() -> Duration {
 
 /// Run the attachment sanitizer process if requested via environment.
 pub fn sanitizer_process_exit_code_from_env() -> Option<i32> {
-    if env::var_os(ATTACHMENT_SANITIZER_ENV).is_none() {
-        return None;
-    }
+    env::var_os(ATTACHMENT_SANITIZER_ENV)?;
     let exit_code = match run_sanitizer_process() {
         Ok(()) => 0,
         Err(err) => {
@@ -1559,7 +1557,7 @@ fn set_rlimit(resource: libc::c_int, value: u64) -> Result<(), SanitizeError> {
         rlim_cur: value as libc::rlim_t,
         rlim_max: value as libc::rlim_t,
     };
-    let result = unsafe { libc::setrlimit(resource, &limit) };
+    let result = unsafe { libc::setrlimit(resource, &raw const limit) };
     if result == 0 {
         return Ok(());
     }
@@ -1631,7 +1629,7 @@ mod tests {
     use axum::http::HeaderMap;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use flate2::{Compression, write::GzEncoder};
-    use hyper::body::to_bytes;
+    use http_body_util::BodyExt as _;
     use iroha_crypto::Hash;
     use std::{io::Write as _, sync::Once};
 
@@ -1872,7 +1870,12 @@ mod tests {
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::CREATED);
-        let meta_bytes = to_bytes(response.into_body()).await.expect("response body");
+        let meta_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
         let meta_text = std::str::from_utf8(&meta_bytes).expect("utf8");
         let meta: AttachmentMeta = json::from_json(meta_text).expect("meta");
         assert_eq!(meta.content_type, super::JSON_MIME_TYPE);
@@ -1904,7 +1907,12 @@ mod tests {
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::CREATED);
-        let meta_bytes = to_bytes(response.into_body()).await.expect("meta body");
+        let meta_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("meta body")
+            .to_bytes();
         let meta_text = std::str::from_utf8(&meta_bytes).expect("utf8 meta");
         let meta: AttachmentMeta = json::from_json(meta_text).expect("meta");
         let expected_id = hex::encode::<[u8; 32]>(Hash::new(payload).into());
@@ -1917,7 +1925,12 @@ mod tests {
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = to_bytes(response.into_body()).await.expect("body bytes");
+        let body_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body bytes")
+            .to_bytes();
         assert_eq!(body_bytes.as_ref(), payload);
     }
 }

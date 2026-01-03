@@ -625,6 +625,12 @@ The refreshed seed flows back into deterministic collector selection through
 `deterministic_collectors`, and `/v1/sumeragi/collectors` reports the active
 plan alongside the `(height, view)` the pacemaker is evaluating.
 
+If a node restarts after finalizing an epoch record but before persisting the
+seed-only snapshot for the next epoch, it recomputes the next-epoch seed from
+the finalized record (seed + ordered reveals) when selecting PRF values. This
+keeps deterministic rotation consistent across peers even if the seed-only
+record is missing at restart.
+
 #### CLI and operator workflow
 
 - `iroha_cli sumeragi vrf-epoch --epoch <n>` prints the persisted seed,
