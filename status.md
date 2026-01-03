@@ -1,8 +1,14 @@
 # Status
 
 ## Latest Updates
+- Treat aborted pending blocks as unknown for consensus checks while still counting their payloads for missing-block tracking, with unit coverage for the new distinction.
+- Tests: not run (not requested).
 - Strengthened Norito streaming snapshot assertions (ticket fields, policy, revocation) and added coverage for large prepaid TEU JSON encoding.
 - Tests: not run (not requested).
+- Resolved merge conflicts in `integration_tests/tests/debug_genesis.rs`, `integration_tests/tests/extra_functional/offline_peers.rs`, and `status.md`.
+- Tests: not run (merge resolution only).
+- Wait for trigger-completion events while submitting the trigger in the integration notification test and close the WS stream after receipt to avoid missed events and shutdown lag.
+- Tests: `cargo test -p integration_tests trigger_completion_success_should_produce_event --test mod -- --nocapture` (failed: `integration_tests/tests/debug_genesis.rs` and `integration_tests/tests/extra_functional/offline_peers.rs` use `?` on `Option`).
 - Normalized Norito streaming integration-test snapshots to structured ticket JSON, aligned revocation fixtures with ticket identifiers, and validated bundle-width telemetry against the configured width.
 - Tests: not run (not requested).
 - Canonicalized Kagami localnet host handling (IPv6 + lowercase), centralized localnet validation, embedded rANS tables for repo-less runs, and fixed start.sh default irohad paths (debug + release); added host/script/rANS unit coverage and updated localnet docs.
