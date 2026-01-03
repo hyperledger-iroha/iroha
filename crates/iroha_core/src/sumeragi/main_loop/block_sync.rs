@@ -112,6 +112,7 @@ impl Actor {
             consensus_mode,
             block_height,
             block_hash,
+            Some(block_view),
         );
         let cert_hint = commit_certificate.as_ref();
         let checkpoint_hint = validator_checkpoint.as_ref();
@@ -481,6 +482,8 @@ impl Actor {
                 super::validate_commit_certificate_roster(
                     cert,
                     block_hash,
+                    block_height,
+                    Some(block_view),
                     consensus_mode,
                     &state_view,
                 )

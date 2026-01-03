@@ -1515,12 +1515,12 @@ fn normalize_peer_config_overrides(
                     lane_summary.len
                 )));
             }
-            if let Some(max_index) = lane_summary.max_index {
-                if max_index >= count {
-                    return Err(SupervisorError::Config(format!(
-                        "nexus.lane_catalog index {max_index} exceeds lane_count {count}"
-                    )));
-                }
+            if let Some(max_index) = lane_summary.max_index
+                && max_index >= count
+            {
+                return Err(SupervisorError::Config(format!(
+                    "nexus.lane_catalog index {max_index} exceeds lane_count {count}"
+                )));
             }
         }
 
@@ -1546,14 +1546,13 @@ fn normalize_peer_config_overrides(
         }
     }
 
-    if let Some(table) = torii.as_ref() {
-        if let Some(da_ingest) = table.get("da_ingest") {
-            if !matches!(da_ingest, toml::Value::Table(_)) {
-                return Err(SupervisorError::Config(
-                    "torii.da_ingest must be a table".to_owned(),
-                ));
-            }
-        }
+    if let Some(table) = torii.as_ref()
+        && let Some(da_ingest) = table.get("da_ingest")
+        && !matches!(da_ingest, toml::Value::Table(_))
+    {
+        return Err(SupervisorError::Config(
+            "torii.da_ingest must be a table".to_owned(),
+        ));
     }
 
     Ok(())

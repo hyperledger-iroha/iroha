@@ -6,7 +6,6 @@ use std::{
 };
 
 use eyre::{Result, eyre};
-use iroha_config::parameters::actual::ConsensusMode;
 use iroha_crypto::{Hash, HashOf, MerkleTree, Signature};
 use iroha_data_model::{
     ChainId, Encode as _,
@@ -2067,7 +2066,7 @@ impl Actor {
         }
     }
 
-    pub(crate) fn handle_rbc_store_evictions(&mut self, removed: &[SessionKey]) {
+    pub(super) fn handle_rbc_store_evictions(&mut self, removed: &[SessionKey]) {
         if removed.is_empty() {
             return;
         }

@@ -53,7 +53,121 @@ impl Actor {
                 self.pending.pending_blocks.insert(hash, pending);
                 ValidationGateOutcome::Valid
             }
-            Err(err) => self.finalize_validation_failure(hash, pending, err),
+            Err(err) => {
+                if let BlockValidationError::PrevBlockHeightMismatch { expected, actual } = &err {
+                    self.request_missing_parent_for_validation(
+                        &pending,
+                        *expected,
+                        *actual,
+                        commit_topology,
+                    );
+                }
+                self.finalize_validation_failure(hash, pending, err)
+            }
+        }
+    }
+
+    fn request_missing_parent_for_validation(
+        &mut self,
+        pending: &PendingBlock,
+        expected: usize,
+        actual: usize,
+        commit_topology: &[PeerId],
+    ) {
+        if actual <= expected {
+            return;
+        }
+        let Some(parent_hash) = pending.block.header().prev_block_hash() else {
+            return;
+        };
+        if self.block_known_locally(parent_hash) {
+            return;
+        }
+        if commit_topology.is_empty() {
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %pending.block.hash(),
+                missing_parent = ?parent_hash,
+                "skipping missing-parent fetch: commit topology empty"
+            );
+            return;
+        }
+
+        let parent_height = pending.height.saturating_sub(1);
+        let topology = super::network_topology::Topology::new(commit_topology.to_vec());
+        let retry_window = self.quorum_timeout(self.runtime_da_enabled());
+        let now = Instant::now();
+        let signers = BTreeSet::new();
+        let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
+        let decision = super::plan_missing_block_fetch(
+            &mut requests,
+            parent_hash,
+            parent_height,
+            &signers,
+            &topology,
+            now,
+            retry_window,
+            self.config.missing_block_signer_fallback_attempts,
+        );
+        self.pending.missing_block_requests = requests;
+        let dwell = self
+            .pending
+            .missing_block_requests
+            .get(&parent_hash)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let targets_len = match &decision {
+            MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        match decision {
+            MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(parent_hash, &targets);
+                info!(
+                    height = pending.height,
+                    view = pending.view,
+                    expected_height = expected,
+                    actual_height = actual,
+                    block = %pending.block.hash(),
+                    missing_parent = ?parent_hash,
+                    targets = ?targets,
+                    target_kind = target_kind.label(),
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms = dwell.as_millis(),
+                    "requested missing parent block after validation mismatch"
+                );
+            }
+            MissingBlockFetchDecision::NoTargets => {
+                warn!(
+                    height = pending.height,
+                    view = pending.view,
+                    expected_height = expected,
+                    actual_height = actual,
+                    block = %pending.block.hash(),
+                    missing_parent = ?parent_hash,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms = dwell.as_millis(),
+                    "missing parent fetch deferred: no targets available"
+                );
+            }
+            MissingBlockFetchDecision::Backoff => {
+                trace!(
+                    height = pending.height,
+                    view = pending.view,
+                    expected_height = expected,
+                    actual_height = actual,
+                    block = %pending.block.hash(),
+                    missing_parent = ?parent_hash,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms = dwell.as_millis(),
+                    "missing parent fetch skipped due to backoff"
+                );
+            }
         }
     }
 

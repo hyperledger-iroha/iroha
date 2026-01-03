@@ -4032,12 +4032,10 @@ impl Default for ToriiOperatorAuth {
     fn default() -> Self {
         let token_fallback = match defaults::torii::operator_auth::TOKEN_FALLBACK {
             "disabled" => OperatorTokenFallback::Disabled,
-            "bootstrap" => OperatorTokenFallback::Bootstrap,
             "always" => OperatorTokenFallback::Always,
             _ => OperatorTokenFallback::Bootstrap,
         };
         let token_source = match defaults::torii::operator_auth::TOKEN_SOURCE {
-            "operator" => OperatorTokenSource::OperatorTokens,
             "api" => OperatorTokenSource::ApiTokens,
             "both" => OperatorTokenSource::Both,
             _ => OperatorTokenSource::OperatorTokens,
@@ -6065,6 +6063,19 @@ mod tests {
             socket_addr!(127.0.0.1:port),
             KeyPair::random().into_parts().0,
         )
+    }
+
+    #[test]
+    fn torii_operator_auth_defaults_match_expected() {
+        let auth = ToriiOperatorAuth::default();
+        assert!(matches!(
+            auth.token_fallback,
+            OperatorTokenFallback::Bootstrap
+        ));
+        assert!(matches!(
+            auth.token_source,
+            OperatorTokenSource::OperatorTokens
+        ));
     }
 
     #[test]

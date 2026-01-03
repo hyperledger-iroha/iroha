@@ -245,7 +245,7 @@ fn parse_asset_literal(value: &str) -> Result<AssetId, String> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(err) = run() {
-        return Err(std::io::Error::new(std::io::ErrorKind::Other, err).into());
+        return Err(std::io::Error::other(err).into());
     }
     Ok(())
 }

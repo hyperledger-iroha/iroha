@@ -29,9 +29,9 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
 
+    let temp_dir = localnet_tempdir()?;
+    let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let temp_dir = localnet_tempdir()?;
-        let out_dir = temp_dir.path().join("localnet");
         let api_ports = AllocatedPortBlock::new(LOCALNET_PEERS);
         let p2p_ports = AllocatedPortBlock::new(LOCALNET_PEERS);
         let base_api_port = api_ports.base();
@@ -69,6 +69,13 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
             );
             return Ok(());
         }
+        if std::env::var_os("IROHA_KAGAMI_LOCALNET_KEEP").is_some() {
+            eprintln!(
+                "keeping kagami localnet artifacts at {}",
+                temp_dir.path().display()
+            );
+            let _ = temp_dir.keep();
+        }
         return Err(err);
     }
     Ok(())
@@ -105,6 +112,7 @@ impl KagamiLocalnet {
 
             let mut cmd = Command::new(irohad_bin);
             cmd.arg("--config").arg(&config_path);
+            cmd.current_dir(out_dir);
             cmd.env("SNAPSHOT_STORE_DIR", &snapshot_dir);
             if std::env::var_os("RUST_LOG").is_none() {
                 cmd.env("RUST_LOG", "info");

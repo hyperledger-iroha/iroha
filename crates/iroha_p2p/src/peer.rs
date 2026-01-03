@@ -3216,7 +3216,7 @@ mod state {
     }
 
     impl ConnectedTo {
-        #[allow(clippy::similar_names)]
+        #[allow(clippy::similar_names, clippy::too_many_lines)]
         pub(super) async fn send_client_hello<K: Kex, E: Enc>(
             Self {
                 our_public_address,
@@ -3365,7 +3365,7 @@ mod state {
     }
 
     impl ConnectedFrom {
-        #[allow(clippy::similar_names)]
+        #[allow(clippy::similar_names, clippy::too_many_lines)]
         pub(super) async fn read_client_hello<K: Kex, E: Enc>(
             Self {
                 our_public_address,

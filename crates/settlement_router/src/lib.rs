@@ -121,7 +121,7 @@ impl NoritoSerialize for MicroXor {
 
 impl<'a> NoritoDeserialize<'a> for MicroXor {
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
+        let ptr = std::ptr::from_ref(archived).cast::<u8>();
         let (base, total) = norito::core::payload_ctx().ok_or(Error::MissingPayloadContext)?;
         let ptr_us = ptr as usize;
         let base_end = base.checked_add(total).ok_or(Error::LengthMismatch)?;
@@ -213,7 +213,7 @@ impl NoritoSerialize for TimestampMs {
 
 impl<'a> NoritoDeserialize<'a> for TimestampMs {
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
+        let ptr = std::ptr::from_ref(archived).cast::<u8>();
         let (base, total) = norito::core::payload_ctx().ok_or(Error::MissingPayloadContext)?;
         let ptr_us = ptr as usize;
         let base_end = base.checked_add(total).ok_or(Error::LengthMismatch)?;
@@ -323,7 +323,7 @@ mod tests {
     use norito::decode_from_bytes;
     use rust_decimal::Decimal;
 
-    use super::MicroXor;
+    use super::{MicroXor, TimestampMs};
 
     #[test]
     fn micro_xor_norito_roundtrip() {
@@ -331,5 +331,13 @@ mod tests {
         let bytes = norito::to_bytes(&amount).expect("encode");
         let decoded: MicroXor = decode_from_bytes(&bytes).expect("decode");
         assert_eq!(decoded, amount);
+    }
+
+    #[test]
+    fn timestamp_ms_norito_roundtrip() {
+        let timestamp = TimestampMs::from_unix_millis(1_700_000_000_000).expect("timestamp");
+        let bytes = norito::to_bytes(&timestamp).expect("encode");
+        let decoded: TimestampMs = decode_from_bytes(&bytes).expect("decode");
+        assert_eq!(decoded, timestamp);
     }
 }

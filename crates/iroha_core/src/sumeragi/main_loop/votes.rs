@@ -55,8 +55,12 @@ impl Actor {
         }
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(vote.height);
-        let topology_peers =
-            self.roster_for_vote_with_mode(vote.block_hash, vote.height, consensus_mode);
+        let topology_peers = self.roster_for_vote_with_mode(
+            vote.block_hash,
+            vote.height,
+            vote.view,
+            consensus_mode,
+        );
         if topology_peers.is_empty() {
             warn!(
                 phase = ?vote.phase,
@@ -98,11 +102,11 @@ impl Actor {
             );
             if matches!(vote.phase, crate::sumeragi::consensus::Phase::Precommit) {
                 if let Some(pending) = self.pending.pending_blocks.get(&vote.block_hash) {
-                    let cooldown = self
-                        .config
-                        .npos
-                        .block_time
-                        .max(std::time::Duration::from_millis(200));
+                    let block_time = {
+                        let view = self.state.view();
+                        view.world.parameters().sumeragi().block_time()
+                    };
+                    let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
                     let now = std::time::Instant::now();
                     if self
                         .block_sync_rebroadcast_log
@@ -425,8 +429,9 @@ impl Actor {
         &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
+        view: u64,
     ) -> Vec<PeerId> {
-        self.roster_for_vote_with_mode(block_hash, height, self.consensus_mode)
+        self.roster_for_vote_with_mode(block_hash, height, view, self.consensus_mode)
     }
 
     // Prefer the roster tied to a committed block to keep signatures valid across roster changes.
@@ -434,9 +439,16 @@ impl Actor {
         &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
+        view: u64,
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let block_view = self
+            .kura
+            .get_block_height_by_hash(block_hash)
+            .and_then(|height| self.kura.get_block(height))
+            .map(|block| u64::from(block.header().view_change_index()))
+            .unwrap_or(view);
         if height <= committed_height {
             if let Some(selection) = super::persisted_roster_for_block(
                 self.state.as_ref(),
@@ -444,6 +456,7 @@ impl Actor {
                 consensus_mode,
                 height,
                 block_hash,
+                Some(block_view),
             )
             .or_else(|| {
                 super::block_sync_history_roster_for_block(
@@ -451,6 +464,7 @@ impl Actor {
                     consensus_mode,
                     block_hash,
                     height,
+                    Some(block_view),
                 )
             }) {
                 if !selection.roster.is_empty() {
@@ -475,6 +489,7 @@ impl Actor {
             consensus_mode,
             height,
             block_hash,
+            Some(block_view),
         )
         .or_else(|| {
             super::block_sync_history_roster_for_block(
@@ -482,6 +497,7 @@ impl Actor {
                 consensus_mode,
                 block_hash,
                 height,
+                Some(block_view),
             )
         }) {
             if !selection.roster.is_empty() {
@@ -533,8 +549,12 @@ impl Actor {
         }
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(vote.height);
-        let topology_peers =
-            self.roster_for_vote_with_mode(vote.block_hash, vote.height, consensus_mode);
+        let topology_peers = self.roster_for_vote_with_mode(
+            vote.block_hash,
+            vote.height,
+            vote.view,
+            consensus_mode,
+        );
         if topology_peers.is_empty() {
             warn!(
                 height = vote.height,
@@ -656,8 +676,12 @@ impl Actor {
         }
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(vote.height);
-        let topology_peers =
-            self.roster_for_vote_with_mode(vote.block_hash, vote.height, consensus_mode);
+        let topology_peers = self.roster_for_vote_with_mode(
+            vote.block_hash,
+            vote.height,
+            vote.view,
+            consensus_mode,
+        );
         if topology_peers.is_empty() {
             warn!(
                 height = vote.height,

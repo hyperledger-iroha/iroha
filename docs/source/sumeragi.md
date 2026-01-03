@@ -150,6 +150,7 @@ accepts traffic:
 Node Roles (config)
 - `validator` (default): participates in consensus according to its current topology role.
 - `observer`: excluded from the consensus topology (role becomes `Undefined`); does not propose, vote, or collect even if its position would otherwise be a collector. It fully syncs via block gossip and can commit using received QCs.
+  - Observers listed in `trusted_peers` remain in the P2P dial set so they keep receiving gossip and block sync, but they never enter the consensus roster.
   - Note: Set B validators remain in the topology and are full validators; they are not the `observer` role.
 
 Validator Key Requirements
@@ -163,7 +164,7 @@ Message Flow (steady state)
 - Proxy tail / collectors: collectors aggregate `CommitVote` signatures and gossip a `CommitCertificate` once quorum is reached; the proxy tail is the primary collector but not the only one. Collectors may still aggregate Availability/Prevote/Precommit QCs for availability evidence and view-change hints.
 - Set B validators: vote/sign under the same rules as Set A; routing/collection still prioritizes Set A for throughput, but any quorum of validators is accepted.
 - Receivers: verify `CommitCertificate`, update Highest/Locked QC tracking, and attempt commit whenever the certificate and block payload are present. If a certificate arrives before the payload, peers request the missing block via block sync and apply it once hydrated.
-- Block-sync updates: peers gossip `BlockSyncUpdate` payloads to a capped fanout (`block_gossip_size`) after commits and for vote/backfill so stragglers and observers can sync without relying on full broadcast. Receivers treat block-sync updates as best-effort and may drop them under queue backpressure to keep vote/proposal traffic moving. Attached Availability/Prevote/Precommit QCs and commit certificates are only applied when their height and block hash match the payload; mismatches are ignored.
+- Block-sync updates: peers gossip `BlockSyncUpdate` payloads to a capped fanout (`block_gossip_size`) after commits and for vote/backfill so stragglers and observers can sync without relying on full broadcast. Receivers apply backpressure when the block queue is full instead of dropping updates so commit/QC evidence is not lost. Attached Availability/Prevote/Precommit QCs and commit certificates are only applied when their height and block hash match the payload; mismatches are ignored.
 - Availability votes: peers gossip `AvailabilityVote` frames to a capped fanout (`block_gossip_size`) so availability QCs can converge without full broadcast when collector routing is sparse.
 - View-change proofs: peers send `ControlFlow::ViewChangeProof` frames with `SignedViewChangeProof` payloads to the commit topology. Once a NEW_VIEW quorum is satisfied the leader re-sends its locally signed proof so suggestions are tracked in `view_change_suggest_total`; recipients merge signatures into their proof chains (accepting only signers from the active commit topology) and bump the accepted index (reflected in `view_change_install_total`) when the payload advances consensus. Proof chains keep a bounded window of indices to avoid unbounded growth, and stale or invalid frames continue to increment the corresponding telemetry/status counters when hashes or signatures do not match the latest committed block.
 

@@ -635,13 +635,13 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
                 path.display()
             )));
         };
-        if let Some(da_ingest) = torii.get("da_ingest") {
-            if !matches!(da_ingest, Value::Table(_)) {
-                return Err(ConfigError::new(format!(
-                    "config {} expected `torii.da_ingest` as a table",
-                    path.display()
-                )));
-            }
+        if let Some(da_ingest) = torii.get("da_ingest")
+            && !matches!(da_ingest, Value::Table(_))
+        {
+            return Err(ConfigError::new(format!(
+                "config {} expected `torii.da_ingest` as a table",
+                path.display()
+            )));
         }
         config.torii = Some(torii.clone());
     }

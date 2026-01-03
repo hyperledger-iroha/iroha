@@ -203,6 +203,9 @@ trust_min_score = -20              # drop trust gossip at or below this score
   warning and increment `p2p_trust_penalties_total{reason="unknown_peer"}`. Scores decay using
   `trust_decay_half_life_ms`; once a sender climbs above `trust_min_score` it is reinstated and
   trust gossip resumes. Public/NPoS overlays skip the penalty so dial sets remain open.
+- Trusted peers configured locally remain in the P2P topology even if they are not in the
+  world-state topology (e.g., observers). They still receive gossip and block sync but do not
+  change the consensus roster.
 - Trust gossip capability: peers advertise `trust_gossip` during the handshake. When a peer sets
   `trust_gossip=false`, it will neither send nor accept trust gossip frames, but regular peer-address
   gossip continues unaffected. The default is `true`, and public (NPoS) deployments should leave it on

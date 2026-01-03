@@ -1053,8 +1053,12 @@ impl Actor {
         }
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(qc.height);
-        let commit_topology =
-            self.roster_for_vote_with_mode(qc.subject_block_hash, qc.height, consensus_mode);
+        let commit_topology = self.roster_for_vote_with_mode(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            consensus_mode,
+        );
         if commit_topology.is_empty() {
             debug!(
                 height = qc.height,
@@ -1441,8 +1445,12 @@ impl Actor {
         self.record_phase_sample(PipelinePhase::CollectExec, qc.height, qc.view);
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(qc.height);
-        let topology_peers =
-            self.roster_for_vote_with_mode(qc.subject_block_hash, qc.height, consensus_mode);
+        let topology_peers = self.roster_for_vote_with_mode(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            consensus_mode,
+        );
         if topology_peers.is_empty() {
             debug!(
                 height = qc.height,
