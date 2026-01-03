@@ -379,6 +379,7 @@ mod tests {
         let env = MockEnv::new()
             .set("CHAIN", "wonder")
             .set("TORII_URL", "http://localhost:8080")
+            .set("TORII_API_VERSION", DEFAULT_TORII_API_VERSION)
             .set("ACCOUNT_DOMAIN", "land")
             .set(
                 "ACCOUNT_PRIVATE_KEY",

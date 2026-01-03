@@ -14,7 +14,7 @@ use std::{
 use base64::Engine as _;
 use derive_more::Display;
 use eyre::{Result, WrapErr, eyre};
-use futures_util::{Stream, StreamExt};
+use futures_util::{Stream, StreamExt, stream};
 use http_default::{AsyncWebSocketStream, WebSocketStream};
 pub use iroha_config::client_api::{
     ConfidentialGas as ConfidentialGasDTO, ConfigGetDTO, ConfigUpdateDTO, Logger as LoggerDTO,
@@ -2323,9 +2323,17 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            let mut slice: &[u8] = resp.body().as_slice();
-            return SumeragiStatusWire::decode_all(&mut slice)
-                .map_err(|e| eyre!("Failed to decode sumeragi status Norito payload: {e}"));
+            return match decode_from_bytes::<SumeragiStatusWire>(resp.body()) {
+                Ok(wire) => Ok(wire),
+                Err(framed_err) => {
+                    let mut slice: &[u8] = resp.body().as_slice();
+                    DecodeAll::decode_all(&mut slice).map_err(|bare_err| {
+                        eyre!(
+                            "Failed to decode sumeragi status Norito payload: framed={framed_err}; bare={bare_err}"
+                        )
+                    })
+                }
+            };
         }
         norito::json::from_slice(resp.body())
             .map_err(|e| eyre!("Failed to decode sumeragi status JSON payload: {e}"))
@@ -2354,9 +2362,17 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            let mut slice: &[u8] = resp.body().as_slice();
-            let wire = SumeragiStatusWire::decode_all(&mut slice)
-                .map_err(|e| eyre!("Failed to decode sumeragi status Norito payload: {e}"))?;
+            let wire = match decode_from_bytes::<SumeragiStatusWire>(resp.body()) {
+                Ok(wire) => wire,
+                Err(framed_err) => {
+                    let mut slice: &[u8] = resp.body().as_slice();
+                    DecodeAll::decode_all(&mut slice).map_err(|bare_err| {
+                        eyre!(
+                            "Failed to decode sumeragi status Norito payload: framed={framed_err}; bare={bare_err}"
+                        )
+                    })?
+                }
+            };
             return Ok(sumeragi_status_json_payload(&wire));
         }
         Ok(norito::json::from_slice(resp.body())?)
@@ -2389,9 +2405,17 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         let wire = if content_type.starts_with(APPLICATION_NORITO) {
-            let mut slice: &[u8] = resp.body().as_slice();
-            SumeragiStatusWire::decode_all(&mut slice)
-                .map_err(|e| eyre!("Failed to decode sumeragi status Norito payload: {e}"))?
+            match decode_from_bytes::<SumeragiStatusWire>(resp.body()) {
+                Ok(wire) => wire,
+                Err(framed_err) => {
+                    let mut slice: &[u8] = resp.body().as_slice();
+                    DecodeAll::decode_all(&mut slice).map_err(|bare_err| {
+                        eyre!(
+                            "Failed to decode sumeragi status Norito payload: framed={framed_err}; bare={bare_err}"
+                        )
+                    })?
+                }
+            }
         } else {
             norito::json::from_slice(resp.body())?
         };
@@ -2550,9 +2574,17 @@ impl Client {
         if content_type.starts_with(APPLICATION_NORITO) {
             use norito::json::{Map, Value};
 
-            let mut slice: &[u8] = resp.body().as_slice();
-            let wire = ExecRootWire::decode_all(&mut slice)
-                .map_err(|e| eyre!("Failed to decode exec_root Norito payload: {e}"))?;
+            let wire = match decode_from_bytes::<ExecRootWire>(resp.body()) {
+                Ok(wire) => wire,
+                Err(framed_err) => {
+                    let mut slice: &[u8] = resp.body().as_slice();
+                    DecodeAll::decode_all(&mut slice).map_err(|bare_err| {
+                        eyre!(
+                            "Failed to decode exec_root Norito payload: framed={framed_err}; bare={bare_err}"
+                        )
+                    })?
+                }
+            };
             let mut map = Map::new();
             map.insert(
                 "block_hash".into(),
@@ -2595,9 +2627,19 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            let mut slice: &[u8] = resp.body().as_slice();
-            let record_opt = <Option<ExecutionQcRecord> as DecodeAll>::decode_all(&mut slice)
-                .map_err(|e| eyre!("Failed to decode exec_qc Norito payload: {e}"))?;
+            let record_opt = match decode_from_bytes::<Option<ExecutionQcRecord>>(resp.body()) {
+                Ok(record) => record,
+                Err(framed_err) => {
+                    let mut slice: &[u8] = resp.body().as_slice();
+                    <Option<ExecutionQcRecord> as DecodeAll>::decode_all(&mut slice).map_err(
+                        |bare_err| {
+                            eyre!(
+                                "Failed to decode exec_qc Norito payload: framed={framed_err}; bare={bare_err}"
+                            )
+                        },
+                    )?
+                }
+            };
             return Ok(exec_qc_json_payload(hash_hex, record_opt));
         }
         norito::json::from_slice(resp.body()).map_err(Into::into)
@@ -3159,7 +3201,7 @@ mod evidence_http_tests {
     use super::{default_alias_policy, *};
     use crate::{
         http::{Method as HttpMethod, Response as HttpResponse},
-        http_default::{RequestSnapshot, set_send_hook},
+        http_default::{RequestSnapshot, with_send_hook},
     };
 
     pub(super) type SnapshotStore = Arc<Mutex<Vec<RequestSnapshot>>>;
@@ -3222,14 +3264,7 @@ mod evidence_http_tests {
         responder: impl Fn(RequestSnapshot) -> Result<HttpResponse<Vec<u8>>> + Send + Sync + 'static,
         f: impl FnOnce() -> R,
     ) -> R {
-        let _guard = hook_mutex().lock().expect("acquire hook mutex");
-        set_send_hook(Some(Arc::new(responder)));
-        let outcome = catch_unwind(AssertUnwindSafe(f));
-        set_send_hook(None);
-        match outcome {
-            Ok(value) => value,
-            Err(panic) => std::panic::resume_unwind(panic),
-        }
+        with_send_hook(Arc::new(responder), f)
     }
 
     pub(super) fn respond_with(
@@ -4038,6 +4073,140 @@ mod evidence_http_tests {
     }
 
     #[test]
+    fn pipeline_status_queued_skips_committed_query() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let payload = norito::json!({
+            "content": { "status": { "kind": "Queued" } },
+        });
+        let status_body = norito::json::to_string(&payload).expect("status payload");
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("lock snapshot store").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => {
+                        Ok(json_response(StatusCode::OK, &status_body))
+                    }
+                    path => Err(eyre::eyre!("unexpected request path: {path}")),
+                }
+            }
+        };
+
+        let result = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let hash =
+                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                    Hash::prehashed([0x23; Hash::LENGTH]),
+                );
+            client.transaction_confirmation_status(hash)
+        });
+
+        assert_eq!(
+            result.expect("confirmation status query"),
+            Some(super::TxConfirmationStatus::Queued)
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+    }
+
+    #[test]
+    fn pipeline_status_approved_with_height_skips_committed_query() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let payload = norito::json!({
+            "content": { "status": { "kind": "Approved", "block_height": 9 } },
+        });
+        let status_body = norito::json::to_string(&payload).expect("status payload");
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("lock snapshot store").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => {
+                        Ok(json_response(StatusCode::OK, &status_body))
+                    }
+                    path => Err(eyre::eyre!("unexpected request path: {path}")),
+                }
+            }
+        };
+
+        let result = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let hash =
+                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                    Hash::prehashed([0x24; Hash::LENGTH]),
+                );
+            client.transaction_confirmation_status(hash)
+        });
+
+        assert_eq!(
+            result.expect("confirmation status query"),
+            Some(super::TxConfirmationStatus::Approved(
+                std::num::NonZeroU64::new(9)
+            ))
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+    }
+
+    #[test]
+    fn pipeline_status_approved_without_height_falls_back_to_committed_query() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+        };
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let payload = norito::json!({
+            "content": { "status": { "kind": "Approved" } },
+        });
+        let status_body = norito::json::to_string(&payload).expect("status payload");
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("lock snapshot store").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => {
+                        Ok(json_response(StatusCode::OK, &status_body))
+                    }
+                    "/query" => {
+                        let response = QueryResponse::Iterable(QueryOutput {
+                            batch: QueryOutputBatchBoxTuple {
+                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
+                            },
+                            remaining_items: 0,
+                            continue_cursor: None,
+                        });
+                        Ok(norito_response(StatusCode::OK, &response))
+                    }
+                    path => Err(eyre::eyre!("unexpected request path: {path}")),
+                }
+            }
+        };
+
+        let result = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let hash =
+                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                    Hash::prehashed([0x24; Hash::LENGTH]),
+                );
+            client.transaction_confirmation_status(hash)
+        });
+
+        assert_eq!(
+            result.expect("confirmation status query"),
+            Some(super::TxConfirmationStatus::Approved(None))
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[1].url.path(), "/query");
+    }
+
+    #[test]
     fn pipeline_status_rejection_without_reason_uses_committed_query() {
         use iroha_data_model::query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
@@ -4177,7 +4346,7 @@ impl From<ResponseReport> for eyre::Report {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TxConfirmationStatus {
     Queued,
-    Approved,
+    Approved(Option<NonZeroU64>),
     Committed,
     Applied,
     Rejected(Option<TransactionRejectionReason>),
@@ -4607,8 +4776,8 @@ impl Client {
 
         thread::scope(|spawner| {
             let submitter_handle = spawner.spawn(move || -> Result<()> {
-                // Unblock as soon as the listener attempts to start; even if the
-                // websocket setup fails we still want to enqueue the transaction.
+                // Wait for the listener connection attempt so we don't miss early
+                // events, but still proceed even if setup fails.
                 let _ = init_receiver.blocking_recv();
                 self.submit_transaction(transaction)?;
                 Ok(())
@@ -4657,34 +4826,30 @@ impl Client {
                     rt.block_on(async {
                         let timeout_err = || Self::tx_confirmation_timeout_report(client.transaction_status_timeout);
                         let filters = Self::tx_confirmation_filters(hash);
-                        // Signal the submitter thread to proceed regardless of the websocket
-                        // handshake outcome; fallback polling will handle listener failures.
-                        let _ = init_sender.send(true);
+                        let connect_timeout =
+                            Self::tx_confirmation_connect_timeout(client.transaction_status_timeout);
+                        let connect_deadline = tokio::time::Instant::now() + connect_timeout;
                         let event_iterator_result = tokio::time::timeout_at(
-                            deadline,
+                            connect_deadline,
                             client.listen_for_events_async(filters),
                         )
                         .await
                         .map_err(Into::into)
                         .and_then(std::convert::identity)
                         .wrap_err("Failed to establish event listener connection");
+                        // Signal the submitter thread after attempting to connect so we
+                        // avoid missing early events when the stream is available.
+                        let _ = init_sender.send(true);
                         let mut event_iterator = match event_iterator_result {
-                            Ok(iter) => iter,
+                            Ok(iter) => Some(iter),
                             Err(err) => {
                                 warn!(
                                     %hash,
                                     ?err,
-                                    "tx confirmation listener setup failed; falling back to pipeline status query"
+                                    timeout_ms = %connect_timeout.as_millis(),
+                                    "tx confirmation listener setup failed; continuing with status polling"
                                 );
-                                return Self::resolve_committed_fallback(
-                                    || client.transaction_confirmation_status(hash),
-                                    hash,
-                                    Duration::from_millis(200),
-                                    3,
-                                    "transaction confirmation listener failed; fallback status check failed",
-                                    err,
-                                )
-                                .await;
+                                None
                             }
                         };
                         let max_queued_duration = if client.transaction_status_timeout
@@ -4697,18 +4862,35 @@ impl Client {
                         let poll_interval =
                             Self::tx_confirmation_poll_interval(client.transaction_status_timeout);
                         let hash_for_check = hash;
-                        let result = tokio::time::timeout_at(
-                            deadline,
-                            Self::listen_for_tx_confirmation_loop(
-                                &mut event_iterator,
-                                hash,
-                                max_queued_duration,
-                                poll_interval,
-                                || client.transaction_confirmation_status(hash_for_check),
-                            ),
-                        )
-                        .await;
-                        event_iterator.close().await;
+                        let result = if let Some(ref mut iterator) = event_iterator {
+                            tokio::time::timeout_at(
+                                deadline,
+                                Self::listen_for_tx_confirmation_loop(
+                                    iterator,
+                                    hash,
+                                    max_queued_duration,
+                                    poll_interval,
+                                    || client.transaction_confirmation_status(hash_for_check),
+                                ),
+                            )
+                            .await
+                        } else {
+                            let mut empty_stream = stream::empty::<Result<EventBox>>();
+                            tokio::time::timeout_at(
+                                deadline,
+                                listen_for_tx_confirmation_stream_with_status_check(
+                                    &mut empty_stream,
+                                    hash,
+                                    max_queued_duration,
+                                    poll_interval,
+                                    || client.transaction_confirmation_status(hash_for_check),
+                                ),
+                            )
+                            .await
+                        };
+                        if let Some(mut iterator) = event_iterator {
+                            iterator.close().await;
+                        }
                         match result {
                             Ok(inner) => match inner.wrap_err_with(timeout_err) {
                                 Ok(ok) => Ok(ok),
@@ -4779,6 +4961,23 @@ impl Client {
         )
     }
 
+    fn tx_confirmation_connect_timeout(timeout: Duration) -> Duration {
+        if timeout == Duration::ZERO {
+            return Duration::from_millis(500);
+        }
+        let min = Duration::from_millis(200);
+        let max = Duration::from_secs(5);
+        let candidate = timeout / 10;
+        let bounded = if candidate < min {
+            min
+        } else if candidate > max {
+            max
+        } else {
+            candidate
+        };
+        bounded.min(timeout)
+    }
+
     fn tx_confirmation_poll_interval(timeout: Duration) -> Duration {
         if timeout == Duration::ZERO {
             return Duration::from_millis(500);
@@ -4817,7 +5016,7 @@ impl Client {
                 }
                 TxConfirmationStatus::Rejected(None) => Err(eyre!("Transaction rejected")),
                 TxConfirmationStatus::Expired => Err(eyre!("Transaction expired")),
-                TxConfirmationStatus::Queued | TxConfirmationStatus::Approved => {
+                TxConfirmationStatus::Queued | TxConfirmationStatus::Approved(_) => {
                     Err(eyre!("Transaction status not finalized"))
                 }
             }
@@ -4838,7 +5037,7 @@ impl Client {
         for attempt in 0..=retries {
             match check() {
                 Ok(Some(outcome)) => match outcome {
-                    status @ (TxConfirmationStatus::Queued | TxConfirmationStatus::Approved) => {
+                    status @ (TxConfirmationStatus::Queued | TxConfirmationStatus::Approved(_)) => {
                         debug!(
                             attempt,
                             ?delay,
@@ -4897,9 +5096,7 @@ impl Client {
     ) -> Result<Option<TxConfirmationStatus>> {
         match self.transaction_pipeline_status(hash) {
             Ok(Some(status)) => match status {
-                TxConfirmationStatus::Queued
-                | TxConfirmationStatus::Approved
-                | TxConfirmationStatus::Rejected(None) => {
+                TxConfirmationStatus::Rejected(None) | TxConfirmationStatus::Approved(None) => {
                     let committed = self.transaction_committed(hash)?;
                     Ok(committed.or(Some(status)))
                 }
@@ -7674,34 +7871,78 @@ impl Client {
 fn tx_confirmation_status_from_pipeline_payload(
     payload: &JsonValue,
 ) -> Option<TxConfirmationStatus> {
-    let status_value = payload.get("status").or_else(|| {
-        payload
-            .get("content")
-            .and_then(|content| content.get("status"))
-    })?;
+    let status_value = payload
+        .get("content")
+        .and_then(|content| content.get("status"))
+        .or_else(|| payload.get("status"))?;
+    let block_height = pipeline_status_block_height(payload, status_value);
     match status_value {
-        JsonValue::String(kind) => tx_confirmation_status_from_kind(kind, None),
+        JsonValue::String(kind) => tx_confirmation_status_from_kind(kind, None, block_height),
         JsonValue::Object(map) => {
             let kind = map.get("kind").and_then(JsonValue::as_str)?;
             let rejection = if kind == "Rejected" {
-                map.get("content")
-                    .and_then(|content| norito::json::from_value(content.clone()).ok())
+                map.get("content").and_then(decode_rejection_reason_value)
             } else {
                 None
             };
-            tx_confirmation_status_from_kind(kind, rejection)
+            tx_confirmation_status_from_kind(kind, rejection, block_height)
         }
         _ => None,
     }
 }
 
+fn pipeline_status_block_height(
+    payload: &JsonValue,
+    status_value: &JsonValue,
+) -> Option<NonZeroU64> {
+    let from_status = match status_value {
+        JsonValue::Object(map) => map
+            .get("block_height")
+            .and_then(JsonValue::as_u64)
+            .and_then(NonZeroU64::new),
+        _ => None,
+    };
+    let from_content = payload
+        .get("content")
+        .and_then(|content| content.get("block_height"))
+        .and_then(JsonValue::as_u64)
+        .and_then(NonZeroU64::new);
+    let from_payload = payload
+        .get("block_height")
+        .and_then(JsonValue::as_u64)
+        .and_then(NonZeroU64::new);
+    from_status.or(from_content).or(from_payload)
+}
+
+fn decode_rejection_reason_value(
+    value: &JsonValue,
+) -> Option<TransactionRejectionReason> {
+    match value {
+        JsonValue::String(encoded) => decode_rejection_reason_base64(encoded)
+            .or_else(|| norito::json::from_value(value.clone()).ok()),
+        _ => norito::json::from_value(value.clone()).ok(),
+    }
+}
+
+fn decode_rejection_reason_base64(
+    encoded: &str,
+) -> Option<TransactionRejectionReason> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()?;
+    decode_from_bytes::<TransactionRejectionReason>(&bytes)
+        .ok()
+        .or_else(|| TransactionRejectionReason::decode_all(&mut bytes.as_slice()).ok())
+}
+
 fn tx_confirmation_status_from_kind(
     kind: &str,
     rejection: Option<TransactionRejectionReason>,
+    block_height: Option<NonZeroU64>,
 ) -> Option<TxConfirmationStatus> {
     match kind {
         "Queued" => Some(TxConfirmationStatus::Queued),
-        "Approved" => Some(TxConfirmationStatus::Approved),
+        "Approved" => Some(TxConfirmationStatus::Approved(block_height)),
         "Committed" => Some(TxConfirmationStatus::Committed),
         "Applied" => Some(TxConfirmationStatus::Applied),
         "Rejected" => Some(TxConfirmationStatus::Rejected(rejection)),
@@ -7784,7 +8025,11 @@ where
                                 debug!(%hash, "transaction entered queue");
                             }
                         }
-                        TxConfirmationStatus::Approved => {}
+                        TxConfirmationStatus::Approved(height) => {
+                            if let Some(height) = height {
+                                block_height = Some(height);
+                            }
+                        }
                         TxConfirmationStatus::Committed | TxConfirmationStatus::Applied => return Ok(hash),
                         TxConfirmationStatus::Rejected(Some(reason)) => return Err(tx_rejection_to_report(&reason)),
                         TxConfirmationStatus::Rejected(None) => return Err(eyre!("Transaction rejected")),
@@ -8009,7 +8254,7 @@ mod tx_hash_tests {
                 let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
                 match count {
                     0 => Ok(Some(super::TxConfirmationStatus::Queued)),
-                    1 => Ok(Some(super::TxConfirmationStatus::Approved)),
+                    1 => Ok(Some(super::TxConfirmationStatus::Approved(None))),
                     _ => Ok(Some(super::TxConfirmationStatus::Committed)),
                 }
             },
@@ -8143,6 +8388,34 @@ mod tx_hash_tests {
     }
 
     #[test]
+    fn tx_confirmation_status_from_pipeline_payload_decodes_base64_rejection_reason() {
+        use base64::Engine as _;
+        use crate::data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
+
+        let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "nope".to_string(),
+        ));
+        let bytes = norito::to_bytes(&reason).expect("encode rejection reason");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let payload = norito::json!({
+            "kind": "Transaction",
+            "content": {
+                "hash": "deadbeef",
+                "status": {
+                    "kind": "Rejected",
+                    "content": encoded,
+                },
+            },
+        });
+
+        let status = super::tx_confirmation_status_from_pipeline_payload(&payload);
+        assert_eq!(
+            status,
+            Some(super::TxConfirmationStatus::Rejected(Some(reason)))
+        );
+    }
+
+    #[test]
     fn tx_confirmation_status_from_pipeline_payload_accepts_terminal_kinds() {
         let committed_payload = norito::json!({
             "content": { "status": { "kind": "Committed" } },
@@ -8167,7 +8440,9 @@ mod tx_hash_tests {
             "content": { "status": { "kind": "Queued" } },
         });
         let approved_payload = norito::json!({
-            "status": "Approved",
+            "content": {
+                "status": { "kind": "Approved", "block_height": 7 },
+            },
         });
 
         assert_eq!(
@@ -8176,7 +8451,9 @@ mod tx_hash_tests {
         );
         assert_eq!(
             super::tx_confirmation_status_from_pipeline_payload(&approved_payload),
-            Some(super::TxConfirmationStatus::Approved)
+            Some(super::TxConfirmationStatus::Approved(
+                std::num::NonZeroU64::new(7)
+            ))
         );
     }
 
@@ -8295,9 +8572,13 @@ mod tx_confirmation_stream_tests {
         crypto::{Hash, HashOf},
         data_model::{
             ValidationFail,
+            block::BlockHeader,
             events::{
                 EventBox,
-                pipeline::{PipelineEventBox, TransactionEvent, TransactionStatus},
+                pipeline::{
+                    BlockEvent, BlockStatus, PipelineEventBox, TransactionEvent,
+                    TransactionStatus,
+                },
             },
             nexus::{DataSpaceId, LaneId},
             transaction::error::TransactionRejectionReason,
@@ -8355,9 +8636,53 @@ mod tx_confirmation_stream_tests {
     }
 
     #[tokio::test]
-    async fn polling_queued_honors_max_duration() {
+    async fn polling_approved_updates_block_height_for_block_events() {
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([10_u8; Hash::LENGTH]));
+        let height = std::num::NonZeroU64::new(12).expect("nonzero height");
+        let block_event = EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
+            header: BlockHeader {
+                height,
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                creation_time_ms: 0,
+                view_change_index: 0,
+                confidential_features: None,
+            },
+            status: BlockStatus::Committed,
+        }));
+        let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
+        let mut events = UnboundedReceiverStream::new(rx);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let _ = tx.send(Ok(block_event));
+        });
+
+        let mut checks = 0u8;
+        let result = listen_for_tx_confirmation_stream_with_status_check(
+            &mut events,
+            hash,
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+            || {
+                checks = checks.saturating_add(1);
+                Ok(Some(super::TxConfirmationStatus::Approved(Some(height))))
+            },
+        )
+        .await;
+
+        assert_eq!(result.unwrap(), hash);
+        assert!(checks > 0);
+    }
+
+    #[tokio::test]
+    async fn polling_queued_honors_max_duration() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([11_u8; Hash::LENGTH]));
         let mut events = stream::empty::<Result<EventBox, eyre::Report>>();
 
         let err = listen_for_tx_confirmation_stream_with_status_check(
@@ -8375,7 +8700,7 @@ mod tx_confirmation_stream_tests {
     #[tokio::test]
     async fn polling_rejects_even_with_busy_stream() {
         let hash: HashOf<SignedTransaction> =
-            HashOf::from_untyped_unchecked(Hash::prehashed([11_u8; Hash::LENGTH]));
+            HashOf::from_untyped_unchecked(Hash::prehashed([12_u8; Hash::LENGTH]));
         let queued_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
             hash: hash.clone(),
             block_height: None,
@@ -8421,6 +8746,21 @@ mod tx_confirmation_stream_tests {
 
         let slow = super::Client::tx_confirmation_poll_interval(Duration::from_secs(120));
         assert_eq!(slow, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn tx_confirmation_connect_timeout_bounds() {
+        let fast = super::Client::tx_confirmation_connect_timeout(Duration::from_secs(1));
+        assert_eq!(fast, Duration::from_millis(200));
+
+        let normal = super::Client::tx_confirmation_connect_timeout(Duration::from_secs(10));
+        assert_eq!(normal, Duration::from_secs(1));
+
+        let slow = super::Client::tx_confirmation_connect_timeout(Duration::from_secs(120));
+        assert_eq!(slow, Duration::from_secs(5));
+
+        let tiny = super::Client::tx_confirmation_connect_timeout(Duration::from_millis(100));
+        assert_eq!(tiny, Duration::from_millis(100));
     }
 }
 
@@ -11924,7 +12264,7 @@ mod tests {
             JsonValue::Object(map)
         });
         let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(&bundle.manifest_bytes);
-        let response_value = JsonValue::Object(JsonMap::from_iter([
+        let mut response_map = JsonMap::from_iter([
             (
                 "storage_ticket".into(),
                 JsonValue::String(bundle.storage_ticket_hex.clone()),
@@ -11941,17 +12281,21 @@ mod tests {
                 "chunk_root".into(),
                 JsonValue::String(bundle.chunk_root_hex.clone()),
             ),
+            (
+                "manifest_hash".into(),
+                JsonValue::String(bundle.manifest_hash_hex.clone()),
+            ),
             ("lane_id".into(), JsonValue::from(bundle.lane_id)),
             ("epoch".into(), JsonValue::from(bundle.epoch)),
             ("manifest_len".into(), JsonValue::from(bundle.manifest_len)),
             ("manifest_norito".into(), JsonValue::String(manifest_b64)),
             ("manifest".into(), bundle.manifest_json.clone()),
             ("chunk_plan".into(), bundle.chunk_plan.clone()),
-            (
-                "sampling_plan".into(),
-                sampling_plan_value.unwrap_or(JsonValue::Null),
-            ),
-        ]));
+        ]);
+        if let Some(plan_value) = sampling_plan_value {
+            response_map.insert("sampling_plan".into(), plan_value);
+        }
+        let response_value = JsonValue::Object(response_map);
         HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)

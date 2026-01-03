@@ -100,6 +100,25 @@ pub fn set_send_hook(hook: Option<SendHook>) {
 }
 
 #[cfg(test)]
+pub fn with_send_hook<R>(hook: SendHook, f: impl FnOnce() -> R) -> R {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    static HOOK_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    let guard = HOOK_MUTEX
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("hook guard");
+    set_send_hook(Some(hook));
+    let outcome = catch_unwind(AssertUnwindSafe(f));
+    set_send_hook(None);
+    drop(guard);
+    match outcome {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+#[cfg(test)]
 fn try_send_with_hook(request: &DefaultRequest) -> Option<Result<Response<Bytes>>> {
     let hook_opt = send_hook_slot()
         .lock()
@@ -354,14 +373,6 @@ mod tests {
 
     #[test]
     fn send_is_safe_inside_tokio_runtime_multi_thread() {
-        set_send_hook(Some(Arc::new(|snapshot| {
-            assert_eq!(snapshot.url.as_str(), "http://127.0.0.1/status");
-            Response::builder()
-                .status(http::StatusCode::OK)
-                .body(Vec::new())
-                .map_err(Into::into)
-        })));
-
         let request = DefaultRequestBuilder::new(
             crate::http::Method::GET,
             Url::parse("http://127.0.0.1/status").expect("url"),
@@ -370,22 +381,21 @@ mod tests {
         .expect("build request");
 
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let result = rt.block_on(async { request.send() });
-
-        set_send_hook(None);
+        let result = with_send_hook(
+            Arc::new(|snapshot| {
+                assert_eq!(snapshot.url.as_str(), "http://127.0.0.1/status");
+                Response::builder()
+                    .status(http::StatusCode::OK)
+                    .body(Vec::new())
+                    .map_err(Into::into)
+            }),
+            || rt.block_on(async { request.send() }),
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn send_is_safe_inside_current_thread_runtime() {
-        set_send_hook(Some(Arc::new(|snapshot| {
-            assert_eq!(snapshot.url.as_str(), "http://127.0.0.1/status");
-            Response::builder()
-                .status(http::StatusCode::OK)
-                .body(Vec::new())
-                .map_err(Into::into)
-        })));
-
         let request = DefaultRequestBuilder::new(
             crate::http::Method::GET,
             Url::parse("http://127.0.0.1/status").expect("url"),
@@ -397,9 +407,16 @@ mod tests {
             .enable_all()
             .build()
             .expect("tokio runtime");
-        let result = rt.block_on(async { request.send() });
-
-        set_send_hook(None);
+        let result = with_send_hook(
+            Arc::new(|snapshot| {
+                assert_eq!(snapshot.url.as_str(), "http://127.0.0.1/status");
+                Response::builder()
+                    .status(http::StatusCode::OK)
+                    .body(Vec::new())
+                    .map_err(Into::into)
+            }),
+            || rt.block_on(async { request.send() }),
+        );
         assert!(result.is_ok());
     }
 }

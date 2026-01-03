@@ -1631,12 +1631,12 @@ mod tests {
                 provider.clone(),
             )),
             InstructionBox::from(Transfer::asset_numeric(
-                AssetId::new(asset_definition.clone(), payer.clone()),
+                AssetId::new(asset_definition.clone(), treasury.clone()),
                 pdp_amount,
                 pdp_bonus.clone(),
             )),
             InstructionBox::from(Transfer::asset_numeric(
-                AssetId::new(asset_definition.clone(), payer.clone()),
+                AssetId::new(asset_definition.clone(), treasury.clone()),
                 potr_amount,
                 potr_bonus.clone(),
             )),

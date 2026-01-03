@@ -518,7 +518,11 @@ mod compat {
         SmartContractParameters {
             fuel: to_nonzero_u64(value.fuel, defaults.fuel()),
             memory: to_nonzero_u64(value.memory, defaults.memory()),
-            execution_depth: value.execution_depth,
+            execution_depth: if value.execution_depth == 0 {
+                defaults.execution_depth()
+            } else {
+                value.execution_depth
+            },
         }
     }
 
@@ -853,19 +857,21 @@ mod tests {
             .build()
             .expect("request build");
 
-        crate::http_default::set_send_hook(Some(Arc::new(|snapshot| {
-            let accept = snapshot
-                .headers
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("accept"))
-                .map(|(_, value)| value.as_str())
-                .expect("accept header");
-            assert_eq!(accept, APPLICATION_NORITO);
-            Ok(http::Response::new(Vec::new()))
-        })));
-
-        let _ = req.send();
-        crate::http_default::set_send_hook(None);
+        crate::http_default::with_send_hook(
+            Arc::new(|snapshot| {
+                let accept = snapshot
+                    .headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                    .map(|(_, value)| value.as_str())
+                    .expect("accept header");
+                assert_eq!(accept, APPLICATION_NORITO);
+                Ok(http::Response::new(Vec::new()))
+            }),
+            || {
+                let _ = req.send();
+            },
+        );
     }
 
     #[test]
@@ -993,9 +999,8 @@ mod query_errors_handling {
     use std::{
         collections::HashMap,
         num::NonZeroU64,
-        panic::{AssertUnwindSafe, catch_unwind},
         sync::{
-            Arc, Mutex, OnceLock,
+            Arc,
             atomic::{AtomicBool, Ordering},
         },
         time::Duration,
@@ -1018,7 +1023,7 @@ mod query_errors_handling {
         client::APPLICATION_NORITO,
         data_model::ValidationFail,
         http::StatusCode as HttpStatusCode,
-        http_default::{RequestSnapshot, set_send_hook},
+        http_default::{RequestSnapshot, with_send_hook},
         query::compat,
     };
 
@@ -1299,19 +1304,7 @@ mod query_errors_handling {
         responder: impl Fn(RequestSnapshot) -> Result<Response<Vec<u8>>> + Send + Sync + 'static,
         f: impl FnOnce() -> R,
     ) -> R {
-        static HOOK_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-        let guard = HOOK_MUTEX
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("hook guard");
-        set_send_hook(Some(Arc::new(responder)));
-        let outcome = catch_unwind(AssertUnwindSafe(f));
-        set_send_hook(None);
-        drop(guard);
-        match outcome {
-            Ok(result) => result,
-            Err(panic) => std::panic::resume_unwind(panic),
-        }
+        with_send_hook(Arc::new(responder), f)
     }
 
     fn ok_empty_response() -> Response<Vec<u8>> {
@@ -1329,8 +1322,8 @@ mod query_errors_handling {
             .map(|(_, value)| value.as_str());
         assert_eq!(
             header,
-            Some("application/json"),
-            "request must declare Accept: application/json; got {:?}",
+            Some(APPLICATION_NORITO),
+            "request must declare Accept: application/x-norito; got {:?}",
             snapshot.headers
         );
     }

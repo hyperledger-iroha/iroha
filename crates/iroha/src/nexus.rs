@@ -186,9 +186,13 @@ mod tests {
 
     use super::*;
 
-    fn sample_settlement(lane_id: LaneId, dataspace_id: DataSpaceId) -> LaneBlockCommitment {
+    fn sample_settlement(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        block_height: u64,
+    ) -> LaneBlockCommitment {
         LaneBlockCommitment {
-            block_height: 5,
+            block_height,
             lane_id,
             dataspace_id,
             tx_count: 1,
@@ -227,9 +231,9 @@ mod tests {
     fn builder_constructs_verifiable_envelope() {
         let lane_id = LaneId::new(7);
         let dataspace_id = DataSpaceId::new(3);
-        let settlement = sample_settlement(lane_id, dataspace_id);
         let da_hash = Some(HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]))); // short input OK
         let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), da_hash);
+        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
         let qc = ExecutionQcRecord {
             subject_block_hash: header.hash(),
             parent_state_root: Hash::new([0xBA; 4]),
@@ -255,8 +259,8 @@ mod tests {
     fn builder_rejects_mismatched_qc() {
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(2);
-        let settlement = sample_settlement(lane_id, dataspace_id);
         let header = header_with_da_hash(NonZeroU64::new(9).expect("nonzero height"), None);
+        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
         let mut qc = ExecutionQcRecord {
             subject_block_hash: header.hash(),
             parent_state_root: Hash::new([0x00; 4]),
@@ -282,8 +286,8 @@ mod tests {
     fn proof_quorum_validation_passes_for_sufficient_signers() {
         let lane_id = LaneId::new(2);
         let dataspace_id = DataSpaceId::new(3);
-        let settlement = sample_settlement(lane_id, dataspace_id);
         let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), None);
+        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
         let qc = ExecutionQcRecord {
             subject_block_hash: header.hash(),
             parent_state_root: Hash::new([0x21; 4]),
@@ -309,8 +313,8 @@ mod tests {
     fn proof_quorum_validation_rejects_insufficient_signers() {
         let lane_id = LaneId::new(4);
         let dataspace_id = DataSpaceId::new(5);
-        let settlement = sample_settlement(lane_id, dataspace_id);
         let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), None);
+        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
         let qc = ExecutionQcRecord {
             subject_block_hash: header.hash(),
             parent_state_root: Hash::new([0x32; 4]),
@@ -340,8 +344,8 @@ mod tests {
     fn proof_quorum_validation_rejects_missing_qc() {
         let lane_id = LaneId::new(6);
         let dataspace_id = DataSpaceId::new(7);
-        let settlement = sample_settlement(lane_id, dataspace_id);
         let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), None);
+        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
 
         let proof = CrossLaneTransferBuilder::new(header, None, None, settlement)
             .build()
@@ -361,8 +365,8 @@ mod tests {
     fn batch_verification_rejects_duplicates() {
         let lane_id = LaneId::new(10);
         let dataspace_id = DataSpaceId::new(4);
-        let settlement = sample_settlement(lane_id, dataspace_id);
         let header = header_with_da_hash(NonZeroU64::new(11).expect("nonzero height"), None);
+        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
         let proof = CrossLaneTransferBuilder::new(header, None, None, settlement)
             .build()
             .expect("envelope should be valid");

@@ -497,6 +497,8 @@ pub enum DenyReason {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use proptest::prelude::*;
 
     use super::*;
@@ -538,6 +540,70 @@ mod tests {
             Some(amount),
             5,
         )
+    }
+
+    fn cbdc_manifest_fixture() -> AssetPermissionManifest {
+        let uaid_hex =
+            "0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
+        let uaid = UniversalAccountId::from_hash(
+            Hash::from_str(uaid_hex).expect("fixture uaid hex must parse"),
+        );
+        let dataspace = DataSpaceId::new(11);
+        let allowance = Allowance {
+            max_amount: Some(Numeric::from(500_000_000_u64)),
+            window: AllowanceWindow::PerDay,
+        };
+        let allow_entry = ManifestEntry {
+            scope: CapabilityScope {
+                dataspace: Some(dataspace),
+                program: Some("cbdc.transfer".parse().expect("program id")),
+                method: Some(sample_name("transfer")),
+                asset: Some("CBDC#centralbank".parse().expect("asset definition")),
+                role: Some(AmxRole::Initiator),
+            },
+            effect: ManifestEffect::Allow(allowance),
+            notes: Some("Wholesale transfer allowance (per UAID, per day).".to_owned()),
+        };
+        let deny_entry = ManifestEntry {
+            scope: CapabilityScope {
+                dataspace: Some(dataspace),
+                program: Some("cbdc.kit".parse().expect("program id")),
+                method: Some(sample_name("withdraw")),
+                asset: None,
+                role: None,
+            },
+            effect: ManifestEffect::Deny(DenyDirective {
+                reason: Some("Withdrawals disabled for this UAID.".to_owned()),
+            }),
+            notes: Some("Deny wins over any preceding allowance.".to_owned()),
+        };
+        AssetPermissionManifest {
+            version: ManifestVersion::V1,
+            uaid,
+            dataspace,
+            issued_ms: 1_762_723_200_000,
+            activation_epoch: 4097,
+            expiry_epoch: Some(4600),
+            entries: vec![allow_entry, deny_entry],
+        }
+    }
+
+    #[test]
+    fn cbdc_manifest_fixture_matches_serialized_json() {
+        let manifest = cbdc_manifest_fixture();
+        let expected =
+            norito::json::to_value(&manifest).expect("serialize manifest to JSON");
+        if std::env::var_os("IROHA_DUMP_MANIFEST_JSON").is_some() {
+            let rendered =
+                norito::json::to_string_pretty(&expected).expect("render manifest JSON");
+            eprintln!("{rendered}");
+        }
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/space_directory/capability/cbdc_wholesale.manifest.json");
+        let fixture = fs::read_to_string(&fixture_path).expect("read fixture JSON");
+        let fixture_value: norito::json::Value =
+            norito::json::from_str(&fixture).expect("parse fixture JSON");
+        assert_eq!(fixture_value, expected);
     }
 
     fn matching_scope(method: &Name) -> CapabilityScope {
