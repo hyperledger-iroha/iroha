@@ -19736,8 +19736,10 @@ async fn block_created_skips_pending_insert_while_processing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn block_created_requests_missing_parent_on_height_gap() {
-    let mut harness = test_actor_harness(4).await;
-    eprintln!("block_created_requests_missing_parent_on_height_gap: harness ready");
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = false;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
     let state_height = actor.state.view().height() as u64;
@@ -19754,7 +19756,6 @@ async fn block_created_requests_missing_parent_on_height_gap() {
     actor
         .handle_block_created(super::message::BlockCreated { block })
         .expect("handle BlockCreated");
-    eprintln!("block_created_requests_missing_parent_on_height_gap: handled BlockCreated");
 
     assert!(
         actor.pending.pending_blocks.contains_key(&block_hash),
@@ -19772,7 +19773,6 @@ async fn block_created_requests_missing_parent_on_height_gap() {
     );
 
     harness.shutdown.send();
-    eprintln!("block_created_requests_missing_parent_on_height_gap: shutdown sent");
 }
 
 #[tokio::test(flavor = "current_thread")]
