@@ -102,6 +102,15 @@ impl Actor {
             );
             if matches!(vote.phase, crate::sumeragi::consensus::Phase::Precommit) {
                 if let Some(pending) = self.pending.pending_blocks.get(&vote.block_hash) {
+                    if pending.aborted {
+                        debug!(
+                            height = vote.height,
+                            view = vote.view,
+                            block = %vote.block_hash,
+                            "skipping block sync update for aborted pending block"
+                        );
+                        return;
+                    }
                     let block_time = {
                         let view = self.state.view();
                         view.world.parameters().sumeragi().block_time()
