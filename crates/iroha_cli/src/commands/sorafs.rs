@@ -2139,7 +2139,6 @@ fn validate_hex_digest(value: &str, flag: &str) -> Result<String> {
 
 fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
     match policy {
-        AnonymityPolicy::Compatible => "anon-compatible",
         AnonymityPolicy::GuardPq => "anon-guard-pq",
         AnonymityPolicy::MajorityPq => "anon-majority-pq",
         AnonymityPolicy::StrictPq => "anon-strict-pq",
@@ -7900,7 +7899,6 @@ fn capability_type_label(cap: CapabilityType) -> &'static str {
     match cap {
         CapabilityType::ToriiGateway => "torii_gateway",
         CapabilityType::QuicNoise => "quic_noise",
-        CapabilityType::SoraNetCompatible => "soranet_compatible",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::VendorReserved => "vendor_reserved",
@@ -10164,7 +10162,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_alias",
-                "account_alias": "legacy@sora",
+                "account_alias": "alias@sora",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-01T00:00:00Z"
@@ -10196,7 +10194,7 @@ mod gateway_tests {
         let args = GatewayUpdateDenylistArgs {
             base_path: base_path.clone(),
             add_paths: vec![add_path],
-            remove_descriptors: vec!["account_alias:legacy@sora".to_owned()],
+            remove_descriptors: vec!["account_alias:alias@sora".to_owned()],
             output_path: Some(output_path.clone()),
             snapshot_out: Some(snapshot_json.clone()),
             snapshot_norito_out: Some(snapshot_norito.clone()),
@@ -11956,10 +11954,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_anonymity_policy_flag_rejects_legacy_stage() {
-        let value = "anon-compatible".to_string();
+    fn parse_anonymity_policy_flag_rejects_unknown() {
+        let value = "anon-unknown".to_string();
         let err = parse_anonymity_policy_flag(Some(&value), "--anonymity-policy")
-            .expect_err("legacy anonymity policy must be rejected");
+            .expect_err("unsupported anonymity policy must be rejected");
         assert!(
             err.to_string().contains("anon-guard-pq"),
             "error should point to the canonical staged policies: {err}"
@@ -11968,10 +11966,6 @@ mod tests {
 
     #[test]
     fn anonymity_policy_label_matches_expected_values() {
-        assert_eq!(
-            anonymity_policy_label(AnonymityPolicy::Compatible),
-            "anon-compatible"
-        );
         assert_eq!(
             anonymity_policy_label(AnonymityPolicy::GuardPq),
             "anon-guard-pq"
@@ -11987,7 +11981,7 @@ mod tests {
     }
 
     #[test]
-    fn load_guard_directory_legacy_json_rejected() {
+    fn load_guard_directory_json_rejected() {
         let mut file = NamedTempFile::new().expect("temp file");
         let id_primary = "01".repeat(32);
         let id_secondary = "02".repeat(32);
@@ -12013,7 +12007,7 @@ mod tests {
 "#
         );
         write!(file, "{json}").expect("write guard directory");
-        let err = load_guard_directory(file.path()).expect_err("legacy format must be rejected");
+        let err = load_guard_directory(file.path()).expect_err("json format must be rejected");
         let msg = err.to_string();
         assert!(
             msg.contains("failed to parse guard directory"),

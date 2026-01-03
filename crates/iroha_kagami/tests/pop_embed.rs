@@ -50,7 +50,7 @@ fn pop_and_embed_populates_pop_hex_entries() -> Result<()> {
         .wrap_err("run `kagami genesis embed-pop`")?;
     ensure!(status.success(), "`kagami genesis embed-pop` failed");
 
-    // Read back and check topology_pop populated
+    // Read back and check pop_hex populated
     let out_bytes = std::fs::read(&out_path).wrap_err("read embed-pop output")?;
     let mf2: norito::json::Value =
         norito::json::from_slice(&out_bytes).wrap_err("parse embed-pop JSON output")?;
@@ -62,10 +62,6 @@ fn pop_and_embed_populates_pop_hex_entries() -> Result<()> {
         .as_array()
         .expect("topology array should exist");
     assert_eq!(topology.len(), 2);
-    assert!(
-        t0.get("topology_pop").is_none(),
-        "legacy topology_pop must not be present"
-    );
 
     let mut seen = std::collections::BTreeMap::new();
     for entry in topology {

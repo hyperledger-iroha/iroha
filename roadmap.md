@@ -138,9 +138,16 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 13. **QUERY-DSL-IMPLEMENTATION — Replace lightweight query DSL stubs** (Data Model/Core/SDK, Line: Shared, Owner: Data Model WG, Priority: Medium, Status: 🈴 Completed, target TBD)
     - [x] Implement real predicate/projection semantics for `query::dsl` and `query::dsl_fast`.
-    - [x] Ensure Norito serialization captures predicate payloads and remains backward compatible.
+    - [x] Ensure Norito serialization captures predicate payloads and remains deterministic.
     - [x] Wire Torii config limits into query post-processing and require config in request limit validation.
     - [x] Add unit/integration tests; update builder APIs and examples.
+
+14. **LEGACY-CLEANUP — Remove compatibility shims and legacy labels** (Core/SDK/Docs, Line: Shared, Owner: Release Eng, Priority: High, Status: 🈺 In Progress, target TBD)
+    - [x] Remove SoraFS anon-compatible policy and SoraNet-compatible capability across bindings, stubs, and tests.
+    - [x] Drop query-lane and genesis-bootstrap compatibility shims; fail executor validation on undecodable verdicts.
+    - [ ] Enforce ABI v1 only (remove Experimental policy paths) and update related tests/docs.
+    - [ ] Remove Norito compatibility toggles and legacy length/offset decode paths (update `norito.md`).
+    - [ ] Sweep docs/translations for remaining legacy/backward-compat references and clean up tooling flags.
 
 17. **BRIDGE-RECEIPTS-TYPED — Replace bridge log stub with typed events** (Core/Executor/CLI, Line: Shared, Owner: Core Protocol WG, Priority: Medium, Status: 🈴 Completed, target TBD)
     - [x] Emit typed Data/event payloads for bridge receipts (remove log stub).

@@ -2,9 +2,8 @@
 //!
 //! This module provides thin conversion helpers so that downstream crates can
 //! encode/decode MV `Storage`/`Cell` instances using the Norito JSON machinery
-//! without pulling Serde into the dependency graph. The legacy `mv::serde`
-//! compatibility shim has been removed; callers should import these helpers
-//! directly.
+//! without pulling Serde into the dependency graph. The former `mv::serde`
+//! shim has been removed; callers should import these helpers directly.
 
 use core::{fmt, marker::PhantomData};
 use std::{collections::BTreeMap, ops::Deref};

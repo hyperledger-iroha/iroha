@@ -1,6 +1,17 @@
 # Status
 
 ## Latest Updates
+- Removed SoraFS `anon-compatible`/`SoraNetCompatible` variants across Rust/JS/Python/Android bindings, updated stubs/tests, and tightened SoraNet capability validation; dropped query-lane and genesis-bootstrap compatibility shims; fail executor validation on undecodable verdicts; refreshed SoraFS/Swift docs to remove legacy labels.
+- Tests: not run (not requested).
+- Made genesis topology entries accept optional `pop_hex`, added PoP merge support, and updated downstream parsing/build/tests plus genesis docs/translations.
+- Resolved clippy warnings across integration tests/config/SoraFS policies and removed the obsolete `Compatible` anonymity policy branch from Python bindings.
+- Tests: `CARGO_TARGET_DIR=target-codex-clippy cargo clippy --workspace --all-targets -- -D warnings` (passed).
+- Skip QC aggregation when the pending block is marked aborted, preventing invalid blocks from forming precommit/availability QCs; added unit coverage for the aborted-pending path.
+- Tests: not run (not requested).
+- Clarified multisig derived-account helpers in core tests (no legacy path; deterministic derived IDs only) and tightened precommit block-sync rebroadcast borrowing; added unit coverage for derived helper behavior.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core falls_back -- --nocapture` (timed out after 300s during test run).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core derived_multisig_helpers_match_expected_values -- --nocapture` (failed: `iroha_telemetry` missing multisig-derived metrics fields in `crates/iroha_telemetry/src/metrics.rs`).
+- Ran `IROHA_KAGAMI_LOCALNET_KEEP=1 cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture`; failed to build `iroha3d` due to `irohad` compile errors (missing `ConsensusMode` arg to `replay_blocks_from_kura`, `Arc::clone` expects `Arc<State>`, missing `TelemetryIntegrity` arg to telemetry WS start, and missing `CommitVote` match arm). Localnet artifacts kept at `target/kagami-localnet/.tmpQD6K96`.
 - Reset pending-block availability/gate/abort state on replacement with a new subject, and expand unit coverage to ensure replacement clears DA/QC gating and aborted flags.
 - Tests: not run (not requested).
 - Resolved merge conflicts in `status.md` and `roadmap.md` after the i23 merge.

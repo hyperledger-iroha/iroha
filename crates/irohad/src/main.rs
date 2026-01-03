@@ -832,6 +832,7 @@ impl NetworkRelay {
                 Some(proposal.header.height),
                 Some(proposal.header.view),
             ),
+            CommitVote(vote) => ("CommitVote", Some(vote.height), Some(vote.view)),
         }
     }
 
@@ -1061,6 +1062,7 @@ impl Iroha {
                         &mut state,
                         &topology,
                         block_count.0,
+                        config.sumeragi.consensus_mode,
                     )
                     .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
                 }
@@ -1111,6 +1113,10 @@ impl Iroha {
             &dataspace_catalog,
             lane_compliance.clone(),
         ));
+        #[cfg(feature = "telemetry")]
+        let mut lane_manifest_task = None;
+        #[cfg(not(feature = "telemetry"))]
+        let mut lane_manifest_task = None;
         if config.nexus.enabled {
             let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
                 lane_catalog.as_ref(),
@@ -1134,34 +1140,15 @@ impl Iroha {
                 let telemetry_task = state.telemetry.clone();
                 let governance_task = Arc::clone(&governance_catalog);
                 let registry_cfg_task = registry_cfg.clone();
-                let state_task = Arc::clone(&state);
-                tokio::spawn(async move {
-                    queue_task
-                        .watch_lane_manifests_task(
-                            Some(telemetry_task),
-                            governance_task,
-                            registry_cfg_task,
-                            Some(state_task),
-                        )
-                        .await;
-                });
+                lane_manifest_task =
+                    Some((queue_task, telemetry_task, governance_task, registry_cfg_task));
             }
             #[cfg(not(feature = "telemetry"))]
             {
                 let queue_task = Arc::clone(&queue);
                 let governance_task = Arc::clone(&governance_catalog);
                 let registry_cfg_task = registry_cfg.clone();
-                let state_task = Arc::clone(&state);
-                tokio::spawn(async move {
-                    queue_task
-                        .watch_lane_manifests_task(
-                            None,
-                            governance_task,
-                            registry_cfg_task,
-                            Some(state_task),
-                        )
-                        .await;
-                });
+                lane_manifest_task = Some((queue_task, governance_task, registry_cfg_task));
             }
         } else {
             let empty_registry = Arc::new(LaneManifestRegistry::empty());
@@ -1755,6 +1742,36 @@ impl Iroha {
         // Thread chain id into state for VRF prehash binding
         state.chain_id = config.common.chain.clone();
         let state = Arc::new(state);
+        #[cfg(feature = "telemetry")]
+        if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =
+            lane_manifest_task
+        {
+            let state_task = Arc::clone(&state);
+            tokio::spawn(async move {
+                queue_task
+                    .watch_lane_manifests_task(
+                        Some(telemetry_task),
+                        governance_task,
+                        registry_cfg_task,
+                        Some(state_task),
+                    )
+                    .await;
+            });
+        }
+        #[cfg(not(feature = "telemetry"))]
+        if let Some((queue_task, governance_task, registry_cfg_task)) = lane_manifest_task {
+            let state_task = Arc::clone(&state);
+            tokio::spawn(async move {
+                queue_task
+                    .watch_lane_manifests_task(
+                        None,
+                        governance_task,
+                        registry_cfg_task,
+                        Some(state_task),
+                    )
+                    .await;
+            });
+        }
 
         #[cfg(feature = "telemetry")]
         let telemetry = {
@@ -2200,10 +2217,14 @@ async fn start_telemetry(
             .await
             .change_context(StartError::StartTelemetry)
             .attach(MSG_SUBSCRIBE)?;
-        let handle = iroha_telemetry::ws::start(telemetry_cfg.clone(), receiver)
-            .await
-            .map_err(|err| {
-                Report::new(StartError::StartTelemetry)
+        let handle = iroha_telemetry::ws::start(
+            telemetry_cfg.clone(),
+            config.telemetry_integrity.clone(),
+            receiver,
+        )
+        .await
+        .map_err(|err| {
+            Report::new(StartError::StartTelemetry)
                     .attach(MSG_START_TASK)
                     .attach(err)
             })?;
@@ -3586,8 +3607,7 @@ fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) 
             .compute
             .resource_profiles
             .get(&config.ivm.memory_budget_profile)
-            .map(|budget| budget.max_stack_bytes.get())
-            .unwrap_or_else(|| guest_stack.max(1));
+            .map_or_else(|| guest_stack.max(1), |budget| budget.max_stack_bytes.get());
         if guest_stack < budget_stack {
             log_config_warning(&format!(
                 "concurrency.guest_stack_bytes ({guest_stack}) is smaller than ivm.memory_budget_profile `{}` max_stack_bytes ({budget_stack}); guest stack limits will be clamped to the smaller value",
@@ -5186,8 +5206,7 @@ mod tests {
                         },
                         "instructions": [],
                         "ivm_triggers": [],
-                        "topology": [],
-                        "topology_pop": []
+                        "topology": []
                     }
                 ]
             });
@@ -5255,8 +5274,7 @@ mod tests {
                         },
                         "instructions": [],
                         "ivm_triggers": [],
-                        "topology": [],
-                        "topology_pop": []
+                        "topology": []
                     }
                 ]
             });

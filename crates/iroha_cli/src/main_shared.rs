@@ -867,7 +867,7 @@ fn load_client_toml_fallback(path: &Path) -> Option<Config> {
         transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
         connect_queue_root: iroha::config::default_connect_queue_root(),
         sorafs_alias_cache: alias_cache,
-        sorafs_anonymity_policy: AnonymityPolicy::Compatible,
+        sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: SorafsRolloutPhase::Default,
     })
 }
@@ -901,7 +901,7 @@ fn fallback_config() -> Config {
         torii_api_min_proof_version: defaults::torii::API_MIN_PROOF_VERSION.to_string(),
         connect_queue_root: iroha::config::default_connect_queue_root(),
         sorafs_alias_cache: alias_cache,
-        sorafs_anonymity_policy: AnonymityPolicy::Compatible,
+        sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: SorafsRolloutPhase::Default,
     }
 }
@@ -4132,7 +4132,7 @@ mod trigger {
         #[arg(long, value_name = "PRESET")]
         pub data_proof_only: Option<ProofEventPreset>,
         /// Restrict verifying key events to a preset when using `--data-verifying-key`.
-        /// Presets: `registered`, `updated`, `deprecated`, `updates-and-deprecations`, `all` (default).
+        /// Presets: `registered`, `updated`, `all` (default).
         #[arg(long, value_name = "PRESET")]
         pub data_vk_only: Option<VkEventPreset>,
         /// Human-readable offset for time start (e.g., "5m", "1h"), added to current time
@@ -4158,11 +4158,6 @@ mod trigger {
         Registered,
         /// Only Updated events
         Updated,
-        /// Only Deprecated events
-        Deprecated,
-        /// Only Updated and Deprecated events
-        #[value(name = "updates-and-deprecations")]
-        UpdatesAndDeprecations,
     }
 
     #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -4305,8 +4300,6 @@ mod trigger {
                         let event_set = match self.data_vk_only.unwrap_or(VkEventPreset::All) {
                             VkEventPreset::Registered => iroha::data_model::events::data::verifying_keys::VerifyingKeyEventSet::only_registered(),
                             VkEventPreset::Updated => iroha::data_model::events::data::verifying_keys::VerifyingKeyEventSet::only_updated(),
-                            VkEventPreset::Deprecated => iroha::data_model::events::data::verifying_keys::VerifyingKeyEventSet::only_deprecated(),
-                            VkEventPreset::UpdatesAndDeprecations => iroha::data_model::events::data::verifying_keys::VerifyingKeyEventSet::updates_and_deprecations(),
                             VkEventPreset::All => iroha::data_model::events::data::verifying_keys::VerifyingKeyEventSet::all(),
                         };
                         DataEventFilter::from(
@@ -6428,7 +6421,6 @@ mod multisig_json_tests {
     use iroha::executor_data_model::isi::multisig::{
         MultisigRegister, MultisigSpec, DEFAULT_MULTISIG_TTL_MS,
     };
-    use iroha_crypto::{Algorithm, KeyPair};
     use std::collections::BTreeMap;
     use std::num::{NonZeroU16, NonZeroU64};
 

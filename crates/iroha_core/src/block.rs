@@ -1493,8 +1493,6 @@ pub enum InvalidGenesisError {
     NotInstructions,
     /// Genesis block must have 1 to 16 transactions (executor upgrade, parameters, ordinary instructions, IVM trigger registrations, initial topology)
     BadTransactionsAmount,
-    /// Deprecated: executor upgrade is optional in genesis (kept for compatibility)
-    MustUpgrade,
     /// Genesis asset definition registration must be authorized by the domain owner or explicit permission
     UnauthorizedAssetDefinition,
     /// Genesis block header must start the chain (height 1, no previous hash)

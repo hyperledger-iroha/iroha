@@ -362,11 +362,11 @@ fn build_advert(opts: &EmitOptions) -> Result<ProviderAdvertV1, String> {
         && !(opts
             .capabilities
             .iter()
-            .any(|cap| cap.cap_type == CapabilityType::SoraNetCompatible)
+            .any(|cap| cap.cap_type == CapabilityType::SoraNetHybridPq)
             || opts.soranet_pq.is_some())
     {
         return Err(
-            "--transport-hint=soranet_relay requires --capability=soranet_compatible or --soranet-pq"
+            "--transport-hint=soranet_relay requires --capability=soranet_pq or --soranet-pq"
                 .into(),
         );
     }
@@ -794,8 +794,9 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
     let cap_type = match head_lower.as_str() {
         "torii" | "torii-gateway" => CapabilityType::ToriiGateway,
         "quic" | "quic-noise" => CapabilityType::QuicNoise,
-        "soranet" | "soranet-compatible" => CapabilityType::SoraNetCompatible,
-        "soranet-pq" | "soranet_pq" | "soranet-hybrid-pq" => CapabilityType::SoraNetHybridPq,
+        "soranet" | "soranet-pq" | "soranet_pq" | "soranet-hybrid-pq" => {
+            CapabilityType::SoraNetHybridPq
+        }
         "range" | "chunk-range" | "chunk_range" => {
             return Err(
                 "use --range-capability=<key=value,...> to describe chunk-range support".into(),
@@ -1210,7 +1211,6 @@ fn capability_name(cap: CapabilityType) -> &'static str {
     match cap {
         CapabilityType::ToriiGateway => "torii",
         CapabilityType::QuicNoise => "quic",
-        CapabilityType::SoraNetCompatible => "soranet",
         CapabilityType::ChunkRangeFetch => "range",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::VendorReserved => "vendor",

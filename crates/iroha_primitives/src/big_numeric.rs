@@ -1,6 +1,6 @@
 //! Signed decimal with variable-length mantissa (up to 512 bits) and an explicit scale.
 //!
-//! This is an incremental bridge type toward replacing the legacy fixed-precision
+//! This is an incremental bridge type toward replacing the previous fixed-precision
 //! `Numeric`. It supports negative values and a configurable decimal scale, while
 //! storing the mantissa in [`crate::bigint::BigInt`].
 

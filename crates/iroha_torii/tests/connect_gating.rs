@@ -345,7 +345,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
             block_max_payload_bytes:
                 iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
-            msg_channel_cap: None,
             msg_channel_cap_votes:
                 iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
             msg_channel_cap_block_payload:
@@ -716,8 +715,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id:
                 iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-            vk_deprecated_cap_per_backend:
-                iroha_config::parameters::defaults::zk::vk::DEPRECATED_CAP_PER_BACKEND,
             kaigi_roster_join_vk: None,
             kaigi_roster_leave_vk: None,
             kaigi_usage_vk: None,

@@ -343,8 +343,7 @@ fn load_config_template(answers: &Answers, keypair: &KeyPair) -> Result<(TomlVal
     if let Some(path) = defaults.config_template {
         let raw = fs::read_to_string(path)
             .wrap_err_with(|| format!("failed to read config template at {path}"))?;
-        let sanitized = normalize_toml(&raw);
-        let mut value: TomlValue = toml::from_str(&sanitized)
+        let mut value: TomlValue = toml::from_str(&raw)
             .wrap_err_with(|| format!("failed to parse config template at {path}"))?;
         ensure_trusted_peer_list(
             &mut value,
@@ -366,11 +365,6 @@ fn load_config_template(answers: &Answers, keypair: &KeyPair) -> Result<(TomlVal
         &answers.trusted_peers,
     );
     Ok((config, defaults.genesis_template.to_string()))
-}
-
-/// Apply small fixups so legacy TOML snippets parse cleanly (e.g., `\0` null).
-fn normalize_toml(raw: &str) -> String {
-    raw.replace("\\0", "\\\\0")
 }
 
 #[allow(clippy::unnecessary_wraps)]

@@ -7819,7 +7819,7 @@ mod tests {
                 "gov-notes",
                 ciphertext,
                 MetadataVisibility::GovernanceOnly,
-                MetadataEncryption::chacha20poly1305_with_label(Some("legacy")),
+                MetadataEncryption::chacha20poly1305_with_label(Some("secondary")),
             )],
         };
         let err = match encrypt_governance_metadata(&metadata, Some(&key), Some("primary")) {

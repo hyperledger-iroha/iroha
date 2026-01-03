@@ -4707,6 +4707,39 @@ mod tests {
         state::{State, World},
     };
 
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn sample_open_verify_envelope() -> iroha_zkp_halo2::OpenVerifyEnvelope {
+        iroha_zkp_halo2::OpenVerifyEnvelope {
+            params: iroha_zkp_halo2::IpaParams {
+                version: 1,
+                curve_id: 1,
+                n: 1,
+                g: vec![[0u8; 32]],
+                h: vec![[0u8; 32]],
+                u: [0u8; 32],
+            },
+            public: iroha_zkp_halo2::PolyOpenPublic {
+                version: 1,
+                curve_id: 1,
+                n: 1,
+                z: [0u8; 32],
+                t: [0u8; 32],
+                p_g: [0u8; 32],
+            },
+            proof: iroha_zkp_halo2::IpaProofData {
+                version: 1,
+                l: vec![[0u8; 32]],
+                r: vec![[0u8; 32]],
+                a_final: [0u8; 32],
+                b_final: [0u8; 32],
+            },
+            transcript_label: "test".to_string(),
+            vk_commitment: None,
+            public_inputs_schema_hash: None,
+            domain_tag: None,
+        }
+    }
+
     pub(super) fn norito_blob<T: NoritoEncode>(val: &T) -> Vec<u8> {
         val.encode()
     }
@@ -4735,6 +4768,33 @@ mod tests {
             version: AxtPolicySnapshot::compute_version(&[binding]),
             entries: vec![binding],
         }
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn compute_envelope_hash_rejects_invalid_payload() {
+        let err = CoreHost::compute_envelope_hash(b"invalid envelope")
+            .expect_err("invalid envelope should fail");
+        assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn compute_envelope_hash_accepts_norito_envelope() {
+        let envelope = sample_open_verify_envelope();
+        let payload = norito::to_bytes(&envelope).expect("encode envelope");
+        let hash = CoreHost::compute_envelope_hash(&payload).expect("hash envelope");
+        let expected: [u8; 32] = iroha_crypto::Hash::new(&payload).into();
+        assert_eq!(hash, expected);
+    }
+
+    #[cfg(not(feature = "zk-halo2-ipa"))]
+    #[test]
+    fn compute_envelope_hash_accepts_bytes_without_feature_gate() {
+        let payload = b"opaque bytes";
+        let hash = CoreHost::compute_envelope_hash(payload).expect("hash payload");
+        let expected: [u8; 32] = iroha_crypto::Hash::new(payload).into();
+        assert_eq!(hash, expected);
     }
 
     #[test]

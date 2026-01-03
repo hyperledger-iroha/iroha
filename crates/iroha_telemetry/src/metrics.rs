@@ -5903,10 +5903,8 @@ pub struct Metrics {
     pub social_halted: Gauge,
     /// Viral incentive rejections grouped by failure reason.
     pub social_rejections_total: IntCounterVec,
-    /// Multisig direct-sign (derived-key) validation rejections.
+    /// Multisig direct-sign validation rejections.
     pub multisig_direct_sign_reject_total: IntCounter,
-    /// Multisig requests rejected because the account id matches the deprecated derived key.
-    pub multisig_derived_account_reject_total: IntCounter,
     /// Open viral escrows currently tracked on-ledger.
     pub social_open_escrows: GenericGauge<AtomicU64>,
     /// Transactions currently queued as observed by consensus.
@@ -6732,10 +6730,6 @@ pub struct Metrics {
     pub torii_nts_unhealthy_reject_total: IntCounter,
     /// Torii admission rejects for direct multisig signing attempts.
     pub torii_multisig_direct_sign_reject_total: IntCounter,
-    /// Torii admission rejects for multisig accounts that still use derived keys.
-    pub torii_multisig_derived_account_reject_total: IntCounter,
-    /// Multisig account registrations detected as using deterministic (derived) identifiers.
-    pub multisig_derived_account_detected_total: IntCounter,
     /// Torii SoraFS provider admission counters (result, reason).
     pub torii_sorafs_admission_total: IntCounterVec,
     /// Torii SoraFS capacity telemetry rejections (provider, reason).
@@ -7048,7 +7042,7 @@ pub struct Metrics {
     pub torii_address_collision_domain_total: IntCounterVec,
     /// Torii address_format selections grouped by endpoint/format.
     pub torii_address_format_total: IntCounterVec,
-    /// Torii strict-address toggle (1 = strict IH58/compressed only, 0 = legacy override).
+    /// Torii strict-address toggle (1 = strict IH58/compressed only, 0 = relaxed).
     pub torii_address_strict_mode: IntGauge,
     /// Torii Norito RPC decode failures grouped by payload kind/reason.
     pub torii_norito_decode_failures_total: IntCounterVec,
@@ -7742,12 +7736,7 @@ impl Default for Metrics {
         }
         let multisig_direct_sign_reject_total = IntCounter::new(
             "multisig_direct_sign_reject_total",
-            "Transactions rejected for direct or derived multisig signatures",
-        )
-        .expect("Infallible");
-        let multisig_derived_account_reject_total = IntCounter::new(
-            "multisig_derived_account_reject_total",
-            "Multisig requests rejected because the account id matches the deprecated derived key",
+            "Transactions rejected for direct multisig signatures",
         )
         .expect("Infallible");
         let social_open_escrows = GenericGauge::new(
@@ -10654,16 +10643,6 @@ impl Default for Metrics {
             "Transactions rejected during admission for being signed directly by a multisig account",
         )
         .expect("Infallible");
-        let torii_multisig_derived_account_reject_total = IntCounter::new(
-            "torii_multisig_derived_account_reject_total",
-            "Transactions rejected during admission because the multisig account uses a derived key",
-        )
-        .expect("Infallible");
-        let multisig_derived_account_detected_total = IntCounter::new(
-            "multisig_derived_account_detected_total",
-            "Multisig account registrations detected as using deterministic identifiers; migrate to non-derivable IDs",
-        )
-        .expect("Infallible");
         let torii_sorafs_admission_total = IntCounterVec::new(
             Opts::new(
                 "torii_sorafs_admission_total",
@@ -11821,7 +11800,6 @@ impl Default for Metrics {
             social_halted,
             social_rejections_total,
             multisig_direct_sign_reject_total,
-            multisig_derived_account_reject_total,
             social_open_escrows
         );
         register_guarded(&registry, &taikai_ingest_segment_latency_ms);
@@ -12010,7 +11988,7 @@ impl Default for Metrics {
         .expect("Infallible");
         let torii_address_strict_mode = IntGauge::new(
             "torii_address_strict_mode",
-            "Torii strict-address toggle (1=strict canonical-only, 0=legacy/testing override)",
+            "Torii strict-address toggle (1=strict canonical-only, 0=relaxed)",
         )
         .expect("Infallible");
         let torii_norito_decode_failures_total = IntCounterVec::new(
@@ -12053,8 +12031,6 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_signature_limit_max);
         register_guarded(&registry, &torii_nts_unhealthy_reject_total);
         register_guarded(&registry, &torii_multisig_direct_sign_reject_total);
-        register_guarded(&registry, &torii_multisig_derived_account_reject_total);
-        register_guarded(&registry, &multisig_derived_account_detected_total);
         let torii_proof_throttled_total = IntCounterVec::new(
             Opts::new(
                 "torii_proof_throttled_total",
@@ -12812,7 +12788,6 @@ impl Default for Metrics {
             social_halted,
             social_rejections_total,
             multisig_direct_sign_reject_total,
-            multisig_derived_account_reject_total,
             social_open_escrows,
             sumeragi_tx_queue_depth,
             sumeragi_tx_queue_capacity,
@@ -13227,8 +13202,6 @@ impl Default for Metrics {
             torii_signature_limit_max,
             torii_nts_unhealthy_reject_total,
             torii_multisig_direct_sign_reject_total,
-            torii_multisig_derived_account_reject_total,
-            multisig_derived_account_detected_total,
             torii_sorafs_admission_total,
             torii_sorafs_capacity_telemetry_rejections_total,
             torii_sorafs_capacity_declared_gib,
@@ -13472,7 +13445,7 @@ fn duplicate_metrics_should_panic() -> bool {
     duplicate_metrics_flag().load(Ordering::Relaxed)
 }
 
-/// Override duplicate-metric panic behaviour (preferred over the legacy env var).
+/// Override duplicate-metric panic behaviour (preferred over env vars).
 pub fn set_duplicate_metrics_panic(enabled: bool) {
     duplicate_metrics_flag().store(enabled, Ordering::Relaxed);
 }

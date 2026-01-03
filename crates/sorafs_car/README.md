@@ -58,8 +58,8 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json \
   payload.tar
 
-# For legacy scripts, `--profile-id=1` is still accepted, but prefer the
-# handle form so automation remains stable if registry IDs change.
+# `--profile-id=1` is accepted, but prefer the handle form so automation remains
+# stable if registry IDs change.
 ```
 
 - Pass `--chunk-fetch-plan-out=path` to persist the canonical `chunk_fetch_specs` JSON so

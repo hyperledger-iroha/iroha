@@ -12,7 +12,7 @@ use integration_tests::{
     sync::{get_status_with_retry, sync_after_submission},
 };
 use iroha::{
-    client::Status,
+    client::{Client, Status},
     crypto::KeyPair,
     data_model::{
         ValidationFail,
@@ -45,6 +45,49 @@ where
         }
     }
     unreachable!()
+}
+
+fn wait_for_asset_definition_owner(
+    client: &Client,
+    asset_definition_id: &AssetDefinitionId,
+    expected_owner: &AccountId,
+    not_found_msg: &'static str,
+    unexpected_owner_msg: &'static str,
+    timeout_msg: &'static str,
+) -> Result<()> {
+    let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
+    loop {
+        let last_err = match client.query(FindAssetsDefinitions::new()).execute_all() {
+            Ok(definitions) => definitions
+                .into_iter()
+                .find(|asset_definition| asset_definition.id() == asset_definition_id)
+                .map_or_else(
+                    || Some(eyre!("{not_found_msg}")),
+                    |asset_definition| {
+                        if asset_definition.owned_by() == expected_owner {
+                            None
+                        } else {
+                            Some(eyre!(
+                                "{unexpected_owner_msg}: expected={expected_owner}, actual={}",
+                                asset_definition.owned_by()
+                            ))
+                        }
+                    },
+                ),
+            Err(err) => Some(Report::new(err)),
+        };
+
+        if last_err.is_none() {
+            return Ok(());
+        }
+
+        if Instant::now() >= deadline {
+            return Err(last_err.unwrap_or_else(|| {
+                eyre!("timed out waiting for {timeout_msg} after {NON_EMPTY_BLOCK_TIMEOUT:?}")
+            }));
+        }
+        sleep(QUERY_RETRY_DELAY);
+    }
 }
 
 /// Ensure noisy tracing is silenced before any network is spawned.
@@ -640,45 +683,14 @@ fn transfer_asset_definition() -> Result<()> {
         return Ok(());
     }
 
-    let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
-    loop {
-        let last_err = match test_client
-            .query(FindAssetsDefinitions::new())
-            .execute_all()
-        {
-            Ok(definitions) => {
-                if let Some(asset_definition) = definitions
-                    .into_iter()
-                    .find(|asset_definition| asset_definition.id() == &asset_definition_id)
-                {
-                    if asset_definition.owned_by() == &alice_id {
-                        None
-                    } else {
-                        Some(eyre!(
-                            "unexpected asset definition owner: expected={alice_id}, actual={}",
-                            asset_definition.owned_by()
-                        ))
-                    }
-                } else {
-                    Some(eyre!("asset definition not found after registration"))
-                }
-            }
-            Err(err) => Some(Report::new(err)),
-        };
-
-        if last_err.is_none() {
-            break;
-        }
-
-        if Instant::now() >= deadline {
-            return Err(last_err.unwrap_or_else(|| {
-                eyre!(
-                    "timed out waiting for asset definition registration after {NON_EMPTY_BLOCK_TIMEOUT:?}"
-                )
-            }));
-        }
-        sleep(QUERY_RETRY_DELAY);
-    }
+    wait_for_asset_definition_owner(
+        &test_client,
+        &asset_definition_id,
+        &alice_id,
+        "asset definition not found after registration",
+        "unexpected asset definition owner",
+        "asset definition registration",
+    )?;
 
     if submit_or_tolerate_timeout(
         &test_client,
@@ -690,45 +702,14 @@ fn transfer_asset_definition() -> Result<()> {
         return Ok(());
     }
 
-    let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
-    loop {
-        let last_err = match test_client
-            .query(FindAssetsDefinitions::new())
-            .execute_all()
-        {
-            Ok(definitions) => {
-                if let Some(asset_definition) = definitions
-                    .into_iter()
-                    .find(|asset_definition| asset_definition.id() == &asset_definition_id)
-                {
-                    if asset_definition.owned_by() == &new_owner_id {
-                        None
-                    } else {
-                        Some(eyre!(
-                            "unexpected asset definition owner after transfer: expected={new_owner_id}, actual={}",
-                            asset_definition.owned_by()
-                        ))
-                    }
-                } else {
-                    Some(eyre!("asset definition not found after transfer"))
-                }
-            }
-            Err(err) => Some(Report::new(err)),
-        };
-
-        if last_err.is_none() {
-            break;
-        }
-
-        if Instant::now() >= deadline {
-            return Err(last_err.unwrap_or_else(|| {
-                eyre!(
-                    "timed out waiting for asset definition transfer after {NON_EMPTY_BLOCK_TIMEOUT:?}"
-                )
-            }));
-        }
-        sleep(QUERY_RETRY_DELAY);
-    }
+    wait_for_asset_definition_owner(
+        &test_client,
+        &asset_definition_id,
+        &new_owner_id,
+        "asset definition not found after transfer",
+        "unexpected asset definition owner after transfer",
+        "asset definition transfer",
+    )?;
     Ok(())
 }
 

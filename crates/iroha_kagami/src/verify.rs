@@ -1,7 +1,7 @@
 //! Profile-aware genesis verification entrypoint.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     io::{BufWriter, Write},
     path::PathBuf,
 };
@@ -15,7 +15,7 @@ use iroha_data_model::{
     },
     prelude::PeerId,
 };
-use iroha_genesis::{GenesisPeerPop, RawGenesisTransaction};
+use iroha_genesis::RawGenesisTransaction;
 
 use crate::{
     Outcome, RunArgs,
@@ -116,7 +116,7 @@ fn verify_manifest(
     }
 
     let peers_with_pops = collect_topology(manifest)?;
-    let unique_peers: HashSet<_> = peers_with_pops.iter().map(|(peer, _)| peer).collect();
+    let unique_peers: HashSet<_> = peers_with_pops.iter().collect();
     if unique_peers.len() < defaults.min_peers {
         return Err(eyre!(
             "profile {:?} requires at least {} topology entries with PoP (saw {})",
@@ -233,34 +233,23 @@ fn resolve_npos_params(
         .ok_or_else(|| eyre!("missing `sumeragi_npos_parameters` in manifest"))
 }
 
-fn collect_topology(manifest: &RawGenesisTransaction) -> Result<Vec<(PeerId, GenesisPeerPop)>> {
+fn collect_topology(manifest: &RawGenesisTransaction) -> Result<Vec<PeerId>> {
     let mut peers_with_pop = Vec::new();
     for (tx_idx, tx) in manifest.transactions().iter().enumerate() {
-        let mut pops_by_pk: HashMap<_, _> = tx
-            .topology_pop()
-            .iter()
-            .map(|entry| (entry.public_key.clone(), entry))
-            .collect();
-        for peer in tx.topology() {
-            let Some(pop) = pops_by_pk.remove(peer.public_key()) else {
+        for entry in tx.topology() {
+            let Some(_pop) = entry.pop_bytes().map_err(|err| {
+                eyre!(
+                    "transaction {tx_idx} has invalid `pop_hex` for peer {}: {err}",
+                    entry.peer.public_key()
+                )
+            })?
+            else {
                 return Err(eyre!(
-                    "transaction {tx_idx} missing PoP for topology peer {}",
-                    peer.public_key()
+                    "transaction {tx_idx} missing `pop_hex` for peer {}",
+                    entry.peer.public_key()
                 ));
             };
-            if pop.pop.is_empty() {
-                return Err(eyre!(
-                    "transaction {tx_idx} has empty PoP payload for peer {}",
-                    peer.public_key()
-                ));
-            }
-            peers_with_pop.push((peer.clone(), pop.clone()));
-        }
-        if let Some((extra_pk, _)) = pops_by_pk.into_iter().next() {
-            return Err(eyre!(
-                "transaction {tx_idx} includes PoP for unknown topology peer {}",
-                extra_pk
-            ));
+            peers_with_pop.push(entry.peer.clone());
         }
     }
     Ok(peers_with_pop)
@@ -273,7 +262,7 @@ mod tests {
         parameter::system::SumeragiConsensusMode,
         prelude::{ChainId, PeerId, PublicKey},
     };
-    use iroha_genesis::{GenesisBuilder, GenesisPeerPop, RawGenesisTransaction};
+    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use iroha_version::BuildLine;
     use tempfile::NamedTempFile;
@@ -303,22 +292,17 @@ mod tests {
         )
         .expect("generate profile manifest");
 
-        let topology: Vec<PeerId> = peers
-            .iter()
-            .map(|(pk, _)| PeerId::new(pk.clone()))
-            .collect();
-        let pops = peers
-            .iter()
-            .map(|(pk, pop)| GenesisPeerPop {
-                public_key: pk.clone(),
-                pop: pop.clone(),
-            })
-            .collect();
         manifest
             .into_builder()
             .next_transaction()
-            .set_topology(topology)
-            .set_topology_pop(pops)
+            .set_topology(
+                peers
+                    .iter()
+                    .map(|(pk, pop)| {
+                        GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.clone())
+                    })
+                    .collect(),
+            )
             .build_raw()
     }
 
@@ -390,13 +374,15 @@ mod tests {
         .expect("generate profile manifest")
         .into_builder()
         .next_transaction()
-        .set_topology(vec![PeerId::new(generate_peer_pop().0)])
+        .set_topology(vec![GenesisTopologyEntry::from(PeerId::new(
+            generate_peer_pop().0,
+        ))])
         .build_raw();
 
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Dev, Some(seed))
             .expect_err("missing PoP should fail");
         assert!(
-            err.to_string().contains("missing PoP"),
+            err.to_string().contains("missing `pop_hex`"),
             "unexpected error: {err}"
         );
     }

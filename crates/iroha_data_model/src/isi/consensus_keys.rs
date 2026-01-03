@@ -34,7 +34,7 @@ pub struct RotateConsensusKey {
     pub record: crate::consensus::ConsensusKeyRecord,
 }
 
-/// Deprecate/disable an existing consensus key.
+/// Disable an existing consensus key.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
 )]
@@ -43,11 +43,14 @@ pub struct RotateConsensusKey {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[getset(get = "pub")]
-pub struct DeprecateConsensusKey {
+pub struct DisableConsensusKey {
     /// Identifier of the key being disabled.
     pub id: crate::consensus::ConsensusKeyId,
 }
 
+/// Backwards-compatible alias for `DisableConsensusKey`.
+pub type DeprecateConsensusKey = DisableConsensusKey;
+
 impl crate::seal::Instruction for RegisterConsensusKey {}
 impl crate::seal::Instruction for RotateConsensusKey {}
-impl crate::seal::Instruction for DeprecateConsensusKey {}
+impl crate::seal::Instruction for DisableConsensusKey {}

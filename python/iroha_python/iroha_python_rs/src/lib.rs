@@ -2916,7 +2916,7 @@ fn sorafs_gateway_fetch_py(
         }
         let policy = AnonymityPolicy::parse(trimmed).ok_or_else(|| {
             PyValueError::new_err(
-                "anonymity_policy must be one of 'anon-compatible', 'stage-a', 'anon-guard-pq', 'stage-b', 'anon-majority-pq', 'stage-c', or 'anon-strict-pq'",
+                "anonymity_policy must be one of 'stage-a', 'anon-guard-pq', 'stage-b', 'anon-majority-pq', 'stage-c', or 'anon-strict-pq'",
             )
         })?;
         orchestrator_config.anonymity_policy = policy;
@@ -3258,7 +3258,6 @@ fn sorafs_gateway_fetch_py(
 
 fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
     match policy {
-        AnonymityPolicy::Compatible => "anon-compatible",
         AnonymityPolicy::GuardPq => "anon-guard-pq",
         AnonymityPolicy::MajorityPq => "anon-majority-pq",
         AnonymityPolicy::StrictPq => "anon-strict-pq",

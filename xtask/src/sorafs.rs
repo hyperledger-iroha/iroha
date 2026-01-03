@@ -5640,7 +5640,6 @@ fn capability_label(cap: CapabilityType) -> &'static str {
     match cap {
         CapabilityType::ToriiGateway => "torii_gateway",
         CapabilityType::QuicNoise => "quic_noise",
-        CapabilityType::SoraNetCompatible => "soranet_compatible",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::VendorReserved => "vendor_reserved",

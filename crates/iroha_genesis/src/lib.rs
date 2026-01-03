@@ -16,7 +16,7 @@
     clippy::clone_on_copy
 )]
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
     fmt::Debug,
     fs::{self, File},
@@ -33,7 +33,7 @@ use iroha_config::parameters::{
     actual::Crypto as ActualCrypto, defaults::confidential::RULES_VERSION,
     user::SmIntrinsicsPolicyConfig,
 };
-use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey};
 #[cfg(test)]
 use iroha_data_model::isi::register::RegisterBox;
 use iroha_data_model::{
@@ -103,8 +103,7 @@ pub struct GenesisBlock(pub SignedBlock);
 ///
 /// It should be signed, converted to a [`GenesisBlock`],
 /// and serialized in Norito format before supplying to an Iroha peer.
-/// See `kagami genesis sign`. Only the canonical Norito form is supported; legacy
-/// SCALE drafts are not accepted. The structure
+/// See `kagami genesis sign`. Only the canonical Norito form is supported. The structure
 /// mirrors the user-facing manifest consumed by `kagami genesis`.
 #[derive(Debug, Clone, JsonSerialize, IntoSchema, Encode, Decode)]
 pub struct RawGenesisTransaction {
@@ -359,11 +358,6 @@ impl GenesisVkRegistry {
             .downcast_ref::<verifying_keys::UpdateVerifyingKey>()
         {
             self.apply_update(update.id(), update.record())?;
-        } else if let Some(deprecate) = instr
-            .as_any()
-            .downcast_ref::<verifying_keys::DeprecateVerifyingKey>()
-        {
-            self.apply_deprecate(deprecate.id())?;
         }
         Ok(())
     }
@@ -465,19 +459,6 @@ impl GenesisVkRegistry {
         }
         self.entries.insert(id.clone(), record.clone());
         self.by_circuit.insert(new_key, id.clone());
-        Ok(())
-    }
-
-    fn apply_deprecate(&mut self, id: &VerifyingKeyId) -> eyre::Result<()> {
-        let Some(entry) = self.entries.get_mut(id) else {
-            return Err(eyre!(
-                "verifying key `{}` deprecated before registration in genesis",
-                Self::id_display(id)
-            ));
-        };
-        entry.status = ConfidentialStatus::Deprecated;
-        entry.key = None;
-        entry.vk_len = 0;
         Ok(())
     }
 
@@ -1240,9 +1221,7 @@ pub struct RawGenesisTx {
     parameters: Option<Parameters>,
     /// Iroha instructions executed during genesis.
     ///
-    /// Genesis JSON stores each instruction as a structured Norito object. The
-    /// adapter rejects byte-array formats from earlier drafts to keep the first
-    /// release canonical.
+    /// Genesis JSON stores each instruction as a structured Norito object.
     #[norito(default)]
     #[norito(with = "crate::genesis_instructions_json")]
     instructions: Vec<InstructionBox>,
@@ -1253,23 +1232,15 @@ pub struct RawGenesisTx {
     ivm_triggers: Vec<GenesisIvmTrigger>,
     /// Initial topology (list of peers) to bootstrap the network.
     ///
-    /// Entries may be provided as `{ "peer": <PeerId>, "pop_hex": "<hex>" }` to keep
-    /// peers and their PoPs together. Legacy split fields are rejected to keep
-    /// PoPs bundled with their peers.
+    /// Entries are provided as `{ "peer": <PeerId>, "pop_hex": "<hex>" }` to keep
+    /// peers and their PoPs together. `pop_hex` may be omitted while composing
+    /// manifests but must be present before signing.
     #[norito(default)]
-    topology: Vec<PeerId>,
-    /// Optional BLS Proof-of-Possession entries for the initial topology.
-    /// Peers without valid `PoP` will be excluded from the initial consensus set.
-    /// Prefer embedding PoPs alongside `topology` entries; this field remains for
-    /// backward compatibility.
-    #[norito(default)]
-    topology_pop: Vec<GenesisPeerPop>,
+    topology: Vec<GenesisTopologyEntry>,
 }
 
 impl norito::json::JsonSerialize for RawGenesisTx {
     fn json_serialize(&self, out: &mut String) {
-        use norito::json::{Map, Value};
-
         fn write_field<F>(out: &mut String, first: &mut bool, key: &str, write_value: F)
         where
             F: FnOnce(&mut String),
@@ -1301,28 +1272,8 @@ impl norito::json::JsonSerialize for RawGenesisTx {
             });
         }
 
-        let pops_by_pk: BTreeMap<iroha_crypto::PublicKey, Vec<u8>> = self
-            .topology_pop
-            .iter()
-            .map(|entry| (entry.public_key.clone(), entry.pop.clone()))
-            .collect();
-
-        let mut topology_entries = Vec::with_capacity(self.topology.len());
-        for peer in &self.topology {
-            let mut entry = Map::new();
-            let peer_value =
-                norito::json::value::to_value(peer).expect("serialize genesis topology peer");
-            entry.insert("peer".to_string(), peer_value);
-
-            if let Some(pop) = pops_by_pk.get(peer.public_key()) {
-                entry.insert("pop_hex".to_string(), Value::String(hex::encode(pop)));
-            }
-
-            topology_entries.push(Value::Object(entry));
-        }
-        let topology_value = Value::Array(topology_entries);
         write_field(out, &mut first, "topology", |out| {
-            topology_value.json_serialize(out);
+            self.topology.json_serialize(out);
         });
 
         out.push('}');
@@ -1332,24 +1283,145 @@ impl norito::json::JsonSerialize for RawGenesisTx {
 impl RawGenesisTx {
     /// Topology entries carried by this transaction.
     #[must_use]
-    pub fn topology(&self) -> &[PeerId] {
+    pub fn topology(&self) -> &[GenesisTopologyEntry] {
         &self.topology
-    }
-
-    /// Proof-of-possession entries corresponding to the transaction topology.
-    #[must_use]
-    pub fn topology_pop(&self) -> &[GenesisPeerPop] {
-        &self.topology_pop
     }
 }
 
-/// Public-key + `PoP` pair in genesis manifest.
-#[derive(Debug, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode)]
+/// Peer PoP entry used to merge PoPs into topology entries.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode)]
 pub struct GenesisPeerPop {
-    /// Peer public key
-    pub public_key: iroha_crypto::PublicKey,
-    /// `PoP` bytes
+    /// Peer public key.
+    pub public_key: PublicKey,
+    /// Proof-of-possession bytes.
     pub pop: Vec<u8>,
+}
+
+/// Peer + proof-of-possession pair in genesis manifest.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, IntoSchema, Encode, Decode)]
+pub struct GenesisTopologyEntry {
+    /// Peer identifier.
+    pub peer: PeerId,
+    /// `PoP` hex string (lowercase, without `0x`).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pop_hex: Option<String>,
+}
+
+impl From<PeerId> for GenesisTopologyEntry {
+    fn from(peer: PeerId) -> Self {
+        Self { peer, pop_hex: None }
+    }
+}
+
+impl GenesisTopologyEntry {
+    /// Build a topology entry from raw PoP bytes.
+    #[must_use]
+    pub fn new(peer: PeerId, pop: Vec<u8>) -> Self {
+        Self {
+            peer,
+            pop_hex: Some(hex::encode(pop)),
+        }
+    }
+
+    /// Decode the PoP hex string into bytes, if present.
+    pub fn pop_bytes(&self) -> Result<Option<Vec<u8>>> {
+        let Some(pop_hex) = self.pop_hex.as_deref() else {
+            return Ok(None);
+        };
+        let trimmed = pop_hex
+            .strip_prefix("0x")
+            .or_else(|| pop_hex.strip_prefix("0X"))
+            .unwrap_or(pop_hex);
+        let bytes = hex::decode(trimmed).map_err(|err| {
+            eyre!(
+                "invalid `pop_hex` for topology peer {}: {err}",
+                self.peer.public_key()
+            )
+        })?;
+        if bytes.is_empty() {
+            return Err(eyre!(
+                "`pop_hex` for topology peer {} is empty",
+                self.peer.public_key()
+            ));
+        }
+        Ok(Some(bytes))
+    }
+}
+
+impl norito::json::JsonDeserialize for GenesisTopologyEntry {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = norito::json::Value::json_deserialize(parser)?;
+        match value {
+            norito::json::Value::Object(mut map) => {
+                let has_peer = map.contains_key("peer");
+                let has_pop = map.contains_key("pop_hex");
+                if has_peer || has_pop {
+                    let peer_value = map
+                        .remove("peer")
+                        .ok_or_else(|| norito::json::Error::missing_field("peer"))?;
+                    let peer: PeerId =
+                        norito::json::value::from_value(peer_value).map_err(|err| {
+                            norito::json::Error::Message(format!(
+                                "failed to decode `peer`: {err}"
+                            ))
+                        })?;
+                    let pop_hex = match map.remove("pop_hex") {
+                        None | Some(norito::json::Value::Null) => None,
+                        Some(norito::json::Value::String(raw)) => Some(normalize_pop_hex(&raw)?),
+                        Some(other) => {
+                            let raw =
+                                norito::json::value::from_value::<String>(other).map_err(|err| {
+                                    norito::json::Error::Message(format!(
+                                        "failed to decode `pop_hex`: {err}"
+                                    ))
+                                })?;
+                            Some(normalize_pop_hex(&raw)?)
+                        }
+                    };
+                    if let Some((field, _)) = map.into_iter().next() {
+                        return Err(norito::json::Error::UnknownField { field });
+                    }
+                    Ok(Self { peer, pop_hex })
+                } else {
+                    let peer: PeerId =
+                        norito::json::value::from_value(norito::json::Value::Object(map))
+                            .map_err(|err| {
+                                norito::json::Error::Message(format!(
+                                    "failed to decode topology peer: {err}"
+                                ))
+                            })?;
+                    Ok(Self { peer, pop_hex: None })
+                }
+            }
+            other => {
+                let peer: PeerId =
+                    norito::json::value::from_value(other).map_err(|err| {
+                        norito::json::Error::Message(format!(
+                            "failed to decode topology peer: {err}"
+                        ))
+                    })?;
+                Ok(Self { peer, pop_hex: None })
+            }
+        }
+    }
+}
+
+fn normalize_pop_hex(raw: &str) -> Result<String, norito::json::Error> {
+    let trimmed = raw
+        .strip_prefix("0x")
+        .or_else(|| raw.strip_prefix("0X"))
+        .unwrap_or(raw);
+    let bytes = hex::decode(trimmed).map_err(|err| {
+        norito::json::Error::Message(format!("invalid `pop_hex`: {err}"))
+    })?;
+    if bytes.is_empty() {
+        return Err(norito::json::Error::Message(
+            "`pop_hex` must not be empty".to_string(),
+        ));
+    }
+    Ok(hex::encode(bytes))
 }
 
 /// Fully expanded view of a genesis manifest after all automatic injections.
@@ -1647,140 +1719,6 @@ impl RawGenesisTransaction {
         })
     }
 
-    fn normalize_transactions_topology(
-        value: &mut norito::json::Value,
-    ) -> Result<(), norito::json::Error> {
-        let Some(array) = value.as_array_mut() else {
-            return Ok(());
-        };
-
-        for (idx, tx_value) in array.iter_mut().enumerate() {
-            let Some(tx_map) = tx_value.as_object_mut() else {
-                return Err(norito::json::Error::Message(format!(
-                    "transactions[{idx}] must be an object"
-                )));
-            };
-            if tx_map.get("topology_pop").is_some() {
-                return Err(norito::json::Error::Message(format!(
-                    "transactions[{idx}] uses deprecated `topology_pop`; embed PoP alongside `topology` entries"
-                )));
-            }
-            let Some(topo_value) = tx_map.get_mut("topology") else {
-                continue;
-            };
-            let Some(entries) = topo_value.as_array_mut() else {
-                continue;
-            };
-            if !entries.iter().any(Self::is_combined_topology_entry) {
-                continue;
-            }
-
-            let mut combined = Vec::new();
-            std::mem::swap(&mut combined, entries);
-            let mut normalized_topology = Vec::with_capacity(combined.len());
-            let mut normalized_pops = Vec::with_capacity(combined.len());
-
-            for (entry_idx, entry) in combined.into_iter().enumerate() {
-                let (peer, pop) = Self::parse_topology_entry(entry).map_err(|err| {
-                    norito::json::Error::Message(format!(
-                        "transactions[{idx}].topology[{entry_idx}]: {err}"
-                    ))
-                })?;
-                let peer_value = norito::json::value::to_value(&peer).map_err(|err| {
-                    norito::json::Error::Message(format!("serialize peer: {err}"))
-                })?;
-                normalized_topology.push(peer_value);
-                normalized_pops.push(Self::topology_pop_value(peer.public_key(), &pop));
-            }
-
-            *topo_value = norito::json::Value::Array(normalized_topology);
-            tx_map.insert(
-                "topology_pop".to_string(),
-                norito::json::Value::Array(normalized_pops),
-            );
-        }
-
-        Ok(())
-    }
-
-    fn is_combined_topology_entry(value: &norito::json::Value) -> bool {
-        match value {
-            norito::json::Value::Object(map) => {
-                map.contains_key("peer") || map.contains_key("pop") || map.contains_key("pop_hex")
-            }
-            _ => false,
-        }
-    }
-
-    fn parse_topology_entry(value: norito::json::Value) -> Result<(PeerId, Vec<u8>), String> {
-        use norito::json::Value;
-
-        let mut map = match value {
-            Value::Object(map) => map,
-            other => return Err(format!("expected topology entry object, found {other:?}")),
-        };
-
-        let peer_value = map
-            .remove("peer")
-            .ok_or_else(|| String::from("missing `peer` field"))?;
-        let peer: PeerId = norito::json::value::from_value(peer_value)
-            .map_err(|err| format!("invalid peer: {err}"))?;
-
-        let pop_value = map
-            .remove("pop_hex")
-            .or_else(|| map.remove("pop"))
-            .ok_or_else(|| String::from("missing `pop_hex` or `pop` field"))?;
-        let pop = match pop_value {
-            Value::String(s) => Self::decode_pop_hex(&s).map_err(|err| err.to_string()),
-            other => Self::decode_pop_value(other),
-        }
-        .map_err(|err| format!("invalid PoP: {err}"))?;
-
-        if let Some((field, _)) = map.into_iter().next() {
-            return Err(format!("unknown field `{field}` in topology entry"));
-        }
-
-        Ok((peer, pop))
-    }
-
-    fn decode_pop_hex(s: &str) -> Result<Vec<u8>, hex::FromHexError> {
-        hex::decode(s.trim_start_matches("0x"))
-    }
-
-    fn decode_pop_value(value: norito::json::Value) -> Result<Vec<u8>, String> {
-        use norito::json::Value;
-
-        let Value::Array(raw) = value else {
-            return Err("expected array of byte values".to_string());
-        };
-        let mut out = Vec::with_capacity(raw.len());
-        for (idx, v) in raw.into_iter().enumerate() {
-            let Some(n) = v.as_u64() else {
-                return Err(format!("pop[{idx}] must be 0-255 number"));
-            };
-            if n > u8::MAX as u64 {
-                return Err(format!("pop[{idx}] must fit in a byte"));
-            }
-            out.push(n as u8);
-        }
-        Ok(out)
-    }
-
-    fn topology_pop_value(pk: &iroha_crypto::PublicKey, pop: &[u8]) -> norito::json::Value {
-        use norito::json::Number;
-        let mut pop_array = Vec::with_capacity(pop.len());
-        for byte in pop {
-            pop_array.push(norito::json::Value::Number(Number::U64(u64::from(*byte))));
-        }
-        let mut map = norito::json::Map::new();
-        map.insert(
-            "public_key".to_string(),
-            norito::json::Value::String(pk.to_string()),
-        );
-        map.insert("pop".to_string(), norito::json::Value::Array(pop_array));
-        norito::json::Value::Object(map)
-    }
-
     fn reject_set_parameter_instructions(
         transactions: &[RawGenesisTx],
     ) -> Result<(), norito::json::Error> {
@@ -1813,10 +1751,9 @@ impl RawGenesisTransaction {
             })
             .transpose()?
             .unwrap_or_else(IvmPath::default);
-        let mut transactions_value = map
+        let transactions_value = map
             .remove("transactions")
             .unwrap_or_else(|| norito::json::Value::Array(Vec::new()));
-        Self::normalize_transactions_topology(&mut transactions_value)?;
         let transactions =
             Self::decode_value::<Vec<RawGenesisTx>>(transactions_value, "transactions")?;
         Self::reject_set_parameter_instructions(&transactions)?;
@@ -2015,7 +1952,7 @@ impl RawGenesisTransaction {
     /// # Errors
     ///
     /// - if consensus metadata cannot be populated
-    /// - if instruction injection fails (e.g., missing topology PoPs)
+    /// - if instruction injection fails (e.g., invalid topology PoPs)
     pub fn normalize(self) -> Result<NormalizedGenesis> {
         let manifest = if self.consensus_fingerprint.is_some()
             && !self.wire_proto_versions.is_empty()
@@ -2642,7 +2579,7 @@ mod tests2 {
     }
 
     #[test]
-    fn combined_topology_entries_are_split() {
+    fn topology_entries_parse_with_pop_hex() {
         init_instruction_registry();
         let peer = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
         let peer_value = norito::json::value::to_value(&peer).expect("serialize peer");
@@ -2651,7 +2588,7 @@ mod tests2 {
             map.insert("peer".to_string(), peer_value);
             map.insert(
                 "pop_hex".to_string(),
-                norito::json::Value::String("00".to_string()),
+                norito::json::Value::String("0x00".to_string()),
             );
             norito::json::Value::Object(map)
         };
@@ -2679,36 +2616,26 @@ mod tests2 {
 
         let manifest = norito::json::Value::Object(manifest_fields);
         let parsed = RawGenesisTransaction::from_json_value(manifest)
-            .expect("combined topology should parse");
+            .expect("topology entry should parse");
         assert_eq!(parsed.transactions.len(), 1);
         let tx = &parsed.transactions[0];
         assert_eq!(tx.topology.len(), 1);
-        assert_eq!(tx.topology_pop.len(), 1);
-        assert_eq!(tx.topology[0], peer);
-        assert_eq!(tx.topology_pop[0].public_key, *peer.public_key());
-        assert_eq!(tx.topology_pop[0].pop, vec![0]);
+        assert_eq!(tx.topology[0].peer, peer);
+        assert_eq!(tx.topology[0].pop_hex.as_deref(), Some("00"));
     }
 
     #[test]
-    fn serialize_topology_embeds_pop_hex_and_skips_legacy_field() {
+    fn serialize_topology_embeds_pop_hex() {
         let (peer_pk, _) = KeyPair::random().into_parts();
         let peer = PeerId::from(peer_pk.clone());
         let tx = RawGenesisTx {
             parameters: None,
             instructions: Vec::new(),
             ivm_triggers: Vec::new(),
-            topology: vec![peer],
-            topology_pop: vec![GenesisPeerPop {
-                public_key: peer_pk,
-                pop: vec![0xAA, 0xBB],
-            }],
+            topology: vec![GenesisTopologyEntry::new(peer, vec![0xAA, 0xBB])],
         };
 
         let json = norito::json::to_json(&tx).expect("serialize tx");
-        assert!(
-            !json.contains("topology_pop"),
-            "legacy topology_pop field must be omitted: {json}"
-        );
         assert!(
             json.contains("\"pop_hex\":\"aabb\""),
             "pop_hex should be embedded alongside topology peer: {json}"
@@ -2716,16 +2643,20 @@ mod tests2 {
     }
 
     #[test]
-    fn legacy_topology_pop_is_rejected() {
+    fn topology_entries_allow_missing_pop_hex() {
         init_instruction_registry();
+        let peer = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let peer_value = norito::json::value::to_value(&peer).expect("serialize peer");
+        let topo_entry = {
+            let mut map = norito::json::Map::new();
+            map.insert("peer".to_string(), peer_value);
+            norito::json::Value::Object(map)
+        };
+
         let mut tx_map = norito::json::Map::new();
         tx_map.insert(
             "topology".to_string(),
-            norito::json::Value::Array(vec![norito::json::Value::Null]),
-        );
-        tx_map.insert(
-            "topology_pop".to_string(),
-            norito::json::Value::Array(vec![norito::json::Value::Null]),
+            norito::json::Value::Array(vec![topo_entry]),
         );
 
         let mut manifest_fields = norito::json::Map::new();
@@ -2744,9 +2675,58 @@ mod tests2 {
         );
 
         let manifest = norito::json::Value::Object(manifest_fields);
-        let err = RawGenesisTransaction::from_json_value(manifest)
-            .expect_err("legacy topology_pop should be rejected");
-        assert!(err.to_string().contains("topology_pop"));
+        let parsed = RawGenesisTransaction::from_json_value(manifest)
+            .expect("topology entry without pop_hex should parse");
+        assert_eq!(parsed.transactions.len(), 1);
+        let tx = &parsed.transactions[0];
+        assert_eq!(tx.topology.len(), 1);
+        assert_eq!(tx.topology[0].peer, peer);
+        assert!(tx.topology[0].pop_hex.is_none());
+    }
+
+    #[test]
+    fn topology_entries_accept_peer_value() {
+        init_instruction_registry();
+        let peer = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let peer_value = norito::json::value::to_value(&peer).expect("serialize peer");
+
+        let mut tx_map = norito::json::Map::new();
+        tx_map.insert(
+            "topology".to_string(),
+            norito::json::Value::Array(vec![peer_value]),
+        );
+
+        let mut manifest_fields = norito::json::Map::new();
+        manifest_fields.insert(
+            "chain".to_string(),
+            norito::json::Value::String("test-chain".into()),
+        );
+        manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
+        manifest_fields.insert(
+            "ivm_dir".to_string(),
+            norito::json::Value::String(".".into()),
+        );
+        manifest_fields.insert(
+            "transactions".to_string(),
+            norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
+        );
+
+        let manifest = norito::json::Value::Object(manifest_fields);
+        let parsed = RawGenesisTransaction::from_json_value(manifest)
+            .expect("peer-only topology entries should parse");
+        assert_eq!(parsed.transactions.len(), 1);
+        let tx = &parsed.transactions[0];
+        assert_eq!(tx.topology.len(), 1);
+        assert_eq!(tx.topology[0].peer, peer);
+        assert!(tx.topology[0].pop_hex.is_none());
+    }
+
+    #[test]
+    fn topology_entry_pop_bytes_none() {
+        let peer = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let entry = GenesisTopologyEntry::from(peer);
+        let pop = entry.pop_bytes().expect("pop_bytes");
+        assert!(pop.is_none());
     }
 
     #[test]
@@ -3170,7 +3150,6 @@ impl RawGenesisTransaction {
                 instructions: tx.instructions,
                 ivm_triggers: tx.ivm_triggers,
                 topology: tx.topology,
-                topology_pop: tx.topology_pop,
             })
             .collect();
 
@@ -3317,40 +3296,23 @@ impl RawGenesisTransaction {
                 );
             }
 
-            if !tx.topology.is_empty() || !tx.topology_pop.is_empty() {
-                let mut pop_map: BTreeMap<iroha_crypto::PublicKey, Vec<u8>> = BTreeMap::new();
-                for entry in tx.topology_pop {
-                    if pop_map
-                        .insert(entry.public_key.clone(), entry.pop)
-                        .is_some()
-                    {
+            if !tx.topology.is_empty() {
+                let mut seen = BTreeSet::new();
+                for entry in tx.topology {
+                    let pk = entry.peer.public_key().clone();
+                    if !seen.insert(pk.clone()) {
                         return Err(eyre!(
-                            "duplicate `topology_pop` entry for peer {}",
-                            entry.public_key
+                            "duplicate `topology` entry for peer {pk}"
                         ));
                     }
-                }
-
-                if tx.topology.is_empty() {
-                    if !pop_map.is_empty() {
-                        return Err(eyre!(
-                            "`topology_pop` entries were provided without any topology peers"
-                        ));
-                    }
-                } else {
-                    for peer in tx.topology {
-                        let pop = pop_map.remove(peer.public_key()).ok_or_else(|| {
-                            eyre!("missing `topology_pop` entry for topology peer {}", peer)
-                        })?;
-                        let register = RegisterPeerWithPop::new(peer, pop);
-                        instructions.push(InstructionBox::from(register));
-                    }
-                    if let Some((dangling, _)) = pop_map.into_iter().next() {
-                        return Err(eyre!(
-                            "`topology_pop` entry for unknown topology peer {}",
-                            dangling
-                        ));
-                    }
+                    let pop = entry.pop_bytes()?.ok_or_else(|| {
+                        eyre!(
+                            "missing `pop_hex` entry for topology peer {}",
+                            entry.peer.public_key()
+                        )
+                    })?;
+                    let register = RegisterPeerWithPop::new(entry.peer, pop);
+                    instructions.push(InstructionBox::from(register));
                 }
             }
 
@@ -3656,8 +3618,7 @@ struct GenesisTxBuilder {
     parameters: Vec<Parameter>,
     instructions: Vec<InstructionBox>,
     ivm_triggers: Vec<GenesisIvmTrigger>,
-    topology: Vec<PeerId>,
-    topology_pop: Vec<GenesisPeerPop>,
+    topology: Vec<GenesisTopologyEntry>,
 }
 
 impl GenesisBuilder {
@@ -3742,14 +3703,37 @@ impl GenesisBuilder {
     }
 
     /// Overwrite the initial topology of the current transaction.
-    pub fn set_topology(mut self, topology: Vec<PeerId>) -> Self {
-        self.current_tx_mut().topology = topology;
+    pub fn set_topology<T: Into<GenesisTopologyEntry>>(mut self, topology: Vec<T>) -> Self {
+        self.current_tx_mut().topology = topology.into_iter().map(Into::into).collect();
         self
     }
 
-    /// Overwrite the `PoP` entries corresponding to the current transaction's topology.
-    pub fn set_topology_pop(mut self, pops: Vec<GenesisPeerPop>) -> Self {
-        self.current_tx_mut().topology_pop = pops;
+    /// Merge PoPs into the topology entries of the current transaction.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the input contains duplicate peers or peers not present in the topology.
+    pub fn set_topology_pop(mut self, topology_pop: Vec<GenesisPeerPop>) -> Self {
+        if topology_pop.is_empty() {
+            return self;
+        }
+        let mut pop_map = BTreeMap::new();
+        for GenesisPeerPop { public_key, pop } in topology_pop {
+            assert!(
+                !pop_map.contains_key(&public_key),
+                "duplicate topology pop entry for peer {public_key}"
+            );
+            pop_map.insert(public_key, pop);
+        }
+        let tx = self.current_tx_mut();
+        for entry in &mut tx.topology {
+            if let Some(pop) = pop_map.remove(entry.peer.public_key()) {
+                entry.pop_hex = Some(hex::encode(pop));
+            }
+        }
+        if let Some(pk) = pop_map.keys().next() {
+            panic!("topology pop entry provided for peer {pk} missing from topology");
+        }
         self
     }
 
@@ -3781,7 +3765,6 @@ impl GenesisBuilder {
                     instructions: tx.instructions,
                     ivm_triggers: tx.ivm_triggers,
                     topology: tx.topology,
-                    topology_pop: tx.topology_pop,
                 }
             })
             .collect();
@@ -4088,17 +4071,36 @@ mod tests {
     }
 
     #[test]
+    fn set_topology_pop_merges_entries() {
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation");
+        let peer = PeerId::new(bls.public_key().clone());
+        let manifest = GenesisBuilder::new_without_executor(ChainId::from("test-topology-pop"), ".")
+            .set_topology(vec![peer.clone()])
+            .set_topology_pop(vec![GenesisPeerPop {
+                public_key: peer.public_key().clone(),
+                pop: pop.clone(),
+            }])
+            .build_raw();
+        let tx = &manifest.transactions()[0];
+        assert_eq!(tx.topology().len(), 1);
+        assert_eq!(tx.topology()[0].peer, peer);
+        let expected = hex::encode(pop);
+        assert_eq!(tx.topology()[0].pop_hex.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
     fn parse_injects_register_peer_with_pop() -> Result<()> {
         init_instruction_registry();
         let chain = ChainId::from("test-chain");
         let (peer_pk, _) = KeyPair::random().into_parts();
         let peer_id = PeerId::from(peer_pk.clone());
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .set_topology(vec![peer_id.clone()])
-            .set_topology_pop(vec![GenesisPeerPop {
-                public_key: peer_pk.clone(),
-                pop: vec![1, 2, 3, 4],
-            }])
+            .set_topology(vec![GenesisTopologyEntry::new(
+                peer_id.clone(),
+                vec![1, 2, 3, 4],
+            )])
             .build_raw()
             .with_consensus_meta();
         let batches = manifest.parse()?;
@@ -4127,13 +4129,12 @@ mod tests {
         let chain = ChainId::from("test-pop-missing");
         let (peer_pk, _) = KeyPair::random().into_parts();
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .set_topology(vec![PeerId::from(peer_pk)])
+            .set_topology(vec![GenesisTopologyEntry::from(PeerId::from(peer_pk))])
             .build_raw()
             .with_consensus_meta();
         let err = manifest.parse().expect_err("missing pop must error");
         assert!(
-            err.to_string()
-                .contains("missing `topology_pop` entry for topology peer"),
+            err.to_string().contains("missing `pop_hex` entry for topology peer"),
             "{err}"
         );
     }

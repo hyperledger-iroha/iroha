@@ -24,7 +24,7 @@ pub fn pedersen_commit(value: u64, blind: u64) -> [u8; 48] {
     res.to_affine().to_compressed()
 }
 
-/// Helper retaining the legacy truncated representation used by VM registers.
+/// Helper retaining the truncated representation used by VM registers.
 /// Encodes the compressed point and returns the low 64 bits.
 pub fn pedersen_commit_truncated(value: u64, blind: u64) -> u64 {
     let bytes = pedersen_commit(value, blind);

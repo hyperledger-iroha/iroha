@@ -1,4 +1,4 @@
-//! Integration coverage for commit certificates in permissioned and NPoS modes.
+//! Integration coverage for commit certificates in permissioned and `NPoS` modes.
 
 use std::time::{Duration, Instant};
 
@@ -200,9 +200,9 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
                 .write(["sumeragi", "collectors_k"], 1_i64)
                 .write(["sumeragi", "collectors_redundant_send_r"], 1_i64);
         })
-        .with_genesis_block(|topology, topology_pop| {
-            let instructions = stake_genesis_instructions(topology.as_ref(), &topology_pop);
-            genesis_factory(vec![instructions], topology, topology_pop)
+        .with_genesis_block(|topology, topology_entries| {
+            let instructions = stake_genesis_instructions(topology.as_ref(), &topology_entries);
+            genesis_factory(vec![instructions], topology, topology_entries)
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -349,16 +349,13 @@ async fn wait_for_commit_certificate(
                 "timed out waiting for commit certificate at height {expected_height} from {torii}"
             ));
         }
-        match fetch_commit_certificates(http, torii, Some(expected_height), Some(1)).await {
-            Ok(certificates) => {
-                if let Some(cert) = certificates
-                    .into_iter()
-                    .find(|cert| cert.height == expected_height)
-                {
-                    return Ok(cert);
-                }
-            }
-            Err(_) => {}
+        if let Ok(certificates) =
+            fetch_commit_certificates(http, torii, Some(expected_height), Some(1)).await
+            && let Some(cert) = certificates
+                .into_iter()
+                .find(|cert| cert.height == expected_height)
+        {
+            return Ok(cert);
         }
         sleep(COMMIT_CERT_POLL).await;
     }
@@ -411,18 +408,15 @@ async fn wait_for_commit_quorum_status(
                 "timed out waiting for commit quorum status at height {expected_height}"
             ));
         }
-        match client.get_sumeragi_status() {
-            Ok(status) => {
-                let quorum = status.commit_quorum;
-                if quorum.height >= expected_height
-                    && quorum.signatures_required >= required_u64
-                    && quorum.signatures_present >= required_u64
-                    && quorum.signatures_counted >= required_u64
-                {
-                    return Ok(());
-                }
+        if let Ok(status) = client.get_sumeragi_status() {
+            let quorum = status.commit_quorum;
+            if quorum.height >= expected_height
+                && quorum.signatures_required >= required_u64
+                && quorum.signatures_present >= required_u64
+                && quorum.signatures_counted >= required_u64
+            {
+                return Ok(());
             }
-            Err(_) => {}
         }
         sleep(COMMIT_CERT_POLL).await;
     }
@@ -434,7 +428,7 @@ async fn wait_for_commit_vote_metrics(
     required: usize,
 ) -> Result<()> {
     let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
-    let required_f64 = required as f64;
+    let required_f64 = f64::from(u32::try_from(required).unwrap_or(u32::MAX));
     loop {
         if Instant::now() >= deadline {
             return Err(eyre!(
@@ -447,13 +441,11 @@ async fn wait_for_commit_vote_metrics(
             let required_metric = reader.get_optional("sumeragi_commit_signatures_required");
             if let (Some(present), Some(counted), Some(required_metric)) =
                 (present, counted, required_metric)
+                && present >= required_f64
+                && counted >= required_f64
+                && required_metric >= required_f64
             {
-                if present >= required_f64
-                    && counted >= required_f64
-                    && required_metric >= required_f64
-                {
-                    return Ok(());
-                }
+                return Ok(());
             }
         }
         sleep(COMMIT_CERT_POLL).await;
@@ -480,20 +472,26 @@ async fn fetch_metrics(
 
 fn stake_genesis_instructions(
     topology: &[PeerId],
-    topology_pop: &[iroha_genesis::GenesisPeerPop],
+    topology_entries: &[iroha_genesis::GenesisTopologyEntry],
 ) -> Vec<InstructionBox> {
     let domain: DomainId = "wonderland".parse().expect("wonderland domain");
     let asset_def: AssetDefinitionId = STAKE_ASSET_ID.parse().expect("stake asset definition");
     let mut instructions = Vec::new();
 
     let mut pop_map = std::collections::BTreeMap::new();
-    for entry in topology_pop {
-        pop_map.insert(entry.public_key.clone(), entry.pop.clone());
-    }
-    for peer in topology {
-        let Some(pop) = pop_map.remove(peer.public_key()) else {
+    for entry in topology_entries {
+        let Some(pop) = entry
+            .pop_bytes()
+            .expect("topology entry should have valid pop_hex")
+        else {
             continue;
         };
+        pop_map.insert(entry.peer.public_key().clone(), pop);
+    }
+    for peer in topology {
+        let pop = pop_map
+            .remove(peer.public_key())
+            .expect("missing PoP for topology peer");
         let hsm_binding = HsmBinding {
             provider: "softkey".to_owned(),
             key_label: peer.public_key().to_string(),

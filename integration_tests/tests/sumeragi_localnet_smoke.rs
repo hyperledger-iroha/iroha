@@ -14,6 +14,7 @@ use nonzero_ext::nonzero;
 use tokio::time::sleep;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
 async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
     init_instruction_registry();
 

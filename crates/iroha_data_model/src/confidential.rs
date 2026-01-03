@@ -246,11 +246,10 @@ impl From<&[u8]> for ConfidentialEncryptedPayload {
 /// Status of a confidential registry entry.
 ///
 /// Entries begin in the `Proposed` state once governance publishes new
-/// metadata. They become `Active` at the scheduled height, later move to
-/// `Deprecated` while still permitting verification, and finally transition
-/// to `Withdrawn`, at which point they must not be used by validators or
-/// wallets. The lifecycle applies uniformly to verifier keys and parameter
-/// sets.
+/// metadata. They become `Active` at the scheduled height and transition
+/// to `Withdrawn` once retired, at which point they must not be used by
+/// validators or wallets. The lifecycle applies uniformly to verifier keys
+/// and parameter sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[repr(u8)]
 #[norito(reuse_archived)]
@@ -259,8 +258,6 @@ pub enum ConfidentialStatus {
     Proposed,
     /// Entry is active and may be used for verification.
     Active,
-    /// Entry is deprecated but still permitted for verification until the configured height.
-    Deprecated,
     /// Entry has been withdrawn and must reject verification attempts.
     Withdrawn,
 }
@@ -269,18 +266,14 @@ impl ConfidentialStatus {
     /// Returns true if the status permits active use.
     #[must_use]
     pub const fn is_active(self) -> bool {
-        matches!(
-            self,
-            ConfidentialStatus::Active | ConfidentialStatus::Deprecated
-        )
+        matches!(self, ConfidentialStatus::Active)
     }
 
     fn from_u8(value: u8) -> Result<Self, NoritoError> {
         match value {
             0 => Ok(Self::Proposed),
             1 => Ok(Self::Active),
-            2 => Ok(Self::Deprecated),
-            3 => Ok(Self::Withdrawn),
+            2 => Ok(Self::Withdrawn),
             other => Err(NoritoError::Message(format!(
                 "invalid ConfidentialStatus discriminant {other}"
             ))),
@@ -293,8 +286,7 @@ impl From<ConfidentialStatus> for u8 {
         match status {
             ConfidentialStatus::Proposed => 0,
             ConfidentialStatus::Active => 1,
-            ConfidentialStatus::Deprecated => 2,
-            ConfidentialStatus::Withdrawn => 3,
+            ConfidentialStatus::Withdrawn => 2,
         }
     }
 }
@@ -312,7 +304,6 @@ impl norito::json::JsonSerialize for ConfidentialStatus {
         let label = match self {
             ConfidentialStatus::Proposed => "Proposed",
             ConfidentialStatus::Active => "Active",
-            ConfidentialStatus::Deprecated => "Deprecated",
             ConfidentialStatus::Withdrawn => "Withdrawn",
         };
         norito::json::write_json_string(label, out);
@@ -328,7 +319,6 @@ impl norito::json::JsonDeserialize for ConfidentialStatus {
         match value.as_str() {
             "Proposed" => Ok(ConfidentialStatus::Proposed),
             "Active" => Ok(ConfidentialStatus::Active),
-            "Deprecated" => Ok(ConfidentialStatus::Deprecated),
             "Withdrawn" => Ok(ConfidentialStatus::Withdrawn),
             other => Err(norito::json::Error::unknown_field(other.to_owned())),
         }
@@ -470,8 +460,6 @@ pub struct PedersenParams {
     pub params_cid: Option<String>,
     /// Block height when the parameter set becomes active.
     pub activation_height: Option<u64>,
-    /// Block height after which the parameter set is considered deprecated.
-    pub deprecation_height: Option<u64>,
     /// Block height when the parameter set must be withdrawn.
     pub withdraw_height: Option<u64>,
     /// Lifecycle status of the parameter entry.
@@ -483,7 +471,7 @@ impl PedersenParams {
     #[must_use]
     pub fn is_effective_at(&self, height: u64) -> bool {
         match self.status {
-            ConfidentialStatus::Active | ConfidentialStatus::Deprecated => {
+            ConfidentialStatus::Active => {
                 let activation_ok = self.activation_height.is_none_or(|h| height >= h);
                 let withdraw_ok = self.withdraw_height.is_none_or(|limit| height < limit);
                 activation_ok && withdraw_ok
@@ -520,8 +508,6 @@ pub struct PoseidonParams {
     pub params_cid: Option<String>,
     /// Block height when the parameter set becomes active.
     pub activation_height: Option<u64>,
-    /// Block height after which the parameter set is considered deprecated.
-    pub deprecation_height: Option<u64>,
     /// Block height when the parameter set must be withdrawn.
     pub withdraw_height: Option<u64>,
     /// Lifecycle status of the parameter entry.
@@ -533,7 +519,7 @@ impl PoseidonParams {
     #[must_use]
     pub fn is_effective_at(&self, height: u64) -> bool {
         match self.status {
-            ConfidentialStatus::Active | ConfidentialStatus::Deprecated => {
+            ConfidentialStatus::Active => {
                 let activation_ok = self.activation_height.is_none_or(|h| height >= h);
                 let withdraw_ok = self.withdraw_height.is_none_or(|limit| height < limit);
                 activation_ok && withdraw_ok
@@ -563,7 +549,6 @@ mod tests {
             metadata_uri_cid: Some("ipfs://pedersen-docs".into()),
             params_cid: Some("ipfs://pedersen-raw".into()),
             activation_height: Some(10),
-            deprecation_height: Some(20),
             withdraw_height: Some(30),
             status: ConfidentialStatus::Active,
         };
@@ -584,9 +569,8 @@ mod tests {
             metadata_uri_cid: None,
             params_cid: Some("ipfs://poseidon".into()),
             activation_height: Some(5),
-            deprecation_height: Some(15),
             withdraw_height: Some(25),
-            status: ConfidentialStatus::Deprecated,
+            status: ConfidentialStatus::Active,
         };
         let bytes = norito::to_bytes(&params).expect("encode poseidon params");
         let decoded: PoseidonParams =

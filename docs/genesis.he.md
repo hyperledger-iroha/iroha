@@ -21,7 +21,8 @@ translator: manual
   - `parameters` – פרמטרים התחלתיים לרשת.
   - `instructions` – הוראות מקודדות Norito.
   - `ivm_triggers` – טריגרים עם קבצי bytecode.
-  - `topology` – טופולוגיית Peer ראשונית.
+  - `topology` – טופולוגיית Peer ראשונית. כל רשומה יכולה לכלול `pop_hex`
+    (אופציונלי) עבור ה‑PoP, אך הוא חייב להיות קיים לפני חתימה.
 - `crypto` – צילום מצב של הגדרות ההצפנה מתוך `iroha_config.crypto` (`default_hash`, `allowed_signing`, `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`). `allowed_curve_ids` משקף את `crypto.curves.allowed_curve_ids` ומפרסם אילו מזהי עקומות קונטרולריים מאושרים ברשת. אם מוסיפים `sm2` לרשימת החתימות חובה לעדכן גם את ערך ה-hash ל-`sm3-256`; בנייה ללא התמיכה ב-`sm` תדחה הגדרות `sm2` לחלוטין.
 
 דוגמה (פלט מקוצר של `kagami genesis generate default`):

@@ -14,14 +14,9 @@ pub type ResolverAttestation = ResolverAttestationDocumentV1;
 /// Domain separator used when hashing RAD payloads.
 pub const RAD_HASH_DOMAIN: &[u8] = b"rad-v1";
 
-/// Decode a RAD payload from either Norito or JSON (legacy) sources.
+/// Decode a RAD payload from Norito bytes.
 pub fn decode_rad_entries(bytes: &[u8]) -> Result<Vec<ResolverAttestation>> {
-    decode_from_bytes(bytes)
-        .or_else(|err| {
-            json::from_slice(bytes)
-                .wrap_err_with(|| format!("failed to decode RAD entries as Norito ({err})"))
-        })
-        .wrap_err("failed to decode resolver attestation entries")
+    decode_from_bytes(bytes).wrap_err("failed to decode resolver attestation entries")
 }
 
 /// Perform structural validation for a RAD entry before it is added to state.

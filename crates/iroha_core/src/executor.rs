@@ -1776,17 +1776,11 @@ where
         .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
 
     let mut slice = &out[len_size..];
-    let verdict: Result<(), ValidationFail> = match Decode::decode(&mut slice) {
-        Ok(v) => v,
-        Err(err) => {
-            iroha_logger::warn!(
-                %verdict_context,
-                err = %err,
-                "executor returned undecodable verdict; assuming success for compatibility"
-            );
-            Ok(())
-        }
-    };
+    let verdict: Result<(), ValidationFail> = Decode::decode(&mut slice).map_err(|err| {
+        ValidationFail::InternalError(format!(
+            "executor returned undecodable verdict: {verdict_context}: {err}"
+        ))
+    })?;
 
     Ok(ExecutorValidationReport { verdict, gas_used })
 }

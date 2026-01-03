@@ -103,7 +103,7 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
     };
     let test_client = network.client();
 
-    run_or_skip(
+    Box::pin(run_or_skip(
         stringify!(execute_trigger_should_produce_event),
         move || async move {
             let asset_definition_id = "rose#wonderland".parse()?;
@@ -148,7 +148,7 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
                 .map(|_| ())?;
             Ok(())
         },
-    )
+    ))
     .await
 }
 
@@ -354,6 +354,7 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
 async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> {
     let Some(network) = start_network(stringify!(
         trigger_should_be_able_to_modify_its_own_repeats_count
@@ -476,6 +477,7 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
 async fn only_account_with_permission_can_register_trigger() -> Result<()> {
     let Some(network) = start_network(stringify!(
         only_account_with_permission_can_register_trigger
@@ -779,6 +781,7 @@ async fn trigger_in_genesis() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
 async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
     let Some(network) =
         start_network(stringify!(trigger_should_be_able_to_modify_other_trigger)).await?

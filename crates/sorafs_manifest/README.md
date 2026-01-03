@@ -76,8 +76,8 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub \
   that records the manifest BLAKE3 digest, the aggregated chunk plan digest
   (offsets, lengths, chunk BLAKE3 digests), and the supplied council signatures
   (Ed25519). The envelope emits the chunker handle in canonical
-  `namespace.name@semver` form and includes the legacy `namespace-name`
-  alias under `profile_aliases` for compatibility. Requires `--manifest-out` and
+  `namespace.name@semver` form and includes the `namespace-name`
+  alias under `profile_aliases`. Requires `--manifest-out` and
   at least one `--council-signature*` flag.
 - `--manifest-signatures-in=path` verifies an existing signatures envelope against
   the freshly computed manifest digest and chunk plan digest, checking Ed25519 signatures
@@ -156,9 +156,8 @@ cargo run -p sorafs_manifest --bin sorafs-provider-advert-stub -- \
   --advert-out=provider.advert \
   --json-out=provider.report.json
 
-# For legacy scripts you can still pass `--profile-id=<alias>`, but prefer the
-# canonical handle (`namespace.name@semver`) so automation stays aligned with the
-# shared registry.
+# You can still pass `--profile-id=<alias>`, but prefer the canonical handle
+# (`namespace.name@semver`) so automation stays aligned with the shared registry.
 ```
 
 The `range` capability advertises support for ranged chunk requests. Supplying

@@ -1580,14 +1580,13 @@ async fn repo_agreements_respect_address_format() -> Result<()> {
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let entry = match find_repo_entry(&parsed, agreement_literal.as_str()) {
-        Some(entry) => entry,
-        None => {
-            eprintln!(
-                "Skipping repo address_format coverage: repo agreement not observed after submission."
-            );
-            return Ok(());
-        }
+    let entry = if let Some(entry) = find_repo_entry(&parsed, agreement_literal.as_str()) {
+        entry
+    } else {
+        eprintln!(
+            "Skipping repo address_format coverage: repo agreement not observed after submission."
+        );
+        return Ok(());
     };
     let initiator = entry
         .get("initiator")

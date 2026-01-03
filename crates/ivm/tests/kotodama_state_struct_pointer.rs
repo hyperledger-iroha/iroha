@@ -29,7 +29,7 @@ fn encode_account_id_pointer_without_inner_hash(id: &str) -> Vec<u8> {
 
     let parsed: AccountId = id.parse().expect("valid AccountId literal");
     let payload = <AccountId as norito::codec::Encode>::encode(&parsed);
-    // Build an inner TLV without the trailing hash (legacy/invalid layout).
+    // Build an inner TLV without the trailing hash (invalid layout).
     let mut inner = Vec::with_capacity(2 + 1 + 4 + payload.len());
     inner.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
     inner.push(1);
@@ -91,7 +91,7 @@ fn pointer_from_norito_rejects_inner_tlv_without_hash() {
     let mut host = CoreHost::new();
     let err = host
         .syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm)
-        .expect_err("legacy inner TLV without hash should fail");
+        .expect_err("invalid inner TLV without hash should fail");
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
 

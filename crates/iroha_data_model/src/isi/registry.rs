@@ -98,10 +98,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<CustomInstruction>,
     InstructionRegistry::register::<verifying_keys::RegisterVerifyingKey>,
     InstructionRegistry::register::<verifying_keys::UpdateVerifyingKey>,
-    InstructionRegistry::register::<verifying_keys::DeprecateVerifyingKey>,
     InstructionRegistry::register::<consensus_keys::RegisterConsensusKey>,
     InstructionRegistry::register::<consensus_keys::RotateConsensusKey>,
-    InstructionRegistry::register::<consensus_keys::DeprecateConsensusKey>,
+    InstructionRegistry::register::<consensus_keys::DisableConsensusKey>,
     InstructionRegistry::register::<endorsement::RegisterDomainCommittee>,
     InstructionRegistry::register::<endorsement::SetDomainEndorsementPolicy>,
     InstructionRegistry::register::<endorsement::SubmitDomainEndorsement>,
@@ -219,8 +218,8 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     );
     registry = registry
         .register_with_id::<consensus_keys::RotateConsensusKey>("consensus::RotateConsensusKey");
-    registry = registry.register_with_id::<consensus_keys::DeprecateConsensusKey>(
-        "consensus::DeprecateConsensusKey",
+    registry = registry.register_with_id::<consensus_keys::DisableConsensusKey>(
+        "consensus::DisableConsensusKey",
     );
     registry = registry
         .register_with_id::<endorsement::RegisterDomainCommittee>("nexus::RegisterDomainCommittee");

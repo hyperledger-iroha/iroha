@@ -76,22 +76,14 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
         NetworkBuilder::new().with_min_peers(4),
         stringify!(genesis_asset_minted_across_peers),
-    )?
+    )
     else {
         return Ok(());
     };
-    let topology = network
-        .peers()
-        .iter()
-        .map(iroha_test_network::NetworkPeer::id)
-        .collect();
-
-    let topology_pop = network.topology_pops().to_vec();
     let builder = load_raw_genesis_transaction()
         .into_builder()
         .next_transaction()
-        .set_topology(topology)
-        .set_topology_pop(topology_pop);
+        .set_topology(network.topology_entries().to_vec());
     let genesis_block = builder.build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)?;
 
     let sync_timeout = network.sync_timeout();
@@ -167,19 +159,18 @@ fn genesis_norito_bytes_roundtrip_network() -> Result<()> {
     let builder =
         NetworkBuilder::new()
             .with_min_peers(4)
-            .with_genesis_block(|topology, topology_pop| {
+            .with_genesis_block(|_topology, topology_entries| {
                 load_raw_genesis_transaction()
                     .into_builder()
                     .next_transaction()
-                    .set_topology(topology.to_vec())
-                    .set_topology_pop(topology_pop)
+                    .set_topology(topology_entries)
                     .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
                     .expect("build genesis block")
             });
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
         builder,
         stringify!(genesis_norito_bytes_roundtrip_network),
-    )?
+    )
     else {
         return Ok(());
     };

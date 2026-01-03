@@ -372,7 +372,6 @@ pub fn capability_name(capability: CapabilityType) -> &'static str {
     match capability {
         CapabilityType::ToriiGateway => "torii_gateway",
         CapabilityType::QuicNoise => "quic_noise",
-        CapabilityType::SoraNetCompatible => "soranet_compatible",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::VendorReserved => "vendor_reserved",
@@ -385,8 +384,9 @@ pub fn parse_capability_name(name: &str) -> Option<CapabilityType> {
     match name.trim().to_ascii_lowercase().as_str() {
         "torii" | "torii_gateway" => Some(CapabilityType::ToriiGateway),
         "quic" | "quic_noise" => Some(CapabilityType::QuicNoise),
-        "soranet" | "soranet_compatible" => Some(CapabilityType::SoraNetCompatible),
-        "soranet_pq" | "soranet-pq" | "soranet-hybrid-pq" => Some(CapabilityType::SoraNetHybridPq),
+        "soranet" | "soranet_pq" | "soranet-pq" | "soranet-hybrid-pq" => {
+            Some(CapabilityType::SoraNetHybridPq)
+        }
         "range" | "chunk_range_fetch" => Some(CapabilityType::ChunkRangeFetch),
         "vendor_reserved" | "vendor" => Some(CapabilityType::VendorReserved),
         _ => None,

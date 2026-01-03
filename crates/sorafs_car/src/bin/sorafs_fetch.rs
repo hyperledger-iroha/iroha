@@ -61,10 +61,9 @@ use sorafs_manifest::{
     provider_advert::ProviderCapabilitySoranetPqV1,
 };
 
-const KNOWN_CAPABILITIES: &[CapabilityType; 5] = &[
+const KNOWN_CAPABILITIES: &[CapabilityType; 4] = &[
     CapabilityType::ToriiGateway,
     CapabilityType::QuicNoise,
-    CapabilityType::SoraNetCompatible,
     CapabilityType::ChunkRangeFetch,
     CapabilityType::SoraNetHybridPq,
 ];
@@ -360,7 +359,7 @@ fn run() -> Result<(), String> {
                 return Err("`--anonymity-policy` must not be empty".into());
             }
             let parsed = AnonymityPolicy::parse(value).ok_or_else(|| {
-                "`--anonymity-policy` must be one of anon-compatible|anon-guard-pq|anon-majority-pq|anon-strict-pq"
+                "`--anonymity-policy` must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq"
                     .to_string()
             })?;
             anonymity_policy = Some(parsed);
@@ -370,7 +369,7 @@ fn run() -> Result<(), String> {
                 return Err("`--anonymity-policy-override` must not be empty".into());
             }
             let parsed = AnonymityPolicy::parse(value).ok_or_else(|| {
-                "`--anonymity-policy-override` must be one of anon-compatible|anon-guard-pq|anon-majority-pq|anon-strict-pq"
+                "`--anonymity-policy-override` must be one of anon-guard-pq|anon-majority-pq|anon-strict-pq"
                     .to_string()
             })?;
             anonymity_policy_override = Some(parsed);
@@ -1570,7 +1569,6 @@ fn capability_name(capability: CapabilityType) -> &'static str {
     match capability {
         CapabilityType::ToriiGateway => "torii_gateway",
         CapabilityType::QuicNoise => "quic_noise",
-        CapabilityType::SoraNetCompatible => "soranet_compatible",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::VendorReserved => "vendor_reserved",
@@ -2826,16 +2824,21 @@ mod tests {
 
     use super::*;
 
-    fn sorafs_fetch_cmd() -> AssertCommand {
-        if let Ok(path) = env::var("CARGO_BIN_EXE_sorafs_fetch") {
-            AssertCommand::new(path)
-        } else {
-            #[allow(deprecated)]
-            {
-                AssertCommand::cargo_bin("sorafs_fetch")
-                    .expect("build sorafs_fetch binary via cargo_bin")
-            }
+    fn cargo_bin_path(bin_name: &str) -> PathBuf {
+        let env_var = format!("CARGO_BIN_EXE_{bin_name}");
+        if let Some(path) = env::var_os(env_var) {
+            return PathBuf::from(path);
         }
+        let mut path = env::current_exe().expect("current exe path should be available");
+        path.pop();
+        if path.ends_with("deps") {
+            path.pop();
+        }
+        path.join(format!("{bin_name}{}", env::consts::EXE_SUFFIX))
+    }
+
+    fn sorafs_fetch_cmd() -> AssertCommand {
+        AssertCommand::new(cargo_bin_path("sorafs_fetch"))
     }
 
     fn range_capability_payload() -> Vec<u8> {
@@ -4739,10 +4742,6 @@ mod tests {
             capabilities: vec![
                 CapabilityTlv {
                     cap_type: CapabilityType::ToriiGateway,
-                    payload: Vec::new(),
-                },
-                CapabilityTlv {
-                    cap_type: CapabilityType::SoraNetCompatible,
                     payload: Vec::new(),
                 },
                 CapabilityTlv {

@@ -154,7 +154,7 @@ public final class SorafsGatewayClientTests {
             "    {\"chunk_index\":0,\"provider\":\"alpha\",\"attempts\":1},",
             "    {\"chunk_index\":1,\"provider\":\"beta\",\"attempts\":2}",
             "  ],",
-            "  \"anonymity_policy\": \"anon-compatible\",",
+            "  \"anonymity_policy\": \"anon-guard-pq\",",
             "  \"anonymity_status\": \"met\",",
             "  \"anonymity_reason\": \"satisfied\",",
             "  \"anonymity_soranet_selected\": 1,",

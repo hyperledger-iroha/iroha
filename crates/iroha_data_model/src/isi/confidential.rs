@@ -20,8 +20,6 @@ isi! {
         pub status: ConfidentialStatus,
         /// Optional activation height override.
         pub activation_height: Option<u64>,
-        /// Optional deprecation height override.
-        pub deprecation_height: Option<u64>,
         /// Optional withdraw height override.
         pub withdraw_height: Option<u64>,
     }
@@ -44,8 +42,6 @@ isi! {
         pub status: ConfidentialStatus,
         /// Optional activation height override.
         pub activation_height: Option<u64>,
-        /// Optional deprecation height override.
-        pub deprecation_height: Option<u64>,
         /// Optional withdraw height override.
         pub withdraw_height: Option<u64>,
     }

@@ -3160,7 +3160,7 @@ fn fetch_command_applies_policy_override() {
         ))
         .arg(format!("--output={}", output_path.display()))
         .arg(format!("--json-out={}", summary_path.display()))
-        .arg("--anonymity-policy-override=anon-compatible")
+        .arg("--anonymity-policy-override=anon-guard-pq")
         .assert()
         .success();
 
@@ -3168,7 +3168,7 @@ fn fetch_command_applies_policy_override() {
     let summary: Value = from_slice(&summary_bytes).expect("parse override summary");
     assert_eq!(
         summary.get("anonymity_policy").and_then(Value::as_str),
-        Some("anon-compatible")
+        Some("anon-guard-pq")
     );
 }
 

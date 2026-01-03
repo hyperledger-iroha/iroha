@@ -58,7 +58,6 @@ fn sample_pedersen_params(id: u32) -> PedersenParams {
         metadata_uri_cid: Some(format!("ipfs://pedersen-{id}-meta")),
         params_cid: Some(format!("ipfs://pedersen-{id}-params")),
         activation_height: Some(10),
-        deprecation_height: Some(20),
         withdraw_height: Some(30),
         status: ConfidentialStatus::Active,
     }
@@ -72,7 +71,6 @@ fn sample_poseidon_params(id: u32) -> PoseidonParams {
         metadata_uri_cid: Some(format!("ipfs://poseidon-{id}-meta")),
         params_cid: Some(format!("ipfs://poseidon-{id}-params")),
         activation_height: Some(15),
-        deprecation_height: Some(40),
         withdraw_height: Some(55),
         status: ConfidentialStatus::Active,
     }
@@ -237,9 +235,8 @@ fn set_pedersen_params_lifecycle_updates_entry() {
         let mut stx_update = block.transaction();
         let update = confidential::SetPedersenParamsLifecycle {
             params_id: id,
-            status: ConfidentialStatus::Deprecated,
+            status: ConfidentialStatus::Proposed,
             activation_height: Some(42),
-            deprecation_height: Some(64),
             withdraw_height: Some(80),
         };
         executor
@@ -255,9 +252,8 @@ fn set_pedersen_params_lifecycle_updates_entry() {
         .pedersen_params()
         .get(&id)
         .expect("pedersen params present");
-    assert_eq!(stored.status, ConfidentialStatus::Deprecated);
+    assert_eq!(stored.status, ConfidentialStatus::Proposed);
     assert_eq!(stored.activation_height, Some(42));
-    assert_eq!(stored.deprecation_height, Some(64));
     assert_eq!(stored.withdraw_height, Some(80));
 }
 
@@ -276,7 +272,6 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
         params_id: ConfidentialParamsId::new(99),
         status: ConfidentialStatus::Active,
         activation_height: None,
-        deprecation_height: None,
         withdraw_height: None,
     };
     let err = executor
@@ -317,7 +312,6 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
             params_id: id,
             status: ConfidentialStatus::Withdrawn,
             activation_height: None,
-            deprecation_height: None,
             withdraw_height: Some(120),
         };
         executor
@@ -333,7 +327,6 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
             params_id: id,
             status: ConfidentialStatus::Active,
             activation_height: None,
-            deprecation_height: None,
             withdraw_height: None,
         };
         let err = executor
@@ -383,13 +376,12 @@ fn publish_poseidon_params_and_update_lifecycle() {
     };
 
     {
-        // Update lifecycle to Deprecated.
+        // Update lifecycle metadata.
         let mut stx_update = block.transaction();
         let update = confidential::SetPoseidonParamsLifecycle {
             params_id: id,
-            status: ConfidentialStatus::Deprecated,
+            status: ConfidentialStatus::Proposed,
             activation_height: Some(30),
-            deprecation_height: Some(90),
             withdraw_height: Some(120),
         };
         executor
@@ -405,9 +397,8 @@ fn publish_poseidon_params_and_update_lifecycle() {
         .poseidon_params()
         .get(&id)
         .expect("poseidon params available");
-    assert_eq!(stored.status, ConfidentialStatus::Deprecated);
+    assert_eq!(stored.status, ConfidentialStatus::Proposed);
     assert_eq!(stored.activation_height, Some(30));
-    assert_eq!(stored.deprecation_height, Some(90));
     assert_eq!(stored.withdraw_height, Some(120));
 }
 
@@ -426,7 +417,6 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
         params_id: ConfidentialParamsId::new(200),
         status: ConfidentialStatus::Active,
         activation_height: None,
-        deprecation_height: None,
         withdraw_height: None,
     };
     let err = executor
@@ -467,7 +457,6 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
             params_id: id,
             status: ConfidentialStatus::Withdrawn,
             activation_height: None,
-            deprecation_height: None,
             withdraw_height: Some(250),
         };
         executor
@@ -486,7 +475,6 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
                     params_id: id,
                     status: ConfidentialStatus::Active,
                     activation_height: None,
-                    deprecation_height: None,
                     withdraw_height: None,
                 }
                 .into(),

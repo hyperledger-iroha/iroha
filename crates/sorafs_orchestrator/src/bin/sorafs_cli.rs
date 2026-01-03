@@ -1697,7 +1697,6 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
 
 fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
     match policy {
-        AnonymityPolicy::Compatible => "anon-compatible",
         AnonymityPolicy::GuardPq => "anon-guard-pq",
         AnonymityPolicy::MajorityPq => "anon-majority-pq",
         AnonymityPolicy::StrictPq => "anon-strict-pq",
@@ -1724,7 +1723,7 @@ fn usage() -> String {
   sorafs_cli manifest verify-signature --manifest=PATH (--bundle=PATH | (--signature=PATH --public-key-hex=HEX)) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--expect-token-hash=HEX]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-compatible|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-compatible|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH --torii-url=URL --provider-id-hex=HEX32 [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--summary-out=PATH]
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--format=table|json]
@@ -1742,7 +1741,7 @@ fn usage() -> String {
 
 fn fetch_usage() -> String {
     "Usage:
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-compatible|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-compatible|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64]"
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64]"
         .to_string()
 }
 
@@ -2068,7 +2067,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             }
             let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
             let parsed = AnonymityPolicy::parse(&normalized).ok_or_else(|| {
-                "`--anonymity-policy` must be one of stage-a|stage-b|stage-c|anon-compatible|anon-guard-pq|anon-majority-pq|anon-strict-pq".to_string()
+                "`--anonymity-policy` must be one of stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq".to_string()
             })?;
             anonymity_policy = Some(parsed);
         } else if let Some(rest) = arg.strip_prefix("--write-mode=") {
@@ -2100,7 +2099,7 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
             }
             let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
             let parsed = AnonymityPolicy::parse(&normalized).ok_or_else(|| {
-                "`--anonymity-policy-override` must be one of stage-a|stage-b|stage-c|anon-compatible|anon-guard-pq|anon-majority-pq|anon-strict-pq"
+                "`--anonymity-policy-override` must be one of stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq"
                     .to_string()
             })?;
             anonymity_policy_override = Some(parsed);
@@ -3051,7 +3050,7 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
                             Value::from(evidence.proof_token_b64.is_some()),
                         );
                         map.insert(
-                            "legacy_proof_verified".into(),
+                            "proof_verified".into(),
                             Value::from(report.policy.proof.is_some()),
                         );
                         map.insert(

@@ -472,17 +472,18 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_print_rejects_legacy_block_layout() {
+    fn sidecar_print_rejects_invalid_block_layout() {
         let temp = tempfile::tempdir().unwrap();
         fs::write(temp.path().join("blocks.index"), b"").expect("seed index");
         fs::write(temp.path().join("blocks.data"), b"").expect("seed data");
         fs::write(temp.path().join("blocks.hashes"), b"").expect("seed hashes");
         let pipeline_dir = temp.path().join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("pipeline dir");
-        fs::write(pipeline_dir.join("block_1.norito"), b"legacy").expect("legacy sidecar");
+        fs::write(pipeline_dir.join("block_1.norito"), b"invalid").expect("invalid sidecar");
 
         let mut sink = std::io::BufWriter::new(Vec::<u8>::new());
-        let err = print_sidecar(&mut sink, temp.path(), 1).expect_err("legacy layout should fail");
+        let err =
+            print_sidecar(&mut sink, temp.path(), 1).expect_err("invalid layout should fail");
         assert!(
             err.to_string().contains("no indexed pipeline sidecar"),
             "unexpected error: {err}"

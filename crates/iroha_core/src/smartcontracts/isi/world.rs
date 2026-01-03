@@ -10,7 +10,6 @@ use crate::{prelude::*, state::WorldTransaction};
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
     use core::{
-        cmp::Ordering,
         convert::{TryFrom, TryInto},
         time::Duration,
     };
@@ -1613,7 +1612,7 @@ pub mod isi {
                     "verifying key not found".into(),
                 ));
             };
-            if vk_rec.status != iroha_data_model::proof::VkStatus::Active {
+            if vk_rec.status != iroha_data_model::confidential::ConfidentialStatus::Active {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                         iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -3880,9 +3879,9 @@ pub mod isi {
         old: &VerifyingKeyRecord,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if old.status == ConfidentialStatus::Deprecated {
+        if matches!(old.status, ConfidentialStatus::Withdrawn) {
             return Err(InstructionExecutionError::InvariantViolation(
-                "cannot update deprecated verifying key".into(),
+                "cannot update withdrawn verifying key".into(),
             ));
         }
         if new.version <= old.version {
@@ -4195,114 +4194,6 @@ pub mod isi {
         }
     }
 
-    impl Execute for verifying_keys::DeprecateVerifyingKey {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanManageVerifyingKeys",
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageVerifyingKeys".into(),
-                ));
-            }
-            let id = self.id().clone();
-            let Some(mut rec) = state_transaction.world.verifying_keys.get(&id).cloned() else {
-                return Err(FindError::Permission(Box::new(Permission::new(
-                    "VerifyingKeyMissing".into(),
-                    iroha_primitives::json::Json::from(
-                        format!("{}::{}", id.backend, id.name).as_str(),
-                    ),
-                )))
-                .into());
-            };
-            // First release policy update: mark as Deprecated and retain a bounded
-            // number of deprecated records per backend. Inline key bytes are cleared
-            // to conserve space; commitment and version remain for provenance.
-            rec.status = ConfidentialStatus::Deprecated;
-            if rec.deprecation_height.is_none() {
-                rec.deprecation_height = Some(state_transaction.block_height());
-            }
-            rec.key = None;
-            rec.vk_len = 0;
-            let key = (rec.circuit_id.clone(), rec.version);
-            state_transaction.world.verifying_keys.remove(id.clone());
-            state_transaction
-                .world
-                .verifying_keys_by_circuit
-                .remove(key.clone());
-            state_transaction
-                .world
-                .verifying_keys
-                .insert(id.clone(), rec.clone());
-            state_transaction
-                .world
-                .verifying_keys_by_circuit
-                .insert(key, id.clone());
-            // Enforce per-backend deprecated retention cap (> 0): if there are
-            // more than `vk_deprecated_cap_per_backend` deprecated records for
-            // this backend, prune deterministically by (name, version) order.
-            let cap = state_transaction.zk.vk_deprecated_cap_per_backend;
-            if cap > 0 {
-                // Collect deprecated ids for this backend
-                let mut depr_ids: Vec<(Option<u64>, iroha_data_model::proof::VerifyingKeyId)> =
-                    state_transaction
-                        .world
-                        .verifying_keys
-                        .iter()
-                        .filter(|(vid, vrec)| {
-                            vid.backend == id.backend
-                                && matches!(vrec.status, ConfidentialStatus::Deprecated)
-                        })
-                        .map(|(vid, vrec)| (vrec.deprecation_height, vid.clone()))
-                        .collect();
-                if depr_ids.len() > cap {
-                    // Prefer pruning by recorded deprecation height; fall back to deterministic
-                    // ordering when heights are unavailable.
-                    depr_ids.sort_by(|(ha, ida), (hb, idb)| match (ha, hb) {
-                        (Some(a), Some(b)) => a
-                            .cmp(b)
-                            .then_with(|| ida.backend.cmp(&idb.backend))
-                            .then_with(|| ida.name.cmp(&idb.name)),
-                        (Some(_), None) => Ordering::Less,
-                        (None, Some(_)) => Ordering::Greater,
-                        (None, None) => ida
-                            .backend
-                            .cmp(&idb.backend)
-                            .then_with(|| ida.name.cmp(&idb.name)),
-                    });
-                    let to_prune = depr_ids.len() - cap;
-                    for (_, old_id) in depr_ids.into_iter().take(to_prune) {
-                        if let Some(old_rec) = state_transaction
-                            .world
-                            .verifying_keys
-                            .remove(old_id.clone())
-                        {
-                            let idx_key = (old_rec.circuit_id, old_rec.version);
-                            state_transaction
-                                .world
-                                .verifying_keys_by_circuit
-                                .remove(idx_key);
-                        }
-                    }
-                }
-            }
-            // Emit verifying key deprecated event
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::verifying_keys::VerifyingKeyEvent::Deprecated(
-                    iroha_data_model::events::data::verifying_keys::VerifyingKeyDeprecated {
-                        id: id.clone(),
-                    },
-                ),
-            ));
-            Ok(())
-        }
-    }
-
     impl Execute for consensus_keys::RegisterConsensusKey {
         fn execute(
             self,
@@ -4562,7 +4453,7 @@ pub mod isi {
         }
     }
 
-    impl Execute for consensus_keys::DeprecateConsensusKey {
+    impl Execute for consensus_keys::DisableConsensusKey {
         fn execute(
             self,
             authority: &AccountId,
@@ -4617,7 +4508,7 @@ pub mod isi {
                     .consensus_keys
                     .get(&id)
                     .and_then(|rec| rec.expiry_height),
-                "deprecated consensus key"
+                "disabled consensus key"
             );
             Ok(())
         }
@@ -4689,7 +4580,6 @@ pub mod isi {
             }
             current.status = *self.status();
             current.activation_height = *self.activation_height();
-            current.deprecation_height = *self.deprecation_height();
             current.withdraw_height = *self.withdraw_height();
 
             state_transaction.world.pedersen_params.remove(*id);
@@ -4764,7 +4654,6 @@ pub mod isi {
             }
             current.status = *self.status();
             current.activation_height = *self.activation_height();
-            current.deprecation_height = *self.deprecation_height();
             current.withdraw_height = *self.withdraw_height();
 
             state_transaction.world.poseidon_params.remove(*id);
@@ -6240,7 +6129,7 @@ pub mod isi {
                     )))
                     .into());
                 };
-                if rec.status != iroha_data_model::proof::VkStatus::Active {
+                if rec.status != iroha_data_model::confidential::ConfidentialStatus::Active {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "verifying key is not active".into(),
                     ));
@@ -7404,24 +7293,16 @@ pub mod isi {
         }
     }
 
-    /// Collect consensus key identifiers bound to a public key, including legacy
-    /// records that may be missing from the pk index.
+    /// Collect consensus key identifiers bound to a public key.
     fn consensus_key_ids_for_public_key(
         world: &WorldTransaction<'_, '_>,
         public_key_label: &str,
-        public_key: &PublicKey,
     ) -> Vec<ConsensusKeyId> {
-        let mut ids = world
+        world
             .consensus_keys_by_pk
             .get(public_key_label)
             .cloned()
-            .unwrap_or_default();
-        for (id, record) in world.consensus_keys.iter() {
-            if record.public_key == *public_key && !ids.contains(id) {
-                ids.push(id.clone());
-            }
-        }
-        ids
+            .unwrap_or_default()
     }
 
     /// Register a peer (BLS-normal with `PoP`)
@@ -7573,7 +7454,7 @@ pub mod isi {
             let key_label = peer_id.public_key().to_string();
             let candidate_id = derive_validator_key_id(peer_id.public_key());
             if let Some(conflict) =
-                consensus_key_ids_for_public_key(world, &key_label, peer_id.public_key())
+                consensus_key_ids_for_public_key(world, &key_label)
                     .into_iter()
                     .find(|id| id != &candidate_id)
             {
@@ -7697,7 +7578,7 @@ pub mod isi {
             };
             upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
             crate::sumeragi::status::record_consensus_key(lifecycle_record.clone());
-            let mut ids = consensus_key_ids_for_public_key(world, &key_label, peer_id.public_key());
+            let mut ids = consensus_key_ids_for_public_key(world, &key_label);
             if !ids.contains(&lifecycle_record.id) {
                 ids.push(lifecycle_record.id.clone());
             }
@@ -9945,10 +9826,10 @@ pub mod isi {
 
             {
                 let mut stx = state_block.transaction();
-                let legacy_id =
-                    ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-legacy");
-                let legacy_record = ConsensusKeyRecord {
-                    id: legacy_id.clone(),
+                let existing_id =
+                    ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-existing");
+                let existing_record = ConsensusKeyRecord {
+                    id: existing_id.clone(),
                     public_key: peer_id.public_key().clone(),
                     activation_height: stx.block_height(),
                     expiry_height: None,
@@ -9958,10 +9839,10 @@ pub mod isi {
                 };
                 stx.world
                     .consensus_keys
-                    .insert(legacy_id.clone(), legacy_record);
+                    .insert(existing_id.clone(), existing_record);
                 stx.world
                     .consensus_keys_by_pk
-                    .insert(peer_id.public_key().to_string(), vec![legacy_id]);
+                    .insert(peer_id.public_key().to_string(), vec![existing_id]);
                 stx.apply();
             }
 
@@ -9977,123 +9858,6 @@ pub mod isi {
             assert!(msg.contains("collision"), "unexpected error: {msg}");
             let snapshot = crate::sumeragi::status::snapshot().peer_key_policy;
             assert_eq!(snapshot.identifier_collision_total, 1);
-        }
-
-        #[test]
-        fn register_peer_rejects_unindexed_identifier_collisions() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.signature_batch_max_bls = 4;
-            state.set_pipeline(pipeline);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
-            let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
-
-            {
-                let mut stx = state_block.transaction();
-                let legacy_id =
-                    ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-legacy");
-                let legacy_record = ConsensusKeyRecord {
-                    id: legacy_id.clone(),
-                    public_key: peer_id.public_key().clone(),
-                    activation_height: stx.block_height(),
-                    expiry_height: None,
-                    hsm: None,
-                    replaces: None,
-                    status: ConsensusKeyStatus::Active,
-                };
-                // Intentionally skip consensus_keys_by_pk to mimic legacy state.
-                stx.world.consensus_keys.insert(legacy_id, legacy_record);
-                stx.apply();
-            }
-
-            crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
-
-            let mut stx = state_block.transaction();
-            let binding = iroha_data_model::consensus::HsmBinding {
-                provider: "softkey".into(),
-                key_label: peer_id.public_key().to_string(),
-                slot: Some(0),
-            };
-            let isi =
-                iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop)
-                    .with_hsm(binding);
-            let err = isi
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("identifier collisions must be rejected even without pk index");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(msg.contains("collision"), "unexpected error: {msg}");
-            assert!(stx.world.peers().iter().all(|p| p != &peer_id));
-            let snapshot = crate::sumeragi::status::snapshot().peer_key_policy;
-            assert_eq!(snapshot.identifier_collision_total, 1);
-        }
-
-        #[test]
-        fn unregister_peer_disables_unindexed_consensus_key() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(kp.public_key().clone());
-            let legacy_id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-legacy");
-
-            {
-                let mut stx = state_block.transaction();
-                {
-                    let peers = stx.world.peers.get_mut();
-                    let _ = peers.push(peer_id.clone());
-                }
-                let legacy_record = ConsensusKeyRecord {
-                    id: legacy_id.clone(),
-                    public_key: peer_id.public_key().clone(),
-                    activation_height: stx.block_height(),
-                    expiry_height: None,
-                    hsm: None,
-                    replaces: None,
-                    status: ConsensusKeyStatus::Active,
-                };
-                stx.world
-                    .consensus_keys
-                    .insert(legacy_id.clone(), legacy_record);
-                stx.apply();
-            }
-
-            let mut stx = state_block.transaction();
-            let unregister = iroha_data_model::isi::register::Unregister::<
-                iroha_data_model::peer::Peer,
-            >::peer(peer_id.clone());
-            unregister
-                .execute(&ALICE_ID, &mut stx)
-                .expect("unregister peer with legacy key");
-            assert!(stx.world.peers().iter().all(|p| p != &peer_id));
-            let stored = stx
-                .world
-                .consensus_keys
-                .get(&legacy_id)
-                .expect("legacy consensus key retained");
-            assert_eq!(stored.status, ConsensusKeyStatus::Disabled);
-            assert_eq!(
-                stored.expiry_height,
-                Some(stx.block_height()),
-                "expiry must be stamped at unregister height"
-            );
-            let ids = stx
-                .world
-                .consensus_keys_by_pk
-                .get(&peer_id.public_key().to_string())
-                .expect("pk index populated");
-            assert!(
-                ids.contains(&legacy_id),
-                "legacy id should be indexed under the peer public key"
-            );
         }
 
         #[test]

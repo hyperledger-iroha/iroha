@@ -1204,7 +1204,6 @@ fn guard_pq_rank(policy: AnonymityPolicy, descriptor: &RelayDescriptor) -> u8 {
         AnonymityPolicy::StrictPq => 3,
         AnonymityPolicy::MajorityPq => 2,
         AnonymityPolicy::GuardPq => 1,
-        AnonymityPolicy::Compatible => 1,
     }
 }
 
@@ -1565,7 +1564,6 @@ fn emit_circuit_build_telemetry(guard: &GuardRecord) {
 
 fn allowed_classical(policy: AnonymityPolicy, target: usize, pq_available: usize) -> usize {
     match policy {
-        AnonymityPolicy::Compatible => target,
         AnonymityPolicy::GuardPq | AnonymityPolicy::MajorityPq => {
             if pq_available == 0 {
                 target
@@ -2825,7 +2823,7 @@ mod tests {
         assert!(report.missing.is_empty());
 
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
-        let guards = selector.select(&directory, None, 0, AnonymityPolicy::Compatible);
+        let guards = selector.select(&directory, None, 0, AnonymityPolicy::GuardPq);
         let guard = guards.guards().first().expect("selected guard");
         assert_eq!(guard.relay_id, relay_id(0x01));
         assert_eq!(guard.path_metadata.avg_rtt_ms, Some(20));
@@ -3022,7 +3020,7 @@ mod tests {
         let mut manager = CircuitManager::new(CircuitManagerConfig::default());
 
         let events = manager
-            .refresh(&directory, &guard_set, 0, AnonymityPolicy::Compatible)
+            .refresh(&directory, &guard_set, 0, AnonymityPolicy::GuardPq)
             .expect("refresh");
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], CircuitEvent::Built { .. }));
@@ -3062,7 +3060,7 @@ mod tests {
             CircuitManager::new(CircuitManagerConfig::default().with_validator_masque_bypass(true));
 
         let events = manager
-            .refresh(&directory, &guard_set, 0, AnonymityPolicy::Compatible)
+            .refresh(&directory, &guard_set, 0, AnonymityPolicy::GuardPq)
             .expect("refresh");
         assert!(
             events
@@ -3087,7 +3085,7 @@ mod tests {
                 &directory,
                 &GuardSet::new(vec![initial_guard]),
                 10,
-                AnonymityPolicy::Compatible,
+                AnonymityPolicy::GuardPq,
             )
             .expect("initial refresh");
 
@@ -3101,7 +3099,7 @@ mod tests {
                 &directory,
                 &GuardSet::new(vec![rotated_guard]),
                 200,
-                AnonymityPolicy::Compatible,
+                AnonymityPolicy::GuardPq,
             )
             .expect("rotation refresh");
 
@@ -3130,7 +3128,7 @@ mod tests {
                 &directory,
                 &GuardSet::new(vec![initial_guard]),
                 0,
-                AnonymityPolicy::Compatible,
+                AnonymityPolicy::GuardPq,
             )
             .expect("initial refresh");
 
@@ -3140,7 +3138,7 @@ mod tests {
                 &directory,
                 &GuardSet::new(vec![updated_guard]),
                 10,
-                AnonymityPolicy::Compatible,
+                AnonymityPolicy::GuardPq,
             )
             .expect("refresh with endpoint change");
 
@@ -3164,7 +3162,7 @@ mod tests {
                 &directory,
                 &GuardSet::new(vec![initial_guard]),
                 0,
-                AnonymityPolicy::Compatible,
+                AnonymityPolicy::GuardPq,
             )
             .expect("initial refresh");
 
@@ -3174,7 +3172,7 @@ mod tests {
                 &directory,
                 &GuardSet::new(vec![updated_guard]),
                 20,
-                AnonymityPolicy::Compatible,
+                AnonymityPolicy::GuardPq,
             )
             .expect("refresh with pq change");
 
@@ -3201,7 +3199,7 @@ mod tests {
                 &directory,
                 &GuardSet::new(vec![guard_a.clone(), guard_b]),
                 0,
-                AnonymityPolicy::Compatible,
+                AnonymityPolicy::GuardPq,
             )
             .expect("initial refresh");
 
@@ -3210,7 +3208,7 @@ mod tests {
                 &directory,
                 &GuardSet::new(vec![guard_a]),
                 60,
-                AnonymityPolicy::Compatible,
+                AnonymityPolicy::GuardPq,
             )
             .expect("refresh removing guard");
 
@@ -3256,7 +3254,7 @@ mod tests {
                     &directory,
                     guard_set,
                     (idx as u64) * 100,
-                    AnonymityPolicy::Compatible,
+                    AnonymityPolicy::GuardPq,
                 )
                 .expect("refresh succeeds");
 
@@ -3323,7 +3321,7 @@ mod tests {
         ));
 
         let selector = GuardSelector::new(NonZeroUsize::new(2).expect("non-zero"));
-        let guards = selector.select(&directory, None, 5, AnonymityPolicy::Compatible);
+        let guards = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
 
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x02));
@@ -3392,7 +3390,7 @@ mod tests {
 
         let directory = RelayDirectory::new(vec![classical_guard.clone(), pq_guard.clone()]);
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
-        let guards = selector.select(&directory, None, 5, AnonymityPolicy::Compatible);
+        let guards = selector.select(&directory, None, 5, AnonymityPolicy::GuardPq);
 
         assert_eq!(guards.len(), 1);
         assert_eq!(guards.guards()[0].relay_id, pq_guard.relay_id);
@@ -3408,7 +3406,7 @@ mod tests {
         ]);
 
         let selector = GuardSelector::new(NonZeroUsize::new(3).expect("non-zero"));
-        let guards = selector.select(&directory, None, 7, AnonymityPolicy::Compatible);
+        let guards = selector.select(&directory, None, 7, AnonymityPolicy::GuardPq);
         let ordered: Vec<[u8; 32]> = guards.iter().map(|record| record.relay_id).collect();
 
         assert_eq!(
@@ -3439,7 +3437,7 @@ mod tests {
         let retention = GuardRetention::new(NonZeroU64::new(100).expect("non-zero"));
         let selector =
             GuardSelector::new(NonZeroUsize::new(2).expect("non-zero")).with_retention(retention);
-        let guards = selector.select(&directory, Some(&existing), 50, AnonymityPolicy::Compatible);
+        let guards = selector.select(&directory, Some(&existing), 50, AnonymityPolicy::GuardPq);
 
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x01));
@@ -3484,7 +3482,7 @@ mod tests {
         let retention = GuardRetention::new(NonZeroU64::new(10).expect("non-zero"));
         let selector =
             GuardSelector::new(NonZeroUsize::new(2).expect("non-zero")).with_retention(retention);
-        let guards = selector.select(&directory, Some(&existing), 20, AnonymityPolicy::Compatible);
+        let guards = selector.select(&directory, Some(&existing), 20, AnonymityPolicy::GuardPq);
 
         assert_eq!(guards.len(), 2);
         assert_eq!(guards.guards()[0].relay_id, relay_id(0x10));

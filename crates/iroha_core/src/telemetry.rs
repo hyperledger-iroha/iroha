@@ -1,6 +1,6 @@
 //! Metrics and status reporting.
 //!
-//! This module still exposes the legacy single-lane TEU gauges used before the
+//! This module still exposes the single-lane TEU gauges used before the
 //! Nexus scheduler becomes active. The wiring mirrors the future Nexus layout
 //! (lanes and data-spaces) so callers can adopt the eventual multi-lane feeds
 //! by swapping in the real scheduler hooks once they land; until then we keep
@@ -4293,12 +4293,6 @@ pub fn record_social_rejection(telemetry: &StateTelemetry, reason: &'static str)
     if reason == "multisig_direct_sign" {
         telemetry.metrics.multisig_direct_sign_reject_total.inc();
     }
-    if reason == "multisig_derived_account" {
-        telemetry
-            .metrics
-            .multisig_derived_account_reject_total
-            .inc();
-    }
 }
 
 #[cfg(not(feature = "telemetry"))]
@@ -5692,22 +5686,6 @@ impl Telemetry {
     pub fn inc_torii_multisig_direct_sign_reject(&self) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics.torii_multisig_direct_sign_reject_total.inc();
-        }
-    }
-
-    /// Record a rejection of a multisig transaction due to a derived account id.
-    pub fn inc_torii_multisig_derived_account_reject(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_multisig_derived_account_reject_total
-                .inc();
-        }
-    }
-
-    /// Record detection of a multisig account created with a deterministic derived identifier.
-    pub fn inc_multisig_derived_account_detected(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.multisig_derived_account_detected_total.inc();
         }
     }
 
@@ -12019,8 +11997,6 @@ mod tests {
         assert_eq!(metrics.torii_nts_unhealthy_reject_total.get(), 1);
         telemetry.inc_torii_multisig_direct_sign_reject();
         assert_eq!(metrics.torii_multisig_direct_sign_reject_total.get(), 1);
-        telemetry.inc_multisig_derived_account_detected();
-        assert_eq!(metrics.multisig_derived_account_detected_total.get(), 1);
         telemetry.inc_torii_attachment_reject("type");
         assert_eq!(
             metrics
@@ -12086,12 +12062,6 @@ mod tests {
                 .get(),
             1,
             "disabled telemetry must not record operator auth lockouts"
-        );
-        telemetry.inc_multisig_derived_account_detected();
-        assert_eq!(
-            metrics.multisig_derived_account_detected_total.get(),
-            1,
-            "disabled telemetry must not record derived-account detections"
         );
         telemetry.inc_torii_attachment_reject("type");
         assert_eq!(

@@ -11139,8 +11139,6 @@ impl State {
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:
                     iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-                vk_deprecated_cap_per_backend:
-                    iroha_config::parameters::defaults::zk::vk::DEPRECATED_CAP_PER_BACKEND,
                 kaigi_roster_join_vk: None,
                 kaigi_roster_leave_vk: None,
                 kaigi_usage_vk: None,
@@ -13464,7 +13462,6 @@ struct ConfidentialTransition {
 fn project_confidential_status(
     current: iroha_data_model::confidential::ConfidentialStatus,
     activation_height: Option<u64>,
-    deprecation_height: Option<u64>,
     withdraw_height: Option<u64>,
     height: u64,
 ) -> iroha_data_model::confidential::ConfidentialStatus {
@@ -13472,10 +13469,6 @@ fn project_confidential_status(
         && height >= withdraw
     {
         ConfidentialStatus::Withdrawn
-    } else if let Some(deprecation) = deprecation_height
-        && height >= deprecation
-    {
-        ConfidentialStatus::Deprecated
     } else if let Some(activation) = activation_height
         && height >= activation
     {
@@ -13495,7 +13488,6 @@ fn collect_confidential_transitions(
         let target = project_confidential_status(
             rec.status,
             rec.activation_height,
-            rec.deprecation_height,
             rec.withdraw_height,
             height,
         );
@@ -13511,7 +13503,6 @@ fn collect_confidential_transitions(
         let target = project_confidential_status(
             rec.status,
             rec.activation_height,
-            rec.deprecation_height,
             rec.withdraw_height,
             height,
         );
@@ -13527,7 +13518,6 @@ fn collect_confidential_transitions(
         let target = project_confidential_status(
             rec.status,
             rec.activation_height,
-            rec.deprecation_height,
             rec.withdraw_height,
             height,
         );
@@ -13745,10 +13735,8 @@ fn params_effective(
 ) -> bool {
     use iroha_data_model::confidential::ConfidentialStatus;
 
-    matches!(
-        status,
-        ConfidentialStatus::Active | ConfidentialStatus::Deprecated
-    ) && activation_height.is_none_or(|h| height >= h)
+    matches!(status, ConfidentialStatus::Active)
+        && activation_height.is_none_or(|h| height >= h)
         && withdraw_height.is_none_or(|h| height < h)
 }
 
@@ -15334,7 +15322,7 @@ mod replay_validation_tests {
             parameter::system::{Parameter, SumeragiNposParameters},
             peer::PeerId,
         };
-        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisPeerPop};
+        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
         use iroha_test_samples::{
             SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
         };
@@ -15365,25 +15353,24 @@ mod replay_validation_tests {
             ..Default::default()
         };
 
-        let pops = vec![
-            GenesisPeerPop {
-                public_key: peer_a.public_key().clone(),
-                pop: iroha_crypto::bls_normal_pop_prove(peer_a.private_key())
+        let topology_entries = vec![
+            GenesisTopologyEntry::new(
+                PeerId::new(peer_a.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(peer_a.private_key())
                     .expect("generate pop a"),
-            },
-            GenesisPeerPop {
-                public_key: peer_b.public_key().clone(),
-                pop: iroha_crypto::bls_normal_pop_prove(peer_b.private_key())
+            ),
+            GenesisTopologyEntry::new(
+                PeerId::new(peer_b.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(peer_b.private_key())
                     .expect("generate pop b"),
-            },
+            ),
         ];
 
         let executor_path = super::permission_cache_tests::ensure_executor_bytecode(&temp_dir);
         let (user_id, user_keypair) = gen_account_in("wonderland");
         let mut genesis_builder =
             GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
-                .set_topology(topology.as_ref().to_owned())
-                .set_topology_pop(pops)
+                .set_topology(topology_entries)
                 .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
         genesis_builder = genesis_builder
             .domain("wonderland".parse::<Name>().expect("domain id"))
@@ -15455,7 +15442,7 @@ mod replay_validation_tests {
         use iroha_data_model::{
             consensus::VALIDATOR_SET_HASH_VERSION_V1, name::Name, peer::PeerId,
         };
-        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisPeerPop};
+        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
         use iroha_test_samples::{
             SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
         };
@@ -15484,25 +15471,24 @@ mod replay_validation_tests {
             PeerId::new(peer_b.public_key().clone()),
             PeerId::new(peer_a.public_key().clone()),
         ];
-        let pops = vec![
-            GenesisPeerPop {
-                public_key: peer_b.public_key().clone(),
-                pop: iroha_crypto::bls_normal_pop_prove(peer_b.private_key())
+        let topology_entries = vec![
+            GenesisTopologyEntry::new(
+                roster[0].clone(),
+                iroha_crypto::bls_normal_pop_prove(peer_b.private_key())
                     .expect("generate pop b"),
-            },
-            GenesisPeerPop {
-                public_key: peer_a.public_key().clone(),
-                pop: iroha_crypto::bls_normal_pop_prove(peer_a.private_key())
+            ),
+            GenesisTopologyEntry::new(
+                roster[1].clone(),
+                iroha_crypto::bls_normal_pop_prove(peer_a.private_key())
                     .expect("generate pop a"),
-            },
+            ),
         ];
 
         let executor_path = super::permission_cache_tests::ensure_executor_bytecode(&temp_dir);
         let (user_id, user_keypair) = gen_account_in("wonderland");
         let mut genesis_builder =
             GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
-                .set_topology(roster.clone())
-                .set_topology_pop(pops);
+                .set_topology(topology_entries);
         genesis_builder = genesis_builder
             .domain("wonderland".parse::<Name>().expect("domain id"))
             .account(user_keypair.public_key().clone())
@@ -16045,7 +16031,7 @@ mod permission_cache_tests {
             transaction::TransactionBuilder,
             trigger::TriggerId,
         };
-        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisPeerPop};
+        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
         use iroha_primitives::time::TimeSource;
         use iroha_test_samples::{
             SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
@@ -16119,11 +16105,10 @@ mod permission_cache_tests {
 
         let mut genesis_builder =
             GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
-                .set_topology(topology.as_ref().to_owned())
-                .set_topology_pop(vec![GenesisPeerPop {
-                    public_key: leader_public_key.clone(),
-                    pop: leader_pop,
-                }]);
+                .set_topology(vec![GenesisTopologyEntry::new(
+                    PeerId::new(leader_public_key.clone()),
+                    leader_pop,
+                )]);
         genesis_builder = genesis_builder
             .domain(Name::from_str("wonderland").unwrap())
             .account(registrar_keypair.public_key().clone())
@@ -18448,8 +18433,6 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id:
                 iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-            vk_deprecated_cap_per_backend:
-                iroha_config::parameters::defaults::zk::vk::DEPRECATED_CAP_PER_BACKEND,
             kaigi_roster_join_vk: None,
             kaigi_roster_leave_vk: None,
             kaigi_usage_vk: None,

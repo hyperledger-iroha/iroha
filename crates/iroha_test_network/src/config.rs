@@ -39,7 +39,7 @@ use iroha_executor_data_model::permission::{
     role::CanManageRoles,
     trigger::CanRegisterTrigger,
 };
-use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisPeerPop};
+use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry};
 use iroha_primitives::{json::Json, numeric::NumericSpec, time::TimeSource, unique_vec::UniqueVec};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 #[cfg(test)]
@@ -119,12 +119,12 @@ pub fn base_iroha_config() -> Table {
 pub fn genesis(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
-    topology_pop: Vec<GenesisPeerPop>,
+    topology_entries: Vec<GenesisTopologyEntry>,
 ) -> GenesisBlock {
     genesis_with_keypair(
         extra_transactions,
         topology,
-        topology_pop,
+        topology_entries,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
     )
 }
@@ -133,7 +133,7 @@ pub fn genesis(
 pub fn genesis_with_keypair(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
-    topology_pop: Vec<GenesisPeerPop>,
+    topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
 ) -> GenesisBlock {
     // Always construct a deterministic, minimal built-in genesis tailored for tests.
@@ -141,20 +141,20 @@ pub fn genesis_with_keypair(
     // first transaction shape predictable (e.g., single Upgrade when a sample
     // executor is available).
     init_instruction_registry();
-    build_minimal_genesis(extra_transactions, topology, topology_pop, genesis_key_pair)
+    build_minimal_genesis(extra_transactions, topology, topology_entries, genesis_key_pair)
 }
 
 fn build_minimal_genesis(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
-    topology_pop: Vec<GenesisPeerPop>,
+    topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
 ) -> GenesisBlock {
     let (mut block, genesis_account, topology_vec, genesis_key_pair) =
         build_minimal_genesis_unexecuted(
             extra_transactions,
             topology,
-            topology_pop,
+            topology_entries,
             genesis_key_pair,
         );
     ensure_genesis_results(
@@ -169,7 +169,7 @@ fn build_minimal_genesis(
 fn build_minimal_genesis_unexecuted(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
-    topology_pop: Vec<GenesisPeerPop>,
+    topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
 ) -> (GenesisBlock, AccountId, Vec<PeerId>, KeyPair) {
     fn try_default_executor_path() -> Option<PathBuf> {
@@ -363,17 +363,30 @@ fn build_minimal_genesis_unexecuted(
 
     let topology_vec: Vec<PeerId> = topology.iter().cloned().collect();
     if !topology_vec.is_empty() {
-        let mut pop_map: BTreeMap<iroha_crypto::PublicKey, Vec<u8>> = topology_pop
+        let mut pop_map: BTreeMap<iroha_crypto::PublicKey, Vec<u8>> = topology_entries
             .iter()
-            .map(|entry| (entry.public_key.clone(), entry.pop.clone()))
+            .map(|entry| {
+                let pop = entry
+                    .pop_bytes()
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "invalid pop_hex for topology peer {}: {err}",
+                            entry.peer.public_key()
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "missing pop_hex for topology peer {}",
+                            entry.peer.public_key()
+                        )
+                    });
+                (entry.peer.public_key().clone(), pop)
+            })
             .collect();
 
         builder = builder
             .next_transaction()
-            .set_topology(topology_vec.clone());
-        if !topology_pop.is_empty() {
-            builder = builder.set_topology_pop(topology_pop.clone());
-        }
+            .set_topology(topology_entries.clone());
 
         for peer_id in &topology_vec {
             let pop_bytes = pop_map
@@ -396,7 +409,7 @@ fn build_minimal_genesis_unexecuted(
 
         if let Some((dangling_pk, _)) = pop_map.into_iter().next() {
             panic!(
-                "topology_pop entry present for peer {dangling_pk} that is absent from topology"
+                "topology entry present for peer {dangling_pk} that is absent from topology"
             );
         }
     }
@@ -678,11 +691,11 @@ mod tests {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
         let topology = [peer_id].into_iter().collect();
-        let pop = GenesisPeerPop {
-            public_key: bls.public_key().clone(),
-            pop: iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        };
-        let block = genesis(Vec::new(), topology, vec![pop]);
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let block = genesis(Vec::new(), topology, vec![entry]);
         assert!(block.0.signatures().next().is_some());
         assert!(
             block.0.has_results(),
@@ -702,10 +715,10 @@ mod tests {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
         let topology = [peer_id].into_iter().collect();
-        let pop = GenesisPeerPop {
-            public_key: bls.public_key().clone(),
-            pop: iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        };
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
 
         let asset_definition_id: AssetDefinitionId = "genesis_extra#wonderland"
             .parse()
@@ -714,7 +727,7 @@ mod tests {
             AssetDefinition::numeric(asset_definition_id),
         ))];
 
-        let block = genesis(vec![instructions], topology, vec![pop]);
+        let block = genesis(vec![instructions], topology, vec![entry]);
         let genesis_account = AccountId::new(
             iroha_genesis::GENESIS_DOMAIN_ID.clone(),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
@@ -766,12 +779,12 @@ mod tests {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
         let topology: UniqueVec<PeerId> = [peer_id].into_iter().collect();
-        let pop = GenesisPeerPop {
-            public_key: bls.public_key().clone(),
-            pop: iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        };
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
         let topology_vec: Vec<PeerId> = topology.iter().cloned().collect();
-        let block = genesis(vec![vec![instruction]], topology.clone(), vec![pop]);
+        let block = genesis(vec![vec![instruction]], topology.clone(), vec![entry]);
 
         let genesis_account = AccountId::new(
             iroha_genesis::GENESIS_DOMAIN_ID.clone(),
@@ -849,15 +862,15 @@ mod tests {
         let topology = [peer_id.clone()]
             .into_iter()
             .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
-        let pop = GenesisPeerPop {
-            public_key: bls.public_key().clone(),
-            pop: iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        };
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
         let (mut block, genesis_account, topology_vec, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
-                vec![pop],
+                vec![entry],
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
         assert_eq!(
@@ -893,15 +906,15 @@ mod tests {
         let topology = [peer_id.clone()]
             .into_iter()
             .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
-        let pop = GenesisPeerPop {
-            public_key: bls.public_key().clone(),
-            pop: iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        };
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
         let (block, genesis_account, topology_vec, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
-                vec![pop],
+                vec![entry],
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
         let executed = super::populate_genesis_results(
@@ -957,11 +970,11 @@ mod tests {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
         let topology = [peer_id.clone()].into_iter().collect();
-        let pop = GenesisPeerPop {
-            public_key: bls.public_key().clone(),
-            pop: iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        };
-        let block = genesis(Vec::new(), topology, vec![pop]);
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let block = genesis(Vec::new(), topology, vec![entry]);
         let mut register_pop = 0;
         let mut hsm_bound = 0;
         for tx in block.0.transactions_vec() {
@@ -997,7 +1010,7 @@ mod tests {
 
         fn assert_registers_alice(
             topology: iroha_primitives::unique_vec::UniqueVec<PeerId>,
-            pops: Vec<GenesisPeerPop>,
+            pops: Vec<GenesisTopologyEntry>,
         ) {
             let (block, _, _, _) = build_minimal_genesis_unexecuted(
                 Vec::new(),
@@ -1031,11 +1044,11 @@ mod tests {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
         let topology = [peer_id.clone()].into_iter().collect();
-        let pop = GenesisPeerPop {
-            public_key: bls.public_key().clone(),
-            pop: iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        };
-        assert_registers_alice(topology, vec![pop]);
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        assert_registers_alice(topology, vec![entry]);
     }
 
     #[test]
@@ -1059,11 +1072,11 @@ mod tests {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
         let topology = [peer_id].into_iter().collect();
-        let pop = GenesisPeerPop {
-            public_key: bls.public_key().clone(),
-            pop: iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        };
-        let block = genesis(Vec::new(), topology, vec![pop]);
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let block = genesis(Vec::new(), topology, vec![entry]);
         let first_tx = block.0.transactions_vec().first().unwrap();
         let Executable::Instructions(isi) = first_tx.instructions() else {
             panic!("expected instructions in first transaction");
@@ -1087,11 +1100,11 @@ mod tests {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
         let topology = [peer_id].into_iter().collect();
-        let pop = GenesisPeerPop {
-            public_key: bls.public_key().clone(),
-            pop: iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        };
-        let block = genesis(Vec::new(), topology, vec![pop]);
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let block = genesis(Vec::new(), topology, vec![entry]);
         assert!(
             block.0.header().confidential_features().is_some(),
             "genesis block must advertise confidential feature digest"
@@ -1099,18 +1112,16 @@ mod tests {
     }
 
     #[test]
-    fn genesis_peer_pop_norito_roundtrip() {
+    fn genesis_topology_entry_norito_roundtrip() {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let pop =
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation");
-        let entry = GenesisPeerPop {
-            public_key: bls.public_key().clone(),
-            pop: pop.clone(),
-        };
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let entry = GenesisTopologyEntry::new(peer_id.clone(), pop.clone());
         let encoded = norito::codec::encode_adaptive(&entry);
-        let decoded =
-            GenesisPeerPop::decode(&mut encoded.as_slice()).expect("decode GenesisPeerPop");
-        assert_eq!(decoded.public_key, entry.public_key);
-        assert_eq!(decoded.pop, pop);
+        let decoded = GenesisTopologyEntry::decode(&mut encoded.as_slice())
+            .expect("decode GenesisTopologyEntry");
+        assert_eq!(decoded.peer, peer_id);
+        assert_eq!(decoded.pop_hex, entry.pop_hex);
     }
 }

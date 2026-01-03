@@ -387,9 +387,8 @@ impl TransportPolicy {
 
 /// Staged anonymity policy enforced while selecting SoraNet-capable providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(clippy::enum_variant_names)]
 pub enum AnonymityPolicy {
-    /// Deprecated compatibility fallback (not user-configurable).
-    Compatible,
     /// Stage A (default): require that at least one SoraNet hop (guard) advertises PQ capability.
     #[default]
     GuardPq,
@@ -402,7 +401,6 @@ pub enum AnonymityPolicy {
 impl AnonymityPolicy {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Compatible => "anon-compatible",
             Self::GuardPq => "anon-guard-pq",
             Self::MajorityPq => "anon-majority-pq",
             Self::StrictPq => "anon-strict-pq",
@@ -429,8 +427,7 @@ impl AnonymityPolicy {
         match self {
             Self::StrictPq => Some(Self::MajorityPq),
             Self::MajorityPq => Some(Self::GuardPq),
-            Self::GuardPq => Some(Self::Compatible),
-            Self::Compatible => None,
+            Self::GuardPq => None,
         }
     }
 }
@@ -2699,7 +2696,7 @@ impl Orchestrator {
         if let Some(policy) = self.config.policy_override.anonymity_policy {
             base_anonymity = policy;
         }
-        let (mut transport_policy, mut anonymity_policy) =
+        let (mut transport_policy, anonymity_policy) =
             self.config.write_mode.apply(base_transport, base_anonymity);
         let compliance_decision = self
             .config
@@ -2708,7 +2705,6 @@ impl Orchestrator {
         let compliance_reason = compliance_decision.reason();
         if compliance_reason.is_some() {
             transport_policy = TransportPolicy::DirectOnly;
-            anonymity_policy = AnonymityPolicy::Compatible;
         }
         let skip_policy_fallback = self.config.policy_override.transport_policy.is_some()
             || self.config.policy_override.anonymity_policy.is_some();
@@ -2845,7 +2841,7 @@ impl Orchestrator {
         if let Some(policy) = self.config.policy_override.anonymity_policy {
             base_anonymity = policy;
         }
-        let (mut transport_policy, mut anonymity_policy) =
+        let (mut transport_policy, anonymity_policy) =
             self.config.write_mode.apply(base_transport, base_anonymity);
         let compliance_decision = self
             .config
@@ -2854,7 +2850,6 @@ impl Orchestrator {
         let compliance_reason = compliance_decision.reason();
         if compliance_reason.is_some() {
             transport_policy = TransportPolicy::DirectOnly;
-            anonymity_policy = AnonymityPolicy::Compatible;
         }
         let skip_policy_fallback = self.config.policy_override.transport_policy.is_some()
             || self.config.policy_override.anonymity_policy.is_some();
@@ -3289,7 +3284,6 @@ impl PolicyReport {
 
     fn target_ratio(&self) -> f64 {
         match self.policy {
-            AnonymityPolicy::Compatible => 0.0,
             AnonymityPolicy::GuardPq => {
                 if self.selected_soranet_total > 0 {
                     1.0 / self.selected_soranet_total as f64
@@ -3537,7 +3531,6 @@ impl PqSupport {
 
     fn satisfies(self, policy: AnonymityPolicy) -> bool {
         match policy {
-            AnonymityPolicy::Compatible => true,
             AnonymityPolicy::GuardPq => self.guard || self.majority || self.strict,
             AnonymityPolicy::MajorityPq => self.majority || self.strict,
             AnonymityPolicy::StrictPq => self.strict,
@@ -3851,7 +3844,6 @@ impl PolicySummary {
 
     fn target_ratio(&self) -> f64 {
         match self.policy {
-            AnonymityPolicy::Compatible => 0.0,
             AnonymityPolicy::GuardPq => {
                 if self.selected_soranet_total > 0 {
                     1.0 / self.selected_soranet_total as f64
@@ -3928,10 +3920,6 @@ impl PolicySummary {
         }
 
         match self.policy {
-            AnonymityPolicy::Compatible => {
-                self.status = PolicyStatus::Met;
-                self.fallback_reason = None;
-            }
             AnonymityPolicy::GuardPq => {
                 if self.selected_pq >= 1 {
                     self.status = PolicyStatus::Met;
@@ -3978,7 +3966,7 @@ impl PolicySummary {
     fn apply_compliance_override(&mut self, fallback: PolicyFallback) {
         self.status = PolicyStatus::NotApplicable;
         self.fallback_reason = Some(fallback);
-        self.effective_policy = AnonymityPolicy::Compatible;
+        self.effective_policy = self.policy;
         self.selected_soranet_total = 0;
         self.selected_pq = 0;
     }
@@ -4026,18 +4014,6 @@ fn select_soranet_providers(
     classical_candidates.sort_by(compare_soranet_candidates);
 
     match policy {
-        AnonymityPolicy::Compatible => {
-            let mut providers: Vec<FetchProvider> = pq_candidates
-                .into_iter()
-                .map(SoranetCandidate::into_weighted_provider)
-                .collect();
-            providers.extend(
-                classical_candidates
-                    .into_iter()
-                    .map(SoranetCandidate::into_weighted_provider),
-            );
-            providers
-        }
         AnonymityPolicy::GuardPq => {
             let mut providers: Vec<FetchProvider> = pq_candidates
                 .into_iter()
@@ -4223,7 +4199,7 @@ fn eligible_providers(
 
     if matches!(transport_policy, TransportPolicy::DirectOnly) {
         summary = PolicySummary::new(anonymity_policy, 0, 0);
-        summary.set_effective_policy(AnonymityPolicy::Compatible);
+        summary.set_effective_policy(anonymity_policy);
         summary.update_selected_counts(0, 0);
         return SelectionOutcome { providers, summary };
     }
@@ -6546,8 +6522,7 @@ mod tests {
             AnonymityPolicy::parse("stageC"),
             Some(AnonymityPolicy::StrictPq)
         );
-        assert_eq!(AnonymityPolicy::parse("anon-compatible"), None);
-        assert_eq!(AnonymityPolicy::parse("legacy"), None);
+        assert_eq!(AnonymityPolicy::parse("anon-unknown"), None);
         assert_eq!(AnonymityPolicy::parse("stage_0"), None);
     }
 
@@ -6863,7 +6838,7 @@ mod tests {
             priority: 0,
         }];
 
-        let mut fallback_meta = provider_metadata("legacy-delta");
+        let mut fallback_meta = provider_metadata("fallback-delta");
         fallback_meta.transport_hints.clear();
 
         let adverts = vec![soranet_meta, quic_meta, torii_meta, fallback_meta];
@@ -6877,7 +6852,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             None,
             None,
             false,
@@ -6893,7 +6868,7 @@ mod tests {
                 "soranet-alpha".to_string(),
                 "quic-beta".to_string(),
                 "torii-gamma".to_string(),
-                "legacy-delta".to_string(),
+                "fallback-delta".to_string(),
             ]
         );
 
@@ -6901,7 +6876,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::DirectOnly,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             None,
             None,
             false,
@@ -6920,7 +6895,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetStrict,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             None,
             None,
             false,
@@ -6941,7 +6916,7 @@ mod tests {
         assert_eq!(anonymity, AnonymityPolicy::StrictPq);
 
         let (transport_direct, anonymity_direct) = WriteModeHint::UploadPqOnly
-            .apply(TransportPolicy::DirectOnly, AnonymityPolicy::Compatible);
+            .apply(TransportPolicy::DirectOnly, AnonymityPolicy::GuardPq);
         assert_eq!(transport_direct, TransportPolicy::SoranetStrict);
         assert_eq!(anonymity_direct, AnonymityPolicy::StrictPq);
     }
@@ -6981,7 +6956,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             None,
             None,
             false,
@@ -7013,7 +6988,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             Some(&guard_set),
             None,
             false,
@@ -7069,7 +7044,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             None,
             None,
             false,
@@ -7111,7 +7086,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             Some(&guard_set),
             None,
             false,
@@ -7153,7 +7128,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             Some(&guard_set),
             None,
             false,
@@ -7184,7 +7159,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             Some(&guard_set),
             None,
             false,
@@ -7229,7 +7204,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             Some(&guard_set),
             None,
             false,
@@ -7252,7 +7227,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             Some(&guard_set),
             None,
             false,
@@ -7522,7 +7497,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             None,
             Some(&directory),
             false,
@@ -7597,7 +7572,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             None,
             Some(&directory),
             false,
@@ -7647,7 +7622,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             None,
             Some(&directory),
             false,
@@ -7719,7 +7694,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             None,
             Some(&directory),
             false,
@@ -7806,7 +7781,7 @@ mod tests {
             &scoreboard,
             None,
             TransportPolicy::SoranetPreferred,
-            AnonymityPolicy::Compatible,
+            AnonymityPolicy::GuardPq,
             Some(&guard_set),
             Some(&directory),
             false,

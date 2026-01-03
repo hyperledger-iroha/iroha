@@ -239,17 +239,17 @@ fn resolve_kagami_bin() -> Result<PathBuf> {
 }
 
 fn resolve_target_dir(repo: &Path) -> PathBuf {
-    match std::env::var("CARGO_TARGET_DIR") {
-        Ok(path) => {
+    std::env::var("CARGO_TARGET_DIR").map_or_else(
+        |_| repo.join("target"),
+        |path| {
             let candidate = PathBuf::from(path);
             if candidate.is_absolute() {
                 candidate
             } else {
                 repo.join(candidate)
             }
-        }
-        Err(_) => repo.join("target"),
-    }
+        },
+    )
 }
 
 fn bin_name(raw: &str) -> String {

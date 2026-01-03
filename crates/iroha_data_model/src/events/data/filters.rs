@@ -756,7 +756,6 @@ impl super::EventFilter for VerifyingKeyEventFilter {
             .is_none_or(|id_matcher| match event {
                 super::verifying_keys::VerifyingKeyEvent::Registered(e) => id_matcher == &e.id,
                 super::verifying_keys::VerifyingKeyEvent::Updated(e) => id_matcher == &e.id,
-                super::verifying_keys::VerifyingKeyEvent::Deprecated(e) => id_matcher == &e.id,
             });
         id_ok && self.event_set.matches(event)
     }

@@ -25,11 +25,15 @@
       {
         "name": "peer",
         "type": "PeerId",
-        "docs": "Peer entry; PoP can be bundled by adding the optional `pop_hex` field."
+        "docs": "Peer entry."
       },
-      { "name": "pop_hex", "type": "Option<HexString>" }
+      {
+        "name": "pop_hex",
+        "type": "HexString",
+        "docs": "Proof-of-possession hex (lowercase, without 0x)."
+      }
     ],
-    "docs": "Entries may be plain `PeerId` objects or a map with `peer` and optional `pop_hex` to keep PoPs adjacent to peers."
+    "docs": "Entries are objects with `peer` and `pop_hex` to keep PoPs adjacent to peers."
   },
   "ManifestCrypto": {
     "Struct": [

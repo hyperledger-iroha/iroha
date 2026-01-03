@@ -37,7 +37,7 @@ fn main() {
         return;
     }
     if target_os == "macos" && !cuda_feature {
-        // Metal hosts skip the legacy static CUDA path; the runtime will fall back to the Metal
+        // Metal hosts skip the static CUDA path; the runtime will fall back to the Metal
         // backend without surfacing an unnecessary warning.
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
         return;

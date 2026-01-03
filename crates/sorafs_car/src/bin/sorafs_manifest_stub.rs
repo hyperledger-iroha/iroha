@@ -1569,12 +1569,11 @@ fn verify_manifest_signatures_file(
         "{}.{}@{}",
         descriptor.namespace, descriptor.name, descriptor.semver
     );
-    let legacy_profile = format!("{}-{}", descriptor.namespace, descriptor.name);
     let profile = value
         .get("profile")
         .and_then(Value::as_str)
         .ok_or_else(|| "manifest signatures file missing `profile` field".to_string())?;
-    if profile != canonical_profile && profile != legacy_profile {
+    if profile != canonical_profile {
         let aliases = value
             .get("profile_aliases")
             .and_then(Value::as_array)
@@ -1585,10 +1584,7 @@ fn verify_manifest_signatures_file(
                     .collect::<Vec<&str>>()
             })
             .unwrap_or_default();
-        if !aliases
-            .iter()
-            .any(|alias| *alias == canonical_profile || *alias == legacy_profile)
-        {
+        if !aliases.iter().any(|alias| *alias == canonical_profile) {
             return Err(format!(
                 "manifest signatures profile `{profile}` does not match expected `{canonical_profile}`"
             ));
@@ -1706,12 +1702,7 @@ fn write_manifest_signatures_file(
         "{}.{}@{}",
         descriptor.namespace, descriptor.name, descriptor.semver
     );
-    let legacy_handle = format!("{}-{}", descriptor.namespace, descriptor.name);
-    let mut profile_aliases = Vec::new();
-    profile_aliases.push(Value::from(profile_handle.clone()));
-    if legacy_handle != profile_handle {
-        profile_aliases.push(Value::from(legacy_handle.clone()));
-    }
+    let profile_aliases = vec![Value::from(profile_handle.clone())];
     root.insert("profile".to_owned(), Value::from(profile_handle));
     root.insert("profile_aliases".to_owned(), Value::Array(profile_aliases));
     root.insert(

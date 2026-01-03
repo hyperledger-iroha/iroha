@@ -59,15 +59,15 @@ ProviderAdvertBodyV1 {
 |-------|-------------|
 | `provider_id` | BLAKE3-256 digest assigned by governance. Used for stake and admission checks. |
 | `profile_id`  | Declares the canonical chunking/profile handle (e.g., `sorafs.sf1@1.0.0`). |
-| `profile_aliases` | Optional list of alternate handles (legacy identifiers, short names) appended to `profile_id` so clients can advertise them in `Accept-Chunker`. The canonical handle MUST appear in the list when the field is present. |
+| `profile_aliases` | Optional list of alternate handles appended to `profile_id` so clients can advertise them in `Accept-Chunker`. The canonical handle MUST appear in the list when the field is present. |
 | `stake`       | Points to the staking pool and amount governing admission. Zero stake fails validation. |
 | `qos`         | Encodes availability tier, maximum retrieval latency, and concurrent stream capacity. |
-| `capabilities` | TLV list describing transport features. Reserved codes cover Torii, QUIC+Noise, and SoraNet compatibility; additional payload allows vendor extensions. |
+| `capabilities` | TLV list describing transport features. Reserved codes cover Torii, QUIC+Noise, and SoraNet PQ; additional payload allows vendor extensions. |
 | `endpoints`   | Concrete service endpoints. Each entry includes the endpoint kind, host pattern, and metadata (TLS fingerprint, ALPN, region). |
 | `rendezvous_topics` | Topics advertised in the DHT so clients can discover providers by profile and region. |
 | `path_policy` | Guard rails that constrain path construction (minimum guard weight, maximum providers from the same ASN or staking pool). |
 | `stream_budget` | Optional concurrency and throughput envelope (`StreamBudgetV1`). Clients clamp in-flight requests to `max_in_flight` and treat `max(max_bytes_per_sec, burst)` as a hard per-chunk ceiling. Only valid when the advert also includes `CapabilityType::ChunkRangeFetch`. |
-| `transport_hints` | Ordered list of supported ranged-fetch transports (`TransportHintV1`). Priorities are low numbers first and align with CLI `--transport-hint` entries. Hints must be non-empty when present and require the `chunk_range_fetch` capability. SoraNet transport hints (`soranet_relay`) additionally require a SoraNet capability flag (`soranet_compatible` or `soranet_hybrid_pq`). |
+| `transport_hints` | Ordered list of supported ranged-fetch transports (`TransportHintV1`). Priorities are low numbers first and align with CLI `--transport-hint` entries. Hints must be non-empty when present and require the `chunk_range_fetch` capability. SoraNet transport hints (`soranet_relay`) additionally require a SoraNet capability flag (`soranet_pq`). |
 | `signature_strict` | When `true`, verifiers MUST reject the advert if the signature fails. External tooling may set this to `false` to allow offline validation flows (the CLI logs a warning instead of aborting). |
 | `allow_unknown_capabilities` | Signals that callers MAY retain the advert even if it contains capability codes they do not yet recognise. Clients drop the unknown TLVs while honouring the advertised capability policy for the known entries. |
 

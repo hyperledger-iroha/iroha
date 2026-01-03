@@ -3,7 +3,7 @@ use std::{format, vec::Vec};
 use self::ecdsa_secp256k1::EcdsaSecp256k1Impl;
 use crate::{Error, KeyGenOption, ParseError};
 
-/// ECDSA over secp256k1 with SHA-256 hashing (used for legacy interoperability).
+/// ECDSA over secp256k1 with SHA-256 hashing (used for interoperability).
 #[derive(Clone, Copy)]
 pub struct EcdsaSecp256k1Sha256;
 

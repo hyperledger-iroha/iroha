@@ -180,7 +180,7 @@ fn manifest_signature_matches_fixture_manifest() {
     );
     assert!(
         alias_strings.contains(&LEGACY_PROFILE_HANDLE),
-        "profile_aliases must include legacy handle"
+            "profile_aliases must include expected handle"
     );
     assert_eq!(
         signatures
@@ -343,7 +343,7 @@ fn json_fixture_in_sync_with_vectors() {
     );
     assert!(
         alias_strings.contains(&LEGACY_PROFILE_HANDLE),
-        "profile_aliases must include legacy handle"
+            "profile_aliases must include expected handle"
     );
     assert_eq!(
         json.get("input_seed")

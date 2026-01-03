@@ -33,13 +33,13 @@ async fn vk_list_filters_by_backend_and_status() {
     let state = State::new(World::new(), kura, query);
     let mut state = state;
 
-    // Insert 3 records: 2 active + 1 deprecated
+    // Insert 3 records: 2 active + 1 proposed
     // Insert via test helper
     let backend = "halo2/ipa";
     for (i, status) in [
         ConfidentialStatus::Active,
         ConfidentialStatus::Active,
-        ConfidentialStatus::Deprecated,
+        ConfidentialStatus::Proposed,
     ]
     .into_iter()
     .enumerate()
@@ -88,17 +88,17 @@ async fn vk_list_filters_by_backend_and_status() {
     let arr_all = v_all.as_array().unwrap();
     assert_eq!(arr_all.len(), 3);
 
-    // Filter Deprecated
-    let req_dep = http::Request::builder()
+    // Filter Proposed
+    let req_prop = http::Request::builder()
         .method("GET")
-        .uri("/v1/zk/vk?status=Deprecated")
+        .uri("/v1/zk/vk?status=Proposed")
         .body(axum::body::Body::empty())
         .unwrap();
-    let resp_dep = app.clone().oneshot(req_dep).await.unwrap();
-    assert_eq!(resp_dep.status(), http::StatusCode::OK);
-    let v_dep: norito::json::Value =
-        norito::json::from_slice(&resp_dep.into_body().collect().await.unwrap().to_bytes())
+    let resp_prop = app.clone().oneshot(req_prop).await.unwrap();
+    assert_eq!(resp_prop.status(), http::StatusCode::OK);
+    let v_prop: norito::json::Value =
+        norito::json::from_slice(&resp_prop.into_body().collect().await.unwrap().to_bytes())
             .unwrap();
-    let arr_dep = v_dep.as_array().unwrap();
-    assert_eq!(arr_dep.len(), 1);
+    let arr_prop = v_prop.as_array().unwrap();
+    assert_eq!(arr_prop.len(), 1);
 }

@@ -2082,21 +2082,15 @@ impl AppQueryLimits {
     /// Clamp the requested page limit to the configured bounds.
     pub fn clamp_page_limit(&self, requested: Option<u64>) -> Result<u64> {
         let requested = requested.unwrap_or(self.default_page_limit);
-        // Treat `limit=0` as "use default page size" to match legacy Torii behaviour.
-        let limit = if requested == 0 {
-            self.default_page_limit
-        } else {
-            requested
-        };
-        if limit > self.max_page_limit {
+        if requested > self.max_page_limit {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "limit must be between 1 and {}",
+                    "limit must be between 0 and {}",
                     self.max_page_limit
                 )),
             )));
         }
-        Ok(limit)
+        Ok(requested)
     }
 
     /// Clamp the requested fetch size to the configured bounds (defaults to the max).
@@ -2726,7 +2720,7 @@ pub async fn handle_count_proofs(
 pub struct VkListQuery {
     /// Exact backend match (e.g., "halo2/ipa"). If None, include all backends.
     pub backend: Option<String>,
-    /// Status filter: "Active" or "Deprecated" (case-sensitive).
+    /// Status filter: "Active", "Proposed", or "Withdrawn" (case-sensitive).
     pub status: Option<String>,
     /// Optional name substring match
     pub name_contains: Option<String>,
@@ -2747,7 +2741,7 @@ pub async fn handle_list_vk(
     crate::NoritoQuery(q): crate::NoritoQuery<VkListQuery>,
 ) -> Result<impl IntoResponse> {
     let view = state.view();
-    use iroha_data_model::proof::VkStatus;
+    use iroha_data_model::confidential::ConfidentialStatus;
     let offset = q.offset.map(u64::from).unwrap_or(0);
     let limit = q.limit.map(u64::from);
     let order_desc = matches!(q.order.as_deref(), Some("desc" | "DESC" | "Desc"));
@@ -2762,7 +2756,7 @@ pub async fn handle_list_vk(
         status_filter: Option<&String>,
         name_contains: Option<&String>,
     ) -> bool {
-        use iroha_data_model::proof::VkStatus;
+        use iroha_data_model::confidential::ConfidentialStatus;
 
         if let Some(b) = backend_filter {
             if &id.backend != b {
@@ -2772,8 +2766,9 @@ pub async fn handle_list_vk(
 
         if let Some(s) = status_filter {
             match s.as_str() {
-                "Active" if rec.status != VkStatus::Active => return false,
-                "Deprecated" if rec.status != VkStatus::Deprecated => return false,
+                "Active" if rec.status != ConfidentialStatus::Active => return false,
+                "Proposed" if rec.status != ConfidentialStatus::Proposed => return false,
+                "Withdrawn" if rec.status != ConfidentialStatus::Withdrawn => return false,
                 _ => {}
             }
         }
@@ -3031,7 +3026,7 @@ pub async fn handle_connect_session(
 }
 
 #[cfg(feature = "connect")]
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+#[derive(Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 /// Query parameters for WebSocket Connect endpoint
 pub struct ConnectWsQuery {
     /// Session identifier (base64url)
@@ -4889,49 +4884,21 @@ fn multisig_spec_key() -> Name {
     Name::from_str("multisig/spec").expect("static multisig spec key")
 }
 
-fn multisig_derived_flag_key() -> Name {
-    Name::from_str("multisig/derived_key").expect("static multisig derived flag key")
-}
-
-#[derive(Debug)]
-enum MultisigRejectKind {
-    Direct,
-    Derived,
-}
-
 fn reject_direct_multisig_signing(
     world: &impl WorldReadOnly,
     tx: &SignedTransaction,
-) -> Option<(AcceptTransactionFail, MultisigRejectKind)> {
+) -> Option<AcceptTransactionFail> {
     let account = world.accounts().get(tx.authority())?;
 
     let metadata = account.metadata();
     let spec_present = metadata.contains(&multisig_spec_key());
-    let derived_flag = metadata
-        .get(&multisig_derived_flag_key())
-        .and_then(|value| value.clone().try_into_any_norito::<bool>().ok())
-        .unwrap_or(false);
-    let derived_detected = derived_flag;
-
-    (spec_present || derived_flag).then(|| {
+    spec_present.then(|| {
         let rejection = SignatureVerificationFail::new(
             tx.signature().clone(),
             SignatureRejectionCode::UnsupportedAuthority,
-            if derived_detected {
-                "signing with deterministically derived multisig key is forbidden; use multisig propose/approve"
-            } else {
-                "direct signing with multisig accounts is forbidden; use multisig propose/approve"
-            },
+            "direct signing with multisig accounts is forbidden; use multisig propose/approve",
         );
-        let kind = if derived_detected {
-            MultisigRejectKind::Derived
-        } else {
-            MultisigRejectKind::Direct
-        };
-        (
-            AcceptTransactionFail::SignatureVerification(rejection),
-            kind,
-        )
+        AcceptTransactionFail::SignatureVerification(rejection)
     })
 }
 
@@ -4954,7 +4921,7 @@ mod multisig_guard_tests {
         let ms_keypair = KeyPair::random();
         let multisig_id = AccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
 
-        let spec = ModelJson::from("legacy-spec");
+        let spec = ModelJson::from("spec");
         let mut metadata = Metadata::default();
         metadata.insert(multisig_spec_key(), spec);
 
@@ -4973,46 +4940,10 @@ mod multisig_guard_tests {
         let view = state.view();
         let rejection = reject_direct_multisig_signing(view.world(), &tx);
         match rejection {
-            Some((AcceptTransactionFail::SignatureVerification(fail), kind)) => {
+            Some(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::UnsupportedAuthority);
-                assert!(matches!(kind, MultisigRejectKind::Direct));
             }
             other => panic!("expected multisig direct-sign rejection, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn derived_multisig_signing_rejected_with_explicit_reason() {
-        let domain_id: DomainId = "derived".parse().unwrap();
-        let chain_id: ChainId = "multisig-derived-sign-guard".parse().unwrap();
-        let derived_keypair = KeyPair::random();
-        let derived_id = AccountId::new(domain_id.clone(), derived_keypair.public_key().clone());
-
-        let mut metadata = Metadata::default();
-        metadata.insert(multisig_spec_key(), ModelJson::from("legacy-spec"));
-        metadata.insert(multisig_derived_flag_key(), ModelJson::new(true));
-
-        let domain = Domain::new(domain_id.clone()).build(&derived_id);
-        let derived_account = Account::new(derived_id.clone())
-            .with_metadata(metadata)
-            .build(&derived_id);
-        let world = World::with([domain], [derived_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query_handle);
-        let tx = TransactionBuilder::new(chain_id, derived_id.clone())
-            .with_executable(Executable::Instructions(Vec::new().into()))
-            .sign(derived_keypair.private_key());
-
-        let view = state.view();
-        let rejection = reject_direct_multisig_signing(view.world(), &tx);
-        match rejection {
-            Some((AcceptTransactionFail::SignatureVerification(fail), kind)) => {
-                assert_eq!(fail.code(), SignatureRejectionCode::UnsupportedAuthority);
-                assert!(fail.detail.contains("derived"), "detail: {}", fail.detail);
-                assert!(matches!(kind, MultisigRejectKind::Derived));
-            }
-            other => panic!("expected derived-key rejection, got {other:?}"),
         }
     }
 }
@@ -5034,22 +4965,14 @@ async fn handle_transaction_inner(
             state_view,
         )
     };
-    if let Some((rejection, reject_kind)) = reject_direct_multisig_signing(&state_view, &tx) {
+    if let Some(rejection) = reject_direct_multisig_signing(&state_view, &tx) {
         iroha_logger::warn!(
             authority = %tx.authority(),
             "rejecting transaction directly signed by multisig account"
         );
         #[cfg(feature = "telemetry")]
         _telemetry.with_metrics(|tel| {
-            match reject_kind {
-                MultisigRejectKind::Direct => {
-                    tel.inc_torii_multisig_direct_sign_reject();
-                }
-                MultisigRejectKind::Derived => {
-                    tel.inc_torii_multisig_derived_account_reject();
-                    tel.inc_torii_multisig_direct_sign_reject();
-                }
-            }
+            tel.inc_torii_multisig_direct_sign_reject();
             let signature_count = tx.signature_count() as u64;
             let signature_limit = tx_limits.max_signatures().get();
             let authority_label = match tx.authority().controller() {
@@ -5058,10 +4981,6 @@ async fn handle_transaction_inner(
             };
             tel.inc_torii_signature_limit_reject(signature_count, signature_limit, authority_label);
         });
-        #[cfg(not(feature = "telemetry"))]
-        {
-            let _ = reject_kind;
-        }
         return Err(Error::AcceptTransaction(rejection));
     }
     drop(state_view);
@@ -5247,7 +5166,7 @@ pub async fn handle_queries_with_opts(
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
     use iroha_core::{
-        pipeline::query_lane::{CursorMode as LaneCursorMode, run_on_snapshot_with_mode},
+        query::snapshot::{CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode},
         smartcontracts::isi::query::QueryLimits,
     };
     #[cfg(feature = "telemetry")]
@@ -5345,8 +5264,8 @@ pub async fn handle_queries_with_opts(
     .map_err(|e| ValidationFail::InternalError(format!("query worker join error: {e}")))
     .and_then(|r| {
         r.map_err(|e| match e {
-            iroha_core::pipeline::query_lane::SnapshotQueryError::Validation(v) => v,
-            iroha_core::pipeline::query_lane::SnapshotQueryError::Execution(exec) => {
+            SnapshotQueryError::Validation(v) => v,
+            SnapshotQueryError::Execution(exec) => {
                 ValidationFail::QueryFailed(exec)
             }
         })
@@ -6218,9 +6137,6 @@ pub struct ZkVkRegisterDto {
     /// Optional activation height (inclusive) for the verifier.
     #[norito(default)]
     pub activation_height: Option<u64>,
-    /// Optional deprecation height (inclusive) for the verifier.
-    #[norito(default)]
-    pub deprecation_height: Option<u64>,
     /// Optional withdraw height after which the verifier must not be used.
     #[norito(default)]
     pub withdraw_height: Option<u64>,
@@ -6234,7 +6150,7 @@ pub struct ZkVkRegisterDto {
     pub vk_bytes: Option<Vec<u8>>,
     /// Optional status; defaults to Active
     #[norito(default)]
-    pub status: Option<iroha_data_model::proof::VkStatus>,
+    pub status: Option<iroha_data_model::confidential::ConfidentialStatus>,
 }
 
 #[cfg(feature = "app_api")]
@@ -6299,9 +6215,6 @@ pub struct ZkVkUpdateDto {
     /// Optional activation height (inclusive) for the verifier.
     #[norito(default)]
     pub activation_height: Option<u64>,
-    /// Optional deprecation height (inclusive) for the verifier.
-    #[norito(default)]
-    pub deprecation_height: Option<u64>,
     /// Optional withdraw height after which the verifier must not be used.
     #[norito(default)]
     pub withdraw_height: Option<u64>,
@@ -6311,7 +6224,7 @@ pub struct ZkVkUpdateDto {
     pub vk_bytes: Option<Vec<u8>>,
     /// Optional status; defaults to Active
     #[norito(default)]
-    pub status: Option<iroha_data_model::proof::VkStatus>,
+    pub status: Option<iroha_data_model::confidential::ConfidentialStatus>,
 }
 
 #[cfg(feature = "app_api")]
@@ -6326,40 +6239,6 @@ fn _assert_vk_update_dto_send() {
 fn _assert_vk_update_dto_json() {
     fn assert_json<T: norito::json::JsonDeserializeOwned>() {}
     assert_json::<ZkVkUpdateDto>();
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// DTO for deprecating a verifying key
-pub struct ZkVkDeprecateDto {
-    /// Account authorizing the operation
-    pub authority: iroha_data_model::account::AccountId,
-    /// Exposed private key used to sign the transaction
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Verifier backend identifier (e.g., “groth16”)
-    pub backend: String,
-    /// Verifying key name within the backend namespace
-    pub name: String,
-}
-
-#[cfg(feature = "app_api")]
-#[allow(dead_code)]
-fn _assert_vk_deprecate_dto_send() {
-    fn assert_send<T: Send>() {}
-    assert_send::<ZkVkDeprecateDto>();
-}
-
-#[cfg(feature = "app_api")]
-#[allow(dead_code)]
-fn _assert_vk_deprecate_dto_json() {
-    fn assert_json<T: norito::json::JsonDeserializeOwned>() {}
-    assert_json::<ZkVkDeprecateDto>();
 }
 
 #[cfg(feature = "app_api")]
@@ -6407,7 +6286,7 @@ fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
 struct VkRecordInputs {
     backend: String,
     version: u32,
-    status: Option<iroha_data_model::proof::VkStatus>,
+    status: Option<iroha_data_model::confidential::ConfidentialStatus>,
     vk_bytes: Option<Vec<u8>>,
     commitment_hex: Option<String>,
     circuit_id: String,
@@ -6419,7 +6298,6 @@ struct VkRecordInputs {
     metadata_uri_cid: Option<String>,
     vk_bytes_cid: Option<String>,
     activation_height: Option<u64>,
-    deprecation_height: Option<u64>,
     withdraw_height: Option<u64>,
 }
 
@@ -6448,18 +6326,17 @@ fn mk_record_from_inputs(
         metadata_uri_cid,
         vk_bytes_cid,
         activation_height,
-        deprecation_height,
         withdraw_height,
     } = inputs;
     if let Some(ref status_value) = status {
         if !matches!(
             *status_value,
             iroha_data_model::confidential::ConfidentialStatus::Active
-                | iroha_data_model::confidential::ConfidentialStatus::Deprecated
+                | iroha_data_model::confidential::ConfidentialStatus::Proposed
         ) {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "status must be Active or Deprecated".into(),
+                    "status must be Active or Proposed".into(),
                 ),
             )));
         }
@@ -6540,20 +6417,11 @@ fn mk_record_from_inputs(
             ),
         )));
     }
-    if let (Some(act), Some(dep)) = (activation_height, deprecation_height) {
-        if act > dep {
+    if let (Some(act), Some(withdraw)) = (activation_height, withdraw_height) {
+        if act > withdraw {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "deprecation_height must be >= activation_height".into(),
-                ),
-            )));
-        }
-    }
-    if let (Some(dep), Some(withdraw)) = (deprecation_height, withdraw_height) {
-        if dep > withdraw {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "withdraw_height must be >= deprecation_height".into(),
+                    "withdraw_height must be >= activation_height".into(),
                 ),
             )));
         }
@@ -6574,7 +6442,6 @@ fn mk_record_from_inputs(
     record.metadata_uri_cid = metadata_uri_cid;
     record.vk_bytes_cid = vk_bytes_cid;
     record.activation_height = activation_height;
-    record.deprecation_height = deprecation_height;
     record.withdraw_height = withdraw_height;
     record.key = key_opt;
     record.gas_schedule_id = Some(gas_schedule_id);
@@ -6583,7 +6450,7 @@ fn mk_record_from_inputs(
 
 #[cfg(feature = "app_api")]
 fn vk_record_to_json(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> norito::json::Value {
-    use iroha_data_model::proof::VkStatus;
+    use iroha_data_model::confidential::ConfidentialStatus;
 
     use crate::json_value;
 
@@ -6621,16 +6488,11 @@ fn vk_record_to_json(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> norit
         "activation_height".into(),
         json_value(&rec.activation_height),
     );
-    m.insert(
-        "deprecation_height".into(),
-        json_value(&rec.deprecation_height),
-    );
     m.insert("withdraw_height".into(), json_value(&rec.withdraw_height));
     let status_str = match rec.status {
-        VkStatus::Active => "Active",
-        VkStatus::Deprecated => "Deprecated",
-        VkStatus::Proposed => "Proposed",
-        VkStatus::Withdrawn => "Withdrawn",
+        ConfidentialStatus::Active => "Active",
+        ConfidentialStatus::Proposed => "Proposed",
+        ConfidentialStatus::Withdrawn => "Withdrawn",
     };
     m.insert("status".into(), norito::json::Value::from(status_str));
     let key_value = if let Some(vk) = rec.key.as_ref() {
@@ -6679,7 +6541,6 @@ mod vk_record_input_tests {
             metadata_uri_cid: Some("ipfs://metadata".to_string()),
             vk_bytes_cid: Some("ipfs://vk_bytes".to_string()),
             activation_height: Some(100),
-            deprecation_height: Some(200),
             withdraw_height: Some(300),
         };
         let record = mk_record_from_inputs(inputs).expect("record created");
@@ -6688,7 +6549,6 @@ mod vk_record_input_tests {
         assert_eq!(record.metadata_uri_cid.as_deref(), Some("ipfs://metadata"));
         assert_eq!(record.vk_bytes_cid.as_deref(), Some("ipfs://vk_bytes"));
         assert_eq!(record.activation_height, Some(100));
-        assert_eq!(record.deprecation_height, Some(200));
         assert_eq!(record.withdraw_height, Some(300));
         assert!(record.key.is_some(), "inline vk should be preserved");
         assert_eq!(record.gas_schedule_id.as_deref(), Some("sched_default"));
@@ -6711,7 +6571,6 @@ mod vk_record_input_tests {
             metadata_uri_cid: None,
             vk_bytes_cid: None,
             activation_height: None,
-            deprecation_height: None,
             withdraw_height: None,
         });
         assert!(res.is_err());
@@ -6734,7 +6593,6 @@ mod vk_record_input_tests {
             metadata_uri_cid: None,
             vk_bytes_cid: None,
             activation_height: None,
-            deprecation_height: None,
             withdraw_height: None,
         });
         assert!(res.is_err());
@@ -6757,7 +6615,6 @@ mod vk_record_input_tests {
             metadata_uri_cid: None,
             vk_bytes_cid: None,
             activation_height: None,
-            deprecation_height: None,
             withdraw_height: None,
         });
         assert!(res.is_err());
@@ -6780,8 +6637,7 @@ mod vk_record_input_tests {
             metadata_uri_cid: None,
             vk_bytes_cid: None,
             activation_height: Some(200),
-            deprecation_height: Some(100),
-            withdraw_height: Some(300),
+            withdraw_height: Some(100),
         });
         assert!(res.is_err());
     }
@@ -6812,7 +6668,6 @@ pub async fn handle_post_vk_register(
         metadata_uri_cid: req.metadata_uri_cid.clone(),
         vk_bytes_cid: req.vk_bytes_cid.clone(),
         activation_height: req.activation_height,
-        deprecation_height: req.deprecation_height,
         withdraw_height: req.withdraw_height,
     })?;
     let id = VerifyingKeyId::new(req.backend.clone(), req.name.clone());
@@ -6853,7 +6708,6 @@ pub async fn handle_post_vk_update(
         metadata_uri_cid: req.metadata_uri_cid.clone(),
         vk_bytes_cid: req.vk_bytes_cid.clone(),
         activation_height: req.activation_height,
-        deprecation_height: req.deprecation_height,
         withdraw_height: req.withdraw_height,
     })?;
     let id = VerifyingKeyId::new(req.backend.clone(), req.name.clone());
@@ -6865,26 +6719,6 @@ pub async fn handle_post_vk_update(
         .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
         .sign(&req.private_key.0);
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/update")
-        .await
-        .map(|_| (StatusCode::ACCEPTED, ()))
-}
-
-/// POST /v1/zk/vk/deprecate — submit DeprecateVerifyingKey as a signed transaction.
-#[cfg(feature = "app_api")]
-pub async fn handle_post_vk_deprecate(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<ZkVkDeprecateDto>,
-) -> Result<impl IntoResponse> {
-    use iroha_data_model::{isi::verifying_keys, prelude as dm};
-    let id = VerifyingKeyId::new(req.backend.clone(), req.name.clone());
-    let isi = verifying_keys::DeprecateVerifyingKey { id };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone())
-        .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
-        .sign(&req.private_key.0);
-    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/deprecate")
         .await
         .map(|_| (StatusCode::ACCEPTED, ()))
 }

@@ -15,7 +15,7 @@
     clippy::uninlined_format_args,
     unused_imports
 )]
-// Current allowances cover the legacy data-munging helpers used by the ZK CLI.
+// Current allowances cover the data-munging helpers used by the ZK CLI.
 // They stay until the module is decomposed and the conversion helpers are refactored.
 //!
 //! Provides thin wrappers over Torii app endpoints for ZK features. These are
@@ -1702,8 +1702,6 @@ pub enum VkCommand {
     Register(VkRegisterArgs),
     /// Update an existing verifying key record (version must increase)
     Update(VkUpdateArgs),
-    /// Deprecate a verifying key (disallow updates)
-    Deprecate(VkDeprecateArgs),
     /// Get a verifying key record by backend and name
     Get(VkGetArgs),
 }
@@ -1713,7 +1711,6 @@ impl Run for VkCommand {
         match self {
             VkCommand::Register(args) => args.run(context),
             VkCommand::Update(args) => args.run(context),
-            VkCommand::Deprecate(args) => args.run(context),
             VkCommand::Get(args) => args.run(context),
         }
     }
@@ -1751,24 +1748,6 @@ impl Run for VkUpdateArgs {
         let v: norito::json::Value = norito::json::from_str(&s)?;
         client.post_zk_vk_update(&v)?;
         context.println("VK update submitted (202 Accepted)")?;
-        Ok(())
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct VkDeprecateArgs {
-    /// Path to a JSON DTO file for deprecate (authority, `private_key`, backend, name)
-    #[arg(long, value_name = "PATH")]
-    json: std::path::PathBuf,
-}
-
-impl Run for VkDeprecateArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
-        let s = std::fs::read_to_string(&self.json)?;
-        let v: norito::json::Value = norito::json::from_str(&s)?;
-        client.post_zk_vk_deprecate(&v)?;
-        context.println("VK deprecate submitted (202 Accepted)")?;
         Ok(())
     }
 }

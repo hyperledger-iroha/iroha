@@ -169,10 +169,9 @@ fn ticket_policy_json(policy: Option<&TicketPolicy>) -> Result<norito::json::Val
         "allowed_regions".into(),
         json::to_value(&policy.allowed_regions)?,
     );
-    let max_bandwidth = match policy.max_bandwidth_kbps {
-        Some(value) => norito::json::Value::from(value),
-        None => norito::json::Value::Null,
-    };
+    let max_bandwidth = policy
+        .max_bandwidth_kbps
+        .map_or(norito::json::Value::Null, norito::json::Value::from);
     map.insert("max_bandwidth_kbps".into(), max_bandwidth);
     map.insert(
         "max_relays".into(),
@@ -201,10 +200,10 @@ fn hex_value(bytes: impl AsRef<[u8]>) -> norito::json::Value {
 }
 
 fn u128_json_value(value: u128) -> norito::json::Value {
-    match u64::try_from(value) {
-        Ok(value) => norito::json::Value::from(value),
-        Err(_) => norito::json::Value::from(value.to_string()),
-    }
+    u64::try_from(value).map_or_else(
+        |_| norito::json::Value::from(value.to_string()),
+        norito::json::Value::from,
+    )
 }
 
 /// Construct a deterministic baseline segment and the encoder configuration used to produce it.
@@ -614,6 +613,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn snapshot_json_encodes_ticket_fields() {
         let vector = baseline_test_vector();
         let snapshot = vector.snapshot_json().expect("snapshot serializes");

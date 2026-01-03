@@ -166,7 +166,7 @@ Either 3A or 3B yields the same final effect: the signed genesis encodes `pop_he
 
 - Optionally run `kagami genesis validate genesis.json` to check identifiers.
 - Distribute the signed `genesis.scale` to all peers.
-- Ensure your `config.toml` lists validator BLS-Normal keys under `trusted_peers` **and** provides matching PoPs under `trusted_peers_pop`. The loader rejects legacy `trusted_peers_bls` mappings and any validator without a PoP; genesis-embedded `pop_hex` entries can satisfy the same requirement if you prefer manifest-only PoPs.
+- Ensure your `config.toml` lists validator BLS-Normal keys under `trusted_peers` **and** provides matching PoPs under `trusted_peers_pop`. The loader rejects `trusted_peers_bls` mappings and any validator without a PoP; genesis-embedded `pop_hex` entries can satisfy the same requirement if you prefer manifest-only PoPs.
 - Using BLS validator keys does not change transaction admission defaults: `allowed_signing` still defaults to Ed25519/secp256k1 for accounts. Only add `bls_normal` to `allowed_signing`/`allowed_curve_ids` if you plan to accept BLS-signed transactions; consensus will function with BLS validators even when admission stays Ed25519-only.
 
 

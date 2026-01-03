@@ -6,7 +6,7 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     da::types::{
         BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile, ExtraMetadata,
-        RetentionPolicy, StorageTicketId, is_zero_u32,
+        RetentionPolicy, StorageTicketId,
     },
     nexus::LaneId,
 };
@@ -43,12 +43,8 @@ pub struct ChunkCommitment {
     /// Whether this chunk is a parity shard (true) or data shard (false).
     pub parity: bool,
     /// Role of the chunk within the erasure layout.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "ChunkRole::skip_serializing")]
     pub role: ChunkRole,
     /// Zero-based group identifier for the chunk (stripe index for row/column parity).
-    #[norito(default)]
-    #[norito(skip_serializing_if = "is_zero_u32")]
     pub group_id: u32,
 }
 
@@ -98,17 +94,6 @@ impl ChunkCommitment {
             role,
             group_id,
         }
-    }
-}
-
-impl ChunkRole {
-    /// Skip serializing roles that are implicit in legacy manifests.
-    #[must_use]
-    pub fn skip_serializing(role: &Self) -> bool {
-        matches!(
-            role,
-            ChunkRole::Data | ChunkRole::LocalParity | ChunkRole::GlobalParity
-        )
     }
 }
 

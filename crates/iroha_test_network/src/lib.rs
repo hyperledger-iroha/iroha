@@ -50,7 +50,7 @@ use iroha_data_model::{
     parameter::{SmartContractParameter, SumeragiParameter, system::SumeragiNposParameters},
     transaction::Executable,
 };
-use iroha_genesis::{GenesisBlock, GenesisPeerPop};
+use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
     unique_vec::UniqueVec,
@@ -117,7 +117,12 @@ const STARTUP_STATUS_WARN_GRACE: Duration = Duration::from_secs(5);
 const STARTUP_STATUS_WARN_INTERVAL: Duration = Duration::from_secs(5);
 
 type GenesisBuilderFn =
-    Box<dyn Fn(UniqueVec<PeerId>, Vec<GenesisPeerPop>) -> GenesisBlock + Send + Sync + 'static>;
+    Box<
+        dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock
+            + Send
+            + Sync
+            + 'static,
+    >;
 
 fn read_env_duration(var: &str, default: Duration) -> Duration {
     if let Ok(val) = std::env::var(var) {
@@ -869,7 +874,7 @@ fn workspace_fingerprint(root: &Path) -> color_eyre::Result<u64> {
 }
 
 fn build_env_overrides() -> [(&'static str, &'static str); 2] {
-    // Streaming runtime rejects legacy rANS; compile test binaries with bundled tables enabled.
+    // Streaming runtime requires bundled rANS tables; compile test binaries with bundles enabled.
     // Developers may work with unsynced Norito bindings locally; skip the workspace-level
     // bindings check when building test binaries to avoid unrelated integration test failures.
     [
@@ -1186,7 +1191,7 @@ pub struct Network {
     cached_genesis: OnceLock<GenesisBlock>,
     config_layers: Vec<Table>,
     sumeragi_overrides: Vec<SumeragiParameter>,
-    topology_pops: Vec<GenesisPeerPop>,
+    topology_entries: Vec<GenesisTopologyEntry>,
     auto_populate_trusted_peer_pops: bool,
 }
 
@@ -1327,7 +1332,7 @@ impl Network {
     pub fn add_peer(&mut self, peer: &NetworkPeer) {
         self.peers.push(peer.clone());
         if let Some(pop) = peer.genesis_pop() {
-            self.topology_pops.push(pop);
+            self.topology_entries.push(pop);
         }
         self.cached_genesis = OnceLock::new();
     }
@@ -1337,8 +1342,8 @@ impl Network {
         self.peers.retain(|x| x != peer);
         if let Some(bls_pk) = peer.bls_public_key() {
             let bls_pk = bls_pk.clone();
-            self.topology_pops
-                .retain(|entry| entry.public_key != bls_pk);
+            self.topology_entries
+                .retain(|entry| entry.peer.public_key != bls_pk);
         }
         self.cached_genesis = OnceLock::new();
     }
@@ -1838,7 +1843,7 @@ impl Network {
                 config::genesis_with_keypair(
                     self.genesis_isi.clone(),
                     self.peers.iter().map(NetworkPeer::id).collect(),
-                    self.topology_pops.clone(),
+                    self.topology_entries.clone(),
                     self.genesis_key_pair.clone(),
                 )
             })
@@ -1851,8 +1856,8 @@ impl Network {
     }
 
     /// BLS Proof-of-Possession entries for the current peer topology.
-    pub fn topology_pops(&self) -> &[GenesisPeerPop] {
-        &self.topology_pops
+    pub fn topology_entries(&self) -> &[GenesisTopologyEntry] {
+        &self.topology_entries
     }
 
     /// Shutdown running peers
@@ -2822,7 +2827,7 @@ impl NetworkBuilder {
     /// and the resulting block is reused verbatim by all peers.
     pub fn with_genesis_block<F>(mut self, build: F) -> Self
     where
-        F: Fn(UniqueVec<PeerId>, Vec<GenesisPeerPop>) -> GenesisBlock + Send + Sync + 'static,
+        F: Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
     {
         self.custom_genesis = Some(Box::new(build));
         self.genesis_isi = vec![Vec::new()];
@@ -2902,22 +2907,22 @@ impl NetworkBuilder {
             .collect();
 
         let peer_ids: UniqueVec<PeerId> = peers.iter().map(NetworkPeer::id).collect();
-        let collected_pops: Vec<GenesisPeerPop> =
+        let collected_entries: Vec<GenesisTopologyEntry> =
             peers.iter().filter_map(NetworkPeer::genesis_pop).collect();
         if enable_bls {
             assert_eq!(
-                collected_pops.len(),
+                collected_entries.len(),
                 peers.len(),
                 "every network peer must provide a BLS PoP"
             );
         }
 
-        let topology_pops: Vec<GenesisPeerPop> = collected_pops.clone();
+        let topology_entries: Vec<GenesisTopologyEntry> = collected_entries.clone();
 
         let peer_topology: Vec<PeerId> = peer_ids.iter().cloned().collect();
         let cached_genesis = OnceLock::new();
         if let Some(builder_fn) = custom_genesis.as_ref() {
-            let mut block = builder_fn(peer_ids.clone(), topology_pops.clone());
+            let mut block = builder_fn(peer_ids.clone(), topology_entries.clone());
             let genesis_key_pair = genesis_key_pair.clone();
             let genesis_account_id = AccountId::new(
                 iroha_genesis::GENESIS_DOMAIN_ID.clone(),
@@ -3031,7 +3036,7 @@ impl NetworkBuilder {
         // Build a preview genesis so we can derive the consensus fingerprint from the
         // actual on-chain parameters (including the built-in genesis scaffolding).
         let preview_genesis =
-            genesis_factory(genesis_isi.clone(), peer_ids.clone(), topology_pops.clone());
+            genesis_factory(genesis_isi.clone(), peer_ids.clone(), topology_entries.clone());
         let mut parameter_state = iroha_data_model::parameter::Parameters::default();
         for tx in preview_genesis.0.external_transactions() {
             if let Executable::Instructions(batch) = tx.instructions() {
@@ -3216,7 +3221,7 @@ impl NetworkBuilder {
             cached_genesis,
             config_layers: Some(base_layer).into_iter().chain(config_layers).collect(),
             sumeragi_overrides,
-            topology_pops,
+            topology_entries,
             auto_populate_trusted_peer_pops,
         }
     }
@@ -4172,12 +4177,10 @@ impl NetworkPeer {
         self.bls_pop.as_deref()
     }
 
-    pub fn genesis_pop(&self) -> Option<GenesisPeerPop> {
+    pub fn genesis_pop(&self) -> Option<GenesisTopologyEntry> {
         self.bls_public_key().and_then(|pk| {
-            self.bls_pop().map(|pop| GenesisPeerPop {
-                public_key: pk.clone(),
-                pop: pop.to_vec(),
-            })
+            self.bls_pop()
+                .map(|pop| GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.to_vec()))
         })
     }
 
@@ -5583,8 +5586,7 @@ mod tests {
         let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
         let (block_height, _rx) = tokio::sync::watch::channel(None);
 
-        #[allow(deprecated)]
-        let storage_root = dir.into_path();
+        let storage_root = dir.path().to_path_buf();
 
         let peer = NetworkPeer {
             mnemonic: "once-block-fallback".to_string(),
@@ -5622,8 +5624,7 @@ mod tests {
         let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
         let (block_height, _rx) = tokio::sync::watch::channel(None);
 
-        #[allow(deprecated)]
-        let storage_root = dir.into_path();
+        let storage_root = dir.path().to_path_buf();
 
         let peer = NetworkPeer {
             mnemonic: "wait-block-watchdog".to_string(),
@@ -7352,7 +7353,7 @@ exit 0
         init_instruction_registry();
 
         let seen_topology: Arc<Mutex<Option<UniqueVec<PeerId>>>> = Arc::new(Mutex::new(None));
-        let seen_pops: Arc<Mutex<Option<Vec<GenesisPeerPop>>>> = Arc::new(Mutex::new(None));
+        let seen_pops: Arc<Mutex<Option<Vec<GenesisTopologyEntry>>>> = Arc::new(Mutex::new(None));
         let callback_topology = Arc::clone(&seen_topology);
         let callback_pops = Arc::clone(&seen_pops);
 

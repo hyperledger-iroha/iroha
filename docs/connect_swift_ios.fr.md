@@ -94,7 +94,7 @@ sens du frame.
 > de chiffrement (`ConnectCrypto.*`) nécessitent le bridge, donc liez le XCFramework dans
 > les applications de production.
 
-## Référence CryptoKit manuelle (legacy / fallback)
+## Référence CryptoKit manuelle
 
 Si le bridge Norito n’est pas disponible ou si vous devez prototyper sans les helpers du
 SDK, la référence suivante montre comment câbler X25519 + ChaChaPoly manuellement. Elle est
@@ -364,4 +364,3 @@ un encodage Norito réel lors de l’intégration.
 - En cas d’échec, suivez `docs/source/swift_parity_triage.md` et inspectez la sortie de
   `mobile_ci` pour déterminer quel lane nécessite une régénération ou un traitement
   d’incident complémentaire.
-

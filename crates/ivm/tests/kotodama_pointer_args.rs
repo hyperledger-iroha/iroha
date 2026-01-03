@@ -20,9 +20,7 @@ fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>>
     if let Some(bytes) = host.wsv.sc_get(&namespaced_path) {
         return Some(bytes.to_vec());
     }
-    // Fallback for legacy hosts that used only the sentinel without padding.
-    let compat_path = format!("{}{}", char::from(0x01), expected_path);
-    host.wsv.sc_get(&compat_path).map(|bytes| bytes.to_vec())
+    None
 }
 
 #[test]

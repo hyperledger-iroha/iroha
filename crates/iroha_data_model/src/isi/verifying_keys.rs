@@ -21,15 +21,6 @@ isi! {
     }
 }
 
-isi! {
-    /// Deprecate an existing verifying key (disallow future updates).
-    pub struct DeprecateVerifyingKey {
-        /// Identifier of the verifying key to deprecate.
-        pub id: VerifyingKeyId,
-    }
-}
-
 // Seal implementations so these types participate as instructions
 impl crate::seal::Instruction for RegisterVerifyingKey {}
 impl crate::seal::Instruction for UpdateVerifyingKey {}
-impl crate::seal::Instruction for DeprecateVerifyingKey {}

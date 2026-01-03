@@ -17,7 +17,7 @@ use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 
 #[test]
-fn vk_register_update_deprecate_emit_events() {
+fn vk_register_update_emit_events() {
     // Minimal node state and block context
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
@@ -86,17 +86,11 @@ fn vk_register_update_deprecate_emit_events() {
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
         .expect("update vk");
 
-    // Deprecate
-    let dep: InstructionBox =
-        iroha_data_model::isi::verifying_keys::DeprecateVerifyingKey { id: id.clone() }.into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), dep)
-        .expect("deprecate vk");
-
     // Apply and extract events
     stx.apply();
     let mut events = block.world.take_external_events();
-    // We expect three events: Registered, Updated, Deprecated (in that order)
-    assert_eq!(events.len(), 3);
+    // We expect two events: Registered, Updated (in that order)
+    assert_eq!(events.len(), 2);
     // Registered
     match events.remove(0).into_shared_data_event() {
         Ok(event) => match event.as_ref() {
@@ -120,15 +114,5 @@ fn vk_register_update_deprecate_emit_events() {
             other => panic!("unexpected second event: {other:?}"),
         },
         Err(other) => panic!("unexpected second event: {other:?}"),
-    }
-    // Deprecated
-    match events.remove(0).into_shared_data_event() {
-        Ok(event) => match event.as_ref() {
-            DataEvent::VerifyingKey(VKEvent::Deprecated(ev)) => {
-                assert_eq!(ev.id, id);
-            }
-            other => panic!("unexpected third event: {other:?}"),
-        },
-        Err(other) => panic!("unexpected third event: {other:?}"),
     }
 }

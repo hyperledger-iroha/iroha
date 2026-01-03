@@ -1440,7 +1440,7 @@ mod tests {
     #[test]
     fn transport_hint_protocol_kind_prefers_identifier() {
         let hint = TransportHint {
-            protocol: "legacy".to_owned(),
+            protocol: "soranet".to_owned(),
             protocol_id: 3,
             priority: 0,
         };
@@ -1673,7 +1673,7 @@ mod tests {
             max_bytes_per_sec: 1_000_000,
             burst_bytes: Some(1_000_000),
         });
-        let providers = vec![FetchProvider::new("legacy").with_metadata(metadata)];
+        let providers = vec![FetchProvider::new("fallback").with_metadata(metadata)];
 
         let shared_payload = Arc::new(payload.clone());
         let fetcher = move |req: FetchRequest| {
@@ -1699,7 +1699,7 @@ mod tests {
                 assert_eq!(chunk_index, 0);
                 assert_eq!(providers.len(), 1);
                 let (provider_id, reason) = &providers[0];
-                assert_eq!(provider_id.as_str(), "legacy");
+                assert_eq!(provider_id.as_str(), "fallback");
                 assert_eq!(*reason, CapabilityMismatch::MissingRangeCapability);
             }
             other => panic!("expected NoCompatibleProviders error, received {other:?}"),

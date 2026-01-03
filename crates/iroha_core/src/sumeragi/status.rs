@@ -4488,7 +4488,7 @@ pub fn inc_rbc_deliver_defer_chunks() {
     RBC_DELIVER_DEFER_CHUNKS_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Increment the legacy counter tracking DA deadline reschedules.
+/// Increment the counter tracking DA deadline reschedules.
 pub fn inc_da_reschedule(mode: ConsensusMode) {
     let _ = mode;
     DA_RESCHEDULE_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -4654,7 +4654,7 @@ pub fn da_gate_missing_availability_total() -> u64 {
     DA_GATE_MISSING_AVAILABILITY_TOTAL.load(Ordering::Relaxed)
 }
 
-/// Return the cumulative number of DA reschedules observed locally (legacy; should remain zero).
+/// Return the cumulative number of DA reschedules observed locally.
 pub fn da_reschedule_total() -> u64 {
     DA_RESCHEDULE_TOTAL.load(Ordering::Relaxed)
 }

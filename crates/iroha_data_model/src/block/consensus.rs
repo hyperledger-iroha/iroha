@@ -181,9 +181,7 @@ pub struct Vote {
     pub signer: ValidatorIndex,
     /// BLS-normal signature over the canonical exec-vote preimage; required for QC aggregation.
     pub bls_sig: Vec<u8>,
-    /// Legacy identity signature payload (unused in BLS-only consensus).
-    ///
-    /// Kept for backward-compatible decoding; new votes should leave this empty.
+    /// Identity signature payload (unused in BLS-only consensus).
     pub signature: Vec<u8>,
 }
 
@@ -217,9 +215,7 @@ pub struct AvailableVote {
     pub signer: ValidatorIndex,
     /// BLS signature over the canonical vote preimage.
     pub bls_sig: Vec<u8>,
-    /// Legacy identity signature payload (unused in BLS-only consensus).
-    ///
-    /// Kept for backward-compatible decoding; new votes should leave this empty.
+    /// Identity signature payload (unused in BLS-only consensus).
     pub signature: Vec<u8>,
 }
 
@@ -301,10 +297,6 @@ pub struct NewView {
     /// Sender index within the validator set.
     pub sender: ValidatorIndex,
     /// Authentication tag binding the sender to this payload.
-    ///
-    /// Note: legacy payloads omit this field; such frames will decode with an empty signature and
-    /// must be rejected by consumers that enforce authentication.
-    #[norito(default)]
     pub signature: Vec<u8>,
 }
 
@@ -2065,7 +2057,7 @@ mod tests {
             view: 4,
             highest_qc: sample_qc(),
             sender: 3,
-            signature: Vec::new(),
+            signature: vec![0xAB, 0xCD],
         }
     }
 
@@ -2384,6 +2376,15 @@ mod tests {
         let bytes = nv.encode();
         let dec = NewView::decode(&mut &bytes[..]).expect("decode new view");
         assert_eq!(nv, dec);
+    }
+
+    #[test]
+    fn new_view_rejects_truncated_signature() {
+        let nv = sample_new_view();
+        let mut bytes = nv.encode();
+        bytes.truncate(bytes.len().saturating_sub(1));
+        let err = NewView::decode(&mut &bytes[..]).expect_err("missing signature should fail");
+        assert!(matches!(err, norito::Error::LengthMismatch));
     }
 
     #[test]

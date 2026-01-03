@@ -45,11 +45,6 @@ impl<T: std::io::Write> RunArgs<T> for Args {
                 let Some(tx_obj) = tx.as_object_mut() else {
                     return Err(eyre!("transaction at index {} must be a JSON object", idx));
                 };
-                if tx_obj.get("topology_pop").is_some() {
-                    return Err(eyre!(
-                        "transaction {idx} uses deprecated `topology_pop`; embed PoPs in `topology` entries instead"
-                    ));
-                }
                 let topology_value = match tx_obj.remove("topology") {
                     Some(value) => value,
                     None => continue,
@@ -60,7 +55,6 @@ impl<T: std::io::Write> RunArgs<T> for Args {
                     .ok_or_else(|| eyre!("topology for tx {idx} must be an array"))?;
                 if entries.is_empty() {
                     tx_obj.insert("topology".into(), norito::json::Value::Array(Vec::new()));
-                    tx_obj.remove("topology_pop");
                     continue;
                 }
                 let mut out_entries = Vec::with_capacity(entries.len());
@@ -76,7 +70,6 @@ impl<T: std::io::Write> RunArgs<T> for Args {
                     out_entries.push(norito::json::Value::Object(map));
                 }
                 tx_obj.insert("topology".into(), norito::json::Value::Array(out_entries));
-                tx_obj.remove("topology_pop");
             }
         }
 
@@ -205,10 +198,6 @@ mod tests {
         assert!(
             topo_entry.contains_key("peer"),
             "topology entry should wrap peer"
-        );
-        assert!(
-            out_json["transactions"][0].get("topology_pop").is_none(),
-            "legacy topology_pop should be removed"
         );
     }
 }

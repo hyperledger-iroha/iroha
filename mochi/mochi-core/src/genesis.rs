@@ -11,12 +11,12 @@ use iroha_data_model::{
         custom::{CustomParameter, CustomParameterId},
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
     },
-    prelude::{AccountId, AssetId, ChainId, DomainId, Name, NumericSpec, PeerId},
+    prelude::{AccountId, AssetId, ChainId, DomainId, Name, NumericSpec},
 };
 use iroha_executor_data_model::permission::{
     domain::CanRegisterDomain, parameter::CanSetParameters,
 };
-use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisPeerPop, RawGenesisTransaction};
+use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 use iroha_version::BuildLine;
@@ -114,14 +114,12 @@ pub fn default_manifest(
 /// Attach topology information to a genesis manifest inside a dedicated transaction.
 pub fn with_topology(
     manifest: RawGenesisTransaction,
-    topology: Vec<PeerId>,
-    pops: Vec<GenesisPeerPop>,
+    topology: Vec<GenesisTopologyEntry>,
 ) -> RawGenesisTransaction {
     manifest
         .into_builder()
         .next_transaction()
         .set_topology(topology)
-        .set_topology_pop(pops)
         .build_raw()
 }
 

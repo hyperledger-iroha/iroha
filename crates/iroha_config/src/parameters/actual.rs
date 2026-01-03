@@ -2231,7 +2231,6 @@ pub struct LaneConfigEntry {
 impl LaneConfigEntry {
     const MANIFEST_POLICY_METADATA_KEY: &'static str = "da_manifest_policy";
     const SHARD_ID_METADATA_KEY: &'static str = "da_shard_id";
-    const LEGACY_SHARD_ID_METADATA_KEY: &'static str = "shard_id";
     const CONFIDENTIAL_FLAG_KEY: &'static str = "confidential_compute";
     const CONFIDENTIAL_MECHANISM_KEY: &'static str = "confidential_mechanism";
     const CONFIDENTIAL_KEY_VERSION_KEY: &'static str = "confidential_key_version";
@@ -2252,7 +2251,6 @@ impl LaneConfigEntry {
         let shard_id = meta
             .metadata
             .get(Self::SHARD_ID_METADATA_KEY)
-            .or_else(|| meta.metadata.get(Self::LEGACY_SHARD_ID_METADATA_KEY))
             .and_then(|raw| raw.parse::<u32>().ok())
             .unwrap_or(lane_numeric);
         let confidential_compute = meta
@@ -3218,7 +3216,7 @@ pub struct AdaptiveObservability {
     pub enabled: bool,
     /// QC latency threshold (ms) that triggers mitigation.
     pub qc_latency_alert_ms: u64,
-    /// Minimum missing-availability burst that triggers mitigation (legacy name).
+    /// Minimum missing-availability burst that triggers mitigation.
     pub da_reschedule_burst: u64,
     /// Additional pacemaker interval (ms) applied during mitigation.
     pub pacemaker_extra_ms: u64,
@@ -3289,8 +3287,6 @@ pub struct Sumeragi {
     pub block_max_transactions: Option<NonZeroUsize>,
     /// Optional cap on block payload bytes when RBC is disabled (None = unlimited).
     pub block_max_payload_bytes: Option<NonZeroUsize>,
-    /// Legacy global cap for block-message channels (used when per-queue caps are unset).
-    pub msg_channel_cap: Option<usize>,
     /// Capacity for the vote message channel.
     pub msg_channel_cap_votes: usize,
     /// Capacity for the block payload channel.
@@ -4827,9 +4823,8 @@ impl Default for SorafsAliasCachePolicy {
 
 /// Staged anonymity rollout policy for SoraNet transports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum SorafsAnonymityStage {
-    /// Deprecated compatibility fallback (not user-configurable).
-    Compatible,
     /// Require at least one PQ-capable guard (Stage A).
     GuardPq,
     /// Prefer PQ-capable relays for a super-majority (Stage B).
@@ -4861,7 +4856,6 @@ impl SorafsAnonymityStage {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Compatible => "anon-compatible",
             Self::GuardPq => "anon-guard-pq",
             Self::MajorityPq => "anon-majority-pq",
             Self::StrictPq => "anon-strict-pq",
@@ -5306,8 +5300,6 @@ pub struct Zk {
     pub poseidon_params_id: Option<u32>,
     /// Pedersen parameter set identifier to embed into policies (if any).
     pub pedersen_params_id: Option<u32>,
-    /// Maximum number of deprecated verifying-key records to retain per backend (0 = unlimited).
-    pub vk_deprecated_cap_per_backend: usize,
     /// Optional verifying key reference used for Kaigi roster join proofs.
     pub kaigi_roster_join_vk: Option<VerifyingKeyRef>,
     /// Optional verifying key reference used for Kaigi roster leave proofs.
@@ -6018,7 +6010,7 @@ impl NtsEnforcementMode {
 mod tests {
     use std::{collections::BTreeMap, num::NonZeroU32};
 
-    use iroha_data_model::nexus::{LaneCatalog, LaneId, LaneMetadata, LaneVisibility, ShardId};
+    use iroha_data_model::nexus::{LaneCatalog, LaneId, LaneMetadata, LaneVisibility};
     use iroha_primitives::{addr::socket_addr, unique_vec};
 
     use super::*;
@@ -6137,27 +6129,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_shard_id_key_is_accepted() {
-        let mut metadata = BTreeMap::new();
-        metadata.insert("shard_id".to_string(), "11".to_string());
-        let catalog = LaneCatalog::new(
-            NonZeroU32::new(3).expect("lane count"),
-            vec![LaneMetadata {
-                id: LaneId::new(2),
-                alias: "lane2".into(),
-                metadata,
-                ..LaneMetadata::default()
-            }],
-        )
-        .expect("lane catalog");
-
-        let config = LaneConfig::from_catalog(&catalog);
-        assert_eq!(config.shard_id(LaneId::new(2)), 11);
-        let mapping = config.shard_mapping();
-        assert_eq!(mapping.get(&LaneId::new(2)), Some(&ShardId::new(11)));
-    }
-
-    #[test]
     fn shard_defaults_to_lane_id_when_metadata_missing() {
         let catalog = LaneCatalog::new(
             NonZeroU32::new(4).expect("lane count"),
@@ -6188,8 +6159,7 @@ mod tests {
             SorafsAnonymityStage::parse("Stage-C"),
             Some(SorafsAnonymityStage::StrictPq)
         );
-        assert_eq!(SorafsAnonymityStage::parse("anon-compatible"), None);
-        assert_eq!(SorafsAnonymityStage::parse("legacy"), None);
+        assert_eq!(SorafsAnonymityStage::parse("anon-unknown"), None);
         assert_eq!(SorafsAnonymityStage::parse("stage_0"), None);
         assert_eq!(SorafsAnonymityStage::parse("anon_compatible"), None);
         assert_eq!(SorafsAnonymityStage::parse("unknown-stage"), None);
@@ -6200,7 +6170,6 @@ mod tests {
         assert_eq!(SorafsAnonymityStage::GuardPq.label(), "anon-guard-pq");
         assert_eq!(SorafsAnonymityStage::MajorityPq.label(), "anon-majority-pq");
         assert_eq!(SorafsAnonymityStage::StrictPq.label(), "anon-strict-pq");
-        assert_eq!(SorafsAnonymityStage::Compatible.label(), "anon-compatible");
     }
 
     #[test]

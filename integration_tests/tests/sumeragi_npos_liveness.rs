@@ -235,6 +235,7 @@ fn detect_height_from_storage(peer: &NetworkPeer) -> Option<u64> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
 async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
     init_instruction_registry();
 
