@@ -14550,20 +14550,23 @@ impl<'state> StateBlock<'state> {
                     Err(_) => return true,
                 };
 
-                // Skip triggers that were registered in the same block (by height),
-                // or at the same timestamp as the current block (by creation time),
-                // to avoid firing them immediately upon registration.
-                if let Some(json) = action.metadata().get(&key_h)
-                    && let Ok(h) = json.try_into_any_norito::<u64>()
-                    && h == self._curr_block.height().get()
-                {
+                // Skip triggers registered in the current block (by height). Use the timestamp
+                // guard only when height metadata is missing (e.g., legacy triggers).
+                let registered_height = action
+                    .metadata()
+                    .get(&key_h)
+                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                if registered_height == Some(current_block_height) {
                     return false;
                 }
-                if let Some(json) = action.metadata().get(&key_t)
-                    && let Ok(t) = json.try_into_any_norito::<u64>()
-                    && t == current_block_time_ms
-                {
-                    return false;
+                if registered_height.is_none() {
+                    let registered_time = action
+                        .metadata()
+                        .get(&key_t)
+                        .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                    if registered_time == Some(current_block_time_ms) {
+                        return false;
+                    }
                 }
                 true
             })
@@ -26530,6 +26533,7 @@ mod tests {
 
         let block = new_dummy_block_with_payload(|h| {
             h.set_height(NonZeroU64::new(1).unwrap());
+            h.creation_time_ms = 1;
         });
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();

@@ -623,11 +623,10 @@ Implementation notes (current)
 - Executor performs stateless pre‑verification for `SignedTransaction::WithProofs` attachments: backend tag sanity, and per‑block dedup by `(proof hash, vk_commitment?)` when `vk_commitment` is present in the attachment or inline VK is provided; falls back to `(proof hash, backend)`.
 - Stateful path provides `VerifyProof` ISI that records verification outcome into WSV (`proofs` storage). The real Halo2 backend is always linked; proofs are verified using `plonk::verify_proof` with the appropriate `Params<C>` and verifying key derived from the backend tag’s `<circuit-id>`.
   - Transparent Halo2 (IPA over Pasta): proofs are verified using `plonk::verify_proof` with IPA PCS and `Params::<EqAffine>` derived transparently.
-    - VK/Params encoding (preferred via ZK1):
-      - `ZK1` envelope with TLVs: `IPAK(k)` for transparent params.
-    - Proof encoding (preferred via ZK1):
+    - VK/Params encoding (ZK1):
+      - `ZK1` envelope with TLVs: `IPAK(k)` and `H2VK` (Halo2 verifying key bytes).
+    - Proof encoding (ZK1):
       - `ZK1` with `PROF` (raw transcript) and optional instance columns `I10P` (Pasta Fp).
-      - Backward‑compat: `H2PF1 || u32 len || proof_bytes` plus optional `H2I10` instances.
     - `VerifyingKeyBox.bytes`: `ZK1` with `IPAK(k)`.
     - `ProofBox.bytes`: `ZK1` with `PROF` (+ optional `I10P`).
     - Built‑in circuit ids:
@@ -636,7 +635,6 @@ Implementation notes (current)
       Example backend tags: `halo2/pasta/tiny-add-v1`, `halo2/pasta/tiny-mul-v1`.
   - Helpers (for producers/tests):
     - `zk1::wrap_start()` → begin a ZK1 buffer; `zk1::wrap_append_proof(..)`; `zk1::wrap_append_instances_pasta_fp(..)`.
-    - Backward‑compat helper remains available for `H2PF1` proof envelopes (no params).
 
   - BN254 KZG verifier support has been removed; only transparent Pasta/IPA backends remain.
     - Proof encoding (ZK1 preferred): `ZK1` with `PROF` and instance columns `I10P` (Pasta Fp).

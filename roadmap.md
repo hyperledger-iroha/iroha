@@ -199,6 +199,12 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Portal SoraFS pin registry implementation plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS pin registry operations runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS pin registry validation plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+
+25. **RUST-1-92-ROLLOUT — Adopt Rust 1.92 lints and APIs** (Tooling/Core, Line: Shared, Owner: Release Eng, Priority: Medium, Status: 🈳 Not Started, target TBD)
+   - [ ] Run `ci/check_rust_1_92_lints.sh` and fix any new deny-by-default findings (never-type fallback, macro-export arguments).
+   - [ ] Sweep std `RwLock` write-then-read handoffs and use `RwLockWriteGuard::downgrade` where it preserves semantics.
+   - [ ] Audit const helpers for rotate usage now that `slice::rotate_left`/`rotate_right` are const-stable.
+   - [ ] Track additional Rust 1.92 API adoption in `docs/source/rust_1_92_adoption.md`.
    - [x] Portal SoraFS portal publish plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS signing ceremony translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS storage capacity marketplace translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
