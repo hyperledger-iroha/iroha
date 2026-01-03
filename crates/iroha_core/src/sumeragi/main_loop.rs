@@ -762,25 +762,28 @@ fn parse_signers_bitmap(
 
 fn normalize_signer_indices_to_canonical(
     signers: &BTreeSet<ValidatorIndex>,
-    topology_view: usize,
-    topology_len: usize,
-    mode_tag: &str,
+    signature_topology: &super::network_topology::Topology,
+    canonical_topology: &super::network_topology::Topology,
 ) -> BTreeSet<ValidatorIndex> {
-    if mode_tag != PERMISSIONED_TAG || topology_len == 0 || topology_view == 0 {
-        return signers.clone();
+    if signers.is_empty() {
+        return BTreeSet::new();
     }
-    let rotation = topology_view % topology_len;
-    signers
-        .iter()
-        .filter_map(|signer| usize::try_from(*signer).ok())
-        .filter_map(|idx| {
-            if idx >= topology_len {
-                return None;
-            }
-            let canonical_idx = (idx + rotation) % topology_len;
-            ValidatorIndex::try_from(canonical_idx).ok()
-        })
-        .collect()
+    let mut normalized = BTreeSet::new();
+    for signer in signers {
+        let Ok(idx) = usize::try_from(*signer) else {
+            continue;
+        };
+        let Some(peer) = signature_topology.as_ref().get(idx) else {
+            continue;
+        };
+        let Some(canonical_idx) = canonical_topology.as_ref().iter().position(|p| p == peer) else {
+            continue;
+        };
+        if let Ok(canonical) = ValidatorIndex::try_from(canonical_idx) {
+            normalized.insert(canonical);
+        }
+    }
+    normalized
 }
 
 fn qc_bls_preimage(
@@ -1049,22 +1052,13 @@ pub(crate) fn validate_block_sync_qc(
     }
     let normalized_voting = normalize_signer_indices_to_canonical(
         &parsed_signers.voting,
-        signature_topology.view_change_index(),
-        roster_len,
-        mode_tag,
+        &signature_topology,
+        topology,
     );
-    let _normalized_present = normalize_signer_indices_to_canonical(
-        &parsed_signers.present,
-        signature_topology.view_change_index(),
-        roster_len,
-        mode_tag,
-    );
-    let normalized_block_signers = normalize_signer_indices_to_canonical(
-        block_signers,
-        usize::try_from(block_view).unwrap_or(0),
-        roster_len,
-        mode_tag,
-    );
+    let block_signature_topology =
+        topology_for_view(topology, qc.height, block_view, mode_tag, prf_seed);
+    let normalized_block_signers =
+        normalize_signer_indices_to_canonical(block_signers, &block_signature_topology, topology);
     if normalized_block_signers.len() >= required {
         if let Some(missing) = normalized_voting
             .iter()

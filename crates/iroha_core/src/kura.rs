@@ -5504,6 +5504,74 @@ mod tests {
                 .map(|c| c.validator_set_hash),
             Some(HashOf::new(&roster))
         );
+        assert!(got.stake_snapshot.is_none());
+        assert_eq!(got.roster_snapshot(), Some(roster));
+    }
+
+    #[test]
+    fn roster_sidecar_roundtrip_v2_with_stake_snapshot() {
+        use iroha_config::base::WithOrigin;
+        use iroha_data_model::block::BlockSignature;
+
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &LaneConfig::default(),
+        )
+        .unwrap();
+
+        let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer = PeerId::new(kp.public_key().clone());
+        let roster = vec![peer];
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; Hash::LENGTH]));
+        let block_sig =
+            BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
+        let cert = CommitCertificate {
+            height: 1,
+            block_hash,
+            view: 0,
+            epoch: 0,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            signatures: vec![block_sig],
+        };
+        let stake_snapshot = crate::sumeragi::stake_snapshot::CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(&roster),
+            entries: vec![crate::sumeragi::stake_snapshot::CommitStakeSnapshotEntry {
+                peer_id: roster[0].clone(),
+                stake: iroha_primitives::numeric::Numeric::new(10, 0),
+            }],
+        };
+        let sidecar = RosterSidecar::new_v2(
+            1,
+            block_hash,
+            Some(cert.clone()),
+            None,
+            Some(stake_snapshot.clone()),
+        );
+
+        kura.write_roster_metadata(&sidecar);
+        let got = kura.read_roster_metadata(1).expect("sidecar exists");
+
+        assert_eq!(got.height, 1);
+        assert_eq!(got.block_hash, block_hash);
+        assert_eq!(got.format_label(), "roster.snapshot.v2");
+        assert_eq!(got.stake_snapshot, Some(stake_snapshot));
         assert_eq!(got.roster_snapshot(), Some(roster));
     }
 

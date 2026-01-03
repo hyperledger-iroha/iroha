@@ -561,6 +561,7 @@ fn main() -> ReportResult<(), MainError> {
     run_with_line(build_line())
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let language_override = language_override_from_args(
@@ -725,10 +726,8 @@ where
                     return Some(value.to_string());
                 }
             }
-        } else if let Some(value) = arg.strip_prefix("--language=") {
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
+        } else if let Some(value) = arg.strip_prefix("--language=") && !value.is_empty() {
+            return Some(value.to_string());
         }
     }
     None
@@ -1115,18 +1114,19 @@ fn listen_events_message(
     i18n: &Localizer,
 ) -> String {
     let filter_text = format!("{filter:?}");
-    if let Some(timeout) = timeout {
-        let timeout_text = format!("{timeout:?}");
-        i18n.t_with(
-            "info.listen_events_with_timeout",
-            &[
-                ("filter", filter_text.as_str()),
-                ("timeout", timeout_text.as_str()),
-            ],
-        )
-    } else {
-        i18n.t_with("info.listen_events", &[("filter", filter_text.as_str())])
-    }
+    timeout.map_or_else(
+        || i18n.t_with("info.listen_events", &[("filter", filter_text.as_str())]),
+        |timeout| {
+            let timeout_text = format!("{timeout:?}");
+            i18n.t_with(
+                "info.listen_events_with_timeout",
+                &[
+                    ("filter", filter_text.as_str()),
+                    ("timeout", timeout_text.as_str()),
+                ],
+            )
+        },
+    )
 }
 
 fn listen_blocks_message(
@@ -1135,18 +1135,19 @@ fn listen_blocks_message(
     i18n: &Localizer,
 ) -> String {
     let height_text = height.to_string();
-    if let Some(timeout) = timeout {
-        let timeout_text = format!("{timeout:?}");
-        i18n.t_with(
-            "info.listen_blocks_with_timeout",
-            &[
-                ("height", height_text.as_str()),
-                ("timeout", timeout_text.as_str()),
-            ],
-        )
-    } else {
-        i18n.t_with("info.listen_blocks", &[("height", height_text.as_str())])
-    }
+    timeout.map_or_else(
+        || i18n.t_with("info.listen_blocks", &[("height", height_text.as_str())]),
+        |timeout| {
+            let timeout_text = format!("{timeout:?}");
+            i18n.t_with(
+                "info.listen_blocks_with_timeout",
+                &[
+                    ("height", height_text.as_str()),
+                    ("timeout", timeout_text.as_str()),
+                ],
+            )
+        },
+    )
 }
 
 mod events {

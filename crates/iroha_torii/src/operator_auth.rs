@@ -2099,8 +2099,10 @@ mod tests {
     #[tokio::test]
     async fn operator_auth_enforces_mtls_and_lockout() {
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let mut lockout = OperatorAuthLockout::default();
-        lockout.failures = std::num::NonZeroU32::new(2);
+        let lockout = OperatorAuthLockout {
+            failures: std::num::NonZeroU32::new(2),
+            ..OperatorAuthLockout::default()
+        };
         let mut config = base_operator_auth_config(
             OperatorTokenFallback::Always,
             OperatorTokenSource::OperatorTokens,

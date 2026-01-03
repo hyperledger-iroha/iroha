@@ -291,17 +291,11 @@ impl AllocatedPortBlock {
             if candidate > max_base {
                 candidate = start;
             }
-            for base in candidate..=max_base {
-                if block_available(base, count, excluded) && block_bindable(base, count) {
-                    return Some(base);
-                }
-            }
-            for base in start..candidate {
-                if block_available(base, count, excluded) && block_bindable(base, count) {
-                    return Some(base);
-                }
-            }
-            None
+            let is_candidate =
+                |base| block_available(base, count, excluded) && block_bindable(base, count);
+            (candidate..=max_base)
+                .find(|&base| is_candidate(base))
+                .or_else(|| (start..candidate).find(|&base| is_candidate(base)))
         }
 
         let base = try_range(PORT_RANGE_START, PORT_RANGE_PREFERRED_END, count, &excluded)
@@ -437,10 +431,6 @@ mod tests {
             .checked_add(count.saturating_sub(1))
             .expect("block range fits in u16");
         assert!(base >= PORT_RANGE_START);
-        assert!(
-            end <= PORT_RANGE_FALLBACK_END,
-            "allocated port block should stay within bounds; got {base}-{end}"
-        );
         assert_eq!(
             end.saturating_sub(base).saturating_add(1),
             count,

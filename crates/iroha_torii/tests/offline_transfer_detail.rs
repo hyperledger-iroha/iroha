@@ -196,6 +196,7 @@ fn build_harness() -> Harness {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_fixtures() -> Fixtures {
     let chain_id = ChainId::from("test-chain");
     let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
@@ -271,7 +272,10 @@ fn build_fixtures() -> Fixtures {
         scalar_bytes(1),
         scalar_bytes(2),
     );
-    certificate.allowance.commitment = balance_proof.initial_commitment.commitment.clone();
+    certificate
+        .allowance
+        .commitment
+        .clone_from(&balance_proof.initial_commitment.commitment);
 
     let receipt = build_receipt(
         &chain_id,
