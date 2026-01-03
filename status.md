@@ -6,6 +6,9 @@
 - Tests: `cargo test --workspace` (failed: `iroha_torii/tests/zk_attachments_subprocess.rs` imports private `routing` module; warnings about unused `mut` in `crates/iroha_core/src/state.rs:18891` and `crates/iroha_torii/src/routing.rs:4800`).
 - Tests: `TEST_NETWORK_TMP_DIR=/Users/mtakemiya/dev/iroha/tmp/test_network_new_view_cache IROHA_KAGAMI_LOCALNET_KEEP=1 cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture` (failed: local socket bind denied on 127.0.0.1:32832 in `fslock_ports`).
 - Tests: `cargo test -p iroha_core handle_new_view_gossips_new_view_frames -- --nocapture` (timed out after 300s during compile).
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core cargo test -p iroha_core handle_new_view_gossips_new_view_frames -- --nocapture` (failed: bind denied on 127.0.0.1:0 in test harness).
+- Fixed `iroha_torii` subprocess attachment test import to use the public `MaybeTelemetry` re-export so `cargo test --workspace` no longer fails on the private routing module.
+- Format: `cargo fmt --all` (timed out after 10s; stable toolchain warns about unstable fmt options).
 - Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
 - Added crash-recovery PRF seed fallback for NPoS epochs when the seed-only next-epoch snapshot is missing after restart, added a regression test, and documented the restart recompute behavior in `docs/source/sumeragi.md`.
 - Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-check cargo check -p iroha_core --lib` (passed).

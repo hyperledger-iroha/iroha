@@ -10,7 +10,7 @@ use axum::{
 };
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::AttachmentSanitizerMode;
-use iroha_torii::routing::MaybeTelemetry;
+use iroha_torii::MaybeTelemetry;
 
 #[tokio::test]
 async fn attachments_sanitize_via_subprocess() {
