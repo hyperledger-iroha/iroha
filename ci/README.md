@@ -6,6 +6,7 @@ This directory hosts the developer-facing shell helpers that gate CI jobs
 as part of a coordinated migration.
 
 ### Featured checks
+- `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.
 - `check_swift_spm_validation.sh` – exercises `IrohaSwift/Package.swift` with the bridge present, with the bridge intentionally missing (expecting a fatal error in required mode), and with `IROHASWIFT_USE_BRIDGE=0` to ensure Swift-only builds still succeed. Writes a summary + logs under `artifacts/swift_spm_validation`.
 - `check_swift_pod_bridge.sh` – runs `pod lib lint` against `IrohaSwift/IrohaSwift.podspec` with the bundled `NoritoBridge.xcframework` to make sure pod consumers get the signed bridge and minimum platform/toolchain settings stay in sync with SPM.
 - `check_sorafs_gateway_denylist.sh` – generates two sample denylist bundles from the canonical fixtures, runs `cargo xtask sorafs-gateway denylist diff`, and fails the build if the report is missing or lacks additions/removals. This guards the MINFO-6 workflow so releases always have working bundle-evidence tooling.
@@ -14,7 +15,8 @@ as part of a coordinated migration.
 ## Cargo `build-dir` decision
 
 Rust 1.91 stabilised the `[build] build-dir` option, which allows relocating
-`target/`. We audited the CI wrappers and decided **not** to override this
+`target/`. The workspace baseline is now Rust 1.92, but we audited the CI
+wrappers and decided **not** to override this
 setting:
 
 - `ci/check_sorafs_fixtures.sh` exports `target/go-cache`, `target/go-mod-cache`,

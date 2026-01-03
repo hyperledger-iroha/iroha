@@ -660,19 +660,21 @@ impl<'set> SetBlock<'set> {
             (0..count)
                 .map(move |_| (id.clone(), action.clone()))
                 .filter(move |(_, act)| {
-                    if let Some(key_h) = height_key.as_ref()
-                        && let Some(json) = act.metadata().get(key_h)
-                        && let Ok(h) = json.try_into_any_norito::<u64>()
-                        && h == current_block_height
-                    {
+                    let registered_height = height_key
+                        .as_ref()
+                        .and_then(|key| act.metadata().get(key))
+                        .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                    if registered_height == Some(current_block_height) {
                         return false;
                     }
-                    if let Some(key_t) = time_key.as_ref()
-                        && let Some(json) = act.metadata().get(key_t)
-                        && let Ok(t) = json.try_into_any_norito::<u64>()
-                        && t == current_block_time_ms
-                    {
-                        return false;
+                    if registered_height.is_none() {
+                        let registered_time = time_key
+                            .as_ref()
+                            .and_then(|key| act.metadata().get(key))
+                            .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                        if registered_time == Some(current_block_time_ms) {
+                            return false;
+                        }
                     }
                     true
                 })
@@ -1206,6 +1208,11 @@ mod tests {
                 .next()
                 .is_none(),
             "trigger registered in current block must be skipped"
+        );
+        let matches_same_time = block_view.match_time_event(time_event, 99, 1_234).count();
+        assert_eq!(
+            matches_same_time, 1,
+            "trigger should match when height differs even if timestamp matches"
         );
 
         let interval_later =

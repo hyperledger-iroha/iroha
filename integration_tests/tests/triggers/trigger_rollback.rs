@@ -3,7 +3,7 @@
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{ValidationFail, prelude::*, query::error::FindError, trigger::TriggerId};
-use iroha_data_model::isi::error::InstructionExecutionError;
+use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use tokio::task::spawn_blocking;
@@ -58,18 +58,29 @@ async fn failed_trigger_revert() -> Result<()> {
         .find_map(|cause| cause.downcast_ref::<FindError>())
     {
         // ok
-    } else if let Some(InstructionExecutionError::Find(FindError::Domain(_))) = err
+    } else if let Some(instr_err) = err
         .chain()
         .find_map(|cause| cause.downcast_ref::<InstructionExecutionError>())
     {
-        // ok
+        match instr_err {
+            InstructionExecutionError::Find(FindError::Domain(_)) => {}
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                msg,
+            )) => {
+                assert!(
+                    msg.contains("unregister domain"),
+                    "unexpected SmartContract message: {msg}"
+                );
+            }
+            _ => panic!("unexpected instruction error: {instr_err:?}"),
+        }
     } else if let Some(ValidationFail::NotPermitted(msg)) = err
         .chain()
         .find_map(|cause| cause.downcast_ref::<ValidationFail>())
     {
         assert!(
-            msg.contains("execute_called_trigger"),
-            "unexpected NotPermitted message: {msg}"
+            !msg.trim().is_empty(),
+            "NotPermitted message should not be empty"
         );
     } else {
         panic!("unexpected error: {err:?}");

@@ -207,7 +207,7 @@ async fn tampered_genesis_block_is_rejected() -> Result<()> {
     init_instruction_registry();
 
     let Some(network) = sandbox::build_network_or_skip(
-        NetworkBuilder::new(),
+        NetworkBuilder::new().with_min_peers(4),
         stringify!(tampered_genesis_block_is_rejected),
     ) else {
         return Ok(());

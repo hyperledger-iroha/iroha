@@ -8555,7 +8555,7 @@ mod tests {
         let vk_wrong = VerifyingKeyBox::new("halo2/bls12_381".into(), vec![9]);
         assert!(!super::verify_backend(backend, &proof, Some(&vk_wrong)));
         // Bad encoding → reject
-        let vk_bad = VerifyingKeyBox::new(backend.into(), b"H2BAD".to_vec());
+        let vk_bad = VerifyingKeyBox::new(backend.into(), b"BAD!".to_vec());
         assert!(!super::verify_backend(backend, &proof, Some(&vk_bad)));
     }
 
@@ -11552,115 +11552,6 @@ mod tests {
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
-    // H2 container variants: unknown tag after proof payload should not yield instances (reject when required)
-    #[cfg(all(
-        feature = "zk-halo2-ipa",
-        feature = "zk-halo2",
-        feature = "zk-halo2-ipa-poseidon"
-    ))]
-    #[test]
-    fn halo2_verify_tiny_merkle2_h2_unknown_magic_rejects_instances() {
-        use halo2_proofs::{
-            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-            plonk::{VerifyingKey, keygen_pk, keygen_vk},
-            poly::commitment::Params as _,
-            transcript::{Blake2bWrite, Challenge255},
-        };
-        use rand::rngs::OsRng;
-
-        let k = 6u32;
-        let params: PastaParams = pasta_params_new(k);
-        let vk_h2: VerifyingKey<Curve> =
-            keygen_vk(&params, &pasta_tiny::poseidon::Merkle2Poseidon::default()).expect("vk");
-        let pk = keygen_pk(
-            &params,
-            vk_h2.clone(),
-            &pasta_tiny::poseidon::Merkle2Poseidon::default(),
-        )
-        .expect("pk");
-
-        let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
-            &params,
-            &pk,
-            &[pasta_tiny::poseidon::Merkle2Poseidon::default()],
-            &[&[]],
-            OsRng,
-            &mut transcript,
-        )
-        .expect("proof created");
-        let proof_bytes = transcript.finalize();
-
-        // H2PF1 + unknown magic (no I10P parsed) → col_refs empty; merkle2 requires instances → reject
-        let mut proof_h2 = vec![];
-        proof_h2.extend_from_slice(b"H2PF1");
-        proof_h2.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
-        proof_h2.extend_from_slice(&proof_bytes);
-        proof_h2.extend_from_slice(b"H2ZZZ"); // unknown magic
-
-        let backend = "halo2/pasta/tiny-merkle2-v1";
-        let vk_box = VerifyingKeyBox::new(backend.into(), b"H2IP1\x00\x00\x00\x00".to_vec()); // k=0 (ignored in code path)
-        let prf_box = ProofBox::new(backend.into(), proof_h2);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
-    }
-
-    #[cfg(all(
-        feature = "zk-halo2-ipa",
-        feature = "zk-halo2",
-        feature = "zk-halo2-ipa-poseidon"
-    ))]
-    #[test]
-    fn halo2_verify_tiny_merkle2_h2_unknown_then_i10p_still_rejects() {
-        use ff::PrimeField as _;
-        use halo2_proofs::{
-            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-            plonk::{VerifyingKey, keygen_pk, keygen_vk},
-            poly::commitment::Params as _,
-            transcript::{Blake2bWrite, Challenge255},
-        };
-        use rand::rngs::OsRng;
-
-        let k = 6u32;
-        let params: PastaParams = pasta_params_new(k);
-        let vk_h2: VerifyingKey<Curve> =
-            keygen_vk(&params, &pasta_tiny::poseidon::Merkle2Poseidon::default()).expect("vk");
-        let pk = keygen_pk(
-            &params,
-            vk_h2.clone(),
-            &pasta_tiny::poseidon::Merkle2Poseidon::default(),
-        )
-        .expect("pk");
-
-        let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
-            &params,
-            &pk,
-            &[pasta_tiny::poseidon::Merkle2Poseidon::default()],
-            &[&[]],
-            OsRng,
-            &mut transcript,
-        )
-        .expect("proof created");
-        let proof_bytes = transcript.finalize();
-
-        // H2PF1 + unknown magic + H2I10 (parser reads only one magic after payload) → col_refs empty → reject
-        let mut proof_h2 = vec![];
-        proof_h2.extend_from_slice(b"H2PF1");
-        proof_h2.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
-        proof_h2.extend_from_slice(&proof_bytes);
-        proof_h2.extend_from_slice(b"H2ZZZ"); // unknown magic consumed by parser
-        // Valid I10P after unknown (parser doesn't loop back to read next) → ignored
-        proof_h2.extend_from_slice(b"H2I10");
-        proof_h2.extend_from_slice(&(1u32).to_le_bytes());
-        proof_h2.extend_from_slice(&(1u32).to_le_bytes());
-        proof_h2.extend_from_slice(Scalar::ZERO.to_repr().as_ref());
-
-        let backend = "halo2/pasta/tiny-merkle2-v1";
-        let vk_box = VerifyingKeyBox::new(backend.into(), b"H2IP1\x00\x00\x00\x00".to_vec());
-        let prf_box = ProofBox::new(backend.into(), proof_h2);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
-    }
-
     #[cfg(all(
         feature = "zk-halo2-ipa",
         feature = "zk-halo2",
@@ -11750,56 +11641,6 @@ mod tests {
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
-    }
-
-    #[cfg(all(
-        feature = "zk-halo2-ipa",
-        feature = "zk-halo2",
-        feature = "zk-halo2-ipa-poseidon"
-    ))]
-    #[test]
-    fn halo2_verify_tiny_add_h2_truncated_proof_rejects() {
-        use halo2_proofs::{
-            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-            plonk::{VerifyingKey, keygen_pk, keygen_vk},
-            poly::commitment::Params as _,
-            transcript::{Blake2bWrite, Challenge255},
-        };
-        use rand::rngs::OsRng;
-
-        let k = 5u32;
-        let params: PastaParams = pasta_params_new(k);
-        let vk_h2: VerifyingKey<Curve> =
-            keygen_vk(&params, &pasta_tiny::Add::default()).expect("vk");
-        let pk = keygen_pk(&params, vk_h2.clone(), &pasta_tiny::Add::default()).expect("pk");
-
-        let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
-            &params,
-            &pk,
-            &[pasta_tiny::Add::default()],
-            &[&[]],
-            OsRng,
-            &mut transcript,
-        )
-        .expect("proof created");
-        let proof_bytes = transcript.finalize();
-
-        // H2PF1: declare longer than provided
-        let mut proof_h2 = vec![];
-        proof_h2.extend_from_slice(b"H2PF1");
-        let declared = (proof_bytes.len() as u32).saturating_add(10);
-        proof_h2.extend_from_slice(&declared.to_le_bytes());
-        proof_h2.extend_from_slice(&proof_bytes); // shorter than declared
-
-        let mut vk_h2c = vec![];
-        vk_h2c.extend_from_slice(b"H2IP1");
-        vk_h2c.extend_from_slice(&k.to_le_bytes());
-
-        let backend = "halo2/pasta/ipa-v1/tiny-add-v1";
-        let vk_box = VerifyingKeyBox::new(backend.into(), vk_h2c);
-        let prf_box = ProofBox::new(backend.into(), proof_h2);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
     // ZK1 duplicate I10P policy: last wins (accept when last is correct)
@@ -11948,53 +11789,6 @@ mod tests {
         assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
-    // H2 invalid VK magic: params_any returns None → reject
-    #[cfg(all(
-        feature = "zk-halo2-ipa",
-        feature = "zk-halo2",
-        feature = "zk-halo2-ipa-poseidon"
-    ))]
-    #[test]
-    fn halo2_verify_tiny_add_ipa_h2_invalid_vk_magic_rejects() {
-        use halo2_proofs::{
-            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-            plonk::{VerifyingKey, keygen_pk, keygen_vk},
-            poly::commitment::Params as _,
-            transcript::{Blake2bWrite, Challenge255},
-        };
-        use rand::rngs::OsRng;
-
-        let k = 5u32;
-        let params: PastaParams = pasta_params_new(k);
-        let vk_h2: VerifyingKey<Curve> =
-            keygen_vk(&params, &pasta_tiny::Add::default()).expect("vk");
-        let pk = keygen_pk(&params, vk_h2.clone(), &pasta_tiny::Add::default()).expect("pk");
-        let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
-            &params,
-            &pk,
-            &[pasta_tiny::Add::default()],
-            &[&[]],
-            OsRng,
-            &mut transcript,
-        )
-        .expect("proof created");
-        let proof_bytes = transcript.finalize();
-
-        // H2PF1 proof ok; VK container with invalid magic (H2BAD)
-        let mut proof_h2 = vec![];
-        proof_h2.extend_from_slice(b"H2PF1");
-        proof_h2.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
-        proof_h2.extend_from_slice(&proof_bytes);
-        let mut vk_h2c = vec![];
-        vk_h2c.extend_from_slice(b"H2BAD");
-
-        let backend = "halo2/pasta/ipa-v1/tiny-add-v1";
-        let vk_box = VerifyingKeyBox::new(backend.into(), vk_h2c);
-        let prf_box = ProofBox::new(backend.into(), proof_h2);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
-    }
-
     // Randomized (deterministic) unknown TLV stress around PROF/I10P → accept
     #[cfg(all(
         feature = "zk-halo2-ipa",
@@ -12087,54 +11881,6 @@ mod tests {
             let prf_box = ProofBox::new(backend.into(), prf_env);
             assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
         }
-    }
-
-    // H2: VK container with invalid magic ensures params_any rejects → overall verify rejects
-    #[cfg(all(
-        feature = "zk-halo2-ipa",
-        feature = "zk-halo2",
-        feature = "zk-halo2-ipa-poseidon"
-    ))]
-    #[test]
-    fn halo2_verify_tiny_mul_h2_invalid_vk_magic_rejects() {
-        use halo2_proofs::{
-            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-            plonk::{VerifyingKey, keygen_pk, keygen_vk},
-            poly::commitment::Params as _,
-            transcript::{Blake2bWrite, Challenge255},
-        };
-        use rand::rngs::OsRng;
-
-        let k = 5u32;
-        let params: PastaParams = pasta_params_new(k);
-        let vk_h2: VerifyingKey<Curve> =
-            keygen_vk(&params, &pasta_tiny::Mul::default()).expect("vk");
-        let pk = keygen_pk(&params, vk_h2.clone(), &pasta_tiny::Mul::default()).expect("pk");
-
-        let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-        halo2_proofs::plonk::create_proof::<Curve, Challenge255<Curve>, _, _, _, _>(
-            &params,
-            &pk,
-            &[pasta_tiny::Mul::default()],
-            &[&[]],
-            OsRng,
-            &mut transcript,
-        )
-        .expect("proof created");
-        let proof_bytes = transcript.finalize();
-
-        // H2PF1 proof ok; VK container with invalid magic
-        let mut proof_h2 = vec![];
-        proof_h2.extend_from_slice(b"H2PF1");
-        proof_h2.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
-        proof_h2.extend_from_slice(&proof_bytes);
-        let mut vk_h2c = vec![];
-        vk_h2c.extend_from_slice(b"H2XXX");
-
-        let backend = "halo2/pasta/ipa-v1/tiny-mul-v1";
-        let vk_box = VerifyingKeyBox::new(backend.into(), vk_h2c);
-        let prf_box = ProofBox::new(backend.into(), proof_h2);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -12419,25 +12165,18 @@ mod tests {
         .expect("proof created");
         let proof_bytes = transcript.finalize();
 
-        // VK: H2IP1
-        let mut vk_container = vec![];
-        vk_container.extend_from_slice(b"H2IP1");
-        vk_container.extend_from_slice(&k.to_le_bytes());
-
-        // Proof: H2PF1 + H2I10 with 2 columns
-        let mut proof_container = vec![];
-        proof_container.extend_from_slice(b"H2PF1");
-        proof_container.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
-        proof_container.extend_from_slice(&proof_bytes);
-        proof_container.extend_from_slice(b"H2I10");
-        proof_container.extend_from_slice(&(2u32).to_le_bytes()); // 2 columns
-        proof_container.extend_from_slice(&(1u32).to_le_bytes()); // 1 row
-        proof_container.extend_from_slice(Scalar::from(5u64).to_repr().as_ref());
-        proof_container.extend_from_slice(Scalar::from(8u64).to_repr().as_ref());
+        // ZK1 envelopes
+        let mut vk_env = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut vk_env, k);
+        zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
+        let mut proof_env = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
+        let cols: [&[Scalar]; 2] = [&[Scalar::from(5u64)][..], &[Scalar::from(8u64)][..]];
+        zk1::wrap_append_instances_pasta_fp_cols(&cols, &mut proof_env);
 
         let backend = "halo2/pasta/ipa-v1/tiny-add2inst-public-v1";
-        let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
-        let prf_box = ProofBox::new(backend.into(), proof_container);
+        let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
+        let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
@@ -12551,20 +12290,16 @@ mod tests {
         .expect("proof created");
         let proof_bytes = transcript.finalize();
 
-        // VK: H2IP1
-        let mut vk_container = vec![];
-        vk_container.extend_from_slice(b"H2IP1");
-        vk_container.extend_from_slice(&k.to_le_bytes());
-
-        // Proof: H2PF1 (no INST)
-        let mut proof_container = vec![];
-        proof_container.extend_from_slice(b"H2PF1");
-        proof_container.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
-        proof_container.extend_from_slice(&proof_bytes);
+        // ZK1 envelopes
+        let mut vk_env = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut vk_env, k);
+        zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
+        let mut proof_env = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
 
         let backend = "halo2/pasta/ipa-v1/tiny-anon-transfer-2x2-v1";
-        let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
-        let prf_box = ProofBox::new(backend.into(), proof_container);
+        let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
+        let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
@@ -12649,20 +12384,16 @@ mod tests {
         .expect("proof created");
         let proof_bytes = transcript.finalize();
 
-        // VK: H2IP1
-        let mut vk_container = vec![];
-        vk_container.extend_from_slice(b"H2IP1");
-        vk_container.extend_from_slice(&k.to_le_bytes());
-
-        // Proof: H2PF1 (no INST)
-        let mut proof_container = vec![];
-        proof_container.extend_from_slice(b"H2PF1");
-        proof_container.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
-        proof_container.extend_from_slice(&proof_bytes);
+        // ZK1 envelopes
+        let mut vk_env = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut vk_env, k);
+        zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
+        let mut proof_env = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
 
         let backend = "halo2/pasta/ipa-v1/tiny-vote-bool-v1";
-        let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
-        let prf_box = ProofBox::new(backend.into(), proof_container);
+        let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
+        let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 
@@ -12749,32 +12480,25 @@ mod tests {
         .expect("proof created");
         let proof_bytes = t.finalize();
 
-        // VK: H2IP1
-        let mut vk_container = vec![];
-        vk_container.extend_from_slice(b"H2IP1");
-        vk_container.extend_from_slice(&k.to_le_bytes());
+        // ZK1 envelopes
+        let mut vk_env = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut vk_env, k);
+        zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
 
-        // Case 1: Missing INST → must fail
-        let mut proof_container1 = vec![];
-        proof_container1.extend_from_slice(b"H2PF1");
-        proof_container1.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
-        proof_container1.extend_from_slice(&proof_bytes);
         let backend = "halo2/pasta/ipa-v1/tiny-id-public-v1";
-        let vk_box1 = VerifyingKeyBox::new(backend.into(), vk_container.clone());
-        let prf_box1 = ProofBox::new(backend.into(), proof_container1);
+        // Case 1: Missing INST → must fail
+        let mut proof_env1 = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_env1, &proof_bytes);
+        let vk_box1 = VerifyingKeyBox::new(backend.into(), vk_env.clone());
+        let prf_box1 = ProofBox::new(backend.into(), proof_env1);
         assert!(!super::verify_backend(backend, &prf_box1, Some(&vk_box1)));
 
         // Case 2: With INST → should succeed
-        let mut proof_container2 = vec![];
-        proof_container2.extend_from_slice(b"H2PF1");
-        proof_container2.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
-        proof_container2.extend_from_slice(&proof_bytes);
-        proof_container2.extend_from_slice(b"H2I10");
-        proof_container2.extend_from_slice(&(1u32).to_le_bytes());
-        proof_container2.extend_from_slice(&(1u32).to_le_bytes());
-        proof_container2.extend_from_slice(Scalar::from(7u64).to_repr().as_ref());
-        let vk_box2 = VerifyingKeyBox::new(backend.into(), vk_container);
-        let prf_box2 = ProofBox::new(backend.into(), proof_container2);
+        let mut proof_env2 = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_env2, &proof_bytes);
+        zk1::wrap_append_instances_pasta_fp(&[Scalar::from(7u64)], &mut proof_env2);
+        let vk_box2 = VerifyingKeyBox::new(backend.into(), vk_env);
+        let prf_box2 = ProofBox::new(backend.into(), proof_env2);
         assert!(super::verify_backend(backend, &prf_box2, Some(&vk_box2)));
     }
 
@@ -12866,7 +12590,7 @@ mod tests {
             }
         }
 
-        // Use IPA via minimal header H2IP1 (transparent)
+        // ZK1 envelopes
         let k = 5u32;
         let params: PastaParams = pasta_params_new(k);
         let vk_h2: VerifyingKey<Curve> = keygen_vk(&params, &TinyAddPublic::default()).expect("vk");
@@ -12888,24 +12612,16 @@ mod tests {
         .expect("proof created");
         let proof_bytes = transcript.finalize();
 
-        // H2IP1 (k only)
-        let mut vk_container = vec![];
-        vk_container.extend_from_slice(b"H2IP1");
-        vk_container.extend_from_slice(&k.to_le_bytes());
-
-        // H2PF1 + INST
-        let mut proof_container = vec![];
-        proof_container.extend_from_slice(b"H2PF1");
-        proof_container.extend_from_slice(&(proof_bytes.len() as u32).to_le_bytes());
-        proof_container.extend_from_slice(&proof_bytes);
-        proof_container.extend_from_slice(b"H2I10");
-        proof_container.extend_from_slice(&(1u32).to_le_bytes());
-        proof_container.extend_from_slice(&(1u32).to_le_bytes());
-        proof_container.extend_from_slice(inst_col[0].to_repr().as_ref());
+        let mut vk_env = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut vk_env, k);
+        zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
+        let mut proof_env = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_env, &proof_bytes);
+        zk1::wrap_append_instances_pasta_fp(inst_col.as_slice(), &mut proof_env);
 
         let backend = "halo2/pasta/ipa-v1/tiny-add-public-v1";
-        let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
-        let prf_box = ProofBox::new(backend.into(), proof_container);
+        let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
+        let prf_box = ProofBox::new(backend.into(), proof_env);
         assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
     }
 

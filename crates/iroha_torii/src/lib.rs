@@ -343,10 +343,11 @@ pub use routing::{
     handle_post_contract_instance_activate, handle_post_sorafs_register_manifest,
     handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
     handle_post_sumeragi_evidence_submit, handle_post_vk_register, handle_post_vk_update,
-    handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
-    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
-    handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots, handle_v1_zk_submit_proof,
-    handle_v1_zk_verify, handle_v1_zk_vote_tally, signed_find_proof_by_id,
+    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
+    handle_v1_new_view_json, handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count,
+    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots,
+    handle_v1_zk_submit_proof, handle_v1_zk_verify, handle_v1_zk_vote_tally,
+    signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};

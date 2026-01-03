@@ -12,9 +12,27 @@
 - Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (failed: pre-existing compile errors in `crates/iroha_core/src/da/shard_cursor.rs` duplicate `LaneConfig` import and config/data-model `LaneConfig` mismatches, `crates/iroha_core/src/da/proofs.rs`/`da/receipts.rs` `LaneConfig` mismatches, `crates/iroha_core/src/kura.rs` `LaneConfig` mismatches, and `crates/iroha_core/src/state.rs` missing `refresh_axt_policies_from_space_directory`).
 - Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (timed out after 300s during compile).
 - Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (passed).
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core gossip_accepts_valid_entries_with_invalid_routes_present -- --nocapture` (failed: compile errors in `crates/iroha_core/src/smartcontracts/isi/multisig.rs` missing `DomainId`/`Algorithm` imports and unresolved `derived_key_flag`/`derived_multisig_account_id`).
 - Added multisig-derived telemetry counters to metrics registry/struct so derived-account tracking compiles cleanly.
 - Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core derived_multisig_helpers_match_expected_values -- --nocapture` (timed out after 300s during compile).
 - Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Parallelized RBC delivery checks in the seven-peer consistency integration test, dropped the full-telemetry override, extended the submitter client transaction timeout/TTL for slow networks, and made the mint submission blocking to ensure commit before convergence checks.
+- Tests: `cargo test -p integration_tests seven_peer_cross_peer_consistency_basic --test mod -- --nocapture` (failed: rustup toolchain update conflict while installing components).
+- Raised the workspace Rust baseline to 1.92 (toolchain + MSRV), updated SoraFS CI templates, added the Rust 1.92 lint gate script + rollout notes, and switched operator-auth rate conversion to `NonZero::div_ceil` with unit coverage.
+- Tests: not run (not requested).
+- Serialized unguarded integration-test network builds (genesis validation, Torii bind failure, observer sync, permissions/roles genesis failures, and concurrency config) to enforce min-peer networks under the sandbox guard for full-suite stability.
+- Tests: `cargo check -p integration_tests --tests` (passed).
+- Waited for unregister-peer roster updates via `FindPeers` instead of `/status` peer counts, so the churn test aligns with on-chain peer registration before bootstrapping and after removal.
+- Tests: `CARGO_TARGET_DIR=target-codex-itest IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/iroha3d cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (passed; shutdown logged peer-task timeouts).
+- Relaxed the time-trigger skip guard to rely on block height and only fall back to the timestamp when height metadata is missing; updated time-trigger tests to cover same-timestamp blocks.
+- Tests: `cargo test -p iroha_core match_time_event_skips_recently_registered_triggers -- --nocapture` (passed).
+- Tests: `cargo test -p iroha_core time_trigger_precommit_executes_and_emits_time_event -- --nocapture` (timed out after 120s while running filtered binaries; target test passed).
+- Tests: `cargo test -p integration_tests sse_captures_time_trigger_and_metadata_events -- --nocapture` (passed).
+- Format: `cargo fmt --all` (failed: stable rustfmt does not support configured unstable options).
+- Broadened trigger-failure notification tests to accept SmartContract invalid-parameter errors and non-empty NotPermitted messages when by-call triggers fail.
+- Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 120s; build directory lock while compiling).
+- Stabilized the unregister-peer churn integration test by relying on network sync fallbacks, waiting for peer-count updates after unregister, and polling asset values to expected totals.
+- Tests: `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/iroha3d cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (passed).
 - Removed SoraFS `anon-compatible`/`SoraNetCompatible` variants across Rust/JS/Python/Android bindings, updated stubs/tests, and tightened SoraNet capability validation; dropped query-lane and genesis-bootstrap compatibility shims; fail executor validation on undecodable verdicts; refreshed SoraFS/Swift docs to remove legacy labels.
 - Tests: not run (not requested).
 - Made genesis topology entries accept optional `pop_hex`, added PoP merge support, and updated downstream parsing/build/tests plus genesis docs/translations.

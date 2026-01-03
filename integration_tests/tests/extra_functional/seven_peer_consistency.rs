@@ -6,6 +6,7 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, eyre};
+use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
@@ -34,10 +35,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         .with_peers(7)
         .with_default_pipeline_time()
         .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true);
+            layer.write(["sumeragi", "da_enabled"], true);
         })
         // Keep blocks small to make block progression deterministic in tests
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
@@ -77,7 +75,10 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     let create_asset_def =
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
 
-    let submitter_client = submitter.client();
+    let mut submitter_client = submitter.client();
+    let tx_timeout = network.sync_timeout() + network.sync_timeout();
+    submitter_client.transaction_status_timeout = tx_timeout;
+    submitter_client.transaction_ttl = Some(tx_timeout + Duration::from_secs(5));
     submitter_client
         .submit_all_blocking::<InstructionBox>([
             create_domain.into(),
@@ -92,7 +93,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     // Mint on one peer and wait until the network advances a few blocks
     let quantity = numeric!(500);
     let _mint_hash = submitter_client
-        .submit(Mint::asset_numeric(
+        .submit_blocking(Mint::asset_numeric(
             quantity.clone(),
             AssetId::new(asset_definition_id.clone(), account_id.clone()),
         ))
@@ -100,18 +101,29 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
 
     let expected_min_height = status_before_mint.blocks.saturating_add(1);
 
-    for peer in peers {
-        let client = peer.client();
-        let store_dir = peer.kura_store_dir().join("rbc_sessions");
-        let session = wait_for_rbc_delivery(
-            &rt,
-            &client,
-            store_dir,
-            expected_min_height,
-            network.sync_timeout(),
-        )
+    let rbc_timeout = network.sync_timeout();
+    let rbc_sessions = rt
+        .block_on(async {
+            let tasks = peers.iter().map(|peer| {
+                let client = peer.client();
+                let store_dir = peer.kura_store_dir().join("rbc_sessions");
+                let peer_id = peer.id().clone();
+                async move {
+                    let session = wait_for_rbc_delivery_inner(
+                        client,
+                        store_dir,
+                        expected_min_height,
+                        rbc_timeout,
+                    )
+                    .await?;
+                    Ok::<_, eyre::Report>((peer_id, session))
+                }
+            });
+            try_join_all(tasks).await
+        })
         .wrap_err("seven_peer_consistency RBC delivery timeout")?;
-        let peer_id = peer.id();
+
+    for (peer_id, session) in rbc_sessions {
         eyre::ensure!(
             get_bool(&session, "delivered") == Some(true),
             "peer {peer_id} missing RBC delivery at or above height {expected_min_height}"
@@ -182,19 +194,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn wait_for_rbc_delivery(
-    rt: &tokio::runtime::Runtime,
-    client: &Client,
-    store_dir: PathBuf,
-    min_height: u64,
-    timeout: Duration,
-) -> Result<Value> {
-    let client = client.clone();
-    rt.block_on(wait_for_rbc_delivery_inner(
-        client, store_dir, min_height, timeout,
-    ))
 }
 
 async fn wait_for_rbc_delivery_inner(

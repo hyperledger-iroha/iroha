@@ -27,14 +27,17 @@ async fn torii_bind_failure_results_in_non_zero_exit() -> eyre::Result<()> {
     let port = listener.local_addr()?.port();
 
     // build a network with Torii configured to the occupied port
-    let network = NetworkBuilder::new()
-        .with_config_layer(|c| {
+    let Some(network) = sandbox::build_network_or_skip(
+        NetworkBuilder::new().with_config_layer(|c| {
             c.write(
                 ["torii", "address"],
                 socket_addr!(127.0.0.1:port).to_string(),
             );
-        })
-        .build();
+        }),
+        stringify!(torii_bind_failure_results_in_non_zero_exit),
+    ) else {
+        return Ok(());
+    };
 
     let peer = network.peer();
     let mut events = peer.events();

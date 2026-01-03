@@ -5,39 +5,18 @@ use std::fs;
 use integration_tests::sandbox;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 
-fn skip_if_sandboxed(context: &str) -> bool {
-    match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
-        Ok(listener) => {
-            drop(listener);
-            false
-        }
-        Err(err) => {
-            if err.kind() == std::io::ErrorKind::PermissionDenied
-                || sandbox::sandbox_reason(&eyre::Report::new(err)).is_some()
-            {
-                eprintln!(
-                    "sandboxed network restriction detected while running {context}; skipping"
-                );
-                true
-            } else {
-                false
-            }
-        }
-    }
-}
-
 #[test]
 fn config_layer_overrides_concurrency_settings() {
-    if skip_if_sandboxed("config_layer_overrides_concurrency_settings") {
-        return;
-    }
-    let network = NetworkBuilder::new()
-        .with_config_layer(|c| {
+    let Some(network) = sandbox::build_network_or_skip(
+        NetworkBuilder::new().with_config_layer(|c| {
             c.write(["concurrency", "scheduler_min_threads"], 3i64)
                 .write(["concurrency", "scheduler_max_threads"], 7i64)
                 .write(["logger", "level"], "TRACE");
-        })
-        .build();
+        }),
+        stringify!(config_layer_overrides_concurrency_settings),
+    ) else {
+        return;
+    };
 
     let mut layers = network.config_layers();
 

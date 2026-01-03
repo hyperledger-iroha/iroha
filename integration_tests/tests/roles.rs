@@ -334,10 +334,14 @@ async fn grant_unexisting_role_in_genesis_fail() {
     let role_id = "UNEXISTING".parse::<RoleId>().unwrap();
     let grant_genesis_role = Grant::account_role(role_id, alice_id);
 
-    let network = NetworkBuilder::new()
-        .with_min_peers(4)
-        .with_genesis_instruction(grant_genesis_role)
-        .build();
+    let Some(network) = sandbox::build_network_or_skip(
+        NetworkBuilder::new()
+            .with_min_peers(4)
+            .with_genesis_instruction(grant_genesis_role),
+        stringify!(grant_unexisting_role_in_genesis_fail),
+    ) else {
+        return;
+    };
     let peer = network.peer();
 
     // Sanity-check stderr to ensure CI surfaces the expected genesis failure diagnostics (see #5423).

@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-rust@v1
         with:
-          rust-version: 1.91
+          rust-version: 1.92
 
       - name: Package payload
         run: |

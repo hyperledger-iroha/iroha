@@ -5,6 +5,7 @@ use std::{
     fs,
     io::Write as _,
     net::IpAddr,
+    num::NonZeroU32,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -460,6 +461,10 @@ pub struct OperatorAuth {
     credentials_path: PathBuf,
 }
 
+fn rate_per_minute_to_per_sec(rate: NonZeroU32) -> u32 {
+    rate.div_ceil(NonZeroU32::new(60).expect("non-zero")).get()
+}
+
 impl OperatorAuth {
     pub(crate) fn new(
         config: ToriiOperatorAuth,
@@ -487,9 +492,7 @@ impl OperatorAuth {
             .map(|token| token.trim().to_string())
             .filter(|token| !token.is_empty())
             .collect();
-        let rate_per_sec = config
-            .rate_per_minute
-            .map(|rate| rate.get().div_ceil(60).max(1));
+        let rate_per_sec = config.rate_per_minute.map(rate_per_minute_to_per_sec);
         let burst = config.burst.map(std::num::NonZeroU32::get);
         let limiter = limits::RateLimiter::new(rate_per_sec, burst);
         Ok(Self {
@@ -1818,6 +1821,22 @@ mod tests {
             HeaderValue::from_static("127.0.0.1"),
         );
         headers
+    }
+
+    #[test]
+    fn rate_per_minute_to_per_sec_rounds_up() {
+        assert_eq!(
+            rate_per_minute_to_per_sec(NonZeroU32::new(1).expect("non-zero")),
+            1
+        );
+        assert_eq!(
+            rate_per_minute_to_per_sec(NonZeroU32::new(60).expect("non-zero")),
+            1
+        );
+        assert_eq!(
+            rate_per_minute_to_per_sec(NonZeroU32::new(61).expect("non-zero")),
+            2
+        );
     }
 
     fn headers_with_operator_token(token: &str) -> HeaderMap {

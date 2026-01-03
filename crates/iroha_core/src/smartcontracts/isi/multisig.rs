@@ -824,6 +824,29 @@ mod tests {
     }
 
     #[test]
+    fn derived_multisig_helpers_match_expected_values() {
+        let domain_id: DomainId = "derived".parse().expect("valid domain");
+        let signer = KeyPair::random();
+        let signer_id = AccountId::new(domain_id.clone(), signer.public_key().clone());
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_id, 1)]),
+            quorum: NonZeroU16::new(1).expect("nonzero quorum"),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
+        };
+
+        assert_eq!(
+            derived_key_flag(),
+            Name::from_str("multisig/derived_key").expect("static key")
+        );
+
+        let derived_id = derived_multisig_account_id(&domain_id, &spec);
+        let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain_id.clone(), spec.clone()));
+        let derived = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
+        let expected_id = AccountId::new(domain_id, derived.public_key().clone());
+        assert_eq!(derived_id, expected_id);
+    }
+
+    #[test]
     fn initial_executor_runs_multisig_flow() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
