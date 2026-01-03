@@ -6642,6 +6642,63 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_chunk_accepts_minimum_size_when_chunk_max_zero() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.rbc_chunk_max_bytes = 0;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+
+    let (_max_chunks, max_bytes) = harness.actor.pending_rbc_caps();
+    assert_eq!(max_bytes, 1);
+
+    let height = 4;
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+    let key = (block_hash, height, view);
+
+    let payload = vec![0xAB];
+    let payload_hash = Hash::new(&payload);
+    let seeded =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1, 0).expect("session");
+    let chunk_root = seeded.chunk_root().expect("chunk root");
+    let session = RbcSession::new(1, Some(payload_hash), Some(chunk_root), 0).expect("session");
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+
+    let chunk = crate::sumeragi::consensus::RbcChunk {
+        block_hash,
+        height,
+        view,
+        epoch: 0,
+        idx: 0,
+        bytes: payload,
+    };
+    harness
+        .actor
+        .handle_rbc_chunk(chunk)
+        .expect("chunk handled");
+
+    let session = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert_eq!(session.received_chunks(), 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn duplicate_rbc_ready_is_ignored() {
     let mut harness = test_actor_harness(4).await;
     let key = session_key();

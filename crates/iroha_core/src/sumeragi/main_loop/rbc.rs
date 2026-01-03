@@ -1255,13 +1255,14 @@ impl Actor {
         ) {
             return Ok(());
         }
-        if chunk.bytes.len() > self.config.rbc_chunk_max_bytes {
+        let max_chunk_bytes = self.config.rbc_chunk_max_bytes.max(1);
+        if chunk.bytes.len() > max_chunk_bytes {
             warn!(
                 height = chunk.height,
                 view = chunk.view,
                 idx = chunk.idx,
                 chunk_len = chunk.bytes.len(),
-                max = self.config.rbc_chunk_max_bytes,
+                max = max_chunk_bytes,
                 "dropping RBC chunk that exceeds configured size cap"
             );
             return Ok(());

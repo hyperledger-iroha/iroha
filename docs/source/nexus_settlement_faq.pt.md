@@ -228,7 +228,7 @@ Salve o registro TWAP, o log do router, o snapshot de telemetria e o hash do led
 #### Lane hibrida/confidencial (`xor_dual_fund`)
 
 Lanes hibridas misturam buffers shielded com reservas XOR publicas. Cada settlement deve mostrar
-qual bucket forneceu o XOR e como a policy de haircut dividiu as taxas. O log do router expõe esses
+qual bucket forneceu o XOR e como a policy de haircut dividiu as taxas. O log do router expoe esses
 detalhes via o bloco de metadata dual-fund:
 
 ```text

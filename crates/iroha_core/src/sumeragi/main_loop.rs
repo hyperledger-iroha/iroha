@@ -5835,15 +5835,13 @@ impl Actor {
             .rbc_pending_max_chunks
             .min(hard_chunk_cap)
             .max(1);
-        let hard_byte_cap = self
-            .config
-            .rbc_chunk_max_bytes
-            .saturating_mul(hard_chunk_cap);
+        let chunk_max_bytes = self.config.rbc_chunk_max_bytes.max(1);
+        let hard_byte_cap = chunk_max_bytes.saturating_mul(hard_chunk_cap);
         let max_bytes = self
             .config
             .rbc_pending_max_bytes
             .min(hard_byte_cap)
-            .max(self.config.rbc_chunk_max_bytes);
+            .max(chunk_max_bytes);
         (max_chunks, max_bytes)
     }
 
