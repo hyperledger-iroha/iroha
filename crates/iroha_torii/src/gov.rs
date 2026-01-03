@@ -790,6 +790,7 @@ fn parse_private_key_literal(raw: &str) -> Result<iroha_crypto::PrivateKey, crat
         .map_err(|err| crate::routing::conversion_error(format!("invalid private_key: {err}")))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn submit_signed_instructions(
     chain_id: Arc<iroha_data_model::ChainId>,
     queue: Arc<iroha_core::queue::Queue>,
@@ -812,6 +813,7 @@ async fn submit_signed_instructions(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn maybe_submit_with_authority(
     chain_id: Arc<iroha_data_model::ChainId>,
     queue: Arc<iroha_core::queue::Queue>,
@@ -840,6 +842,7 @@ async fn maybe_submit_with_authority(
     Ok(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn maybe_submit_optional_signer(
     chain_id: Arc<iroha_data_model::ChainId>,
     queue: Arc<iroha_core::queue::Queue>,

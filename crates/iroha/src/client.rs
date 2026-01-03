@@ -4805,6 +4805,7 @@ impl Client {
         ]
     }
 
+    #[allow(clippy::too_many_lines)]
     fn listen_for_tx_confirmation(
         &self,
         init_sender: tokio::sync::oneshot::Sender<bool>,
@@ -5008,8 +5009,9 @@ impl Client {
         let outcome = Self::retry_transaction_committed(check, delay, retries)
             .await
             .wrap_err(context)?;
-        if let Some(result) = outcome {
-            match result {
+        outcome.map_or_else(
+            || Err(fallback_err),
+            |result| match result {
                 TxConfirmationStatus::Committed | TxConfirmationStatus::Applied => Ok(hash),
                 TxConfirmationStatus::Rejected(Some(reason)) => {
                     Err(tx_rejection_to_report(&reason))
@@ -5019,10 +5021,8 @@ impl Client {
                 TxConfirmationStatus::Queued | TxConfirmationStatus::Approved(_) => {
                     Err(eyre!("Transaction status not finalized"))
                 }
-            }
-        } else {
-            Err(fallback_err)
-        }
+            },
+        )
     }
 
     async fn retry_transaction_committed<F>(
@@ -7979,6 +7979,7 @@ where
     .await
 }
 
+#[allow(clippy::too_many_lines)]
 async fn listen_for_tx_confirmation_stream_with_status_check<S, F>(
     event_iterator: &mut S,
     hash: HashOf<SignedTransaction>,
@@ -8591,7 +8592,7 @@ mod tx_confirmation_stream_tests {
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([7_u8; Hash::LENGTH]));
         let queued_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
-            hash: hash.clone(),
+            hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::GLOBAL,
@@ -11712,14 +11713,12 @@ mod tests {
             membership_mismatch
                 .get("active_peers")
                 .and_then(Value::as_array)
-                .map(|peers| peers.is_empty())
-                .unwrap_or(false)
+                .is_some_and(Vec::is_empty)
         );
         assert!(
             membership_mismatch
                 .get("last_peer")
-                .map(|value| value.is_null())
-                .unwrap_or(false)
+                .is_some_and(Value::is_null)
         );
         assert_eq!(
             membership_mismatch
@@ -11740,14 +11739,12 @@ mod tests {
         assert!(
             membership_mismatch
                 .get("last_local_hash")
-                .map(|value| value.is_null())
-                .unwrap_or(false)
+                .is_some_and(Value::is_null)
         );
         assert!(
             membership_mismatch
                 .get("last_remote_hash")
-                .map(|value| value.is_null())
-                .unwrap_or(false)
+                .is_some_and(Value::is_null)
         );
         assert_eq!(
             membership_mismatch

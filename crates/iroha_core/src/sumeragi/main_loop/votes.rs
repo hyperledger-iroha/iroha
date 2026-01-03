@@ -221,18 +221,20 @@ impl Actor {
             );
             return true;
         }
-        if vote.height == lock.height && vote.block_hash != lock.subject_block_hash {
-            iroha_logger::debug!(
-                height = vote.height,
-                view = vote.view,
-                epoch = vote.epoch,
-                signer = vote.signer,
-                block_hash = %vote.block_hash,
-                locked_height = lock.height,
-                locked_hash = %lock.subject_block_hash,
-                "dropping precommit vote that conflicts with locked block"
-            );
-            return true;
+        if vote.height == lock.height {
+            if vote.block_hash != lock.subject_block_hash {
+                iroha_logger::debug!(
+                    height = vote.height,
+                    view = vote.view,
+                    epoch = vote.epoch,
+                    signer = vote.signer,
+                    block_hash = %vote.block_hash,
+                    locked_height = lock.height,
+                    locked_hash = %lock.subject_block_hash,
+                    "dropping precommit vote that conflicts with locked block"
+                );
+                return true;
+            }
         }
         if self.block_known_locally(vote.block_hash) {
             let candidate = crate::sumeragi::consensus::QcHeaderRef {
@@ -447,8 +449,7 @@ impl Actor {
             .kura
             .get_block_height_by_hash(block_hash)
             .and_then(|height| self.kura.get_block(height))
-            .map(|block| u64::from(block.header().view_change_index()))
-            .unwrap_or(view);
+            .map_or(view, |block| u64::from(block.header().view_change_index()));
         if height <= committed_height {
             if let Some(selection) = super::persisted_roster_for_block(
                 self.state.as_ref(),
@@ -507,6 +508,7 @@ impl Actor {
         active
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn handle_available_vote(
         &mut self,
         vote: crate::sumeragi::consensus::AvailableVote,

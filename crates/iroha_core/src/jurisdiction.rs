@@ -639,7 +639,7 @@ impl JdgAttestationGuard {
 
                     let signature = &attestation.signature.signatures[0];
                     let public_key_refs: Vec<&[u8]> =
-                        public_keys.iter().map(|pk| pk.as_slice()).collect();
+                        public_keys.iter().map(Vec::as_slice).collect();
                     iroha_crypto::bls_normal_verify_preaggregated_same_message(
                         hash_bytes,
                         signature.as_slice(),
@@ -1371,7 +1371,7 @@ mod tests {
                     .to_vec()
             })
             .collect();
-        let signature_refs: Vec<&[u8]> = signatures.iter().map(|sig| sig.as_slice()).collect();
+        let signature_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
         let aggregated =
             iroha_crypto::bls_normal_aggregate_signatures(&signature_refs).expect("aggregate");
         attestation.signature.signatures = vec![aggregated];

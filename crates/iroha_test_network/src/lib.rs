@@ -3304,6 +3304,21 @@ pub enum PeerLifecycleEvent {
     BlockApplied { height: u64 },
 }
 
+async fn wait_for_start_event(
+    mut rx: broadcast::Receiver<PeerLifecycleEvent>,
+) -> Option<PeerLifecycleEvent> {
+    loop {
+        match rx.recv().await {
+            Ok(event @ PeerLifecycleEvent::ServerStarted)
+            | Ok(event @ PeerLifecycleEvent::Terminated { .. })
+            | Ok(event @ PeerLifecycleEvent::Killed) => return Some(event),
+            Ok(_) => continue,
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => return None,
+        }
+    }
+}
+
 /// Controls execution of `irohad` child process.
 ///
 /// While exists, allocates socket ports and a temporary directory (not cleared automatically).
@@ -3933,26 +3948,32 @@ impl NetworkPeer {
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&GenesisBlock>,
     ) -> Result<()> {
-        let failure = async move {
-            self.once(|e| matches!(e, PeerLifecycleEvent::Terminated { .. }))
-                .await;
-            let err = if let Some(preview) = self.stderr_preview() {
-                eyre!("Peer exited unexpectedly; stderr preview:\n{preview}")
-            } else {
-                eyre!("Peer exited unexpectedly")
-            };
-            Err::<(), color_eyre::Report>(err)
-        };
-        let success = async move {
-            self.start(config_layers, genesis).await?;
-            self.once(|e| matches!(e, PeerLifecycleEvent::ServerStarted))
-                .await;
-            Ok::<(), color_eyre::Report>(())
-        };
-
-        tokio::select! {
-            res = failure => res,
-            res = success => res,
+        let events = self.events();
+        self.start(config_layers, genesis).await?;
+        match wait_for_start_event(events).await {
+            Some(PeerLifecycleEvent::ServerStarted) => Ok(()),
+            Some(PeerLifecycleEvent::Terminated { status }) => {
+                let err = if let Some(preview) = self.stderr_preview() {
+                    eyre!(
+                        "Peer exited unexpectedly ({status:?}); stderr preview:\n{preview}"
+                    )
+                } else {
+                    eyre!("Peer exited unexpectedly ({status:?})")
+                };
+                Err(err)
+            }
+            Some(PeerLifecycleEvent::Killed) => {
+                let err = if let Some(preview) = self.stderr_preview() {
+                    eyre!("Peer was killed before startup; stderr preview:\n{preview}")
+                } else {
+                    eyre!("Peer was killed before startup")
+                };
+                Err(err)
+            }
+            None => Err(eyre!("Peer event channel closed before startup")),
+            Some(PeerLifecycleEvent::Spawned | PeerLifecycleEvent::BlockApplied { .. }) => {
+                unreachable!("wait_for_start_event filters out intermediate lifecycle events")
+            }
         }
     }
 

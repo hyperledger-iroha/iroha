@@ -244,6 +244,7 @@ impl Actor {
         progress
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn reschedule_pending_quorum_block(
         &mut self,
         mut pending: PendingBlock,
@@ -354,6 +355,7 @@ impl Actor {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn rebroadcast_pending_block_updates(
         &mut self,
         pending: &PendingBlock,

@@ -148,7 +148,7 @@
 # init_mode = "strict"
 # store_dir = "./storage"
 # blocks_in_memory = 1024
-# block_sync_roster_retention = 512   # Certified commit-roster snapshots retained for block-sync recovery
+# block_sync_roster_retention = 7200  # Certified commit-roster snapshots retained for block-sync recovery
 # roster_sidecar_retention = 512      # Roster sidecars retained in pipeline/roster_sidecars.* before GC
 
 [logger]

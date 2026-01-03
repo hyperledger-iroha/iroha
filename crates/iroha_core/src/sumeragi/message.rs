@@ -19,8 +19,8 @@ pub enum BlockMessage {
     BlockSyncUpdate(#[skip_try_from] BlockSyncUpdate),
     /// Broadcast periodically or at startup to pin consensus parameters across peers.
     ///
-    /// Nodes verify that their local configuration matches advertised values. A mismatch
-    /// is logged and flagged locally; consensus rules remain unchanged.
+    /// Nodes verify that their local on-chain collector parameters match advertised values.
+    /// A mismatch is logged and flagged locally; consensus rules remain unchanged.
     ConsensusParams(#[skip_try_from] ConsensusParamsAdvert),
     /// Data Availability acknowledgement vote (scaffold path).
     AvailabilityVote(#[skip_try_from] super::consensus::AvailableVote),
@@ -193,6 +193,10 @@ pub struct BlockSyncUpdate {
     pub commit_certificate: Option<iroha_data_model::consensus::CommitCertificate>,
     /// Optional validator checkpoint associated with the block height.
     pub validator_checkpoint: Option<iroha_data_model::consensus::ValidatorSetCheckpoint>,
+    /// Optional stake snapshot aligned to the validator set.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
 }
 
 impl From<&SignedBlock> for BlockSyncUpdate {
@@ -204,6 +208,7 @@ impl From<&SignedBlock> for BlockSyncUpdate {
             precommit_votes: Vec::new(),
             commit_certificate: None,
             validator_checkpoint: None,
+            stake_snapshot: None,
         }
     }
 }

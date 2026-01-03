@@ -791,7 +791,7 @@ fn minimal_config_snapshot() {
                     },
                 },
                 blocks_in_memory: 1024,
-                block_sync_roster_retention: 512,
+                block_sync_roster_retention: 7200,
                 roster_sidecar_retention: 512,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity: 256,

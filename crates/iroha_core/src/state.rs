@@ -150,7 +150,7 @@ use crate::{
         pin_store::DaPinStore,
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
-    sumeragi::status,
+    sumeragi::{stake_snapshot::CommitStakeSnapshot, status},
 };
 
 mod tiered;
@@ -4137,7 +4137,7 @@ pub struct StateBlock<'state> {
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
     pub chain_id: iroha_data_model::ChainId,
-    /// NPoS PRF seed derived from the pre-block world state at this height.
+    /// `NPoS` PRF seed derived from the pre-block world state at this height.
     pre_block_npos_seed: [u8; 32],
     /// Accumulated settlement receipts for transactions in this block.
     settlement_accumulator: crate::settlement::SettlementAccumulator,
@@ -8493,6 +8493,14 @@ impl<'world> WorldBlock<'world> {
         &mut self.assets
     }
 
+    #[cfg(any(test, feature = "app_api"))]
+    /// Mutable VRF epoch storage accessor used by tests and API scaffolding.
+    pub fn vrf_epochs_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
+        &mut self.vrf_epochs
+    }
+
     #[cfg(any(test, feature = "telemetry"))]
     /// Mutable execution-root storage accessor used by telemetry/router tests.
     pub fn exec_roots_mut_for_testing(
@@ -10199,13 +10207,18 @@ impl State {
         &self,
         commit_certificate: &CommitCertificate,
         checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
         let path = self.commit_roster_journal_path();
         if path.as_os_str().is_empty() {
             return;
         }
         let mut journal = self.commit_roster_journal.write();
-        journal.upsert(commit_certificate.clone(), checkpoint.clone());
+        journal.upsert(
+            commit_certificate.clone(),
+            checkpoint.clone(),
+            stake_snapshot,
+        );
         if let Err(err) = journal.persist() {
             warn!(
                 ?err,
@@ -10235,16 +10248,28 @@ impl State {
         &self,
         commit_certificate: &CommitCertificate,
         checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
         status::record_commit_certificate(commit_certificate.clone());
         status::record_validator_checkpoint(checkpoint.clone());
-        self.persist_commit_roster_journal(commit_certificate, checkpoint);
-        let sidecar = crate::kura::RosterSidecar::new_v1(
-            commit_certificate.height,
-            commit_certificate.block_hash,
-            Some(commit_certificate.clone()),
-            Some(checkpoint.clone()),
-        );
+        let sidecar_snapshot = stake_snapshot.clone();
+        self.persist_commit_roster_journal(commit_certificate, checkpoint, stake_snapshot);
+        let sidecar = if sidecar_snapshot.is_some() {
+            crate::kura::RosterSidecar::new_v2(
+                commit_certificate.height,
+                commit_certificate.block_hash,
+                Some(commit_certificate.clone()),
+                Some(checkpoint.clone()),
+                sidecar_snapshot,
+            )
+        } else {
+            crate::kura::RosterSidecar::new_v1(
+                commit_certificate.height,
+                commit_certificate.block_hash,
+                Some(commit_certificate.clone()),
+                Some(checkpoint.clone()),
+            )
+        };
         self.kura.write_roster_metadata(&sidecar);
     }
 
@@ -12076,18 +12101,18 @@ impl State {
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
-    ) -> Result<Vec<AccountId>, LaneRelayError> {
+    ) -> Vec<AccountId> {
         if let Some(mut validators) = manifest_registry.lane_validators(lane_id) {
             validators.sort();
             validators.dedup();
-            return Ok(validators);
+            return validators;
         }
 
         if !matches!(
             validator_mode,
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected
         ) {
-            return Ok(Vec::new());
+            return Vec::new();
         }
 
         let mut candidates: Vec<(AccountId, Numeric)> = self
@@ -12117,11 +12142,11 @@ impl State {
         let max = usize::try_from(nexus.staking.max_validators.get())
             .unwrap_or(usize::MAX)
             .min(candidates.len());
-        Ok(candidates
+        candidates
             .into_iter()
             .take(max)
             .map(|(account, _)| account)
-            .collect())
+            .collect()
     }
 
     fn lane_relay_qc_public_keys(
@@ -12204,7 +12229,7 @@ impl State {
             derived_mode_tag,
             &vote,
         );
-        let key_refs: Vec<&[u8]> = public_keys.iter().map(|key| key.as_slice()).collect();
+        let key_refs: Vec<&[u8]> = public_keys.iter().map(Vec::as_slice).collect();
         iroha_crypto::bls_normal_verify_preaggregated_same_message(
             &preimage,
             &qc.bls_aggregate_signature,
@@ -12218,6 +12243,7 @@ impl State {
     ///
     /// # Errors
     /// Returns a [`LaneRelayError`] when the envelope fails verification.
+    #[allow(clippy::too_many_lines)]
     pub fn record_lane_relay(
         &self,
         envelope: &LaneRelayEnvelope,
@@ -12270,7 +12296,7 @@ impl State {
             validator_mode,
             manifest_registry.as_ref(),
             &nexus,
-        )?;
+        );
         let min_quorum = crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
         if validator_pool.len() < committee_size {
             #[cfg(feature = "telemetry")]
@@ -13841,6 +13867,8 @@ impl<'state> StateBlock<'state> {
         _block_height: u64,
         _lag_blocks: i64,
     ) {
+        #[cfg(not(feature = "telemetry"))]
+        let _ = self;
         #[cfg(feature = "telemetry")]
         {
             self.telemetry.record_da_shard_cursor_event(
@@ -13854,6 +13882,8 @@ impl<'state> StateBlock<'state> {
     }
 
     fn record_da_shard_cursor_lag_ok(&self, _lane_id: LaneId, _shard_id: u32) {
+        #[cfg(not(feature = "telemetry"))]
+        let _ = self;
         #[cfg(feature = "telemetry")]
         {
             record_da_shard_cursor_lag(self.telemetry, _lane_id.as_u32(), _shard_id, 0);
@@ -14288,6 +14318,8 @@ impl<'state> StateBlock<'state> {
             let validator_set_hash = HashOf::new(&checkpoint_topology);
             let block_height = block.as_ref().header().height().get();
             let block_hash = block.as_ref().hash();
+            let stake_snapshot =
+                CommitStakeSnapshot::from_roster(self.world(), &checkpoint_topology);
             let checkpoint = ValidatorSetCheckpoint::new(
                 block_height,
                 block_hash,
@@ -14308,7 +14340,7 @@ impl<'state> StateBlock<'state> {
                 signatures,
             };
             self.state_ref
-                .record_commit_roster(&commit_cert, &checkpoint);
+                .record_commit_roster(&commit_cert, &checkpoint, stake_snapshot);
         }
 
         self.world.external_event_buf.mutate_vec(|events| {
@@ -15292,6 +15324,7 @@ mod replay_validation_tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn replay_rotates_topology_for_npos_prf_leader() {
         use std::borrow::Cow;
 
@@ -15326,9 +15359,11 @@ mod replay_validation_tests {
         let leader_index = topology.leader_index_prf(seed, height, view);
         assert_ne!(leader_index, 0, "leader rotation must be exercised");
 
-        let mut npos_params = SumeragiNposParameters::default();
-        npos_params.epoch_seed = seed;
-        npos_params.epoch_length_blocks = 10;
+        let npos_params = SumeragiNposParameters {
+            epoch_seed: seed,
+            epoch_length_blocks: 10,
+            ..Default::default()
+        };
 
         let pops = vec![
             GenesisPeerPop {
@@ -15407,6 +15442,7 @@ mod replay_validation_tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn replay_uses_commit_roster_journal_for_signature_order() {
         use std::borrow::Cow;
 
@@ -15536,7 +15572,7 @@ mod replay_validation_tests {
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-        state.record_commit_roster(&commit_cert, &checkpoint);
+        state.record_commit_roster(&commit_cert, &checkpoint, None);
 
         let replay_world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
@@ -18463,6 +18499,7 @@ pub(crate) mod deserialize {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn default_governance() -> iroha_config::parameters::actual::Governance {
         iroha_config::parameters::actual::Governance {
             vk_ballot: None,
@@ -18858,6 +18895,38 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         State::new_for_testing(world, kura, query_handle)
+    }
+
+    #[test]
+    fn vrf_epochs_mut_for_testing_inserts_record() {
+        let world = World::default();
+        let record = iroha_data_model::consensus::VrfEpochRecord {
+            epoch: 0,
+            seed: [0_u8; 32],
+            epoch_length: 1,
+            commit_deadline_offset: 0,
+            reveal_deadline_offset: 0,
+            roster_len: 0,
+            finalized: false,
+            updated_at_height: 0,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+        {
+            let mut block = world.block();
+            block
+                .vrf_epochs_mut_for_testing()
+                .insert(record.epoch, record);
+            block.commit();
+        }
+        let view = world.view();
+        let stored = view.vrf_epochs().get(&0).expect("vrf epoch record");
+        assert_eq!(stored.epoch, 0);
     }
 
     fn assert_world_snapshot(snapshot: &impl WorldStateSnapshot) {
@@ -19484,7 +19553,7 @@ mod tests {
             bls_sig: Vec::new(),
         };
         let preimage = crate::sumeragi::consensus::bls_preimage::exec_vote(
-            &*super::DEFAULT_TEST_CHAIN_ID,
+            &super::DEFAULT_TEST_CHAIN_ID,
             crate::sumeragi::consensus::PERMISSIONED_TAG,
             &vote,
         );
@@ -19496,7 +19565,7 @@ mod tests {
                     .to_vec()
             })
             .collect();
-        let sig_refs: Vec<&[u8]> = signatures.iter().map(|sig| sig.as_slice()).collect();
+        let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
         let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
             .expect("aggregate execution QC signatures");
         ExecutionQcRecord {
@@ -19830,15 +19899,17 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
-        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..Default::default()
+        };
         state.set_nexus(nexus).expect("apply nexus config");
         install_lane_manifest_registry(
             &state,
@@ -19859,6 +19930,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn record_lane_relay_accepts_emergency_override_under_quorum() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -19888,16 +19960,21 @@ mod tests {
             [],
         );
         let mut state = State::new_for_testing(world, kura, query_handle);
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
-        nexus.lane_relay_emergency.enabled = true;
-        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_relay_emergency: iroha_config::parameters::actual::LaneRelayEmergency {
+                enabled: true,
+                ..Default::default()
+            },
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..Default::default()
+        };
         state.set_nexus(nexus).expect("apply nexus config");
         install_lane_manifest_registry(
             &state,
@@ -20006,6 +20083,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn record_lane_relay_accepts_emergency_override_on_expiry_height() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -20026,16 +20104,21 @@ mod tests {
             [],
         );
         let mut state = State::new_for_testing(world, kura, query_handle);
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
-        nexus.lane_relay_emergency.enabled = true;
-        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_relay_emergency: iroha_config::parameters::actual::LaneRelayEmergency {
+                enabled: true,
+                ..Default::default()
+            },
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..Default::default()
+        };
         state.set_nexus(nexus).expect("apply nexus config");
         install_lane_manifest_registry(
             &state,
@@ -20132,16 +20215,21 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
-        nexus.lane_relay_emergency.enabled = true;
-        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_relay_emergency: iroha_config::parameters::actual::LaneRelayEmergency {
+                enabled: true,
+                ..Default::default()
+            },
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..Default::default()
+        };
         state.set_nexus(nexus).expect("apply nexus config");
 
         let (base_1, _) = bls_account_in("validators");
@@ -20182,15 +20270,17 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
-        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..Default::default()
+        };
         state.set_nexus(nexus).expect("apply nexus config");
 
         let (base_1, _) = bls_account_in("validators");
@@ -20231,16 +20321,21 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
-        nexus.lane_relay_emergency.enabled = true;
-        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_relay_emergency: iroha_config::parameters::actual::LaneRelayEmergency {
+                enabled: true,
+                ..Default::default()
+            },
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..Default::default()
+        };
         state.set_nexus(nexus).expect("apply nexus config");
 
         let (base_1, _) = bls_account_in("validators");
@@ -20279,16 +20374,21 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
-        nexus.lane_relay_emergency.enabled = true;
-        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
-            description: None,
-            fault_tolerance: 1,
-        }])
-        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_relay_emergency: iroha_config::parameters::actual::LaneRelayEmergency {
+                enabled: true,
+                ..Default::default()
+            },
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..Default::default()
+        };
         state.set_nexus(nexus).expect("apply nexus config");
 
         let (base_1, _) = bls_account_in("validators");
@@ -20392,9 +20492,12 @@ mod tests {
         let validator_mode = nexus
             .staking
             .validator_mode(LaneId::SINGLE, &nexus.lane_catalog);
-        let pool = state
-            .lane_relay_validator_pool(LaneId::SINGLE, validator_mode, &manifest_registry, &nexus)
-            .expect("validator pool");
+        let pool = state.lane_relay_validator_pool(
+            LaneId::SINGLE,
+            validator_mode,
+            &manifest_registry,
+            &nexus,
+        );
         assert_eq!(pool, vec![validator]);
     }
 
@@ -21886,7 +21989,7 @@ mod tests {
         );
         {
             let mut journal = state.commit_roster_journal.write();
-            journal.upsert(commit_cert.clone(), checkpoint.clone());
+            journal.upsert(commit_cert.clone(), checkpoint.clone(), None);
         }
 
         state.restore_commit_roster_history();
@@ -21998,7 +22101,7 @@ mod tests {
             None,
         );
 
-        state.record_commit_roster(&commit_cert, &checkpoint);
+        state.record_commit_roster(&commit_cert, &checkpoint, None);
 
         let sidecar = kura
             .read_roster_metadata(commit_cert.height)
@@ -26088,10 +26191,7 @@ mod tests {
             let signature = Signature::new(keypairs[*idx].private_key(), message_digest.as_ref());
             signature_payloads.push(signature.payload().to_vec());
         }
-        let signature_refs: Vec<&[u8]> = signature_payloads
-            .iter()
-            .map(|payload| payload.as_slice())
-            .collect();
+        let signature_refs: Vec<&[u8]> = signature_payloads.iter().map(Vec::as_slice).collect();
         let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
             .expect("aggregate merge signatures");
         let signers_bitmap = merge_signers_bitmap(&signers_set, keypairs.len());

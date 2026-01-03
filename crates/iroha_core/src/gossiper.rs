@@ -57,14 +57,14 @@ const DROP_REASON_NO_RESTRICTED_TARGETS: &str = "no_restricted_targets";
 const DROP_REASON_PUBLIC_OVERLAY_REFUSED: &str = "restricted_public_overlay_refused";
 const OUTCOME_PUBLIC_OVERLAY_FORWARD: &str = "restricted_public_overlay_forward";
 const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
-const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055424C49435F00;
-const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245535452494354;
+const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
+const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
 
 fn splitmix64(mut state: u64) -> u64 {
-    state = state.wrapping_add(0x9E3779B97F4A7C15);
+    state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
 }
 

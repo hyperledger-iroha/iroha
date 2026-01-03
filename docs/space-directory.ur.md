@@ -82,21 +82,57 @@ deny دونوں entries شامل ہیں:
 
 ```json
 {
-  "version": 1,
-  "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+  "version": {
+    "state": null,
+    "version": "V1"
+  },
+  "uaid": [
+    "hash:0F4D86B20839A8DDBE8A1A3D21CF1C502D49F3F79F0FA1CD88D5F24C56C0AB11#40DE"
+  ],
   "dataspace": 11,
   "issued_ms": 1762723200000,
   "activation_epoch": 4097,
+  "expiry_epoch": 4600,
   "entries": [
     {
       "scope": {
         "dataspace": 11,
-        "program": "cbdc.transfer",
+        "program": [
+          "cbdc.transfer"
+        ],
         "method": "transfer",
-        "asset": "CBDC#centralbank"
+        "asset": "CBDC#centralbank",
+        "role": {
+          "details": null,
+          "role": "Initiator"
+        }
       },
       "effect": {
-        "Allow": { "max_amount": "500000000", "window": "PerDay" }
+        "decision": "Allow",
+        "details": {
+          "max_amount": "500000000",
+          "window": {
+            "details": null,
+            "window": "PerDay"
+          }
+        }
+      }
+    },
+    {
+      "scope": {
+        "dataspace": 11,
+        "program": [
+          "cbdc.kit"
+        ],
+        "method": "withdraw",
+        "asset": null,
+        "role": null
+      },
+      "effect": {
+        "decision": "Deny",
+        "details": {
+          "reason": "Withdrawals disabled for this UAID."
+        }
       }
     }
   ]

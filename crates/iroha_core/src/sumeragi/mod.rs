@@ -14,8 +14,8 @@ use iroha_config::parameters::actual::{
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
-    ChainId, block::BlockHeader, merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope,
-    parameter::system::SumeragiConsensusMode, peer::PeerId,
+    ChainId, block::BlockHeader, consensus::VrfEpochRecord, merge::MergeCommitteeSignature,
+    nexus::LaneRelayEnvelope, parameter::system::SumeragiConsensusMode, peer::PeerId,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
@@ -124,7 +124,7 @@ pub struct NposCollectorConfig {
     pub redundant_send_r: u8,
 }
 
-/// Snapshot of VRF epoch scheduling parameters for NPoS.
+/// Snapshot of VRF epoch scheduling parameters for `NPoS`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NposEpochParams {
     /// Epoch length in blocks.
@@ -154,21 +154,22 @@ pub(crate) fn load_npos_epoch_params(
     view: &StateView<'_>,
     config: &SumeragiConfig,
 ) -> NposEpochParams {
-    if let Some(params) = view.world.sumeragi_npos_parameters() {
-        let commit_window = params.vrf_commit_window_blocks();
-        let reveal_window = params.vrf_reveal_window_blocks();
-        NposEpochParams {
-            epoch_length_blocks: params.epoch_length_blocks(),
-            commit_deadline_offset: commit_window,
-            reveal_deadline_offset: commit_window.saturating_add(reveal_window),
-        }
-    } else {
+    view.world.sumeragi_npos_parameters().map_or(
         NposEpochParams {
             epoch_length_blocks: config.epoch_length_blocks,
             commit_deadline_offset: config.vrf_commit_deadline_offset,
             reveal_deadline_offset: config.vrf_reveal_deadline_offset,
-        }
-    }
+        },
+        |params| {
+            let commit_window = params.vrf_commit_window_blocks();
+            let reveal_window = params.vrf_reveal_window_blocks();
+            NposEpochParams {
+                epoch_length_blocks: params.epoch_length_blocks(),
+                commit_deadline_offset: commit_window,
+                reveal_deadline_offset: commit_window.saturating_add(reveal_window),
+            }
+        },
+    )
 }
 
 fn latest_epoch_seed(view: &StateView<'_>) -> [u8; 32] {
@@ -193,12 +194,33 @@ fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) 
         })
 }
 
-/// Resolve the NPoS PRF seed for the epoch containing `height`.
+fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
+    use iroha_crypto::blake2::{Blake2b512, Digest as _};
+
+    let mut h = Blake2b512::new();
+    iroha_crypto::blake2::digest::Update::update(&mut h, &record.seed);
+    let mut reveals: Vec<(u32, [u8; 32])> = record
+        .participants
+        .iter()
+        .filter_map(|p| p.reveal.map(|reveal| (p.signer, reveal)))
+        .collect();
+    reveals.sort_by_key(|(signer, _)| *signer);
+    for (signer, reveal) in reveals {
+        iroha_crypto::blake2::digest::Update::update(&mut h, &signer.to_be_bytes());
+        iroha_crypto::blake2::digest::Update::update(&mut h, &reveal);
+    }
+    let digest = iroha_crypto::blake2::Digest::finalize(h);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest[..32]);
+    out
+}
+
+/// Resolve the `NPoS` PRF seed for the epoch containing `height`.
 pub fn npos_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
     npos_seed_for_height_from_world(&view.world, view.chain_id(), height)
 }
 
-/// Resolve the NPoS PRF seed for the epoch containing `height` from any world snapshot.
+/// Resolve the `NPoS` PRF seed for the epoch containing `height` from any world snapshot.
 pub(crate) fn npos_seed_for_height_from_world(
     world: &impl WorldReadOnly,
     chain_id: &ChainId,
@@ -210,6 +232,13 @@ pub(crate) fn npos_seed_for_height_from_world(
             let epoch = (height - 1) / epoch_len;
             if let Some(record) = world.vrf_epochs().get(&epoch) {
                 return record.seed;
+            }
+            if let Some((_last_epoch, record)) = world.vrf_epochs().iter().last() {
+                if record.finalized && epoch == record.epoch.saturating_add(1) {
+                    // Crash recovery: derive the next-epoch seed if the in-progress snapshot
+                    // was not persisted before restart.
+                    return next_epoch_seed_from_record(record);
+                }
             }
         }
         return params.epoch_seed();
@@ -1035,12 +1064,12 @@ mod tests {
         };
         cache.insert(block_key, now);
 
-        for idx in 0..3 {
+        for idx in 0_u8..3 {
             cache.insert(
                 BlockPayloadDedupKey::Proposal {
-                    height: idx + 2,
+                    height: u64::from(idx) + 2,
                     view: 0,
-                    payload_hash: Hash::prehashed([idx as u8; 32]),
+                    payload_hash: Hash::prehashed([idx; 32]),
                 },
                 now,
             );
@@ -3475,6 +3504,7 @@ pub mod rbc_sampling;
 pub mod rbc_status;
 pub mod rbc_store;
 pub(crate) mod smt;
+pub(crate) mod stake_snapshot;
 pub mod status;
 pub mod view_change;
 pub(crate) mod witness;
@@ -3702,10 +3732,11 @@ where
     fn insert(&mut self, key: T, now: Instant) -> DedupInsertOutcome {
         let evicted_expired = self.evict_expired(now);
         if let Some(mut entry) = self.entries.remove(&key) {
-            let mut order = entry.order;
-            if self.lru.remove(&(entry.order, key.clone())) {
-                order = self.next_order();
-            }
+            let order = if self.lru.remove(&(entry.order, key.clone())) {
+                self.next_order()
+            } else {
+                entry.order
+            };
             entry.order = order;
             entry.last_seen = now;
             self.entries.insert(key.clone(), entry);
@@ -3858,6 +3889,7 @@ impl BlockPayloadDedupCache {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum LaneRelayMessage {
     Envelope(LaneRelayEnvelope),
     MergeSignature(MergeCommitteeSignature),
@@ -4243,54 +4275,42 @@ impl SumeragiHandle {
                     status::WorkerQueueKind::Votes,
                 )
             }
-            BlockMessage::ExecVote(vote) => {
-                enqueue_blocking(
-                    &self.votes,
-                    BlockMessage::ExecVote(vote),
-                    "ExecVote",
-                    status::WorkerQueueKind::Votes,
-                )
-            }
-            BlockMessage::ExecutionQC(qc) => {
-                enqueue_blocking(
-                    &self.votes,
-                    BlockMessage::ExecutionQC(qc),
-                    "ExecutionQC",
-                    status::WorkerQueueKind::Votes,
-                )
-            }
-            BlockMessage::PrecommitQC(qc) => {
-                enqueue_blocking(
-                    &self.votes,
-                    BlockMessage::PrecommitQC(qc),
-                    "VoteLike",
-                    status::WorkerQueueKind::Votes,
-                )
-            }
-            BlockMessage::PrevoteQC(qc) => {
-                enqueue_blocking(
-                    &self.votes,
-                    BlockMessage::PrevoteQC(qc),
-                    "VoteLike",
-                    status::WorkerQueueKind::Votes,
-                )
-            }
-            BlockMessage::AvailabilityQC(qc) => {
-                enqueue_blocking(
-                    &self.votes,
-                    BlockMessage::AvailabilityQC(qc),
-                    "VoteLike",
-                    status::WorkerQueueKind::Votes,
-                )
-            }
-            BlockMessage::ProposalHint(hint) => {
-                enqueue_blocking(
-                    &self.votes,
-                    BlockMessage::ProposalHint(hint),
-                    "ProposalHint",
-                    status::WorkerQueueKind::Votes,
-                )
-            }
+            BlockMessage::ExecVote(vote) => enqueue_blocking(
+                &self.votes,
+                BlockMessage::ExecVote(vote),
+                "ExecVote",
+                status::WorkerQueueKind::Votes,
+            ),
+            BlockMessage::ExecutionQC(qc) => enqueue_blocking(
+                &self.votes,
+                BlockMessage::ExecutionQC(qc),
+                "ExecutionQC",
+                status::WorkerQueueKind::Votes,
+            ),
+            BlockMessage::PrecommitQC(qc) => enqueue_blocking(
+                &self.votes,
+                BlockMessage::PrecommitQC(qc),
+                "VoteLike",
+                status::WorkerQueueKind::Votes,
+            ),
+            BlockMessage::PrevoteQC(qc) => enqueue_blocking(
+                &self.votes,
+                BlockMessage::PrevoteQC(qc),
+                "VoteLike",
+                status::WorkerQueueKind::Votes,
+            ),
+            BlockMessage::AvailabilityQC(qc) => enqueue_blocking(
+                &self.votes,
+                BlockMessage::AvailabilityQC(qc),
+                "VoteLike",
+                status::WorkerQueueKind::Votes,
+            ),
+            BlockMessage::ProposalHint(hint) => enqueue_blocking(
+                &self.votes,
+                BlockMessage::ProposalHint(hint),
+                "ProposalHint",
+                status::WorkerQueueKind::Votes,
+            ),
             BlockMessage::RbcReady(message) => {
                 let height = message.height;
                 let view = message.view;
@@ -4411,30 +4431,24 @@ impl SumeragiHandle {
                     status::WorkerQueueKind::Blocks,
                 )
             }
-            BlockMessage::RbcInit(init) => {
-                enqueue_blocking(
-                    &self.rbc_chunks,
-                    BlockMessage::RbcInit(init),
-                    "RbcChunk",
-                    status::WorkerQueueKind::RbcChunks,
-                )
-            }
-            BlockMessage::RbcChunk(chunk) => {
-                enqueue_blocking(
-                    &self.rbc_chunks,
-                    BlockMessage::RbcChunk(chunk),
-                    "RbcChunk",
-                    status::WorkerQueueKind::RbcChunks,
-                )
-            }
-            other => {
-                enqueue_blocking(
-                    &self.block,
-                    other,
-                    "BlockMessage",
-                    status::WorkerQueueKind::Blocks,
-                )
-            }
+            BlockMessage::RbcInit(init) => enqueue_blocking(
+                &self.rbc_chunks,
+                BlockMessage::RbcInit(init),
+                "RbcChunk",
+                status::WorkerQueueKind::RbcChunks,
+            ),
+            BlockMessage::RbcChunk(chunk) => enqueue_blocking(
+                &self.rbc_chunks,
+                BlockMessage::RbcChunk(chunk),
+                "RbcChunk",
+                status::WorkerQueueKind::RbcChunks,
+            ),
+            other => enqueue_blocking(
+                &self.block,
+                other,
+                "BlockMessage",
+                status::WorkerQueueKind::Blocks,
+            ),
         }
     }
 
@@ -4722,7 +4736,7 @@ pub struct SumeragiStartArgs {
     pub genesis_network: GenesisWithPubKey,
     /// Current committed block count.
     pub block_count: BlockCount,
-    /// Maximum fanout for block sync updates, availability votes, and NEW_VIEW gossip.
+    /// Maximum fanout for block sync updates, availability votes, and `NEW_VIEW` gossip.
     pub block_sync_gossip_limit: usize,
     #[cfg(feature = "telemetry")]
     /// Telemetry sink describing enabled metrics/logging endpoints.
@@ -4877,7 +4891,7 @@ struct SumeragiWorker {
 }
 
 /// Skip ticks when message queues are saturated or pending, while enforcing a periodic tick cadence.
-#[allow(clippy::fn_params_excessive_bools)]
+#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
 fn should_run_tick(
     now: Instant,
     last_tick: Instant,
@@ -5125,6 +5139,7 @@ struct WorkerMailbox<'a> {
 }
 
 impl<'a> WorkerMailbox<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         state: &'a mut WorkerMailboxState,
         vote_rx: &'a mpsc::Receiver<BlockMessage>,
@@ -5203,7 +5218,7 @@ impl<'a> WorkerMailbox<'a> {
     }
 
     fn any_pending(&self) -> bool {
-        self.state.slots.iter().any(|slot| slot.is_some())
+        self.state.slots.iter().any(Option::is_some)
     }
 }
 

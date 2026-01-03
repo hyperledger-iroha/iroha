@@ -62,6 +62,7 @@ pub struct NetworkTimeStatus {
 }
 
 /// Health evaluation flags for the current NTS snapshot.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug)]
 pub struct NtsHealth {
     /// Whether the minimum sample threshold has been met.
@@ -222,8 +223,7 @@ fn params_snapshot_store() -> &'static RwLock<ParamsSnapshot> {
 fn params_snapshot() -> ParamsSnapshot {
     params_snapshot_store()
         .read()
-        .map(|guard| *guard)
-        .unwrap_or_else(|err| *err.into_inner())
+        .map_or_else(|err| *err.into_inner(), |guard| *guard)
 }
 
 /// Configure the NTS admission policy snapshot used before the service starts.

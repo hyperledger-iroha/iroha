@@ -866,6 +866,19 @@ impl Root {
         let telemetry_integrity = self.telemetry_integrity.parse(&mut emitter);
 
         let sumeragi = self.sumeragi.parse(&mut emitter);
+        if let Some(ref sumeragi) = sumeragi {
+            let roster_retention =
+                u64::try_from(kura.block_sync_roster_retention.get()).unwrap_or(u64::MAX);
+            if sumeragi.npos.reconfig.evidence_horizon_blocks > roster_retention {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "kura.block_sync_roster_retention ({}) must be >= sumeragi.npos.reconfig.evidence_horizon_blocks ({})",
+                        kura.block_sync_roster_retention.get(),
+                        sumeragi.npos.reconfig.evidence_horizon_blocks
+                    )),
+                );
+            }
+        }
         let pipeline = self.pipeline.parse();
         let tiered_state = self.tiered_state.parse();
         let compute = self.compute.parse(&mut emitter);
@@ -14191,6 +14204,36 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "key_allowed_algorithms".into(),
             Value::Array(vec![Value::String("ed25519".to_string())]),
         );
+        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+    }
+
+    #[test]
+    fn kura_roster_retention_must_cover_evidence_horizon() {
+        let mut table = base_table();
+        let kura = table
+            .entry("kura")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("kura table");
+        kura.insert("block_sync_roster_retention".into(), Value::Integer(10));
+
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let npos = sumeragi
+            .entry("npos")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("npos table");
+        let reconfig = npos
+            .entry("reconfig")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("reconfig table");
+        reconfig.insert("evidence_horizon_blocks".into(), Value::Integer(20));
+
         assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
     }
 
