@@ -34,6 +34,7 @@ impl Actor {
             precommit_votes,
             commit_certificate,
             validator_checkpoint,
+            stake_snapshot,
         } = update;
         let block_hash = block.hash();
         let block_height = block.header().height().get();
@@ -123,6 +124,7 @@ impl Actor {
             persisted_roster,
             cert_hint,
             checkpoint_hint,
+            stake_snapshot.as_ref(),
             self.state.as_ref(),
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
@@ -181,7 +183,11 @@ impl Actor {
         ) {
             {
                 let mut journal = self.state.commit_roster_journal.write();
-                journal.upsert(cert.clone(), checkpoint.clone());
+                journal.upsert(
+                    cert.clone(),
+                    checkpoint.clone(),
+                    selection.stake_snapshot.clone(),
+                );
                 if let Err(err) = journal.persist() {
                     warn!(
                         ?err,
@@ -191,30 +197,89 @@ impl Actor {
                     );
                 }
             }
-            let sidecar = crate::kura::RosterSidecar::new_v1(
-                block_height,
-                block_hash,
-                Some(cert.clone()),
-                Some(checkpoint.clone()),
-            );
+            let sidecar = if selection.stake_snapshot.is_some() {
+                crate::kura::RosterSidecar::new_v2(
+                    block_height,
+                    block_hash,
+                    Some(cert.clone()),
+                    Some(checkpoint.clone()),
+                    selection.stake_snapshot.clone(),
+                )
+            } else {
+                crate::kura::RosterSidecar::new_v1(
+                    block_height,
+                    block_hash,
+                    Some(cert.clone()),
+                    Some(checkpoint.clone()),
+                )
+            };
             self.kura.write_roster_metadata(&sidecar);
         }
         let had_incoming_qc = incoming_qc.is_some();
-        let block_signers = {
+        let block_signers_result = {
             let state_view = self.state.view();
-            match validated_block_signers(&block, &topology, &state_view, mode_tag, prf_seed) {
-                Ok(signers) => signers,
-                Err(err) => {
-                    super::status::inc_block_sync_drop_invalid_signatures();
-                    warn!(
+            validated_block_signers(&block, &topology, &state_view, mode_tag, prf_seed)
+        };
+        let block_signers = match block_signers_result {
+            Ok(signers) => signers,
+            Err(err) => {
+                let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+                let parent_missing = block
+                    .header()
+                    .prev_block_hash()
+                    .is_some_and(|hash| !self.block_known_locally(hash));
+                let ahead = block_height > local_height.saturating_add(1);
+                let defer_signatures = matches!(
+                    err,
+                    crate::block::SignatureVerificationError::UnknownSignature
+                        | crate::block::SignatureVerificationError::UnknownSignatory
+                );
+                if parent_missing && ahead && defer_signatures {
+                    let expected_height = local_height.saturating_add(1);
+                    let expected_usize = usize::try_from(expected_height).ok();
+                    let actual_usize = usize::try_from(block_height).ok();
+                    if let Some(parent_hash) = block.header().prev_block_hash() {
+                        let commit_topology = self.effective_commit_topology();
+                        self.request_missing_parent(
+                            block_hash,
+                            block_height,
+                            block_view,
+                            parent_hash,
+                            &commit_topology,
+                            Some(&selection.roster),
+                            expected_usize,
+                            actual_usize,
+                            "block_sync_signatures",
+                        );
+                        if block_height > expected_height.saturating_add(1) {
+                            self.request_missing_parents_for_gap(
+                                &commit_topology,
+                                Some(&selection.roster),
+                                "block_sync_gap",
+                            );
+                        }
+                    }
+                    info!(
                         ?err,
-                        hash = ?block_hash,
                         height = block_height,
                         view = block_view,
-                        "dropping block sync update with invalid or insufficient signatures"
+                        block = %block_hash,
+                        local_height,
+                        "deferring block sync update due to signature mismatch while behind"
                     );
+                    let created = super::message::BlockCreated { block };
+                    let _ = self.handle_block_created(created);
                     return Ok(());
                 }
+                super::status::inc_block_sync_drop_invalid_signatures();
+                warn!(
+                    ?err,
+                    hash = ?block_hash,
+                    height = block_height,
+                    view = block_view,
+                    "dropping block sync update with invalid or insufficient signatures"
+                );
+                return Ok(());
             }
         };
         let availability_qc = incoming_availability_qc.and_then(|qc| {
@@ -335,9 +400,16 @@ impl Actor {
                     };
                     signer_peers.insert(peer.clone());
                 }
-                let state_view = self.state.view();
-                super::stake_quorum_reached_for_peers(&state_view, &selection.roster, &signer_peers)
+                if let Some(snapshot) = selection.stake_snapshot.as_ref() {
+                    super::stake_quorum_reached_for_snapshot(
+                        snapshot,
+                        &selection.roster,
+                        &signer_peers,
+                    )
                     .unwrap_or(false)
+                } else {
+                    false
+                }
             }
         };
         let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
@@ -478,14 +550,13 @@ impl Actor {
         let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
         let allow_nonextending_qc = selection.commit_certificate.is_some()
             || commit_certificate.as_ref().is_some_and(|cert| {
-                let state_view = self.state.view();
                 super::validate_commit_certificate_roster(
                     cert,
                     block_hash,
                     block_height,
                     Some(block_view),
                     consensus_mode,
-                    &state_view,
+                    stake_snapshot.as_ref(),
                 )
                 .is_ok()
             })
@@ -745,6 +816,7 @@ impl Actor {
     }
 
     /// Cache a validated precommit QC from block sync when the block payload is not ready yet.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn cache_block_sync_qc_for_unknown_block(
         &mut self,
         qc: crate::sumeragi::consensus::Qc,
@@ -855,6 +927,7 @@ impl Actor {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn handle_fetch_pending_block(
         &mut self,
         request: super::message::FetchPendingBlock,

@@ -1462,7 +1462,8 @@ pub fn membership_mismatch_snapshot() -> MembershipMismatchSnapshot {
     let active_peers = registry
         .entries
         .iter()
-        .filter_map(|(peer, entry)| entry.active.then(|| peer.clone()))
+        .filter(|(_, entry)| entry.active)
+        .map(|(peer, _)| peer.clone())
         .collect();
     let last = registry.last.clone();
     MembershipMismatchSnapshot {
@@ -2378,9 +2379,9 @@ pub struct DedupEvictionSnapshot {
     pub vote_capacity_total: u64,
     /// Vote dedup evictions due to TTL expiry.
     pub vote_expired_total: u64,
-    /// BlockCreated dedup evictions due to capacity.
+    /// `BlockCreated` dedup evictions due to capacity.
     pub block_created_capacity_total: u64,
-    /// BlockCreated dedup evictions due to TTL expiry.
+    /// `BlockCreated` dedup evictions due to TTL expiry.
     pub block_created_expired_total: u64,
     /// Proposal dedup evictions due to capacity.
     pub proposal_capacity_total: u64,

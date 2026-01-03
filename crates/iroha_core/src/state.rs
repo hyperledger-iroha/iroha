@@ -150,7 +150,7 @@ use crate::{
         pin_store::DaPinStore,
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
-    sumeragi::status,
+    sumeragi::{stake_snapshot::CommitStakeSnapshot, status},
 };
 
 mod tiered;
@@ -4130,7 +4130,7 @@ pub struct StateBlock<'state> {
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
     pub chain_id: iroha_data_model::ChainId,
-    /// NPoS PRF seed derived from the pre-block world state at this height.
+    /// `NPoS` PRF seed derived from the pre-block world state at this height.
     pre_block_npos_seed: [u8; 32],
     /// Accumulated settlement receipts for transactions in this block.
     settlement_accumulator: crate::settlement::SettlementAccumulator,
@@ -10192,13 +10192,18 @@ impl State {
         &self,
         commit_certificate: &CommitCertificate,
         checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
         let path = self.commit_roster_journal_path();
         if path.as_os_str().is_empty() {
             return;
         }
         let mut journal = self.commit_roster_journal.write();
-        journal.upsert(commit_certificate.clone(), checkpoint.clone());
+        journal.upsert(
+            commit_certificate.clone(),
+            checkpoint.clone(),
+            stake_snapshot,
+        );
         if let Err(err) = journal.persist() {
             warn!(
                 ?err,
@@ -10228,16 +10233,28 @@ impl State {
         &self,
         commit_certificate: &CommitCertificate,
         checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
         status::record_commit_certificate(commit_certificate.clone());
         status::record_validator_checkpoint(checkpoint.clone());
-        self.persist_commit_roster_journal(commit_certificate, checkpoint);
-        let sidecar = crate::kura::RosterSidecar::new_v1(
-            commit_certificate.height,
-            commit_certificate.block_hash,
-            Some(commit_certificate.clone()),
-            Some(checkpoint.clone()),
-        );
+        let sidecar_snapshot = stake_snapshot.clone();
+        self.persist_commit_roster_journal(commit_certificate, checkpoint, stake_snapshot);
+        let sidecar = if sidecar_snapshot.is_some() {
+            crate::kura::RosterSidecar::new_v2(
+                commit_certificate.height,
+                commit_certificate.block_hash,
+                Some(commit_certificate.clone()),
+                Some(checkpoint.clone()),
+                sidecar_snapshot,
+            )
+        } else {
+            crate::kura::RosterSidecar::new_v1(
+                commit_certificate.height,
+                commit_certificate.block_hash,
+                Some(commit_certificate.clone()),
+                Some(checkpoint.clone()),
+            )
+        };
         self.kura.write_roster_metadata(&sidecar);
     }
 
@@ -12069,18 +12086,18 @@ impl State {
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
-    ) -> Result<Vec<AccountId>, LaneRelayError> {
+    ) -> Vec<AccountId> {
         if let Some(mut validators) = manifest_registry.lane_validators(lane_id) {
             validators.sort();
             validators.dedup();
-            return Ok(validators);
+            return validators;
         }
 
         if !matches!(
             validator_mode,
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected
         ) {
-            return Ok(Vec::new());
+            return Vec::new();
         }
 
         let mut candidates: Vec<(AccountId, Numeric)> = self
@@ -12110,11 +12127,11 @@ impl State {
         let max = usize::try_from(nexus.staking.max_validators.get())
             .unwrap_or(usize::MAX)
             .min(candidates.len());
-        Ok(candidates
+        candidates
             .into_iter()
             .take(max)
             .map(|(account, _)| account)
-            .collect())
+            .collect()
     }
 
     fn lane_relay_qc_public_keys(
@@ -12197,7 +12214,7 @@ impl State {
             derived_mode_tag,
             &vote,
         );
-        let key_refs: Vec<&[u8]> = public_keys.iter().map(|key| key.as_slice()).collect();
+        let key_refs: Vec<&[u8]> = public_keys.iter().map(Vec::as_slice).collect();
         iroha_crypto::bls_normal_verify_preaggregated_same_message(
             &preimage,
             &qc.bls_aggregate_signature,
@@ -12211,6 +12228,7 @@ impl State {
     ///
     /// # Errors
     /// Returns a [`LaneRelayError`] when the envelope fails verification.
+    #[allow(clippy::too_many_lines)]
     pub fn record_lane_relay(
         &self,
         envelope: &LaneRelayEnvelope,
@@ -12263,7 +12281,7 @@ impl State {
             validator_mode,
             manifest_registry.as_ref(),
             &nexus,
-        )?;
+        );
         let min_quorum = crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
         if validator_pool.len() < committee_size {
             #[cfg(feature = "telemetry")]
@@ -14281,6 +14299,8 @@ impl<'state> StateBlock<'state> {
             let validator_set_hash = HashOf::new(&checkpoint_topology);
             let block_height = block.as_ref().header().height().get();
             let block_hash = block.as_ref().hash();
+            let stake_snapshot =
+                CommitStakeSnapshot::from_roster(&self.state_ref.view(), &checkpoint_topology);
             let checkpoint = ValidatorSetCheckpoint::new(
                 block_height,
                 block_hash,
@@ -14301,7 +14321,7 @@ impl<'state> StateBlock<'state> {
                 signatures,
             };
             self.state_ref
-                .record_commit_roster(&commit_cert, &checkpoint);
+                .record_commit_roster(&commit_cert, &checkpoint, stake_snapshot);
         }
 
         self.world.external_event_buf.mutate_vec(|events| {
@@ -15529,7 +15549,7 @@ mod replay_validation_tests {
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-        state.record_commit_roster(&commit_cert, &checkpoint);
+        state.record_commit_roster(&commit_cert, &checkpoint, None);
 
         let replay_world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
@@ -18456,6 +18476,7 @@ pub(crate) mod deserialize {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn default_governance() -> iroha_config::parameters::actual::Governance {
         iroha_config::parameters::actual::Governance {
             vk_ballot: None,
@@ -20385,9 +20406,8 @@ mod tests {
         let validator_mode = nexus
             .staking
             .validator_mode(LaneId::SINGLE, &nexus.lane_catalog);
-        let pool = state
-            .lane_relay_validator_pool(LaneId::SINGLE, validator_mode, &manifest_registry, &nexus)
-            .expect("validator pool");
+        let pool =
+            state.lane_relay_validator_pool(LaneId::SINGLE, validator_mode, &manifest_registry, &nexus);
         assert_eq!(pool, vec![validator]);
     }
 
@@ -21879,7 +21899,7 @@ mod tests {
         );
         {
             let mut journal = state.commit_roster_journal.write();
-            journal.upsert(commit_cert.clone(), checkpoint.clone());
+            journal.upsert(commit_cert.clone(), checkpoint.clone(), None);
         }
 
         state.restore_commit_roster_history();
@@ -21991,7 +22011,7 @@ mod tests {
             None,
         );
 
-        state.record_commit_roster(&commit_cert, &checkpoint);
+        state.record_commit_roster(&commit_cert, &checkpoint, None);
 
         let sidecar = kura
             .read_roster_metadata(commit_cert.height)

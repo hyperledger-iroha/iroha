@@ -219,7 +219,7 @@ fn execute_propose(
         None,
     );
 
-    let approve_me = MultisigApprove::new(multisig_account.clone(), instructions_hash.clone());
+    let approve_me = MultisigApprove::new(multisig_account.clone(), instructions_hash);
     for signatory in multisig_spec.signatories.keys() {
         if is_multisig(state_transaction, signatory)? {
             deploy_relayer(
@@ -248,7 +248,7 @@ fn execute_approve(
 ) -> Result<(), ValidationFail> {
     let approver = authority.clone();
     let multisig_account = instruction.account.clone();
-    let instructions_hash = instruction.instructions_hash.clone();
+    let instructions_hash = instruction.instructions_hash;
 
     let spec = multisig_spec(state_transaction, &multisig_account)?;
     let has_multisig_role = state_transaction
@@ -405,12 +405,12 @@ fn prune_down(
     let spec = multisig_spec(state_transaction, multisig_account)?;
 
     RemoveKeyValue::account(multisig_account.clone(), proposal_key(instructions_hash))
-        .execute(&multisig_account, state_transaction)
+        .execute(multisig_account, state_transaction)
         .map_err(ValidationFail::InstructionFailed)?;
 
     for signatory in spec.signatories.keys() {
         let relay_hash = {
-            let relay = MultisigApprove::new(multisig_account.clone(), instructions_hash.clone());
+            let relay = MultisigApprove::new(multisig_account.clone(), *instructions_hash);
             HashOf::new(&vec![InstructionBox::from(relay)])
         };
         if is_multisig(state_transaction, signatory)? {

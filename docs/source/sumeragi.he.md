@@ -46,7 +46,8 @@ translator: manual
 
 ### פרמטרים K / r
 - בקונפיג: ‏`sumeragi.collectors_k: usize` (מספר אספנים לגובה, ברירת מחדל 1) ו-`sumeragi.collectors_redundant_send_r: u8` (פיזור שליחות עודפות, ברירת מחדל 1).
-- בשרשרת: K ו-r מאוחסנים גם ב-`SumeragiParameters` וניתנים לעדכון עם `SetSumeragiParameters`. CLI כדוגמת `sumeragi status --summary` מציג את הערכים העדכניים.
+- בשרשרת: K ו-r נמצאים ב-`SumeragiParameters` והם המקור הקובע לתכנון הקולקטורים ולפרסום `ConsensusParams`; ערכי הקונפיג מזינים את ברירות המחדל ב-genesis. כאשר פירים מפרסמים K/r שונים, נרשם mismatch אך נשמרים הערכים מהשרשרת.
+- פולבק: אם `k` לא מחזיר קולקטורים, ההצבעות נופלות לטופולוגיית ה-commit המלאה; `redundant_send_r` מטופל לפחות כ-1.
 
 ### עקרונות טופולוגיה
 - טופולוגיה נוצרת רק עבור ולידטורים בעלי PoP ב-BLS. הפונקציות `leader_index()` ו-`proxy_tail_index()` אינן משתמשות בשאריות ומחזירות `TopologySegment` דטרמיניסטי לביקורת.

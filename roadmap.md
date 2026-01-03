@@ -293,6 +293,10 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Bridge proofs translations completed across all locales in `docs/source`.
    - [x] Bridge finality proofs translations completed across all locales in `docs/source`.
    - [x] Runtime upgrades translations completed across all locales in `docs/source`.
+   - [x] Sumeragi NPoS task breakdown translations completed across all locales in `docs/source`.
+   - [x] Sumeragi evidence audit API translations completed across all locales in `docs/source`.
+   - [x] Sumeragi randomness evidence runbook translations completed across all locales in `docs/source`.
+   - [x] Sumeragi aggregators translations completed across all locales in `docs/source`.
    - [x] Sumeragi pacemaker translations completed across all locales in `docs/source`.
    - [x] Portal Torii app API parity audit translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal GAR operator onboarding brief translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.

@@ -1,6 +1,23 @@
 # Status
 
 ## Latest Updates
+- Translated the Sumeragi randomness evidence runbook across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Aligned handshake consensus caps with on-chain K/r parameters and rejected zero collectors/redundant-send updates in `SetParameter`, adding unit coverage for the new validation and caps behavior.
+- Tests: `cargo test -p iroha_core consensus_caps_use_on_chain_collectors -- --nocapture` (failed: compile errors in `crates/iroha_core/src/state.rs` and `crates/iroha_core/src/sumeragi/stake_snapshot.rs` unrelated to these changes).
+- Translated the Sumeragi evidence audit API doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Added missing-parent fetch on BlockCreated and block-sync signature deferral (with gap sweeps) so lagging peers request parents instead of dropping ahead blocks; added unit coverage and documented the recovery flow.
+- Tests: `cargo test -p iroha_core block_created_requests_missing_parent_on_height_gap -- --nocapture` (timed out after 120s; build lock while compiling `iroha_core`, compile errors in unrelated files: missing `stake_snapshot` params in roster journal/block sync, `penalties.rs` `u64::from(usize)` mismatch, `stake_snapshot.rs` missing trait import).
+- Tests: `cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture` (failed to compile `iroha_core`: `penalties.rs` `u64::from(usize)` mismatch, `stake_snapshot.rs` missing trait import).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; `iroha_core` compile errors).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Aligned collector planning and `ConsensusParams` adverts with on-chain `SumeragiParameters` K/r values (instead of config defaults), with updated unit coverage for on-chain overrides and collector-target expectations.
+- Tests: not run (not requested).
+- Translated the Sumeragi aggregators doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Translated the Sumeragi NPoS task breakdown doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
 - Translated the Sumeragi pacemaker doc across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
 - Tests: not run (docs-only change).
 - Request missing parent blocks when validation defers a block ahead of local height, so lagging peers can sync and resume voting; added unit coverage for the new fetch path.

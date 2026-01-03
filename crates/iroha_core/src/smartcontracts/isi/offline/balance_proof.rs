@@ -62,7 +62,7 @@ pub(super) fn verify_balance_proof(
     let c_res = decode_commitment(&inputs.balance_proof.resulting_commitment)?;
     let delta_bytes =
         numeric_delta_bytes(&inputs.balance_proof.claimed_delta, inputs.expected_scale)?;
-    let delta_proof = &proof_bytes[1..1 + DELTA_PROOF_BYTES];
+    let delta_proof = &proof_bytes[1..=DELTA_PROOF_BYTES];
     let range_proof = &proof_bytes[1 + DELTA_PROOF_BYTES..];
     let (r_point, s_g, s_h) = parse_delta_proof(delta_proof)?;
     let context = derive_context(inputs.chain_id);
@@ -128,7 +128,7 @@ pub fn build_balance_proof(
         return Err(BalanceProofError::InvalidProof.into());
     }
 
-    let range_proof = build_range_proof(&context, resulting_value_u64, blind_res)?;
+    let range_proof = build_range_proof(&context, resulting_value_u64, blind_res);
     let mut proof = Vec::with_capacity(BALANCE_PROOF_BYTES);
     proof.push(BALANCE_PROOF_VERSION);
     proof.extend_from_slice(r_point.compress().as_bytes());
@@ -406,7 +406,13 @@ fn verify_range_proof(
         let s0 = decode_scalar(&proof_bytes[offset + 128..offset + 160])?;
         let s1 = decode_scalar(&proof_bytes[offset + 160..offset + 192])?;
 
-        let challenge = range_proof_challenge(context, bit_index as u8, &commitment, &a0, &a1);
+        let challenge = range_proof_challenge(
+            context,
+            u8::try_from(bit_index).expect("range proof bits fit in u8"),
+            &commitment,
+            &a0,
+            &a1,
+        );
         let e1 = challenge - e0;
         let lhs0 = RistrettoPoint::vartime_multiscalar_mul(
             [s0, -e0],
@@ -436,11 +442,7 @@ fn verify_range_proof(
     Ok(())
 }
 
-fn build_range_proof(
-    context: &[u8; 32],
-    value: u64,
-    resulting_blinding: Scalar,
-) -> Result<Vec<u8>, BalanceProofError> {
+fn build_range_proof(context: &[u8; 32], value: u64, resulting_blinding: Scalar) -> Vec<u8> {
     let mut rng = OsRng;
     let mut blindings = Vec::with_capacity(RANGE_PROOF_BITS);
     let mut sum = Scalar::ZERO;
@@ -454,20 +456,25 @@ fn build_range_proof(
     blindings.push(last_blinding);
 
     let mut proof = Vec::with_capacity(RANGE_PROOF_BYTES);
-    for bit_index in 0..RANGE_PROOF_BITS {
+    for (bit_index, blinding) in blindings.iter().enumerate() {
         let bit = ((value >> bit_index) & 1) == 1;
         let bit_scalar = Scalar::from(u64::from(bit));
-        let commitment =
-            RISTRETTO_BASEPOINT_POINT * bit_scalar + pedersen_generator_h() * blindings[bit_index];
+        let commitment = RISTRETTO_BASEPOINT_POINT * bit_scalar + pedersen_generator_h() * blinding;
         let (a0, a1, e0, s0, s1) = if bit {
             let alpha = random_scalar(&mut rng);
             let e0 = random_scalar(&mut rng);
             let s0 = random_scalar(&mut rng);
             let a0 = pedersen_generator_h() * s0 - commitment * e0;
             let a1 = pedersen_generator_h() * alpha;
-            let challenge = range_proof_challenge(context, bit_index as u8, &commitment, &a0, &a1);
+            let challenge = range_proof_challenge(
+                context,
+                u8::try_from(bit_index).expect("range proof bits fit in u8"),
+                &commitment,
+                &a0,
+                &a1,
+            );
             let e1 = challenge - e0;
-            let s1 = alpha + e1 * blindings[bit_index];
+            let s1 = alpha + e1 * blinding;
             (a0, a1, e0, s0, s1)
         } else {
             let alpha = random_scalar(&mut rng);
@@ -476,9 +483,15 @@ fn build_range_proof(
             let a0 = pedersen_generator_h() * alpha;
             let commitment_minus_g = commitment - RISTRETTO_BASEPOINT_POINT;
             let a1 = pedersen_generator_h() * s1 - commitment_minus_g * e1;
-            let challenge = range_proof_challenge(context, bit_index as u8, &commitment, &a0, &a1);
+            let challenge = range_proof_challenge(
+                context,
+                u8::try_from(bit_index).expect("range proof bits fit in u8"),
+                &commitment,
+                &a0,
+                &a1,
+            );
             let e0 = challenge - e1;
-            let s0 = alpha + e0 * blindings[bit_index];
+            let s0 = alpha + e0 * blinding;
             (a0, a1, e0, s0, s1)
         };
         proof.extend_from_slice(commitment.compress().as_bytes());
@@ -488,7 +501,7 @@ fn build_range_proof(
         proof.extend_from_slice(s0.to_bytes().as_ref());
         proof.extend_from_slice(s1.to_bytes().as_ref());
     }
-    Ok(proof)
+    proof
 }
 
 #[cfg(test)]

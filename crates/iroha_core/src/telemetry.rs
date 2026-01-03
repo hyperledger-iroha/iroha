@@ -874,6 +874,7 @@ impl StateTelemetry {
     }
 
     /// Record the configured caps and frame limits for transaction gossip.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_tx_gossip_caps(
         &self,
         frame_cap_bytes: usize,

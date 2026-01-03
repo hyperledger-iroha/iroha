@@ -40,7 +40,7 @@ pub struct EvidenceValidationContext<'a> {
     pub chain_id: &'a ChainId,
     /// Consensus mode tag (permissioned or `NPoS`) for preimage separation.
     pub mode_tag: &'a str,
-    /// Optional PRF seed for NPoS topology rotation.
+    /// Optional PRF seed for `NPoS` topology rotation.
     pub prf_seed: Option<[u8; 32]>,
 }
 
@@ -84,7 +84,7 @@ fn canonicalize_evidence(ev: &Evidence) -> Evidence {
         EvidencePayload::Censorship { tx_hash, receipts } => Evidence {
             kind: ev.kind,
             payload: EvidencePayload::Censorship {
-                tx_hash: tx_hash.clone(),
+                tx_hash: *tx_hash,
                 receipts: canonicalize_censorship_receipts(receipts),
             },
         },
@@ -339,7 +339,7 @@ pub fn evidence_subject_height_view(evidence: &Evidence) -> (Option<Height>, Opt
     }
 }
 
-pub(crate) fn evidence_block_refs(evidence: &Evidence) -> Vec<(u64, HashOf<BlockHeader>)> {
+pub(super) fn evidence_block_refs(evidence: &Evidence) -> Vec<(u64, HashOf<BlockHeader>)> {
     let mut refs = Vec::new();
     match &evidence.payload {
         EvidencePayload::DoubleVote { v1, v2 } => {

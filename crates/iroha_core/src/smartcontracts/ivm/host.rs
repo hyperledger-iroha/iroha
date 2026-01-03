@@ -1504,8 +1504,8 @@ impl CoreHost {
                 tx.record_confidential_gas_delta(delta);
             }
         }
-        self.flush_completed_axt(tx)?;
-        self.flush_durable_state(tx)?;
+        self.flush_completed_axt(tx);
+        self.flush_durable_state(tx);
         Ok(queued)
     }
 
@@ -1529,7 +1529,7 @@ impl CoreHost {
             });
     }
 
-    fn decode_name_payload(&self, payload: &[u8]) -> Result<Name, ivm::VMError> {
+    fn decode_name_payload(payload: &[u8]) -> Result<Name, ivm::VMError> {
         let mut reader = Cursor::new(payload);
         if let Ok(name) = Name::decode(&mut reader) {
             return Ok(name);
@@ -1548,7 +1548,8 @@ impl CoreHost {
             let mut out = Vec::with_capacity(7 + env.len() + Hash::LENGTH);
             out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
             out.push(1);
-            out.extend_from_slice(&(env.len() as u32).to_be_bytes());
+            let env_len = u32::try_from(env.len()).map_err(|_| ivm::VMError::NoritoInvalid)?;
+            out.extend_from_slice(&env_len.to_be_bytes());
             out.extend_from_slice(&env);
             let h: [u8; Hash::LENGTH] = Hash::new(&env).into();
             out.extend_from_slice(&h);
@@ -2632,7 +2633,7 @@ impl CoreHost {
         state: &axt::HostAxtState,
         lane: LaneId,
         commit_height: u64,
-    ) -> Result<AxtEnvelopeRecord, ivm::VMError> {
+    ) -> AxtEnvelopeRecord {
         let descriptor = ModelAxtDescriptor {
             dsids: state.descriptor().dsids.clone(),
             touches: state
@@ -2685,7 +2686,7 @@ impl CoreHost {
             )
         });
 
-        Ok(AxtEnvelopeRecord {
+        AxtEnvelopeRecord {
             binding,
             lane,
             descriptor,
@@ -2693,56 +2694,50 @@ impl CoreHost {
             proofs,
             handles,
             commit_height: Some(commit_height),
-        })
+        }
     }
 
     fn flush_durable_state(
         &mut self,
         tx: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), ValidationFail> {
+    ) {
         if self.durable_state_overlay.is_empty() {
-            return Ok(());
+            return;
         }
-        for (path, value) in self.durable_state_overlay.iter() {
-            match value {
-                Some(stored) => {
-                    tx.world
-                        .smart_contract_state
-                        .insert(path.clone(), stored.clone());
-                    self.durable_state_base.insert(path.clone(), stored.clone());
-                }
-                None => {
-                    tx.world.smart_contract_state.remove(path.clone());
-                    self.durable_state_base.remove(path);
-                }
+        for (path, value) in &self.durable_state_overlay {
+            if let Some(stored) = value {
+                tx.world
+                    .smart_contract_state
+                    .insert(path.clone(), stored.clone());
+                self.durable_state_base.insert(path.clone(), stored.clone());
+            } else {
+                tx.world.smart_contract_state.remove(path.clone());
+                self.durable_state_base.remove(path);
             }
         }
         self.durable_state_overlay.clear();
-        Ok(())
     }
 
     fn flush_completed_axt(
         &mut self,
         tx: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), ValidationFail> {
+    ) {
         self.amx_budget_violation = None;
         if self.completed_axt.is_empty() {
-            return Ok(());
+            return;
         }
         let lane = tx.current_lane_id.unwrap_or_else(|| LaneId::new(0));
         let commit_height = tx.block_height();
 
         // Materialize and persist each completed envelope into the block-level accumulator.
-        let envelopes = self
+        let envelopes: Vec<_> = self
             .completed_axt
             .drain(..)
             .map(|state| Self::materialize_axt_record(&state, lane, commit_height))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| ValidationFail::NotPermitted("failed to encode AXT envelope".into()))?;
+            .collect();
         for envelope in envelopes {
             tx.record_axt_envelope(envelope);
         }
-        Ok(())
     }
 
     /// Execute a closure with a mutable reference to the [`CoreHost`] attached to `vm`.
@@ -3338,7 +3333,7 @@ impl IVMHost for CoreHost {
             ivm::syscalls::SYSCALL_STATE_GET => {
                 let path_ptr = vm.register(10);
                 let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
-                let path = self.decode_name_payload(path_tlv.payload)?;
+                let path = Self::decode_name_payload(path_tlv.payload)?;
                 self.log_state_read_key(path.as_ref());
                 if let Some(entry) = self.durable_state_overlay.get(&path) {
                     match entry {
@@ -3359,12 +3354,14 @@ impl IVMHost for CoreHost {
                 let val_ptr = vm.register(11);
                 let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
                 let val_tlv = Self::expect_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
-                let path = self.decode_name_payload(path_tlv.payload)?;
+                let path = Self::decode_name_payload(path_tlv.payload)?;
                 self.log_state_write_key(path.as_ref());
                 let mut stored = Vec::with_capacity(7 + val_tlv.payload.len() + Hash::LENGTH);
                 stored.extend_from_slice(&(val_tlv.type_id as u16).to_be_bytes());
                 stored.push(val_tlv.version);
-                stored.extend_from_slice(&(val_tlv.payload.len() as u32).to_be_bytes());
+                let payload_len =
+                    u32::try_from(val_tlv.payload.len()).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                stored.extend_from_slice(&payload_len.to_be_bytes());
                 stored.extend_from_slice(val_tlv.payload);
                 let h: [u8; Hash::LENGTH] = Hash::new(val_tlv.payload).into();
                 stored.extend_from_slice(&h);
@@ -3374,7 +3371,7 @@ impl IVMHost for CoreHost {
             ivm::syscalls::SYSCALL_STATE_DEL => {
                 let path_ptr = vm.register(10);
                 let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
-                let path = self.decode_name_payload(path_tlv.payload)?;
+                let path = Self::decode_name_payload(path_tlv.payload)?;
                 self.log_state_write_key(path.as_ref());
                 self.durable_state_overlay.insert(path, None);
                 Ok(0)
