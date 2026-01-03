@@ -1951,7 +1951,7 @@ impl Actor {
         actual_height: Option<usize>,
         trigger: &'static str,
     ) {
-        if self.block_known_locally(parent_hash) {
+        if self.block_payload_available_locally(parent_hash) {
             return;
         }
         let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
@@ -4475,7 +4475,7 @@ impl Actor {
         block.header().prev_block_hash()
     }
 
-    fn block_known_locally(&self, hash: HashOf<BlockHeader>) -> bool {
+    fn block_payload_available_locally(&self, hash: HashOf<BlockHeader>) -> bool {
         self.pending.pending_blocks.contains_key(&hash)
             || self
                 .subsystems
@@ -4483,6 +4483,25 @@ impl Actor {
                 .inflight
                 .as_ref()
                 .is_some_and(|inflight| inflight.block_hash == hash)
+            || self
+                .pending
+                .pending_processing
+                .get()
+                .is_some_and(|pending| pending == hash)
+            || self.kura.get_block_height_by_hash(hash).is_some()
+    }
+
+    fn block_known_locally(&self, hash: HashOf<BlockHeader>) -> bool {
+        self.pending
+            .pending_blocks
+            .get(&hash)
+            .is_some_and(|pending| !pending.aborted)
+            || self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| inflight.block_hash == hash && !inflight.pending.aborted)
             || self
                 .pending
                 .pending_processing
