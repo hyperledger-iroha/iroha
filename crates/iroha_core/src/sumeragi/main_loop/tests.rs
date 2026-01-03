@@ -8386,6 +8386,30 @@ async fn has_nonempty_pending_at_height_ignores_aborted() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn block_known_locally_ignores_aborted_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(2, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, 2, 0);
+    pending.mark_aborted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    assert!(
+        !actor.block_known_locally(block_hash),
+        "aborted pending block should not be considered known for consensus"
+    );
+    assert!(
+        actor.block_payload_available_locally(block_hash),
+        "aborted pending block should still count as payload available"
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn non_rbc_payload_budget_respects_frame_cap_when_unset() {
     let frame_cap: usize = 1024 * 1024;
