@@ -8,13 +8,15 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Numeric;
 
-pub(crate) fn scalar_bytes(value: u8) -> [u8; 32] {
+/// Build a fixed-width scalar byte array with the provided low byte.
+pub fn scalar_bytes(value: u8) -> [u8; 32] {
     let mut bytes = [0u8; 32];
     bytes[0] = value;
     bytes
 }
 
-pub(crate) fn build_balance_proof_for_allowance(
+/// Build a balance proof payload for an allowance with explicit blinding seeds.
+pub fn build_balance_proof_for_allowance(
     chain_id: &ChainId,
     allowance: &OfflineAllowanceCommitment,
     claimed_delta: &Numeric,

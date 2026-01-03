@@ -3,6 +3,7 @@
 // Nested `if` blocks remain intentional for readability/instrumentation; Clippy's
 // `collapsible_if` lint would force let-chains that obscure the control flow.
 #![allow(clippy::collapsible_if)]
+#![cfg_attr(test, allow(clippy::large_stack_arrays))]
 
 #[cfg(all(feature = "kaigi_privacy_mocks", not(any(debug_assertions, test))))]
 compile_error!(

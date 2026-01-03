@@ -3171,7 +3171,7 @@ mod tests {
             .world()
             .contract_instances()
             .get(&instance_key)
-            .cloned()
+            .copied()
             .expect("instance bound");
         assert_eq!(bound_hash, code_hash);
         assert!(view.world().contract_manifests().get(&code_hash).is_some());

@@ -4797,7 +4797,7 @@ mod evidence_submit_tests {
             &keypair1
         };
 
-        let mut world = iroha_core::state::World::default();
+        let world = iroha_core::state::World::default();
         {
             let mut block = world.block();
             let params = SumeragiNposParameters {
@@ -21142,8 +21142,7 @@ mod status_tests {
             membership_mismatch
                 .get("active_peers")
                 .and_then(Value::as_array)
-                .map(|peers| peers.is_empty())
-                .unwrap_or(false)
+                .is_some_and(Vec::is_empty)
         );
         assert!(
             membership_mismatch
