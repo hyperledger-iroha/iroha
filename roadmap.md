@@ -43,6 +43,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Limit integration-test network concurrency in the sandbox harness (CPU-scaled default + `IROHA_TEST_NETWORK_PARALLELISM`) so `--test-threads=1` is no longer required.
    - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly (currently fails to compile: missing `parent_state_root` in `integration_tests/tests/nexus/cross_lane.rs`).
   - [x] Re-run `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` to confirm localnet tx-status fallbacks no longer emit WARN noise.
+   - [ ] Re-run `cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture` after the BlockSyncUpdate backpressure and missing-parent fetch fixes; set `IROHA_KAGAMI_LOCALNET_KEEP=1` on failure to retain logs.
    - [ ] Re-run `cargo test -p integration_tests --test mod -- --nocapture` with `API_ADDRESS`/`PUBLIC_KEY` env overrides set to confirm test-network peers ignore host env config overrides.
    - [ ] Re-run `cargo test -p integration_tests --test mod` after the payload-hash stabilization fix (strip results/extra signatures from DA/RBC payload bytes); attempt 2025-12-31 timed out after 5m with pipeline event failures, peers waiting for block 1, and status endpoint connection refused—confirm the gating condition is resolved.
    - [ ] Re-run `cargo test -p integration_tests --test mod` after stabilizing NPoS PRF seed handling (seed fixed within epoch + next-epoch record persisted at rollover + replay PRF rotation) to confirm event/connected-peers suites no longer hang.
@@ -285,6 +286,14 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Nexus settlement FAQ translations completed across all locales in `docs/source`.
    - [x] Nexus elastic lane provisioning translations completed across all locales in `docs/source`.
    - [x] Nexus privacy commitments translations completed across all locales in `docs/source`.
+   - [x] Testing and troubleshooting guide translations completed across all locales in `docs/source`.
+   - [x] Account address compliance status translations completed across all locales in `docs/source`.
+   - [x] Release artifact selection translations completed across all locales in `docs/source`.
+   - [x] Docker builder image translations completed across all locales in `docs/source`.
+   - [x] Bridge proofs translations completed across all locales in `docs/source`.
+   - [x] Bridge finality proofs translations completed across all locales in `docs/source`.
+   - [x] Runtime upgrades translations completed across all locales in `docs/source`.
+   - [x] Sumeragi pacemaker translations completed across all locales in `docs/source`.
    - [x] Portal Torii app API parity audit translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal GAR operator onboarding brief translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
    - [x] Portal SoraFS dispute & revocation runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.

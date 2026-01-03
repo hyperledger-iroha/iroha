@@ -334,7 +334,9 @@ impl PeersGossiper {
             .iter()
             .map(|peer| (peer.id().clone(), peer.address().clone()))
             .collect();
-        let trusted_set: BTreeSet<_> = trusted_list.iter().map(|peer| peer.id().clone()).collect();
+        let mut trusted_set: BTreeSet<_> =
+            trusted_list.iter().map(|peer| peer.id().clone()).collect();
+        trusted_set.insert(peer_id.clone());
         let static_trusted_peers = trusted_set.clone();
         let initial_topology: BTreeSet<_> = trusted_set.clone();
         let trust_candidates = trusted_set.clone();
@@ -440,16 +442,18 @@ impl PeersGossiper {
     }
 
     fn set_current_topology(&mut self, UpdateTopology(topology): UpdateTopology) {
+        let mut new_topology: BTreeSet<_> = topology.into_iter().collect();
+        new_topology.extend(self.static_trusted_peers.iter().cloned());
+
         self.gossip_peers.retain(|peer, map| {
-            if !topology.contains(peer) {
+            if !new_topology.contains(peer) {
                 return false;
             }
 
-            map.retain(|peer, _| topology.contains(peer));
+            map.retain(|peer, _| new_topology.contains(peer));
             !map.is_empty()
         });
 
-        let new_topology: BTreeSet<_> = topology.into_iter().collect();
         let removed: Vec<_> = self
             .current_topology
             .difference(&new_topology)
@@ -476,7 +480,7 @@ impl PeersGossiper {
         // Keep the network dial set in sync with the current topology so removed peers
         // are disconnected promptly and new peers are contacted.
         self.network
-            .update_topology(UpdateTopology(new_topology.into_iter().collect()));
+            .update_topology(UpdateTopology(new_topology.iter().cloned().collect()));
         self.network_update_peers_addresses();
         if unchanged {
             iroha_logger::debug!(
@@ -934,8 +938,8 @@ mod tests {
         let peer_id = PeerId::from(key_pair.public_key().clone());
 
         let network_cfg = NetworkConfig {
-            address: WithOrigin::inline(listen_addr.into()),
-            public_address: WithOrigin::inline(listen_addr.into()),
+            address: WithOrigin::inline(listen_addr.clone().into()),
+            public_address: WithOrigin::inline(listen_addr.clone().into()),
             relay_mode: RelayMode::Disabled,
             relay_hub_address: None,
             relay_ttl: iroha_config::parameters::defaults::network::RELAY_TTL,
@@ -1086,8 +1090,16 @@ mod tests {
             "configured observer should remain trusted even if excluded from topology"
         );
         assert!(
+            gossiper.current_topology.contains(observer_peer.id()),
+            "static trusted peers should remain in the p2p topology"
+        );
+        assert!(
             !gossiper.trusted_peers.contains(&dynamic_peer_id),
             "non-static peer should be dropped from trust when removed from topology"
+        );
+        assert!(
+            !gossiper.current_topology.contains(&dynamic_peer_id),
+            "dynamic peers removed from topology should not remain in the p2p topology"
         );
         assert!(
             gossiper.trust_candidates.contains(observer_peer.id()),

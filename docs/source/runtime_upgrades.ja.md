@@ -1,115 +1,168 @@
-<!-- Japanese translation of docs/source/runtime_upgrades.md -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/source/runtime_upgrades.md
 status: complete
-translator: manual
+generator: scripts/sync_docs_i18n.py
+source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_last_modified: "2025-12-04T06:31:08.260928+00:00"
+translation_last_reviewed: 2026-01-01
 ---
 
-# ランタイムアップグレード（IVM + ホスト）— 無停止・ノーハードフォーク
+# ランタイムアップグレード (IVM + Host) — 無停止・ハードフォーク無し
 
-本ドキュメントは、ネットワーク停止やハードフォークなしに IVM/ホスト機能（新しいシステムコールやポインター ABI 型など）を導入するための決定論的でガバナンス制御の仕組みを定義します。ノードは事前にバイナリを展開し、オンチェーンでのアクティベーションをブロック高さのウィンドウ内で調整します。既存コントラクトはそのまま動作し、新機能は ABI バージョンとポリシーでゲートされます。
+本ドキュメントは、新しい IVM/host 機能 (例: 新しい syscall と pointer-ABI 型) をネットワーク停止や
+ハードフォーク無しで導入するための、決定論的かつガバナンス制御の仕組みを規定します。ノードは事前に
+バイナリを展開し、アクティベーションは高さウィンドウ内でオンチェーン調整されます。既存コントラクトは
+変更なしで動作し、新機能は ABI バージョンとポリシーでゲートされます。
 
-## ゴール
-- スケジュールされた高さウィンドウでの決定論的アクティベーションと冪等適用。
-- 複数 ABI バージョンの共存。既存バイナリを壊さない。
-- アクティベーション前に新機能を有効化させない受理・実行ガードレール。
-- 機能可視化と明確な失敗モードを備えた運用者向けロールアウト。
+目的
+- 予定された高さウィンドウでの決定論的アクティベーション (冪等適用)。
+- 複数 ABI バージョンの共存; 既存バイナリを破壊しない。
+- 事前アクティベーションの payload が新挙動を有効化できない入場/実行ガード。
+- 機能可視性と明確な失敗モードを備えた運用フレンドリーなロールアウト。
 
-## 非ゴール
-- 既存システムコール番号やポインター型 ID の変更（禁止）。
-- バイナリアップデート無しでノードをライブパッチすること。
+非目的
+- 既存の syscall 番号や pointer 型 ID の変更 (禁止)。
+- 更新済みバイナリを配布せずにノードをライブパッチすること。
 
-## 定義
-- **ABI バージョン**: `ProgramMetadata.abi_version` に宣言される小整数。`SyscallPolicy` とポインター型の許可リストを選択。
-- **ABI ハッシュ**: 指定バージョンの ABI 表面（システムコール一覧、ポインター型 ID/許可リスト、ポリシーフラグ）を `ivm::syscalls::compute_abi_hash` で計算した決定論的ダイジェスト。
-- **システムコールポリシー**: 指定 ABI バージョンおよびホストポリシーで、システムコール番号の許可／不許可を判断するマッピング。
-- **アクティベーションウィンドウ**: 半開区間 `[start, end)`。`start` で一度だけアクティベーションが有効。
+定義
+- ABI Version: `ProgramMetadata.abi_version` に宣言される小さな整数。`SyscallPolicy` と pointer 型の allowlist を選択する。
+- ABI Hash: あるバージョンの ABI サーフェス (syscall リスト/番号/形状、pointer 型 ID/allowlist、ポリシーフラグ) の決定論的 digest。`ivm::syscalls::compute_abi_hash` で算出。
+- Syscall Policy: ABI バージョンと host ポリシーに対して syscall 番号の許可/禁止を判断する host マッピング。
+- Activation Window: ブロック高の半開区間 `[start, end)` で、`start` で一度だけ有効化される。
 
-## ステートオブジェクト（データモデル）
-- `RuntimeUpgradeId`: マニフェスト正規 Norito バイト列の Blake2b-256。
-- `RuntimeUpgradeManifest`:
-  - `name: String`
-  - `description: String`
-  - `abi_version: u16`
-  - `abi_hash: [u8; 32]`
-  - `added_syscalls: Vec<u16>`
-  - `added_pointer_types: Vec<u16>`
-  - `start_height: u64`
-  - `end_height: u64`
-- `RuntimeUpgradeRecord`:
-  - `manifest: RuntimeUpgradeManifest`
-  - `status: RuntimeUpgradeStatus`
-  - `proposer: AccountId`
-  - `created_height: u64`
+状態オブジェクト (データモデル)
+<!-- BEGIN RUNTIME UPGRADE TYPES -->
+- `RuntimeUpgradeId`: manifest の canonical Norito bytes の Blake2b-256。
+- `RuntimeUpgradeManifest` フィールド:
+  - `name: String` — 人が読めるラベル。
+  - `description: String` — 運用向けの短い説明。
+  - `abi_version: u16` — 有効化する対象 ABI バージョン。
+  - `abi_hash: [u8; 32]` — 対象ポリシーの canonical ABI hash。
+  - `added_syscalls: Vec<u16>` — このバージョンで有効になる syscall 番号。
+  - `added_pointer_types: Vec<u16>` — アップグレードで追加される pointer 型 ID。
+  - `start_height: u64` — アクティベーションが許可される最初のブロック高。
+  - `end_height: u64` — アクティベーションウィンドウの排他的上限。
+  - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` — アップグレード成果物の SBOM digest。
+  - `slsa_attestation: Vec<u8>` — SLSA attestation 生バイト (JSON では base64)。
+  - `provenance: Vec<ManifestProvenance>` — canonical payload への署名。
+- `RuntimeUpgradeRecord` フィールド:
+  - `manifest: RuntimeUpgradeManifest` — canonical 提案 payload。
+  - `status: RuntimeUpgradeStatus` — 提案のライフサイクル状態。
+  - `proposer: AccountId` — 提案を提出した権限主体。
+  - `created_height: u64` — 提案が台帳に入ったブロック高。
+- `RuntimeUpgradeSbomDigest` フィールド:
+  - `algorithm: String` — digest アルゴリズム ID。
+  - `digest: Vec<u8>` — digest 生バイト (JSON では base64)。
+<!-- END RUNTIME UPGRADE TYPES -->
+  - 不変条件: `end_height > start_height`; `abi_version` は任意のアクティブバージョンより大きいこと; `abi_hash` は `ivm::syscalls::compute_abi_hash(policy_for(abi_version))` と一致すること; `added_*` は新しい ABI ポリシーと直前のアクティブ版との差分を正確に列挙すること; 既存の番号/ID を削除または再番号付けしてはならない。
 
-**不変条件**: `end_height > start_height`、`abi_version` は既存より大きく、`added_*` は既存集合と不交差。既存番号/ID の削除・再割り当ては禁止。
+ストレージレイアウト
+- `world.runtime_upgrades`: `RuntimeUpgradeId.0` (生の 32 バイトハッシュ) をキーとする MVCC マップ。値は canonical Norito の `RuntimeUpgradeRecord` payload。エントリはブロックを跨いで保持され、commit は冪等で replay 安全。
 
-## ストレージレイアウト
-`world.runtime_upgrades` に `RuntimeUpgradeId` をキーとした MVCC マップとして格納。Norito でエンコードされた `RuntimeUpgradeRecord` を持ち、リプレイに安全。
+命令 (ISI)
+- ProposeRuntimeUpgrade { manifest: RuntimeUpgradeManifest }
+  - 効果: 既存でなければ `RuntimeUpgradeId` をキーに `RuntimeUpgradeRecord { status: Proposed }` を挿入。
+  - 提案/有効化済み record とウィンドウが重なる場合、または不変条件が破られる場合は拒否。
+  - 冪等: 同一 canonical manifest bytes の再送は no-op。
+  - Canonical encoding: manifest bytes は `RuntimeUpgradeManifest::canonical_bytes()` と一致する必要があり、非 canonical は拒否。
+- ActivateRuntimeUpgrade { id: RuntimeUpgradeId }
+  - 事前条件: 対応する Proposed record が存在; `current_height` は `manifest.start_height` に一致; `current_height < manifest.end_height`。
+  - 効果: record を `ActivatedAt(current_height)` に更新し、`abi_version` をアクティブ ABI セットに追加。
+  - 冪等: 同じ高さでの replay は no-op。他の高さは決定論的に拒否。
+- CancelRuntimeUpgrade { id: RuntimeUpgradeId }
+  - 事前条件: status が Proposed かつ `current_height < manifest.start_height`。
+  - 効果: `Canceled` に更新。
 
-## 命令（ISI）
-- `ProposeRuntimeUpgrade { manifest }`
-  - 効果: `RuntimeUpgradeRecord{ status=Proposed }` を挿入（存在する場合は不変）。
-  - ウィンドウ重複や不変条件違反を拒否。正規バイト列のみ受理。
-- `ActivateRuntimeUpgrade { id }`
-  - 前提: Proposed 記録が存在し、`current_height == start_height`、かつ `current_height < end_height`。
-  - 効果: `ActivatedAt(current_height)` に更新し、`abi_version` をアクティブ集合へ追加。
-  - 冪等: 同高さのリプレイは無操作。異なる高さは拒否。
-- `CancelRuntimeUpgrade { id }`
-  - 前提: Proposed 状態で `current_height < start_height`。
-  - 効果: ステータスを `Canceled` に変更。
+イベント (Data Events)
+- RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
-## イベント
-`RuntimeUpgradeEvent::{Proposed, Activated, Canceled}`。
+入場ルール
+- コントラクト入場: `ProgramMetadata.abi_version = v` の manifest に対して:
+  - `v` が未アクティブ: `IvmAdmissionError::AbiVersionNotActive { v }` で拒否。
+  - アクティブ後: `abi_hash(v)` を再計算し payload/manifest と一致させる。不一致は `IvmAdmissionError::ManifestAbiHashMismatch`。
+- トランザクション入場: `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` は適切な権限 (root/sudo) が必要。ウィンドウ重複制約を満たすこと。
 
-## 受理ルール
-- コントラクト受理: `ProgramMetadata.abi_version = v` のマニフェストは、アクティベーション前なら `AbiVersionNotActive` で拒否。アクティベーション後は計算した `abi_hash` と一致しなければ `ManifestAbiHashMismatch`。
-- トランザクション受理: 各命令は適切な権限（root/sudo）とウィンドウ不重複性のチェックが必要。
+プロベナンス強制
+- Runtime-upgrade manifest は SBOM digest (`sbom_digests`)、SLSA attestation bytes (`slsa_attestation`)、署名メタデータ (`provenance` signatures) を持てる。署名は canonical `RuntimeUpgradeManifestSignaturePayload` (manifest の全フィールド、`provenance` の署名リストを除く) を対象とする。
+- ガバナンス設定 `governance.runtime_upgrade_provenance` で強制:
+  - `mode`: `optional` (欠落を許可、存在時は検証) / `required` (欠落時は拒否)。
+  - `require_sbom`: `true` の場合 SBOM digest が最低 1 つ必要。
+  - `require_slsa`: `true` の場合 SLSA attestation が非空で必要。
+  - `trusted_signers`: 承認済み署名者の公開鍵リスト。
+  - `signature_threshold`: 必要な信頼署名の最小数。
+- プロベナンス拒否は命令失敗に安定コードを付与 (prefix `runtime_upgrade_provenance:`):
+  - `missing_provenance`, `missing_sbom`, `invalid_sbom_digest`, `missing_slsa_attestation`
+  - `missing_signatures`, `invalid_signature`, `untrusted_signer`, `signature_threshold_not_met`
+- テレメトリ: `runtime_upgrade_provenance_rejections_total{reason}` が拒否理由を集計。
 
-## 実行ルール
-- VM ホストポリシー: `ProgramMetadata.abi_version` に基づき `SyscallPolicy` を選択。許可外のシステムコールは `VMError::UnknownSyscall`。
-- ポインター ABI: バージョンごとの許可リストで TLV を検証。
-- ホスト切替: 各ブロックでアクティブ ABI 集合を再計算。アクティベーション後の同一ブロック内トランザクションも新ポリシーを観測します。
+実行ルール
+- VM Host Policy: 実行時に `ProgramMetadata.abi_version` から `SyscallPolicy` を導出。未知の syscall は `VMError::UnknownSyscall`。
+- Pointer-ABI: `ProgramMetadata.abi_version` に由来する allowlist。該当バージョンの allowlist 外型は decode/validation で拒否。
+- Host Switching: 各ブロックでアクティブ ABI セットを再計算。アクティベーション TX が commit されると、同一ブロック内の後続 TX は新ポリシーを観測 ( `runtime_upgrade_admission::activation_allows_new_abi_in_same_block` で検証)。
+  - Syscall policy binding: `CoreHost` はトランザクションの ABI バージョンを読み、`ivm::syscalls::is_syscall_allowed`/`is_type_allowed_for_policy` をブロック単位 `SyscallPolicy` に適用。ホストはトランザクション単位の VM インスタンスを再利用するため、ブロック途中の有効化は安全。後続トランザクションは更新ポリシーを観測し、先行トランザクションは元のバージョンのまま。
 
-## 決定論と安全性
-- アクティベーションは `start_height` で一度のみ。リオーガも決定論的に再適用される。
-- 既存 ABI バージョンは継続して有効。新バージョンは集合に追加。
-- 合意や実行順序に影響する動的交渉は存在しない。
+決定論性と安全性の不変条件
+- アクティベーションは `start_height` のみで発生し冪等。`start_height` より下の reorg はブロックが再着地した際に決定論的に再適用。
+- 既存 ABI バージョンは無期限にアクティブ。新バージョンはアクティブ集合を拡張するだけ。
+- 動的交渉はコンセンサスや実行順序に影響しない。能力 gossip は情報提供のみ。
 
-## 運用ロールアウト
-1. 新 ABI (`v+1`) をサポートするバイナリを事前配布。
-2. テレメトリで対応率を確認。
-3. `ProposeRuntimeUpgrade` を十分先のウィンドウで提出。
-4. `start_height` でアクティベート。旧バイナリは従来 ABI のみ受理・実行。
-5. アクティベーション後に `v+1` 対応コントラクトを再コンパイル／デプロイ。
+運用ロールアウト (無停止)
+1) 新 ABI (`v+1`) をサポートするが有効化しないノードバイナリを配布。
+2) テレメトリでフリートの対応状況を確認 ( `v+1` サポートをアナウンスするノード割合 )。
+3) 十分に先のウィンドウ (例: `H+N`) で `ProposeRuntimeUpgrade` を提出。
+4) `start_height` で `ActivateRuntimeUpgrade` がブロックに含まれて自動実行され、ホストのアクティブ集合が切り替わる。未更新ノードは旧契約は動作するが `v+1` の入場/実行は拒否。
+5) 有効化後、`v+1` をターゲットにコントラクトを再コンパイル/デプロイ。
 
-## Torii & CLI
-- Torii: `GET /v1/runtime/abi/active`, `GET /v1/runtime/abi/hash`, `GET /v1/runtime/upgrades`, `POST /v1/runtime/upgrades/{propose|activate|cancel}`。
-- CLI: `iroha runtime abi active/hash`, `iroha runtime upgrade {list, propose, activate, cancel}`。
+Torii と CLI
+- Torii
+  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
+  - `GET /v1/runtime/upgrades` -> record 一覧 (implemented)。
+  - `POST /v1/runtime/upgrades/propose` -> `ProposeRuntimeUpgrade` をラップ (instruction skeleton を返す; implemented)。
+  - `POST /v1/runtime/upgrades/activate/:id` -> `ActivateRuntimeUpgrade` をラップ (instruction skeleton を返す; implemented)。
+  - `POST /v1/runtime/upgrades/cancel/:id` -> `CancelRuntimeUpgrade` をラップ (instruction skeleton を返す; implemented)。
+- CLI
+  - `iroha runtime abi active` (implemented)
+  - `iroha runtime abi hash` (implemented)
+  - `iroha runtime upgrade list` (implemented)
+  - `iroha runtime upgrade propose --file <manifest.json>` (implemented)
+  - `iroha runtime upgrade activate --id <id>` (implemented)
+  - `iroha runtime upgrade cancel --id <id>` (implemented)
 
-## コアクエリ API
-`FindActiveAbiVersions` が `{ active_versions, default_compile_target }` を返却。サンプルは `docs/source/samples/find_active_abi_versions.md`。
+Core Query API
+- Norito 単発クエリ (署名付き):
+  - `FindActiveAbiVersions` は Norito 構造体 `{ active_versions: [u16], default_compile_target: u16 }` を返す。
+  - サンプル: `docs/source/samples/find_active_abi_versions.md` (型/フィールドと JSON 例)。
 
-## 必要なコード変更
-- `iroha_data_model`: 型／命令／イベントと Norito/JSON コーデック、往復テスト。
-- `iroha_core`: レジストリ追加、ハンドラー実装、受理ゲート、テスト。
-- `ivm`: 新 ABI 定義とポリシー、ゴールデンテスト再生成。
-- `iroha_cli` / `iroha_torii`: エンドポイント／コマンド追加。
-- Kotodama コンパイラ: 新 ABI バージョンと `abi_hash` をサポート。
+必要なコード変更 (crate 別)
+- iroha_data_model
+  - `RuntimeUpgradeManifest`, `RuntimeUpgradeRecord`, 命令 enum, イベント, JSON/Norito codec と roundtrip テストを追加。
+- iroha_core
+  - WSV: `runtime_upgrades` レジストリと重複チェック/ゲッターを追加。
+  - Executors: ISI handlers を実装; イベントを発行; 入場ルールを適用。
+  - Admission: `abi_version` の有効性と `abi_hash` 一致でプログラム manifest をゲート。
+  - Syscall policy mapping: アクティブ ABI セットを VM host コンストラクタに渡し、実行開始時のブロック高を用いて決定論性を担保。
+  - Tests: アクティベーションウィンドウの冪等性、重複拒否、入場の pre/post 振る舞い。
+- ivm
+  - `ABI_V2` (例) を定義し、`abi_syscall_list()` 拡張、`is_syscall_allowed(policy, number)` マッピング、pointer 型ポリシー拡張。
+  - golden tests の再計算と固定: `abi_syscall_list_golden.rs`, `abi_hash_versions.rs`, `pointer_type_ids_golden.rs`。
+- iroha_cli / iroha_torii
+  - 上記エンドポイント/コマンドを追加; manifest 用 Norito JSON helper; 基本的な統合テスト。
+- Kotodama compiler
+  - `abi_version = v+1` のターゲットを許可し、選択したバージョンの `abi_hash` を `.to` manifest に埋め込む。
 
-## テレメトリ
-`runtime.active_abi_versions` ゲージと `runtime.upgrade_events_total{kind}` カウンタを追加。
+Telemetry
+- `runtime.active_abi_versions` gauge と `runtime.upgrade_events_total{kind}` counter を追加。
 
-## セキュリティ
-- root/sudo のみが命令を実行可能。マニフェストは署名必須。
-- アクティベーションウィンドウが先行実行を防ぎ、アクティベーションを決定論的に。
-- `abi_hash` がインターフェースを固定し、バイナリ差異を吸収。
+Security Considerations
+- root/sudo のみが propose/activate/cancel 可能; manifest は適切に署名されていること。
+- アクティベーションウィンドウが front-running を防ぎ、決定論的適用を保証。
+- `abi_hash` が interface surface を固定し、バイナリ間のサイレント drift を防止。
 
-## 受け入れ基準
-- アクティベーション前は `v+1` コードを拒否。
-- アクティベーション後は `v+1` を受理・実行し、旧プログラムは影響なし。
-- ABI ハッシュ／システムコール一覧のゴールデンテストが x86-64/ARM64 で成功。
-- アクティベーションが冪等であり、リオーガ下で安全。 
+Acceptance Criteria (Conformance)
+- 事前アクティベーションでは `abi_version = v+1` のコードを決定論的に拒否。
+- `start_height` でのアクティベーション後、`v+1` を受理/実行し、旧プログラムは無変更で動作。
+- ABI hash と syscall リストの golden tests が x86-64/ARM64 で通る。
+- アクティベーションは冪等で reorg に対して安全。

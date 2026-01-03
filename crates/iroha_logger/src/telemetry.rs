@@ -484,10 +484,10 @@ fn normalize_field_name(field_name: &str) -> String {
                 let prev_is_alnum = idx > 0 && chars[idx - 1].is_ascii_alphanumeric();
                 let prev_is_upper = idx > 0 && chars[idx - 1].is_ascii_uppercase();
                 let next_is_lower = idx + 1 < chars.len() && chars[idx + 1].is_ascii_lowercase();
-                if (prev_is_alnum && !prev_is_upper) || (prev_is_upper && next_is_lower) {
-                    if !normalized.ends_with('_') {
-                        normalized.push('_');
-                    }
+                if ((prev_is_alnum && !prev_is_upper) || (prev_is_upper && next_is_lower))
+                    && !normalized.ends_with('_')
+                {
+                    normalized.push('_');
                 }
                 normalized.push(ch.to_ascii_lowercase());
             } else {
@@ -584,12 +584,16 @@ mod tests {
         with_test_lock(|| {
             configure_policy(TelemetryRedactionMode::Allowlist, &["ApiKeyHash"]);
             let value = sanitize_value("api_key_hash", Value::from("hash"));
-            if redaction_supported() {
-                assert_eq!(value, Value::from("hash"));
-            } else {
-                assert_eq!(value, Value::from("hash"));
-            }
+            assert_eq!(value, Value::from("hash"));
         });
+    }
+
+    #[test]
+    fn normalize_redaction_field_handles_camel_case() {
+        assert_eq!(normalize_redaction_field("ApiKeyHash"), "api_key_hash");
+        assert_eq!(normalize_redaction_field("apiKeyHash"), "api_key_hash");
+        assert_eq!(normalize_redaction_field("api_key_hash"), "api_key_hash");
+        assert_eq!(normalize_redaction_field("APIKey"), "api_key");
     }
 
     #[test]

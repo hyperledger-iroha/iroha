@@ -1764,15 +1764,12 @@ fn block_sync_quorum_available(
     signature_quorum_met: bool,
     candidate_qc_present: bool,
     commit_cert_present: bool,
-    missing_block_requested: bool,
+    _missing_block_requested: bool,
     _block_height: u64,
     _local_height: u64,
 ) -> bool {
-    commit_cert_present
-        || candidate_qc_present
-        || signature_quorum_met
-        || missing_block_requested
-        || block_signers > 0
+    // Missing-block fetches still require some signed evidence unless a QC/cert is present.
+    commit_cert_present || candidate_qc_present || signature_quorum_met || block_signers > 0
 }
 
 fn send_missing_block_request(
@@ -2894,15 +2891,37 @@ struct BlockSyncRosterSelection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RosterValidationError {
     BlockHashMismatch,
+    HeightMismatch {
+        expected: u64,
+        actual: u64,
+    },
+    ViewMismatch {
+        expected: u64,
+        actual: u64,
+    },
     EmptyRoster,
+    ValidatorSetHashVersionMismatch {
+        expected: u16,
+        actual: u16,
+    },
     ValidatorSetHashMismatch,
     SignerIndexOverflow(u32),
-    SignerOutOfRange { signer: u32, roster_len: u32 },
+    SignerOutOfRange {
+        signer: u32,
+        roster_len: u32,
+    },
     DuplicateSigner(u32),
     SignatureInvalid(u32),
-    CommitQuorumMissing { votes: usize, required: usize },
+    CommitQuorumMissing {
+        votes: usize,
+        required: usize,
+    },
     StakeSnapshotUnavailable,
     StakeQuorumMissing,
+    CheckpointExpired {
+        block_height: u64,
+        expires_at_height: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3108,13 +3127,22 @@ fn selection_from_roster_artifacts(
     commit_certificate: Option<&CommitCertificate>,
     checkpoint: Option<&ValidatorSetCheckpoint>,
     block_hash: HashOf<BlockHeader>,
+    block_height: u64,
+    block_view: Option<u64>,
     source: BlockSyncRosterSource,
     consensus_mode: ConsensusMode,
     state_view: &StateView<'_>,
 ) -> Option<BlockSyncRosterSelection> {
     let validated_cert =
         commit_certificate.and_then(|cert| {
-            match validate_commit_certificate_roster(cert, block_hash, consensus_mode, state_view) {
+            match validate_commit_certificate_roster(
+                cert,
+                block_hash,
+                block_height,
+                block_view,
+                consensus_mode,
+                state_view,
+            ) {
                 Ok(roster) => Some((roster, cert)),
                 Err(err) => {
                     warn!(
@@ -3126,8 +3154,8 @@ fn selection_from_roster_artifacts(
                 }
             }
         });
-    let validated_checkpoint =
-        checkpoint.and_then(|chk| match validate_checkpoint_roster(chk, block_hash) {
+    let validated_checkpoint = checkpoint.and_then(|chk| {
+        match validate_checkpoint_roster(chk, block_hash, block_height) {
             Ok(roster) => Some((roster, chk)),
             Err(err) => {
                 warn!(
@@ -3137,7 +3165,8 @@ fn selection_from_roster_artifacts(
                 );
                 None
             }
-        });
+        }
+    });
     match (validated_cert, validated_checkpoint) {
         (Some((roster, cert)), Some((checkpoint_roster, chk))) => {
             if roster != checkpoint_roster {
@@ -3175,6 +3204,7 @@ fn block_sync_history_roster_for_block(
     consensus_mode: ConsensusMode,
     block_hash: HashOf<BlockHeader>,
     block_height: u64,
+    block_view: Option<u64>,
 ) -> Option<BlockSyncRosterSelection> {
     let cert = super::status::commit_certificate_history()
         .into_iter()
@@ -3199,6 +3229,8 @@ fn block_sync_history_roster_for_block(
         cert.as_ref(),
         checkpoint.as_ref(),
         block_hash,
+        block_height,
+        block_view,
         source,
         consensus_mode,
         &state_view,
@@ -3211,6 +3243,7 @@ fn persisted_roster_for_block(
     consensus_mode: ConsensusMode,
     block_height: u64,
     block_hash: HashOf<BlockHeader>,
+    block_view: Option<u64>,
 ) -> Option<BlockSyncRosterSelection> {
     let state_view = state.view();
     if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
@@ -3218,6 +3251,8 @@ fn persisted_roster_for_block(
             Some(&snapshot.commit_certificate),
             Some(&snapshot.validator_checkpoint),
             block_hash,
+            block_height,
+            block_view,
             BlockSyncRosterSource::CommitRosterJournal,
             consensus_mode,
             &state_view,
@@ -3254,6 +3289,8 @@ fn persisted_roster_for_block(
             meta.commit_certificate.as_ref(),
             meta.validator_checkpoint.as_ref(),
             block_hash,
+            block_height,
+            block_view,
             BlockSyncRosterSource::RosterSidecar,
             consensus_mode,
             &state_view,
@@ -3285,6 +3322,7 @@ fn block_sync_update_with_roster(
 ) -> super::message::BlockSyncUpdate {
     let block_hash = block.hash();
     let block_height = block.header().height().get();
+    let block_view = u64::from(block.header().view_change_index());
     let mut update = super::message::BlockSyncUpdate::from(block);
     let (consensus_mode, mode_tag, prf_seed) = {
         let state_view = state.view();
@@ -3301,42 +3339,53 @@ fn block_sync_update_with_roster(
             .then(|| super::npos_seed_for_height(&state_view, block_height));
         (consensus_mode, mode_tag, prf_seed)
     };
-    let selection =
-        persisted_roster_for_block(state, kura, consensus_mode, block_height, block_hash)
-            .or_else(|| {
-                block_sync_history_roster_for_block(state, consensus_mode, block_hash, block_height)
+    let selection = persisted_roster_for_block(
+        state,
+        kura,
+        consensus_mode,
+        block_height,
+        block_hash,
+        Some(block_view),
+    )
+    .or_else(|| {
+        block_sync_history_roster_for_block(
+            state,
+            consensus_mode,
+            block_hash,
+            block_height,
+            Some(block_view),
+        )
+    })
+    .or_else(|| {
+        let view = state.view();
+        // Use the active roster so checkpoint signature indices match consensus ordering.
+        let roster = derive_active_topology(&view, trusted, me);
+        let source = if view.commit_topology().is_empty() {
+            BlockSyncRosterSource::TrustedPeersFallback
+        } else {
+            BlockSyncRosterSource::CommitTopologySnapshot
+        };
+        drop(view);
+        if roster.is_empty() {
+            None
+        } else {
+            let signatures =
+                canonicalize_block_signatures_for_roster(block, &roster, mode_tag, prf_seed);
+            Some(BlockSyncRosterSelection {
+                roster: roster.clone(),
+                source,
+                commit_certificate: None,
+                checkpoint: Some(ValidatorSetCheckpoint::new(
+                    block_height,
+                    block_hash,
+                    roster,
+                    signatures,
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    None,
+                )),
             })
-            .or_else(|| {
-                let view = state.view();
-                // Use the active roster so checkpoint signature indices match consensus ordering.
-                let roster = derive_active_topology(&view, trusted, me);
-                let source = if view.commit_topology().is_empty() {
-                    BlockSyncRosterSource::TrustedPeersFallback
-                } else {
-                    BlockSyncRosterSource::CommitTopologySnapshot
-                };
-                drop(view);
-                if roster.is_empty() {
-                    None
-                } else {
-                    let signatures = canonicalize_block_signatures_for_roster(
-                        block, &roster, mode_tag, prf_seed,
-                    );
-                    Some(BlockSyncRosterSelection {
-                        roster: roster.clone(),
-                        source,
-                        commit_certificate: None,
-                        checkpoint: Some(ValidatorSetCheckpoint::new(
-                            block_height,
-                            block_hash,
-                            roster,
-                            signatures,
-                            VALIDATOR_SET_HASH_VERSION_V1,
-                            None,
-                        )),
-                    })
-                }
-            });
+        }
+    });
     if let Some(selection) = selection {
         apply_roster_selection_to_block_sync_update(&mut update, &selection);
     }
@@ -3346,14 +3395,36 @@ fn block_sync_update_with_roster(
 fn validate_commit_certificate_roster(
     cert: &CommitCertificate,
     block_hash: HashOf<BlockHeader>,
+    block_height: u64,
+    block_view: Option<u64>,
     consensus_mode: ConsensusMode,
     state_view: &StateView<'_>,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
     if cert.block_hash != block_hash {
         return Err(RosterValidationError::BlockHashMismatch);
     }
+    if cert.height != block_height {
+        return Err(RosterValidationError::HeightMismatch {
+            expected: block_height,
+            actual: cert.height,
+        });
+    }
+    if let Some(block_view) = block_view {
+        if cert.view != block_view {
+            return Err(RosterValidationError::ViewMismatch {
+                expected: block_view,
+                actual: cert.view,
+            });
+        }
+    }
     if cert.validator_set.is_empty() {
         return Err(RosterValidationError::EmptyRoster);
+    }
+    if cert.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
+        return Err(RosterValidationError::ValidatorSetHashVersionMismatch {
+            expected: VALIDATOR_SET_HASH_VERSION_V1,
+            actual: cert.validator_set_hash_version,
+        });
     }
     if HashOf::new(&cert.validator_set) != cert.validator_set_hash {
         return Err(RosterValidationError::ValidatorSetHashMismatch);
@@ -3414,9 +3485,30 @@ fn validate_commit_certificate_roster(
 fn validate_checkpoint_roster(
     checkpoint: &ValidatorSetCheckpoint,
     block_hash: HashOf<BlockHeader>,
+    block_height: u64,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
     if checkpoint.block_hash != block_hash {
         return Err(RosterValidationError::BlockHashMismatch);
+    }
+    if checkpoint.height != block_height {
+        return Err(RosterValidationError::HeightMismatch {
+            expected: block_height,
+            actual: checkpoint.height,
+        });
+    }
+    if checkpoint.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
+        return Err(RosterValidationError::ValidatorSetHashVersionMismatch {
+            expected: VALIDATOR_SET_HASH_VERSION_V1,
+            actual: checkpoint.validator_set_hash_version,
+        });
+    }
+    if let Some(expires_at_height) = checkpoint.expires_at_height {
+        if block_height >= expires_at_height {
+            return Err(RosterValidationError::CheckpointExpired {
+                block_height,
+                expires_at_height,
+            });
+        }
     }
     if checkpoint.validator_set.is_empty() {
         return Err(RosterValidationError::EmptyRoster);
@@ -3458,7 +3550,7 @@ fn validate_checkpoint_roster(
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn select_block_sync_roster(
-    _block: &SignedBlock,
+    block: &SignedBlock,
     block_hash: HashOf<BlockHeader>,
     block_height: u64,
     persisted: Option<BlockSyncRosterSelection>,
@@ -3472,6 +3564,7 @@ fn select_block_sync_roster(
     allow_uncertified: bool,
 ) -> Option<BlockSyncRosterSelection> {
     let state_view = state.view();
+    let block_view = u64::from(block.header().view_change_index());
     if let Some(selection) = persisted {
         return Some(selection);
     }
@@ -3481,6 +3574,8 @@ fn select_block_sync_roster(
             Some(&snapshot.commit_certificate),
             Some(&snapshot.validator_checkpoint),
             block_hash,
+            block_height,
+            Some(block_view),
             BlockSyncRosterSource::CommitRosterJournal,
             consensus_mode,
             &state_view,
@@ -3490,17 +3585,8 @@ fn select_block_sync_roster(
         warn!(
             height = block_height,
             block = %block_hash,
-            "commit roster journal present but artifacts failed validation; falling back to stored roster"
+            "commit roster journal present but artifacts failed validation"
         );
-        let roster = snapshot.validator_checkpoint.validator_set.clone();
-        if !roster.is_empty() {
-            return Some(BlockSyncRosterSelection {
-                roster,
-                source: BlockSyncRosterSource::CommitRosterJournal,
-                commit_certificate: None,
-                checkpoint: None,
-            });
-        }
     }
 
     if let (Some(cert_hint), Some(checkpoint_hint)) = (cert_hint, checkpoint_hint) {
@@ -3508,6 +3594,8 @@ fn select_block_sync_roster(
             Some(cert_hint),
             Some(checkpoint_hint),
             block_hash,
+            block_height,
+            Some(block_view),
             BlockSyncRosterSource::CommitCheckpointPairHint,
             consensus_mode,
             &state_view,
@@ -3521,58 +3609,36 @@ fn select_block_sync_roster(
             Some(cert_hint),
             checkpoint_hint,
             block_hash,
+            block_height,
+            Some(block_view),
             BlockSyncRosterSource::CommitCertificateHint,
             consensus_mode,
             &state_view,
         ) {
             return Some(selection);
         }
-        if !cert_hint.validator_set.is_empty() {
-            warn!(
-                height = block_height,
-                block = %block_hash,
-                source = "commit_certificate_hint",
-                validator_set = cert_hint.validator_set.len(),
-                "using commit certificate roster without validating signatures"
-            );
-            return Some(BlockSyncRosterSelection {
-                roster: cert_hint.validator_set.clone(),
-                source: BlockSyncRosterSource::CommitCertificateHint,
-                commit_certificate: None,
-                checkpoint: None,
-            });
-        }
     } else if let Some(checkpoint_hint) = checkpoint_hint {
         if let Some(selection) = selection_from_roster_artifacts(
             None,
             Some(checkpoint_hint),
             block_hash,
+            block_height,
+            Some(block_view),
             BlockSyncRosterSource::ValidatorCheckpointHint,
             consensus_mode,
             &state_view,
         ) {
             return Some(selection);
         }
-        if !checkpoint_hint.validator_set.is_empty() {
-            warn!(
-                height = block_height,
-                block = %block_hash,
-                source = "validator_checkpoint_hint",
-                validator_set = checkpoint_hint.validator_set.len(),
-                "using checkpoint roster without validating signatures"
-            );
-            return Some(BlockSyncRosterSelection {
-                roster: checkpoint_hint.validator_set.clone(),
-                source: BlockSyncRosterSource::ValidatorCheckpointHint,
-                commit_certificate: None,
-                checkpoint: None,
-            });
-        }
     }
 
-    if let Some(history) =
-        block_sync_history_roster_for_block(state, consensus_mode, block_hash, block_height)
-    {
+    if let Some(history) = block_sync_history_roster_for_block(
+        state,
+        consensus_mode,
+        block_hash,
+        block_height,
+        Some(block_view),
+    ) {
         return Some(history);
     }
 
