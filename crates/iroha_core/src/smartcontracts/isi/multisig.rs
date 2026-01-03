@@ -6,7 +6,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use iroha_crypto::{Algorithm, HashOf, KeyPair};
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
@@ -33,7 +33,6 @@ use crate::{
 const DELIMITER: char = '/';
 const MULTISIG: &str = "multisig";
 const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
-const DERIVED_KEY_REJECTION: &str = "multisig account must use a non-derivable key; re-register with a random or injected account id";
 
 static MULTISIG_SPEC_CACHE: LazyLock<Mutex<BTreeMap<AccountId, MultisigSpec>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
@@ -78,11 +77,6 @@ pub fn execute_multisig_instruction(
 
 pub(crate) fn spec_key() -> Name {
     Name::from_str(&format!("{MULTISIG}{DELIMITER}spec"))
-        .expect("constant string must be a valid name")
-}
-
-fn derived_key_flag() -> Name {
-    Name::from_str(&format!("{MULTISIG}{DELIMITER}derived_key"))
         .expect("constant string must be a valid name")
 }
 

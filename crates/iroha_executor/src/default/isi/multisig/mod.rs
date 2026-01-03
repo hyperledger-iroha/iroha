@@ -36,14 +36,9 @@ pub(super) fn visit_instruction<V: Execute + Visit + ?Sized>(
 const DELIMITER: char = '/';
 const MULTISIG: &str = "multisig";
 const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
-pub(super) const DERIVED_KEY_REJECTION: &str = "multisig account must use a non-derivable key; re-register with a random or injected account id";
 
 fn spec_key() -> Name {
     format!("{MULTISIG}{DELIMITER}spec").parse().unwrap()
-}
-
-pub(super) fn derived_key_flag() -> Name {
-    format!("{MULTISIG}{DELIMITER}derived_key").parse().unwrap()
 }
 
 fn proposal_key(hash: &HashOf<Vec<InstructionBox>>) -> Name {

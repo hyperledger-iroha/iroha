@@ -2,6 +2,8 @@
 
 use iroha_logger::prelude::*;
 
+use crate::sumeragi::consensus::Phase;
+
 use super::*;
 
 type VoteLogKey = (
@@ -47,14 +49,12 @@ impl Actor {
 
     pub(super) fn handle_vote(&mut self, vote: crate::sumeragi::consensus::Vote) {
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
-        if self.drop_vote_for_height_or_view(&vote, committed_height) {
+        if self.drop_vote_for_height_or_view(&vote, committed_height)
+            || self.drop_precommit_vote_for_lock(&vote)
+        {
             return;
         }
-        if self.drop_precommit_vote_for_lock(&vote) {
-            return;
-        }
-        let (consensus_mode, mode_tag, prf_seed) =
-            self.consensus_context_for_height(vote.height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
         let topology_peers = self.roster_for_vote_with_mode(
             vote.block_hash,
             vote.height,
@@ -80,18 +80,12 @@ impl Actor {
             mode_tag,
             prf_seed,
         };
-        let signature_topology =
-            topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
+        let signature_topology = topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
         if !self.validate_and_record_vote(&vote, &signature_topology, &evidence_context, mode_tag)
         {
             return;
         }
-
-        if matches!(
-            vote.phase,
-            crate::sumeragi::consensus::Phase::Prevote
-                | crate::sumeragi::consensus::Phase::Precommit
-        ) {
+        if matches!(vote.phase, Phase::Prevote | Phase::Precommit) {
             self.try_form_qc_from_votes(
                 vote.phase,
                 vote.block_hash,
@@ -100,7 +94,7 @@ impl Actor {
                 vote.epoch,
                 topology,
             );
-            if matches!(vote.phase, crate::sumeragi::consensus::Phase::Precommit) {
+            if matches!(vote.phase, Phase::Precommit) {
                 if let Some(pending) = self.pending.pending_blocks.get(&vote.block_hash) {
                     if pending.aborted {
                         debug!(
@@ -111,15 +105,12 @@ impl Actor {
                         );
                         return;
                     }
-                    let block_time = {
-                        let view = self.state.view();
-                        view.world.parameters().sumeragi().block_time()
-                    };
+                    let state_view = self.state.view();
+                    let block_time = state_view.world.parameters().sumeragi().block_time();
                     let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
-                    let now = std::time::Instant::now();
                     if self
                         .block_sync_rebroadcast_log
-                        .allow(vote.block_hash, now, cooldown)
+                        .allow(vote.block_hash, std::time::Instant::now(), cooldown)
                     {
                         let update = self.block_sync_update_for_precommit_vote(
                             &pending.block,
@@ -129,9 +120,6 @@ impl Actor {
                             &self.vote_log,
                             &vote,
                         );
-                        if topology_peers.is_empty() {
-                            return;
-                        }
                         self.broadcast_block_sync_update(update, &topology_peers);
                         iroha_logger::info!(
                             height = vote.height,

@@ -9477,7 +9477,7 @@ async fn handle_connect_ws_logic(
         "app" | "App" => iroha_torii_shared::connect::Role::App,
         _ => iroha_torii_shared::connect::Role::Wallet,
     };
-    let token = match resolve_connect_ws_token(&headers, &q) {
+    let token = match resolve_connect_ws_token(&headers) {
         Ok(token) => token,
         Err(response) => return response,
     };
@@ -9608,7 +9608,6 @@ fn parse_connect_ws_query(
     use axum::http::StatusCode;
     let mut sid = None;
     let mut role = None;
-    let mut token = None;
     if let Some(qs) = raw {
         for pair in qs.split('&') {
             if pair.is_empty() {
@@ -9630,29 +9629,31 @@ fn parse_connect_ws_query(
             match key {
                 "sid" => sid = Some(value),
                 "role" => role = Some(value),
-                "token" => token = Some(value),
+                "token" => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        "connect query must not include token; use Authorization or Sec-WebSocket-Protocol",
+                    )
+                        .into_response());
+                }
                 _ => {}
             }
         }
     }
     match (sid, role) {
-        (Some(sid), Some(role)) => Ok(routing::ConnectWsQuery { sid, role, token }),
+        (Some(sid), Some(role)) => Ok(routing::ConnectWsQuery { sid, role }),
         _ => Err((StatusCode::BAD_REQUEST, "connect query missing sid/role").into_response()),
     }
 }
 
 const CONNECT_PROTOCOL_TOKEN_PREFIX: &str = "iroha-connect.token.v1.";
-const LEGACY_CONNECT_TOKEN_QUERY_SHIM_EXPIRY: &str = "2027-03-31";
-static LEGACY_CONNECT_QUERY_TOKEN_WARN_ONCE: std::sync::Once = std::sync::Once::new();
 
 #[allow(clippy::result_large_err)]
 fn resolve_connect_ws_token(
     headers: &axum::http::HeaderMap,
-    query: &routing::ConnectWsQuery,
 ) -> Result<String, axum::response::Response> {
     use axum::http::StatusCode;
 
-    let query_token = query.token.clone();
     let auth_token = parse_authorization_token(headers)?;
     let protocol_token = parse_protocol_token(headers)?;
 
@@ -9666,43 +9667,11 @@ fn resolve_connect_ws_token(
                     .into_response());
             }
         }
-        if let Some(query) = query_token.as_ref() {
-            if query != &auth {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    "connect: conflicting tokens in Authorization header and query string",
-                )
-                    .into_response());
-            }
-        }
         return Ok(auth);
     }
 
     if let Some(proto) = protocol_token {
-        if let Some(query) = query_token.as_ref() {
-            if query != &proto {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    "connect: conflicting tokens in Sec-WebSocket-Protocol header and query string",
-                )
-                    .into_response());
-            }
-        }
         return Ok(proto);
-    }
-
-    if let Some(query) = query_token {
-        if query.is_empty() {
-            return Err(
-                (StatusCode::BAD_REQUEST, "connect: token must not be empty").into_response(),
-            );
-        }
-        LEGACY_CONNECT_QUERY_TOKEN_WARN_ONCE.call_once(|| {
-            iroha_logger::warn!(
-                "connect: query token is deprecated; migrate to Authorization or Sec-WebSocket-Protocol before {LEGACY_CONNECT_TOKEN_QUERY_SHIM_EXPIRY}",
-            );
-        });
-        return Ok(query);
     }
 
     Err((
@@ -9710,6 +9679,35 @@ fn resolve_connect_ws_token(
         "connect: missing token; send Authorization: Bearer <token> or Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url>",
     )
         .into_response())
+}
+
+#[cfg(all(test, feature = "connect"))]
+mod connect_token_tests {
+    use axum::http::{HeaderMap, StatusCode, header};
+
+    use super::{parse_connect_ws_query, resolve_connect_ws_token};
+
+    #[test]
+    fn connect_query_rejects_token_param() {
+        let err = parse_connect_ws_query(Some("sid=abc&role=app&token=deadbeef"))
+            .expect_err("token param should be rejected");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn resolve_connect_ws_token_requires_headers() {
+        let headers = HeaderMap::new();
+        let err = resolve_connect_ws_token(&headers).expect_err("missing token should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn resolve_connect_ws_token_accepts_bearer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer test-token".parse().unwrap());
+        let token = resolve_connect_ws_token(&headers).expect("bearer token ok");
+        assert_eq!(token, "test-token");
+    }
 }
 
 #[allow(clippy::result_large_err)]

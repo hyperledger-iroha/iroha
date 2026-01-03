@@ -190,8 +190,6 @@ fn torii_debug_match_enabled() -> bool {
 /// - `offset` values that exceed `usize::MAX` (on the current platform) or the
 ///   collection length clamp to the end of the collection, yielding an empty
 ///   slice.
-/// - `limit = 0` is treated as "no limit" to preserve backwards-compatible
-///   semantics with earlier Torii endpoints.
 /// - When `cap` is provided, user-supplied limits are clamped to that maximum.
 fn pagination_bounds(
     len: usize,
@@ -204,9 +202,7 @@ fn pagination_bounds(
         Err(_) => len,
     };
 
-    let limited = limit
-        .filter(|&lim| lim > 0)
-        .map(|lim| cap.map_or(lim, |cap_lim| lim.min(cap_lim)));
+    let limited = limit.map(|lim| cap.map_or(lim, |cap_lim| lim.min(cap_lim)));
 
     let end = limited
         .and_then(|lim| usize::try_from(lim).ok())
@@ -214,6 +210,17 @@ fn pagination_bounds(
         .unwrap_or(len);
 
     (start, end)
+}
+
+#[cfg(test)]
+mod pagination_tests {
+    use super::pagination_bounds;
+
+    #[test]
+    fn pagination_bounds_limit_zero_returns_empty() {
+        let (start, end) = pagination_bounds(10, 0, Some(0), Some(7));
+        assert_eq!((start, end), (0, 0));
+    }
 }
 
 #[cfg(feature = "app_api")]

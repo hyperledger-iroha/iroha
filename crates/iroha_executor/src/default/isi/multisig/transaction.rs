@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use iroha_smart_contract::data_model::{isi::CustomInstruction, query::error::QueryExecutionFail};
 
-use super::{account::legacy_derived_multisig_account_id, *};
+use super::*;
 use crate::{
     data_model::{Level, query::error::FindError},
     smart_contract::DebugExpectExt as _,
@@ -42,11 +42,6 @@ impl VisitExecute for MultisigPropose {
             Ok(spec) => spec,
             Err(err) => deny!(executor, err),
         };
-        if let Err(err) =
-            ensure_not_derived_multisig_account(&multisig_account, &multisig_spec, executor)
-        {
-            deny!(executor, err);
-        }
         let proposer_role = multisig_role_for(&proposer);
         let multisig_role = multisig_role_for(&multisig_account);
         let is_downward_proposal = host
@@ -92,7 +87,6 @@ impl VisitExecute for MultisigPropose {
         let multisig_account = self.account;
         let instructions_hash = HashOf::new(&self.instructions);
         let spec = multisig_spec(&multisig_account, executor)?;
-        ensure_not_derived_multisig_account(&multisig_account, &spec, executor)?;
 
         let now_ms = now_ms(executor);
         let expires_at_ms = {
@@ -142,7 +136,6 @@ fn deploy_relayer<V: Execute + Visit + ?Sized>(
     executor: &mut V,
 ) -> Result<(), ValidationFail> {
     let spec = multisig_spec(&relayer, executor)?;
-    ensure_not_derived_multisig_account(&relayer, &spec, executor)?;
     let relay_expires_at_ms =
         capped_relay_expiry(now_ms, parent_expires_at_ms, spec.transaction_ttl_ms.get());
 
@@ -183,33 +176,6 @@ fn deploy_relayer<V: Execute + Visit + ?Sized>(
 fn capped_relay_expiry(now_ms: u64, parent_expires_at_ms: u64, relayer_ttl_ms: u64) -> u64 {
     let local_expiry = now_ms.saturating_add(relayer_ttl_ms);
     local_expiry.min(parent_expires_at_ms)
-}
-
-fn ensure_not_derived_multisig_account<V: Execute + Visit + ?Sized>(
-    multisig_account: &AccountId,
-    spec: &MultisigSpec,
-    executor: &V,
-) -> Result<(), ValidationFail> {
-    let flag_key = derived_key_flag();
-    if let Ok(raw) = super::load_account_metadata(multisig_account, &flag_key, executor) {
-        let is_derived: bool = raw
-            .try_into_any_norito()
-            .map_err(metadata_conversion_error)?;
-        if is_derived {
-            return Err(ValidationFail::NotPermitted(
-                DERIVED_KEY_REJECTION.to_owned(),
-            ));
-        }
-        return Ok(());
-    }
-
-    if legacy_derived_multisig_account_id(multisig_account.domain(), spec) == *multisig_account {
-        return Err(ValidationFail::NotPermitted(
-            DERIVED_KEY_REJECTION.to_owned(),
-        ));
-    }
-
-    Ok(())
 }
 
 fn proposal_value<V: Execute + Visit + ?Sized>(
