@@ -537,9 +537,12 @@ pub fn seed_viewer_negotiation(
 
 #[cfg(test)]
 mod tests {
-    use norito::streaming::{
-        CapabilityFlags, CapabilityRole, HpkeSuite, PrivacyBucketGranularity,
-        TransportCapabilityResolution,
+    use norito::{
+        json::{Number, Value},
+        streaming::{
+            CapabilityFlags, CapabilityRole, HpkeSuite, PrivacyBucketGranularity,
+            TransportCapabilityResolution,
+        },
     };
 
     use super::*;
@@ -623,12 +626,127 @@ mod tests {
         let norito::json::Value::Object(ticket_map) = ticket else {
             panic!("ticket must be an object");
         };
+        let expected_ticket_id = hex_encode(vector.ticket.ticket_id);
         let ticket_id = match ticket_map.get("ticket_id") {
-            Some(norito::json::Value::String(value)) => value,
+            Some(Value::String(value)) => value,
             _ => panic!("ticket_id must be a string"),
         };
-        let expected_ticket_id = hex_encode(vector.ticket.ticket_id);
         assert_eq!(ticket_id, &expected_ticket_id);
+        let key_commitment = match ticket_map.get("key_commitment") {
+            Some(Value::String(value)) => value,
+            _ => panic!("key_commitment must be a string"),
+        };
+        assert_eq!(key_commitment, &hex_encode(vector.ticket.key_commitment));
+        let contract_sig = match ticket_map.get("contract_sig") {
+            Some(Value::String(value)) => value,
+            _ => panic!("contract_sig must be a string"),
+        };
+        assert_eq!(contract_sig, &hex_encode(vector.ticket.contract_sig));
+        let commitment = match ticket_map.get("commitment") {
+            Some(Value::String(value)) => value,
+            _ => panic!("commitment must be a string"),
+        };
+        assert_eq!(commitment, &hex_encode(vector.ticket.commitment));
+        let nullifier = match ticket_map.get("nullifier") {
+            Some(Value::String(value)) => value,
+            _ => panic!("nullifier must be a string"),
+        };
+        assert_eq!(nullifier, &hex_encode(vector.ticket.nullifier));
+        let proof_id = match ticket_map.get("proof_id") {
+            Some(Value::String(value)) => value,
+            _ => panic!("proof_id must be a string"),
+        };
+        assert_eq!(proof_id, &hex_encode(vector.ticket.proof_id));
+
+        let owner = match ticket_map.get("owner") {
+            Some(Value::String(value)) => value,
+            _ => panic!("owner must be a string"),
+        };
+        assert_eq!(owner, &vector.ticket.owner);
+        let dsid = match ticket_map.get("dsid") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("dsid must be a number"),
+        };
+        assert_eq!(dsid, vector.ticket.dsid);
+        let lane_id = match ticket_map.get("lane_id") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("lane_id must be a number"),
+        };
+        assert_eq!(lane_id, u64::from(vector.ticket.lane_id));
+        let settlement_bucket = match ticket_map.get("settlement_bucket") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("settlement_bucket must be a number"),
+        };
+        assert_eq!(settlement_bucket, vector.ticket.settlement_bucket);
+        let start_slot = match ticket_map.get("start_slot") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("start_slot must be a number"),
+        };
+        assert_eq!(start_slot, vector.ticket.start_slot);
+        let expire_slot = match ticket_map.get("expire_slot") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("expire_slot must be a number"),
+        };
+        assert_eq!(expire_slot, vector.ticket.expire_slot);
+        let prepaid_teu = match ticket_map.get("prepaid_teu") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("prepaid_teu must be a number"),
+        };
+        assert_eq!(
+            prepaid_teu,
+            u64::try_from(vector.ticket.prepaid_teu).expect("prepaid fits u64")
+        );
+        let chunk_teu = match ticket_map.get("chunk_teu") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("chunk_teu must be a number"),
+        };
+        assert_eq!(chunk_teu, u64::from(vector.ticket.chunk_teu));
+        let fanout_quota = match ticket_map.get("fanout_quota") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("fanout_quota must be a number"),
+        };
+        assert_eq!(fanout_quota, u64::from(vector.ticket.fanout_quota));
+        let issued_at = match ticket_map.get("issued_at") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("issued_at must be a number"),
+        };
+        assert_eq!(issued_at, vector.ticket.issued_at);
+        let expires_at = match ticket_map.get("expires_at") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("expires_at must be a number"),
+        };
+        assert_eq!(expires_at, vector.ticket.expires_at);
+        let capabilities = match ticket_map.get("capabilities") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("capabilities must be a number"),
+        };
+        assert_eq!(capabilities, u64::from(vector.ticket.capabilities.bits()));
+        let policy = match ticket_map.get("policy") {
+            Some(Value::Object(value)) => value,
+            _ => panic!("policy must be an object"),
+        };
+        let allowed_regions = match policy.get("allowed_regions") {
+            Some(Value::Array(values)) => values,
+            _ => panic!("policy.allowed_regions must be an array"),
+        };
+        let regions: Vec<&str> = allowed_regions
+            .iter()
+            .map(|value| match value {
+                Value::String(value) => value.as_str(),
+                _ => panic!("allowed_regions entries must be strings"),
+            })
+            .collect();
+        assert_eq!(regions, vec!["us", "jp"]);
+        let max_bandwidth = match policy.get("max_bandwidth_kbps") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("policy.max_bandwidth_kbps must be a number"),
+        };
+        assert_eq!(max_bandwidth, 15_000);
+        let max_relays = match policy.get("max_relays") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("policy.max_relays must be a number"),
+        };
+        assert_eq!(max_relays, u64::from(vector.ticket.policy.as_ref().unwrap().max_relays));
 
         let revocation = root
             .get("ticket_revocation")
@@ -637,15 +755,49 @@ mod tests {
             panic!("ticket_revocation must be an object");
         };
         let revocation_ticket_id = match revocation_map.get("ticket_id") {
-            Some(norito::json::Value::String(value)) => value,
+            Some(Value::String(value)) => value,
             _ => panic!("ticket_revocation.ticket_id must be a string"),
         };
         let revocation_nullifier = match revocation_map.get("nullifier") {
-            Some(norito::json::Value::String(value)) => value,
+            Some(Value::String(value)) => value,
             _ => panic!("ticket_revocation.nullifier must be a string"),
+        };
+        let revocation_signature = match revocation_map.get("revocation_signature") {
+            Some(Value::String(value)) => value,
+            _ => panic!("ticket_revocation.revocation_signature must be a string"),
+        };
+        let revocation_reason = match revocation_map.get("reason_code") {
+            Some(Value::Number(Number::U64(value))) => *value,
+            _ => panic!("ticket_revocation.reason_code must be a number"),
         };
         assert_eq!(revocation_ticket_id, &expected_ticket_id);
         assert_eq!(revocation_nullifier, &hex_encode(vector.ticket.nullifier));
+        assert_eq!(
+            revocation_signature,
+            &hex_encode(vector.ticket_revocation.revocation_signature)
+        );
+        assert_eq!(revocation_reason, u64::from(vector.ticket_revocation.reason_code));
+    }
+
+    #[test]
+    fn snapshot_json_uses_string_for_large_prepaid_teu() {
+        let mut vector = baseline_test_vector();
+        vector.ticket.prepaid_teu = u128::from(u64::MAX) + 1;
+        let snapshot = vector.snapshot_json().expect("snapshot serializes");
+        let value: norito::json::Value =
+            norito::json::from_str(&snapshot).expect("snapshot parses");
+        let norito::json::Value::Object(root) = value else {
+            panic!("snapshot root must be an object");
+        };
+        let ticket = root.get("ticket").expect("ticket field present");
+        let norito::json::Value::Object(ticket_map) = ticket else {
+            panic!("ticket must be an object");
+        };
+        let prepaid_teu = match ticket_map.get("prepaid_teu") {
+            Some(Value::String(value)) => value,
+            _ => panic!("prepaid_teu must be a string"),
+        };
+        assert_eq!(prepaid_teu, &vector.ticket.prepaid_teu.to_string());
     }
 
     #[test]

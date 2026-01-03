@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Strengthened Norito streaming snapshot assertions (ticket fields, policy, revocation) and added coverage for large prepaid TEU JSON encoding.
+- Tests: not run (not requested).
 - Normalized Norito streaming integration-test snapshots to structured ticket JSON, aligned revocation fixtures with ticket identifiers, and validated bundle-width telemetry against the configured width.
 - Tests: not run (not requested).
 - Canonicalized Kagami localnet host handling (IPv6 + lowercase), centralized localnet validation, embedded rANS tables for repo-less runs, and fixed start.sh default irohad paths (debug + release); added host/script/rANS unit coverage and updated localnet docs.
