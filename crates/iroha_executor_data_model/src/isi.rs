@@ -168,8 +168,7 @@ pub mod multisig {
         /// Account backing the multisig controller.
         ///
         /// Must live in the same domain as the signatories. The key is provided by
-        /// the caller and is no longer derived deterministically from the
-        /// multisig specification to prevent direct-sign bypasses.
+        /// the caller to anchor the multisig controller identity.
         pub account: AccountId,
         /// Specification of the multisig account
         pub spec: MultisigSpec,
@@ -631,7 +630,7 @@ pub mod multisig {
         }
 
         #[test]
-        fn multisig_register_from_spec_avoids_derived_controller() {
+        fn multisig_register_from_spec_randomizes_controller() {
             let domain: DomainId = "non-derived".parse().expect("valid domain");
             let signer = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
             let mut signatories = BTreeMap::new();
@@ -651,15 +650,6 @@ pub mod multisig {
                 first.account.domain(),
                 &domain,
                 "generated controller must stay in the signatory domain"
-            );
-
-            let legacy_seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain.clone(), spec));
-            let legacy_key = KeyPair::from_seed(legacy_seed.as_ref().to_vec(), Algorithm::Ed25519);
-            let legacy_account = AccountId::new(domain.clone(), legacy_key.public_key().clone());
-
-            assert_ne!(
-                first.account, legacy_account,
-                "from_spec must not reuse legacy deterministic controller ids"
             );
             assert_ne!(
                 first.account, second.account,

@@ -1400,7 +1400,7 @@ async fn connect_ws_accepts_protocol_token() {
 
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
-async fn connect_ws_accepts_legacy_query_token() {
+async fn connect_ws_rejects_query_token() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
 
@@ -1411,7 +1411,7 @@ async fn connect_ws_accepts_legacy_query_token() {
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-            eprintln!("skipping connect_ws_accepts_legacy_query_token: {err}");
+            eprintln!("skipping connect_ws_rejects_query_token: {err}");
             return;
         }
         Err(err) => panic!("failed to bind test listener: {err}"),
@@ -1419,44 +1419,16 @@ async fn connect_ws_accepts_legacy_query_token() {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-    let app2 = torii.api_router_for_tests();
-
-    let sid_fixed = B64.encode([0x72u8; 32]);
-    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        ("sid", Some(sid_fixed.clone())),
-        ("node", Option::<String>::None),
-    ]))
-    .expect("json serialization");
-    let res = app2
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(Uri::from_static("/v1/connect/session"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(req_body))
-                .unwrap(),
-        )
+    let sid = B64.encode([0x72u8; 32]);
+    let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app&token=deadbeef");
+    let err = tokio_tungstenite::connect_async(&url)
         .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let bytes = http_body_util::BodyExt::collect(res.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    let sid = v.get("sid").and_then(|x| x.as_str()).expect("sid");
-    assert_eq!(sid, sid_fixed);
-    let token_app = v
-        .get("token_app")
-        .and_then(|x| x.as_str())
-        .expect("token_app");
-
-    let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app&token={token_app}");
-    let (_ws, resp) = tokio_tungstenite::connect_async(&url)
-        .await
-        .expect("ws handshake ok");
-    assert_eq!(resp.status(), StatusCode::SWITCHING_PROTOCOLS);
+        .expect_err("ws handshake should reject query token");
+    let status = match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => resp.status(),
+        other => panic!("unexpected error: {other:?}"),
+    };
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[cfg(feature = "ws_integration_tests")]
@@ -1480,7 +1452,7 @@ async fn connect_ws_handshake_fails_when_disabled() {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     // Attempt WS connect directly; expect failure
     let url = format!(
-        "ws://{}/v1/connect/ws?sid={}&role=app&token=deadbeef",
+        "ws://{}/v1/connect/ws?sid={}&role=app",
         addr, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     );
     let res = tokio_tungstenite::connect_async(&url).await;

@@ -1,6 +1,12 @@
 # Status
 
 ## Latest Updates
+- Skip rebroadcasting aborted pending blocks in precommit sync updates, highest-QC payload rebroadcasts, and pending replay selection; added unit coverage for aborted-pending vote handling and broadcast suppression.
+- Tests: not run (not requested).
+- Added equal-weight fallback for empty NPoS public-lane stake maps when forming commit snapshots and computing stake quorum, with unit coverage and NPoS docs updated.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core stake_snapshot_from_roster_falls_back_to_equal_weights_without_stake_records -- --nocapture` (timed out after 120s during compile; retry failed to compile `iroha_core` due to borrow error in `crates/iroha_core/src/sumeragi/main_loop/votes.rs:126`).
+- Avoided Sumeragi stalls under full background queues by dropping non-blocking RBC chunk posts, added unit coverage for the new behavior, and removed debug eprintlns from the block-created path.
+- Tests: not run (not requested).
 - Treat aborted pending blocks as unknown for consensus checks while still counting their payloads for missing-block tracking, with unit coverage for the new distinction.
 - Tests: not run (not requested).
 - Strengthened Norito streaming snapshot assertions (ticket fields, policy, revocation) and added coverage for large prepaid TEU JSON encoding.

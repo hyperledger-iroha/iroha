@@ -206,6 +206,7 @@ impl Actor {
             .pending
             .pending_blocks
             .iter()
+            .filter(|(_, pending)| !pending.aborted)
             .max_by_key(|(_, pending)| (pending.height, pending.view))
             .map(|(hash, pending)| (*hash, pending.block.clone(), pending.height, pending.view))
         else {

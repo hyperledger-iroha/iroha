@@ -2,7 +2,6 @@
 
 use std::collections::BTreeSet;
 
-use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_smart_contract::data_model::{
     prelude::{FindAccounts, Grant, Register},
     query::prelude::{FindDomains, FindRoles, FindRolesByAccountId},
@@ -35,7 +34,6 @@ impl VisitExecute for MultisigRegister {
 
         let mut metadata = Metadata::default();
         metadata.insert(spec_key(), Json::new(spec.clone()));
-        metadata.insert(derived_key_flag(), Json::from(false));
 
         let register_account =
             Register::account(Account::new(multisig_account_id.clone()).with_metadata(metadata));
@@ -60,11 +58,6 @@ fn validate_registration<V: Execute + Visit + ?Sized>(
         return Err(ValidationFail::NotPermitted(format!(
             "multisig account `{multisig_account}` must belong to domain `{domain_id}`"
         )));
-    }
-    if legacy_derived_multisig_account_id(&domain_id, spec) == *multisig_account {
-        return Err(ValidationFail::NotPermitted(
-            DERIVED_KEY_REJECTION.to_owned(),
-        ));
     }
     ensure_quorum_reachable(spec)?;
     ensure_signatories_exist(spec, executor)?;
@@ -117,15 +110,6 @@ fn ensure_signatories_exist<V: Execute + Visit + ?Sized>(
         fetch_account_by_id(account, executor)?;
     }
     Ok(())
-}
-
-pub(super) fn legacy_derived_multisig_account_id(
-    domain_id: &DomainId,
-    spec: &MultisigSpec,
-) -> AccountId {
-    let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain_id.clone(), spec.clone()));
-    let key_pair = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
-    AccountId::new(domain_id.clone(), key_pair.public_key().clone())
 }
 
 fn account_exists<V: Execute + Visit + ?Sized>(

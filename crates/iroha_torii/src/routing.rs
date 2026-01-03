@@ -612,8 +612,6 @@ fn torii_debug_match_enabled() -> bool {
 /// - `offset` values that exceed `usize::MAX` (on the current platform) or the
 ///   collection length clamp to the end of the collection, yielding an empty
 ///   slice.
-/// - `limit = 0` is treated as "no limit" to preserve backwards-compatible
-///   semantics with earlier Torii endpoints.
 /// - When `cap` is provided, user-supplied limits are clamped to that maximum.
 fn pagination_bounds(
     len: usize,
@@ -626,9 +624,7 @@ fn pagination_bounds(
         Err(_) => len,
     };
 
-    let limited = limit
-        .filter(|&lim| lim > 0)
-        .map(|lim| cap.map_or(lim, |cap_lim| lim.min(cap_lim)));
+    let limited = limit.map(|lim| cap.map_or(lim, |cap_lim| lim.min(cap_lim)));
 
     let end = limited
         .and_then(|lim| usize::try_from(lim).ok())
@@ -645,7 +641,7 @@ fn pagination_bounds(
 pub struct HistoryWindowQuery {
     /// Optional starting height (inclusive). Defaults to the latest known height.
     pub from: Option<u64>,
-    /// Optional result cap (0 = unbounded up to the server-side cap).
+    /// Optional result cap (0 yields an empty result set).
     pub limit: Option<u64>,
 }
 
@@ -662,7 +658,6 @@ where
     F: Fn(&T) -> u64,
 {
     let capped_limit = limit
-        .filter(|&lim| lim > 0)
         .map(|lim| lim.min(cap))
         .unwrap_or(cap)
         .min(usize::MAX as u64) as usize;
@@ -675,6 +670,24 @@ where
         .filter(|item| height_fn(item) <= start_from)
         .take(capped_limit)
         .collect()
+}
+
+#[cfg(test)]
+mod pagination_tests {
+    use super::{clamp_history_window, pagination_bounds};
+
+    #[test]
+    fn pagination_bounds_limit_zero_returns_empty() {
+        let (start, end) = pagination_bounds(10, 0, Some(0), Some(5));
+        assert_eq!((start, end), (0, 0));
+    }
+
+    #[test]
+    fn clamp_history_window_limit_zero_returns_empty() {
+        let items = vec![3u64, 2, 1];
+        let windowed = clamp_history_window(items, None, Some(0), 10, |v| *v);
+        assert!(windowed.is_empty());
+    }
 }
 
 #[cfg(feature = "app_api")]

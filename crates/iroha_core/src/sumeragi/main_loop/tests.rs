@@ -2723,9 +2723,8 @@ async fn fetch_pending_block_ignores_aborted_pending() {
         .handle_fetch_pending_block(request)
         .expect("fetch pending block");
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
-        posts.is_empty(),
+        harness.background_rx.try_iter().next().is_none(),
         "aborted pending block should not be served"
     );
 
@@ -4598,6 +4597,59 @@ async fn rebroadcast_highest_pending_block_picks_latest() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_highest_pending_block_skips_aborted() {
+    let mut harness = test_actor_harness(4).await;
+    let payload_hash = Hash::new(b"payload");
+    let parent = sample_block(1, 0, None);
+    let low = sample_block(2, 0, Some(parent.hash()));
+    let high = sample_block(3, 1, Some(parent.hash()));
+
+    harness.actor.pending.pending_blocks.insert(
+        low.hash(),
+        PendingBlock::new(low.clone(), payload_hash, 2, 0),
+    );
+    let mut pending_high = PendingBlock::new(high.clone(), payload_hash, 3, 1);
+    pending_high.mark_aborted();
+    harness
+        .actor
+        .pending
+        .pending_blocks
+        .insert(high.hash(), pending_high);
+
+    let _ = harness.background_rx.try_iter().count();
+    harness
+        .actor
+        .rebroadcast_highest_pending_block(Instant::now());
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let broadcast_low = posts.iter().any(|post| {
+        matches!(
+            post,
+            BackgroundPost::Broadcast {
+                msg: BlockMessage::BlockCreated(created),
+                ..
+            } if created.block.hash() == low.hash()
+        )
+    });
+    let broadcast_high = posts.iter().any(|post| {
+        matches!(
+            post,
+            BackgroundPost::Broadcast {
+                msg: BlockMessage::BlockCreated(created),
+                ..
+            } if created.block.hash() == high.hash()
+        )
+    });
+    assert!(broadcast_low, "expected non-aborted pending block to be rebroadcast");
+    assert!(
+        !broadcast_high,
+        "aborted pending block should not be rebroadcast"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_cooldown_uses_chain_block_time() {
     let harness = test_actor_harness(4).await;
     let block_time = {
@@ -4838,6 +4890,71 @@ async fn precommit_vote_block_sync_update_cooldown_uses_chain_block_time() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn precommit_vote_skips_block_sync_update_for_aborted_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, 1, 0);
+    pending.mark_aborted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let _ = harness.background_rx.try_iter().count();
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let view = 0;
+    let rotated = super::topology_for_view(&topology, 1, view, super::PERMISSIONED_TAG, None);
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_idx = rotated
+        .as_ref()
+        .iter()
+        .position(|peer| peer == &local_peer)
+        .expect("local peer in topology");
+    let chain = actor.common_config.chain.clone();
+    let keypair = actor.common_config.key_pair.clone();
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Precommit,
+        block_hash,
+        height: 1,
+        view,
+        epoch: 0,
+        signer: u32::try_from(signer_idx).expect("signer index fits u32"),
+        bls_sig: Vec::new(),
+        signature: Vec::new(),
+    };
+    sign_vote_for_view(
+        &mut vote,
+        &chain,
+        &topology,
+        std::slice::from_ref(&keypair),
+    );
+    actor.handle_vote(vote);
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let sync_updates = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::BlockSyncUpdate(update),
+                    ..
+                } if update.block.hash() == block_hash
+            )
+        })
+        .count();
+    assert_eq!(
+        sync_updates, 0,
+        "aborted pending block should not trigger block sync updates"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn precommit_vote_broadcasts_block_sync_update_when_pending_untracked() {
     let mut harness = test_actor_harness(4).await;
 
@@ -4889,6 +5006,62 @@ async fn precommit_vote_broadcasts_block_sync_update_when_pending_untracked() {
     assert_eq!(
         sync_updates, expected_targets,
         "expected block sync update posts after local precommit"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn precommit_vote_block_sync_update_skips_aborted_pending_untracked() {
+    let mut harness = test_actor_harness(4).await;
+
+    let parent = sample_block(1, 0, None);
+    let block = sample_block(2, 0, Some(parent.hash()));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
+    pending.mark_aborted();
+
+    let _ = harness.background_rx.try_iter().count();
+
+    let topology =
+        super::network_topology::Topology::new(harness.actor.effective_commit_topology());
+    let emitted = harness.actor.emit_precommit_vote(
+        block_hash,
+        2,
+        0,
+        0,
+        &topology,
+        block.header().prev_block_hash(),
+    );
+    assert!(emitted, "expected local precommit vote to be emitted");
+
+    let _ = harness.background_rx.try_iter().count();
+
+    let vote = harness
+        .actor
+        .local_precommit_vote_for(2, 0, 0, &topology)
+        .expect("local precommit vote recorded");
+    harness
+        .actor
+        .maybe_broadcast_block_sync_update_for_precommit_vote(&pending, &vote);
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let sync_updates = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post {
+                    msg: BlockMessage::BlockSyncUpdate(update),
+                    ..
+                } if update.block.hash() == block_hash
+            )
+        })
+        .count();
+    assert_eq!(
+        sync_updates, 0,
+        "aborted pending block should not trigger block sync updates"
     );
 
     harness.shutdown.send();
@@ -18174,6 +18347,72 @@ async fn maybe_broadcast_new_view_emits_control_flow() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn maybe_broadcast_new_view_skips_aborted_pending_payload_rebroadcast() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = sample_block(1, 0, None);
+    let block = sample_block(2, 0, Some(parent.hash()));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, 2, 0);
+    pending.mark_aborted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let highest_qc_ref = crate::sumeragi::consensus::QcHeaderRef {
+        phase: Phase::Precommit,
+        subject_block_hash: block_hash,
+        height: 2,
+        view: 0,
+        epoch: 0,
+    };
+    let qc = crate::sumeragi::consensus::Qc {
+        phase: highest_qc_ref.phase,
+        subject_block_hash: highest_qc_ref.subject_block_hash,
+        height: highest_qc_ref.height,
+        view: highest_qc_ref.view,
+        epoch: highest_qc_ref.epoch,
+        aggregate: crate::sumeragi::consensus::QcAggregate {
+            signers_bitmap: vec![0x01],
+            bls_aggregate_signature: vec![0x01],
+        },
+    };
+    actor.qc_cache.insert(
+        (
+            qc.phase,
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            qc.epoch,
+        ),
+        qc,
+    );
+
+    let _ = harness.background_rx.try_iter().count();
+    actor.maybe_broadcast_new_view(highest_qc_ref, None, None);
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let created_posts = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Broadcast {
+                    msg: BlockMessage::BlockCreated(created),
+                    ..
+                } if created.block.hash() == block_hash
+            )
+        })
+        .count();
+    assert_eq!(
+        created_posts, 0,
+        "aborted pending block should not be rebroadcast with highest QC"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn maybe_broadcast_new_view_uses_activation_height_mode_tag() {
     use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
@@ -19811,11 +20050,9 @@ async fn block_created_skips_pending_insert_while_processing() {
         .pending_processing_parent
         .set(block.header().prev_block_hash());
 
-    eprintln!("block_created_requests_missing_parent_on_height_gap: before handle");
     actor
         .handle_block_created(super::message::BlockCreated { block })
         .expect("handle BlockCreated");
-    eprintln!("block_created_requests_missing_parent_on_height_gap: after handle");
 
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
@@ -23961,6 +24198,65 @@ fn dispatch_background_request_full_blocks_until_space() {
     );
 }
 
+#[cfg(feature = "telemetry")]
+#[test]
+fn dispatch_background_request_rbc_chunk_drops_when_full() {
+    use std::sync::{Arc, mpsc};
+
+    let (tx, rx) = mpsc::sync_channel(1);
+    tx.send(BackgroundPost::Broadcast {
+        msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        }),
+        enqueued_at: Instant::now(),
+    })
+    .expect("prefill background queue");
+    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+    let telemetry = Telemetry::new(metrics.clone(), true);
+    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let chunk = sample_chunk_with_len(0, 4);
+    let request = BackgroundRequest::Post {
+        peer,
+        msg: BlockMessage::RbcChunk(chunk),
+    };
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let result = dispatch_background_request(Some(&tx), request, &telemetry);
+        let _ = done_tx.send(result);
+    });
+
+    let result = done_rx
+        .recv_timeout(Duration::from_millis(200))
+        .expect("RbcChunk dispatch should not block on a full queue");
+    assert!(result.is_err());
+    handle.join().expect("thread joins");
+
+    match rx.try_recv().expect("prefilled message should remain queued") {
+        BackgroundPost::Broadcast {
+            msg: BlockMessage::ConsensusParams(_),
+            ..
+        } => {}
+        other => panic!("unexpected background task: {other:?}"),
+    }
+    assert_eq!(
+        metrics
+            .sumeragi_bg_post_drop_total
+            .with_label_values(&["Post"])
+            .get(),
+        1
+    );
+    assert_eq!(
+        metrics
+            .sumeragi_bg_post_overflow_total
+            .with_label_values(&["Post"])
+            .get(),
+        1
+    );
+}
+
 #[cfg(not(feature = "telemetry"))]
 #[test]
 fn dispatch_background_request_post_enqueues() {
@@ -24087,6 +24383,49 @@ fn dispatch_background_request_full_blocks_until_space() {
         .expect("background dispatch completes after drain");
     assert!(result.is_ok());
     handle.join().expect("thread joins");
+}
+
+#[cfg(not(feature = "telemetry"))]
+#[test]
+fn dispatch_background_request_rbc_chunk_drops_when_full() {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::sync_channel(1);
+    tx.send(BackgroundPost::Broadcast {
+        msg: BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        }),
+        enqueued_at: Instant::now(),
+    })
+    .expect("prefill background queue");
+    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    let chunk = sample_chunk_with_len(0, 4);
+    let request = BackgroundRequest::Post {
+        peer,
+        msg: BlockMessage::RbcChunk(chunk),
+    };
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let result = dispatch_background_request(Some(&tx), request);
+        let _ = done_tx.send(result);
+    });
+
+    let result = done_rx
+        .recv_timeout(Duration::from_millis(200))
+        .expect("RbcChunk dispatch should not block on a full queue");
+    assert!(result.is_err());
+    handle.join().expect("thread joins");
+
+    match rx.try_recv().expect("prefilled message should remain queued") {
+        BackgroundPost::Broadcast {
+            msg: BlockMessage::ConsensusParams(_),
+            ..
+        } => {}
+        other => panic!("unexpected background task: {other:?}"),
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -2964,6 +2964,15 @@ impl Actor {
         pending: &PendingBlock,
         vote: &crate::sumeragi::consensus::Vote,
     ) {
+        if pending.aborted {
+            debug!(
+                height = vote.height,
+                view = vote.view,
+                block = %vote.block_hash,
+                "skipping block sync update for aborted pending block"
+            );
+            return;
+        }
         let cooldown = self
             .config
             .npos
@@ -4415,6 +4424,15 @@ impl Actor {
         }
 
         if let Some(pending) = self.pending.pending_blocks.get(&block_hash) {
+            if pending.aborted {
+                debug!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %block_hash,
+                    "skipping rebroadcast of aborted pending block for highest QC"
+                );
+                return;
+            }
             let block_height = pending.block.header().height().get();
             let created = super::message::BlockCreated::from(&pending.block);
             debug!(
