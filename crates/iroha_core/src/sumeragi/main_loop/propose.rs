@@ -140,6 +140,8 @@ impl Actor {
         self.clean_rbc_sessions_for_block(pending_hash, height);
         self.qc_cache
             .retain(|(_, hash, _, _, _), _| hash != &pending_hash);
+        self.qc_signer_tally
+            .retain(|(_, hash, _, _, _), _| hash != &pending_hash);
         self.execution_qc_cache.remove(&pending_hash);
         self.subsystems.propose.proposal_cache.pop_hint(height, view);
         self.subsystems.propose.proposal_cache.pop_proposal(height, view);

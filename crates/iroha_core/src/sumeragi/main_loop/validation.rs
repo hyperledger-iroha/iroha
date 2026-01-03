@@ -145,6 +145,8 @@ impl Actor {
         self.clean_rbc_sessions_for_block(hash, height);
         self.qc_cache
             .retain(|(_, cached_hash, _, _, _), _| cached_hash != &hash);
+        self.qc_signer_tally
+            .retain(|(_, cached_hash, _, _, _), _| cached_hash != &hash);
         self.execution_qc_cache.remove(&hash);
         ValidationGateOutcome::Invalid {
             hash,

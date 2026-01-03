@@ -1,6 +1,15 @@
 # Status
 
 ## Latest Updates
+- Replay now resolves per-block validator rosters from commit-roster journals/sidecars during Kura rebuilds, with a regression test covering roster ordering on restart.
+- Tests: `cargo test -p iroha_core replay_uses_commit_roster_journal_for_signature_order -- --nocapture` (timed out after 180s while running filtered binaries; target test passed; warnings about unused import/dead code in Sumeragi and unused-mut in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
+- Tests: `TEST_NETWORK_TMP_DIR=/Users/mtakemiya/dev/iroha/tmp/test_network IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_recovers_after_peer_restart -- --nocapture --test-threads=1`.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Pruned QC signer tallies alongside QC-cache evictions across commit/propose/validation/reschedule paths and added coverage in `drop_stale_pending_block` to ensure tallies are cleared with stale blocks.
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus routed-trace audit report (2026 Q1) across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
 - Tracked missing-block request heights so stale requests are pruned on commit, and added/updated unit coverage for height updates and pruning.
 - Tests: `cargo test --workspace` (timed out after 120s during compile; ivm/sorafs build errors copying incremental artifacts and missing rlib, plus warnings for unused import/dead code in Sumeragi and unused-mut in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
 - Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).

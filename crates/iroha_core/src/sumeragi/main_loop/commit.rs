@@ -927,6 +927,8 @@ impl Actor {
                 if failure.clean_block_hash {
                     self.qc_cache
                         .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                    self.qc_signer_tally
+                        .retain(|(_, hash, _, _, _), _| hash != &block_hash);
                     self.execution_qc_cache.remove(&block_hash);
                     self.clean_rbc_sessions_for_block(block_hash, pending_height);
                     block_hash_to_clean = Some(block_hash);
@@ -1077,6 +1079,8 @@ impl Actor {
                         }
                         self.qc_cache
                             .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                        self.qc_signer_tally
+                            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
                         self.execution_qc_cache.remove(&block_hash);
                         block_hash_to_clean = Some(block_hash);
                         emit_pipeline_events_now = true;
@@ -1136,6 +1140,8 @@ impl Actor {
                         }
                         if outcome.clean_block_hash {
                             self.qc_cache
+                                .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                            self.qc_signer_tally
                                 .retain(|(_, hash, _, _, _), _| hash != &block_hash);
                             self.execution_qc_cache.remove(&block_hash);
                             block_hash_to_clean = Some(block_hash);
@@ -1286,14 +1292,21 @@ impl Actor {
                 self.clean_rbc_sessions_for_block(stale_hash, stale_height);
                 self.qc_cache
                     .retain(|(_, hash, _, _, _), _| hash != &stale_hash);
+                self.qc_signer_tally
+                    .retain(|(_, hash, _, _, _), _| hash != &stale_hash);
                 self.execution_qc_cache.remove(&stale_hash);
             }
             self.qc_cache.retain(|(_, hash, height, _, _), _| {
                 *hash == block_hash || *height > pending_height
             });
+            self.qc_signer_tally.retain(|(_, hash, height, _, _), _| {
+                *hash == block_hash || *height > pending_height
+            });
             self.subsystems.propose.proposal_cache.prune_height_leq(pending_height);
             if let Some(parent) = parent_to_cleanup {
                 self.qc_cache
+                    .retain(|(_, hash, _, _, _), _| hash != &parent);
+                self.qc_signer_tally
                     .retain(|(_, hash, _, _, _), _| hash != &parent);
                 self.execution_qc_cache.remove(&parent);
             }
@@ -1400,6 +1413,8 @@ impl Actor {
             self.clean_rbc_sessions_for_block(block_hash, pending_height);
             if let Some(parent) = pending.block.header().prev_block_hash() {
                 self.qc_cache
+                    .retain(|(_, hash, _, _, _), _| hash != &parent);
+                self.qc_signer_tally
                     .retain(|(_, hash, _, _, _), _| hash != &parent);
                 self.execution_qc_cache.remove(&parent);
             }
@@ -1709,6 +1724,8 @@ impl Actor {
         pending.mark_aborted();
         self.clean_rbc_sessions_for_block(block_hash, height);
         self.qc_cache
+            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+        self.qc_signer_tally
             .retain(|(_, hash, _, _, _), _| hash != &block_hash);
         self.execution_qc_cache.remove(&block_hash);
         self.commit_votes
@@ -2695,6 +2712,8 @@ impl Actor {
                 pending.mark_aborted();
                 self.clean_rbc_sessions_for_block(hash, pending_height);
                 self.qc_cache
+                    .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
+                self.qc_signer_tally
                     .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
                 self.execution_qc_cache.remove(&hash);
                 let latest_committed_qc = self.latest_committed_qc();
@@ -4960,6 +4979,7 @@ impl Actor {
         }
         for key in stale_qcs {
             let _ = self.qc_cache.remove(&key);
+            let _ = self.qc_signer_tally.remove(&key);
         }
     }
 

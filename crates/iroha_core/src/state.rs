@@ -15030,6 +15030,51 @@ mod block_proof_tests {
     }
 }
 
+/// Resolve the validator roster for a replayed block using persisted roster metadata.
+fn replay_roster_for_block(
+    state: &State,
+    kura: &Kura,
+    block: &SignedBlock,
+    fallback: &crate::sumeragi::network_topology::Topology,
+) -> Vec<PeerId> {
+    let height = block.header().height().get();
+    let block_hash = block.hash();
+
+    if let Some(snapshot) = state.commit_roster_snapshot_for_block(height, block_hash) {
+        let roster = if snapshot.commit_certificate.validator_set.is_empty() {
+            snapshot.validator_checkpoint.validator_set
+        } else {
+            snapshot.commit_certificate.validator_set
+        };
+        if !roster.is_empty() {
+            return roster;
+        }
+    }
+
+    if let Some(meta) = kura.read_roster_metadata(height) {
+        if meta.block_hash != block_hash {
+            warn!(
+                expected = %block_hash,
+                stored = %meta.block_hash,
+                height,
+                "ignoring roster sidecar with mismatched hash during replay"
+            );
+        } else if let Some(roster) = meta.roster_snapshot()
+            && !roster.is_empty()
+        {
+            return roster;
+        }
+    }
+
+    let view = state.view();
+    let commit_topology = view.commit_topology();
+    if !commit_topology.is_empty() {
+        return commit_topology.iter().cloned().collect();
+    }
+
+    fallback.as_ref().to_vec()
+}
+
 /// Replay blocks from the local Kura store into the provided [`State`], rebuilding world state
 /// when a snapshot is unavailable.
 /// Uses the configured consensus mode as a fallback when resolving topology rotation.
@@ -15072,7 +15117,8 @@ pub fn replay_blocks_from_kura(
             .ok_or_else(|| eyre!("missing block at height {height} during replay"))?;
         iroha_logger::debug!(height, hash = %block_arc.hash(), "replaying block from Kura");
         let signed_block = (*block_arc).clone();
-        let mut block_topology = topology.clone();
+        let roster = replay_roster_for_block(state, kura, &signed_block, topology);
+        let mut block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
         let view = u64::from(signed_block.header().view_change_index());
         let height = signed_block.header().height().get();
         let (effective_mode, prf_seed) = {
@@ -15172,7 +15218,7 @@ pub fn replay_blocks_from_kura(
                 "transaction replays were rejected while rebuilding state"
             );
         }
-        let _ = state_block.apply_without_execution(&committed_block, topology.as_ref().to_owned());
+        let _ = state_block.apply_without_execution(&committed_block, roster);
         state_block.commit().map_err(|err| {
             eyre!(err).wrap_err(format!("failed to commit replayed block #{height}"))
         })?;
@@ -15351,6 +15397,171 @@ mod replay_validation_tests {
         replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Npos)
             .expect("replay should validate prf leader");
         assert_eq!(state.view().height(), 2);
+    }
+
+    #[test]
+    fn replay_uses_commit_roster_journal_for_signature_order() {
+        use std::borrow::Cow;
+
+        use iroha_config::{
+            base::WithOrigin,
+            kura::InitMode,
+            parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
+        };
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::{
+            consensus::VALIDATOR_SET_HASH_VERSION_V1, name::Name, peer::PeerId,
+        };
+        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisPeerPop};
+        use iroha_test_samples::{
+            SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
+        };
+
+        let chain_id = ChainId::from("iroha:test:replay-roster-journal");
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+
+        let peer_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let roster = vec![
+            PeerId::new(peer_b.public_key().clone()),
+            PeerId::new(peer_a.public_key().clone()),
+        ];
+        let pops = vec![
+            GenesisPeerPop {
+                public_key: peer_b.public_key().clone(),
+                pop: iroha_crypto::bls_normal_pop_prove(peer_b.private_key())
+                    .expect("generate pop b"),
+            },
+            GenesisPeerPop {
+                public_key: peer_a.public_key().clone(),
+                pop: iroha_crypto::bls_normal_pop_prove(peer_a.private_key())
+                    .expect("generate pop a"),
+            },
+        ];
+
+        let executor_path = super::permission_cache_tests::ensure_executor_bytecode(&temp_dir);
+        let (user_id, user_keypair) = gen_account_in("wonderland");
+        let mut genesis_builder =
+            GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
+                .set_topology(roster.clone())
+                .set_topology_pop(pops);
+        genesis_builder = genesis_builder
+            .domain("wonderland".parse::<Name>().expect("domain id"))
+            .account(user_keypair.public_key().clone())
+            .finish_domain();
+        let genesis_block = genesis_builder
+            .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+            .expect("genesis");
+        let genesis_signed = genesis_block.0.clone();
+
+        let genesis_arc = Arc::new(genesis_signed.clone());
+        kura.store_block(Arc::clone(&genesis_arc))
+            .expect("store genesis");
+
+        let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
+            .with_instructions([Log::new(
+                iroha_logger::Level::INFO,
+                "replay roster journal".to_owned(),
+            )])
+            .sign(user_keypair.private_key());
+        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let new_block = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, Some(&genesis_signed))
+            .sign(peer_b.private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = new_block.into();
+
+        let block_arc = Arc::new(signed_block.clone());
+        kura.store_block(Arc::clone(&block_arc))
+            .expect("store block");
+
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let world = World::with(
+            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+            [Account::new(genesis_id.clone()).build(&genesis_id)],
+            [],
+        );
+        let state = State::new_with_chain(
+            world,
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let signatures: Vec<_> = signed_block.signatures().cloned().collect();
+        let block_hash = signed_block.hash();
+        let validator_set_hash = HashOf::new(&roster);
+        let commit_cert = CommitCertificate {
+            height: 2,
+            block_hash,
+            view: 0,
+            epoch: 0,
+            validator_set_hash,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            signatures: signatures.clone(),
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            2,
+            block_hash,
+            roster,
+            signatures,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        state.record_commit_roster(&commit_cert, &checkpoint);
+
+        let replay_world = World::with(
+            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+            [Account::new(genesis_id.clone()).build(&genesis_id)],
+            [],
+        );
+        let mut replay_state = State::new_with_chain(
+            replay_world,
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = replay_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let fallback_topology = crate::sumeragi::network_topology::Topology::new(vec![
+            PeerId::new(peer_a.public_key().clone()),
+            PeerId::new(peer_b.public_key().clone()),
+        ]);
+
+        replay_blocks_from_kura(
+            &kura,
+            &mut replay_state,
+            &fallback_topology,
+            2,
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay should honor commit roster journal ordering");
+        assert_eq!(replay_state.view().height(), 2);
     }
 }
 

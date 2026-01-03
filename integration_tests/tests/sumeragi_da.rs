@@ -27,7 +27,7 @@ use iroha_test_network::{Network, NetworkBuilder};
 use norito::json::{self, Value};
 use rand::{Rng, SeedableRng, distr::Alphanumeric};
 use rand_chacha::ChaCha8Rng;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use toml::Table;
 
 #[derive(Clone)]
@@ -397,7 +397,17 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
         {
             return Ok(());
         }
-        restart_peer.once_block(expected_height).await;
+        timeout(
+            da_commit_wait_timeout(),
+            restart_peer.once_block(expected_height),
+        )
+        .await
+        .map_err(|_| {
+            eyre!(
+                "restart peer failed to reach height {expected_height} before timeout {:?}",
+                da_commit_wait_timeout()
+            )
+        })?;
 
         let restart_start = Instant::now();
         wait_for_recovered_flag(
@@ -604,7 +614,17 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
             restart_start,
         )
         .await?;
-        restart_peer.once_block(expected_height).await;
+        timeout(
+            da_commit_wait_timeout(),
+            restart_peer.once_block(expected_height),
+        )
+        .await
+        .map_err(|_| {
+            eyre!(
+                "restart peer failed to reach height {expected_height} before timeout {:?}",
+                da_commit_wait_timeout()
+            )
+        })?;
         let _commit_elapsed =
             wait_for_height(http.clone(), status_url, expected_height, restart_start).await?;
 

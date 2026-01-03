@@ -1,14 +1,15 @@
 //! Integration tests for executor upgrade workflows and permissions.
 
 use executor_custom_data_model::{complex_isi::NumericQuery, permissions::CanControlDomainLives};
-use eyre::{Context, Result};
+use eyre::{Context, Result, eyre};
+use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_executor_data_model::permission::{Permission as _, domain::CanUnregisterDomain};
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, load_sample_ivm};
 use nonzero_ext::nonzero;
-use tokio::{runtime::Runtime, sync::oneshot};
+use tokio::runtime::Runtime;
 
 fn start_network(
     builder: NetworkBuilder,
@@ -545,47 +546,39 @@ fn migration_should_cause_upgrade_event() {
     };
     let client = network.client();
 
-    let (tx, rx) = oneshot::channel::<Result<(), eyre::Report>>();
-    let events_client = client.clone();
-    std::thread::spawn(move || {
-        let iter = match events_client.listen_for_events([ExecutorEventFilter::new()]) {
-            Ok(iter) => iter,
-            Err(err) => {
-                let _ = tx.send(Err(err));
-                return;
-            }
-        };
-        for event in iter {
-            match event {
-                Ok(EventBox::Data(ev)) => {
-                    if let DataEvent::Executor(ExecutorEvent::Upgraded(upgrade)) = ev.as_ref() {
-                        assert!(
-                            !upgrade.new_data_model().permissions().is_empty(),
-                            "expected upgraded model to carry permissions"
-                        );
-                        let _ = tx.send(Ok(()));
-                        return;
-                    }
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    let _ = tx.send(Err(err));
-                    return;
-                }
-            }
-        }
-        let _ = tx.send(Err(eyre::eyre!("event stream ended before upgrade event")));
-    });
+    let mut events = rt
+        .block_on(async {
+            client
+                .listen_for_events_async([ExecutorEventFilter::new()])
+                .await
+        })
+        .expect("executor events stream should open");
 
     upgrade_executor(&client, "executor_with_custom_permission").unwrap();
 
-    let _ = rt
-        .block_on(async {
-            tokio::time::timeout(core::time::Duration::from_secs(60), rx)
-                .await
-                .unwrap()
+    let result: Result<()> = rt.block_on(async {
+        tokio::time::timeout(core::time::Duration::from_secs(60), async {
+            while let Some(event) = events.next().await {
+                match event {
+                    Ok(EventBox::Data(ev)) => {
+                        if let DataEvent::Executor(ExecutorEvent::Upgraded(upgrade)) = ev.as_ref() {
+                            assert!(
+                                !upgrade.new_data_model().permissions().is_empty(),
+                                "expected upgraded model to carry permissions"
+                            );
+                            return Ok(());
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(err) => return Err(err),
+                }
+            }
+            Err(eyre!("event stream ended before upgrade event"))
         })
-        .expect("should receive upgraded event immediately after upgrade");
+        .await
+        .map_err(|_| eyre!("timed out waiting for upgrade event"))?
+    });
+    result.expect("should receive upgraded event immediately after upgrade");
 }
 
 #[test]

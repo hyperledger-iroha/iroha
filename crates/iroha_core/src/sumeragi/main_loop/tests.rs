@@ -8286,6 +8286,28 @@ async fn stale_pending_block_requeues_transactions() {
         pending_hash,
         PendingBlock::new(pending_block, payload_hash, 2, 0),
     );
+    let qc_key = (Phase::Precommit, pending_hash, 2, 0, 0);
+    actor.qc_cache.insert(
+        qc_key,
+        crate::sumeragi::consensus::Qc {
+            phase: Phase::Precommit,
+            subject_block_hash: pending_hash,
+            height: 2,
+            view: 0,
+            epoch: 0,
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0x01],
+                bls_aggregate_signature: Vec::new(),
+            },
+        },
+    );
+    actor.qc_signer_tally.insert(
+        qc_key,
+        QcSignerTally {
+            voting_signers: BTreeSet::from([ValidatorIndex::from(0_u16)]),
+            present_signers: 1,
+        },
+    );
 
     assert!(super::pending_block_stale_for_tip(
         2,
@@ -8306,6 +8328,14 @@ async fn stale_pending_block_requeues_transactions() {
     assert!(
         !actor.pending.pending_blocks.contains_key(&pending_hash),
         "pending entry should be cleared"
+    );
+    assert!(
+        !actor.qc_cache.contains_key(&qc_key),
+        "stale pending block should evict cached QCs"
+    );
+    assert!(
+        !actor.qc_signer_tally.contains_key(&qc_key),
+        "stale pending block should evict cached QC signers"
     );
 
     shutdown.send();
