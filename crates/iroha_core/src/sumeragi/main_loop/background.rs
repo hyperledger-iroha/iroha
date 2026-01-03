@@ -10,6 +10,7 @@ pub(super) fn dispatch_background_request(
     request: BackgroundRequest,
     telemetry: &Telemetry,
 ) -> Result<(), Box<BackgroundRequest>> {
+    let allow_blocking = background_request_allows_blocking(&request);
     let (kind, peer_for_metrics, post) = match request {
         BackgroundRequest::Post { peer, msg } => (
             "Post",
@@ -76,6 +77,12 @@ pub(super) fn dispatch_background_request(
         Err(mpsc::TrySendError::Full(post)) => {
             telemetry.inc_bg_post_overflow(kind);
             trace!(kind, "background post queue full; applying backpressure");
+            if !allow_blocking {
+                trace!(kind, "dropping non-blocking background request");
+                super::status::record_bg_post_drop(kind);
+                telemetry.inc_bg_post_drop(kind);
+                return Err(Box::new(request_from_post(post)));
+            }
             match tx.send(post) {
                 Ok(()) => {
                     telemetry.inc_bg_post_enqueued(kind);
@@ -107,6 +114,7 @@ pub(super) fn dispatch_background_request(
     tx_opt: Option<&mpsc::SyncSender<BackgroundPost>>,
     request: BackgroundRequest,
 ) -> Result<(), Box<BackgroundRequest>> {
+    let allow_blocking = background_request_allows_blocking(&request);
     let (kind, post) = match request {
         BackgroundRequest::Post { peer, msg } => (
             "Post",
@@ -160,6 +168,11 @@ pub(super) fn dispatch_background_request(
         Ok(()) => Ok(()),
         Err(mpsc::TrySendError::Full(post)) => {
             trace!(kind, "background post queue full; applying backpressure");
+            if !allow_blocking {
+                trace!(kind, "dropping non-blocking background request");
+                super::status::record_bg_post_drop(kind);
+                return Err(Box::new(request_from_post(post)));
+            }
             match tx.send(post) {
                 Ok(()) => Ok(()),
                 Err(mpsc::SendError(post)) => {
@@ -174,6 +187,16 @@ pub(super) fn dispatch_background_request(
             super::status::record_bg_post_drop(kind);
             Err(Box::new(request_from_post(post)))
         }
+    }
+}
+
+fn background_request_allows_blocking(request: &BackgroundRequest) -> bool {
+    match request {
+        BackgroundRequest::Post { msg, .. } | BackgroundRequest::Broadcast { msg } => {
+            !matches!(msg, BlockMessage::RbcChunk(_))
+        }
+        BackgroundRequest::PostControlFlow { .. }
+        | BackgroundRequest::BroadcastControlFlow { .. } => true,
     }
 }
 

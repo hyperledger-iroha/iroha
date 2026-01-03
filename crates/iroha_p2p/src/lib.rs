@@ -96,13 +96,6 @@ pub enum Error {
     },
     /// Message improperly formatted
     Format,
-    /// Deprecated environment variable `{name}` is set; {guidance}
-    DeprecatedEnv {
-        /// Name of the deprecated environment variable.
-        name: &'static str,
-        /// Guidance for operators to migrate off the shim.
-        guidance: &'static str,
-    },
     /// Field is not defined for a peer at this stage
     Field,
     /// Norito codec error

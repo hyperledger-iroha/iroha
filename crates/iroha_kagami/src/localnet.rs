@@ -996,23 +996,22 @@ fn repo_root_path() -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), Path::to_path_buf);
     root.canonicalize().unwrap_or(root)
 }
 
 fn resolve_target_dir(repo_root: &Path, target_dir: Option<&str>) -> PathBuf {
-    match target_dir {
-        Some(path) => {
+    target_dir.map_or_else(
+        || repo_root.join("target"),
+        |path| {
             let target_dir = PathBuf::from(path);
             if target_dir.is_absolute() {
                 target_dir
             } else {
                 repo_root.join(target_dir)
             }
-        }
-        None => repo_root.join("target"),
-    }
+        },
+    )
 }
 
 fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {

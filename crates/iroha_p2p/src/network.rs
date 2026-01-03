@@ -1387,12 +1387,6 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let trust_gossip_config = trust_gossip;
         let trust_gossip = trust_gossip_config && soranet_handshake.trust_gossip;
         let soranet_runtime = runtime_from_handshake(soranet_handshake)?;
-        guard_deprecated_env_toggle(
-            "IROHA_P2P_TOPOLOGY_UPDATE_MS",
-            "configure network.peer_gossip_period_ms instead of using the deprecated env override",
-            !cfg!(debug_assertions),
-        )?;
-
         // Bind TCP listener with improved diagnostics that include the configured address.
         let listen_addr_repr = format!("{listen_addr:?}");
         let public_addr_repr = format!("{public_address:?}");
@@ -5050,35 +5044,6 @@ fn topology_tick_interval(configured: Duration) -> Duration {
     configured
 }
 
-fn guard_deprecated_env_toggle(
-    name: &'static str,
-    guidance: &'static str,
-    enforce_error: bool,
-) -> Result<(), Error> {
-    guard_deprecated_env_toggle_with_override(name, guidance, enforce_error, None)
-}
-
-fn guard_deprecated_env_toggle_with_override(
-    name: &'static str,
-    guidance: &'static str,
-    enforce_error: bool,
-    env_present: Option<bool>,
-) -> Result<(), Error> {
-    let present = env_present.unwrap_or_else(|| std::env::var_os(name).is_some());
-    if present {
-        if enforce_error {
-            return Err(Error::DeprecatedEnv { name, guidance });
-        }
-        iroha_logger::warn!(
-            target: "iroha_p2p::config",
-            name,
-            guidance,
-            "deprecated environment override is ignored; use configuration instead"
-        );
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, OnceLock};
@@ -5417,24 +5382,6 @@ mod tests {
     fn topology_tick_interval_ignores_env_override() {
         let configured = Duration::from_millis(500);
         assert_eq!(topology_tick_interval(configured), configured);
-    }
-
-    #[test]
-    fn deprecated_env_guard_errors_when_enforced() {
-        const ENV: &str = "IROHA_TEST_DEPRECATED_ENV_GUARD";
-        let result = guard_deprecated_env_toggle_with_override(ENV, "use config", true, Some(true));
-        assert!(
-            matches!(result, Err(Error::DeprecatedEnv { name, .. }) if name == ENV),
-            "expected a deterministic error when enforcement is enabled"
-        );
-    }
-
-    #[test]
-    fn deprecated_env_guard_warns_when_not_enforced() {
-        const ENV: &str = "IROHA_TEST_DEPRECATED_ENV_GUARD";
-        let result =
-            guard_deprecated_env_toggle_with_override(ENV, "use config", false, Some(true));
-        assert!(result.is_ok());
     }
 
     #[test]

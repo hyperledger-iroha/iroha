@@ -3025,8 +3025,6 @@ pub struct ConnectWsQuery {
     pub sid: String,
     /// Role name: "app" or "wallet"
     pub role: String,
-    /// Optional token provided via query string (legacy; prefer headers/protocols)
-    pub token: Option<String>,
 }
 
 #[cfg(all(test, feature = "connect"))]
