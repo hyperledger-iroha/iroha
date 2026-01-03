@@ -486,7 +486,7 @@ impl Actor {
         Ok(())
     }
 
-    fn snapshot_to_vrf_record(
+    pub(super) fn snapshot_to_vrf_record(
         &self,
         snapshot: EpochSnapshot,
         finalized: bool,

@@ -102,7 +102,7 @@ async fn trigger_completion_failure_reports_error() -> Result<()> {
         ),
     ));
     let client = network.client();
-    spawn_blocking(move || client.submit(register_trigger)).await??;
+    spawn_blocking(move || client.submit_blocking(register_trigger)).await??;
     network.ensure_blocks(2).await?;
 
     let call_trigger = ExecuteTrigger::new(trigger_id);

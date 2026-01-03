@@ -1,6 +1,37 @@
 # Status
 
 ## Latest Updates
+- Tracked missing-block request heights so stale requests are pruned on commit, and added/updated unit coverage for height updates and pruning.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; ivm/sorafs build errors copying incremental artifacts and missing rlib, plus warnings for unused import/dead code in Sumeragi and unused-mut in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Disabled integration-test network serialization by default (use `IROHA_TEST_SERIALIZE_NETWORKS=1` to re-enable), and extended ZK proof event test timeouts/submit path to reduce tx confirmation stalls.
+- Tests: `cargo test -p integration_tests serial_guard_is_noop_by_default -- --nocapture` (failed: `crates/iroha_core/src/sumeragi/main_loop/qc.rs` calls `plan_missing_block_fetch` with a missing `height` argument).
+- Translated the Nexus telemetry remediation plan across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Dropped commit votes for committed heights and stale views unless the block is known/missing; added unit coverage for stale/committed commit-vote handling.
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Pruned Sumeragi `vote_log`/`commit_votes` on block commits and cleared commit votes on roster/mode resets; added unit coverage.
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Pruned `proposals_seen` on block commits to prevent unbounded growth and extended commit-retention unit coverage.
+- Tests: not run (not requested).
+- Translated the Nexus cross-lane commitments doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Pruned `exec_vote_log` on block commits to prevent unbounded growth and added unit coverage for commit-time retention.
+- Tests: not run (not requested).
+- Translated the Nexus public lane staking doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Bounded NEW_VIEW receipt snapshots to a fixed in-memory window, added unit tests, and updated telemetry/pipeline docs (en/ja/he).
+- Tests: `cargo test --workspace` (timed out after 300s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus operations runbook across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Guarded Sumeragi proposal assembly against view indices beyond `u32::MAX` to avoid block-header panics and added unit coverage for overflow views.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus fee model updates doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
 - Translated the Nexus lane compliance policy engine spec across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
 - Tests: not run (docs-only change).
 - Aligned NPoS epoch scheduling with on-chain `SumeragiNposParameters` during mode flips and seed refreshes, updated status/telemetry + docs, and added unit coverage for epoch-parameter loading and overrides.

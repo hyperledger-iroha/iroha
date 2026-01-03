@@ -33,9 +33,9 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let client_for_submit = client.clone();
     let asset_definition_clone = asset_definition_id.clone();
     let mint_quantity = quantity.clone();
-    spawn_blocking(move || {
+    let submit_res: eyre::Result<()> = spawn_blocking(move || {
         client_for_submit
-            .submit_all::<InstructionBox>([
+            .submit_all_blocking::<InstructionBox>([
                 Register::asset_definition(AssetDefinition::numeric(
                     asset_definition_clone.clone(),
                 ))
@@ -46,9 +46,18 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
                 )
                 .into(),
             ])
-            .unwrap();
+            .map(|_| ())
     })
-    .await?;
+    .await
+    .map_err(eyre::Report::from)?;
+    if sandbox::handle_result(
+        submit_res,
+        stringify!(restarted_peer_should_restore_its_state),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
     if sandbox::handle_result(
         network.ensure_blocks(2).await,
         stringify!(restarted_peer_should_restore_its_state),

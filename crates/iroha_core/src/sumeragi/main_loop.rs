@@ -1646,6 +1646,7 @@ fn new_view_highest_qc_phase_valid(qc: &crate::sumeragi::consensus::Qc) -> bool 
 
 #[derive(Debug, Clone)]
 struct MissingBlockRequest {
+    height: u64,
     first_seen: Instant,
     last_requested: Instant,
     view_change_triggered: bool,
@@ -1671,12 +1672,14 @@ impl MissingBlockRequest {
 fn touch_missing_block_request(
     requests: &mut BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
     block_hash: HashOf<BlockHeader>,
+    height: u64,
     now: Instant,
     retry_window: Duration,
 ) -> bool {
     match requests.entry(block_hash) {
         Entry::Vacant(vacant) => {
             vacant.insert(MissingBlockRequest {
+                height,
                 first_seen: now,
                 last_requested: now,
                 view_change_triggered: false,
@@ -1686,6 +1689,7 @@ fn touch_missing_block_request(
         }
         Entry::Occupied(mut occupied) => {
             let stats = occupied.get_mut();
+            stats.height = stats.height.max(height);
             let retry_due = now.saturating_duration_since(stats.last_requested) >= retry_window;
             if retry_due {
                 stats.last_requested = now;
@@ -1710,13 +1714,14 @@ enum MissingBlockFetchDecision {
 fn plan_missing_block_fetch(
     requests: &mut BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
     block_hash: HashOf<BlockHeader>,
+    height: u64,
     signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     topology: &super::network_topology::Topology,
     now: Instant,
     retry_window: Duration,
     signer_fallback_attempts: u32,
 ) -> MissingBlockFetchDecision {
-    if !touch_missing_block_request(requests, block_hash, now, retry_window) {
+    if !touch_missing_block_request(requests, block_hash, height, now, retry_window) {
         return MissingBlockFetchDecision::Backoff;
     }
 
@@ -1828,6 +1833,7 @@ where
     let decision = plan_missing_block_fetch(
         requests,
         block_hash,
+        height,
         signers,
         topology,
         now,

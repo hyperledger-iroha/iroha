@@ -271,6 +271,7 @@ Iroha can group signatures by scheme during block validation and verify them in 
 - Consensus visibility (Sumeragi):
   - `GET /v1/sumeragi/new_view` — JSON snapshot of NEW_VIEW receipt counts per `(height, view)`. Shape:
     - `{ "ts_ms": <now>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
+    - Note: counts are retained in a bounded in-memory window; oldest entries are evicted.
   - `GET /v1/sumeragi/new_view/sse` — Server‑Sent Events stream of the same JSON (polled ~1s). Useful for dashboards.
   - Purpose: operator insight into pacemaker gating during view changes; complements Prometheus metric `sumeragi_new_view_receipts_by_hv{height,view}`.
 

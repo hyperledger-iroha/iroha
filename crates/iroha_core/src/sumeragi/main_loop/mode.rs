@@ -96,6 +96,7 @@ impl Actor {
         self.qc_cache.clear();
         self.execution_qc_cache.clear();
         self.vote_log.clear();
+        self.commit_votes.clear();
         self.subsystems.propose.collector_redundant_limit = self.config.collectors_redundant_send_r;
         self.pending.pending_replay_last_sent.clear();
         self.pending.missing_block_requests.clear();

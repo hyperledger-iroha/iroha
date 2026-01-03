@@ -1174,6 +1174,7 @@ impl Actor {
             let decision = plan_missing_block_fetch(
                 &mut self.pending.missing_block_requests,
                 qc.subject_block_hash,
+                qc.height,
                 &signer_set,
                 &topology,
                 now,
