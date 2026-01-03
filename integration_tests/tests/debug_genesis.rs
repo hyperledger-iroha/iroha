@@ -21,8 +21,7 @@ fn genesis_roundtrip_inspection() -> Result<()> {
             .with_peers(4)
             .with_auto_populated_trusted_peers(),
         stringify!(genesis_roundtrip_inspection),
-    )?
-    else {
+    ) else {
         return Ok(());
     };
 
