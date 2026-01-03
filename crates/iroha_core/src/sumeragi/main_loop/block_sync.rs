@@ -942,6 +942,12 @@ impl Actor {
             .as_ref()
             .filter(|inflight| inflight.block_hash == block_hash)
         {
+            if inflight.pending.aborted {
+                debug!(
+                    hash = %block_hash,
+                    "skipping fetch response for aborted inflight pending block"
+                );
+            } else {
             let block = &inflight.pending.block;
             let block_hash = block.hash();
             let block_height = block.header().height().get();
@@ -978,9 +984,16 @@ impl Actor {
                 );
             }
             return Ok(());
+            }
         }
 
         if let Some(pending) = self.pending.pending_blocks.get(&block_hash) {
+            if pending.aborted {
+                debug!(
+                    hash = %block_hash,
+                    "skipping fetch response for aborted pending block"
+                );
+            } else {
             let block = &pending.block;
             let block_hash = block.hash();
             let block_height = block.header().height().get();
@@ -1017,6 +1030,7 @@ impl Actor {
                 );
             }
             return Ok(());
+            }
         }
 
         if let Some(height) = self.kura.get_block_height_by_hash(block_hash) {

@@ -4219,8 +4219,7 @@ mod evidence_http_tests {
                 prelude::{AccountId, ChainId, DomainId, TransactionBuilder},
                 query::CommittedTransaction,
                 transaction::{
-                    TransactionEntrypoint, TransactionResult,
-                    error::TransactionRejectionReason,
+                    TransactionEntrypoint, TransactionResult, error::TransactionRejectionReason,
                 },
             },
         };
@@ -4259,8 +4258,7 @@ mod evidence_http_tests {
                 "status": { "kind": "Rejected" },
             },
         });
-        let status_body =
-            norito::json::to_string(&status_payload).expect("status payload");
+        let status_body = norito::json::to_string(&status_payload).expect("status payload");
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
@@ -7914,9 +7912,7 @@ fn pipeline_status_block_height(
     from_status.or(from_content).or(from_payload)
 }
 
-fn decode_rejection_reason_value(
-    value: &JsonValue,
-) -> Option<TransactionRejectionReason> {
+fn decode_rejection_reason_value(value: &JsonValue) -> Option<TransactionRejectionReason> {
     match value {
         JsonValue::String(encoded) => decode_rejection_reason_base64(encoded)
             .or_else(|| norito::json::from_value(value.clone()).ok()),
@@ -7924,9 +7920,7 @@ fn decode_rejection_reason_value(
     }
 }
 
-fn decode_rejection_reason_base64(
-    encoded: &str,
-) -> Option<TransactionRejectionReason> {
+fn decode_rejection_reason_base64(encoded: &str) -> Option<TransactionRejectionReason> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded.trim())
         .ok()?;
@@ -8390,8 +8384,8 @@ mod tx_hash_tests {
 
     #[test]
     fn tx_confirmation_status_from_pipeline_payload_decodes_base64_rejection_reason() {
-        use base64::Engine as _;
         use crate::data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
+        use base64::Engine as _;
 
         let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "nope".to_string(),
@@ -8577,13 +8571,12 @@ mod tx_confirmation_stream_tests {
             events::{
                 EventBox,
                 pipeline::{
-                    BlockEvent, BlockStatus, PipelineEventBox, TransactionEvent,
-                    TransactionStatus,
+                    BlockEvent, BlockStatus, PipelineEventBox, TransactionEvent, TransactionStatus,
                 },
             },
             nexus::{DataSpaceId, LaneId},
-            transaction::error::TransactionRejectionReason,
             transaction::SignedTransaction,
+            transaction::error::TransactionRejectionReason,
         },
     };
 
