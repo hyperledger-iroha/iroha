@@ -2,7 +2,6 @@
 
 use std::{
     fs,
-    net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -15,12 +14,13 @@ use iroha::{
     config::{Config, LoadPath},
     data_model::{Level, isi::Log},
 };
-use iroha_test_network::{Program, init_instruction_registry, repo_root};
+use iroha_test_network::{
+    Program, fslock_ports::AllocatedPortBlock, init_instruction_registry, repo_root,
+};
 use tempfile::TempDir;
 use tokio::time::sleep;
 
 const LOCALNET_PEERS: u16 = 4;
-const PORT_SCAN_ATTEMPTS: u16 = 512;
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const READY_POLL: Duration = Duration::from_millis(200);
 
@@ -32,13 +32,20 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
     let result: Result<()> = async {
         let temp_dir = localnet_tempdir()?;
         let out_dir = temp_dir.path().join("localnet");
-        let base_api_port = find_available_port_block(20_000, LOCALNET_PEERS, PORT_SCAN_ATTEMPTS)?;
-        let base_p2p_port = find_available_port_block(30_000, LOCALNET_PEERS, PORT_SCAN_ATTEMPTS)?;
+        let api_ports = AllocatedPortBlock::new(LOCALNET_PEERS);
+        let p2p_ports = AllocatedPortBlock::new(LOCALNET_PEERS);
+        let base_api_port = api_ports.base();
+        let base_p2p_port = p2p_ports.base();
         generate_localnet(&out_dir, base_api_port, base_p2p_port)?;
         let irohad_bin = Program::Irohad
             .resolve()
             .wrap_err("resolve irohad binary")?;
-        let _localnet = KagamiLocalnet::start(&out_dir, &irohad_bin, LOCALNET_PEERS)?;
+        let _localnet = KagamiLocalnet::start(
+            &out_dir,
+            &irohad_bin,
+            LOCALNET_PEERS,
+            (api_ports, p2p_ports),
+        )?;
 
         let client = load_localnet_client(&out_dir)?;
         wait_for_status_ready(&client, READY_TIMEOUT).await?;
@@ -70,10 +77,16 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
 struct KagamiLocalnet {
     dir: PathBuf,
     children: Vec<Child>,
+    _port_reservations: (AllocatedPortBlock, AllocatedPortBlock),
 }
 
 impl KagamiLocalnet {
-    fn start(out_dir: &Path, irohad_bin: &Path, peers: u16) -> Result<Self> {
+    fn start(
+        out_dir: &Path,
+        irohad_bin: &Path,
+        peers: u16,
+        port_reservations: (AllocatedPortBlock, AllocatedPortBlock),
+    ) -> Result<Self> {
         let mut children = Vec::with_capacity(peers as usize);
         for idx in 0..peers {
             let config_path = out_dir.join(format!("peer{idx}.toml"));
@@ -107,6 +120,7 @@ impl KagamiLocalnet {
         Ok(Self {
             dir: out_dir.to_path_buf(),
             children,
+            _port_reservations: port_reservations,
         })
     }
 }
@@ -245,33 +259,6 @@ fn try_candidates(candidates: &[PathBuf]) -> Option<PathBuf> {
         }
     }
     None
-}
-
-fn find_available_port_block(start: u16, count: u16, attempts: u16) -> Result<u16> {
-    let max_base = u16::MAX.saturating_sub(count);
-    let end = start.saturating_add(attempts).min(max_base);
-    for base in start..=end {
-        if port_block_available(base, count) {
-            return Ok(base);
-        }
-    }
-    Err(eyre!(
-        "unable to find {count} available ports starting at {start}"
-    ))
-}
-
-fn port_block_available(base: u16, count: u16) -> bool {
-    let mut listeners = Vec::new();
-    for offset in 0..count {
-        let Some(port) = base.checked_add(offset) else {
-            return false;
-        };
-        match TcpListener::bind(("127.0.0.1", port)) {
-            Ok(listener) => listeners.push(listener),
-            Err(_) => return false,
-        }
-    }
-    true
 }
 
 fn load_localnet_client(out_dir: &Path) -> Result<Client> {

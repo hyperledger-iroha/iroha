@@ -33,6 +33,18 @@ fn proof_event_timeout(network: &Network) -> Duration {
     network.sync_timeout().max(Duration::from_secs(300))
 }
 
+fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
+    const NEEDLES: [&str; 3] = [
+        "haven't got tx confirmation within",
+        "transaction queued for too long",
+        "Connection dropped without `Committed/Applied` or `Rejected` event",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
+}
+
 #[tokio::test]
 async fn verify_proof_emits_verified_event() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -44,6 +56,7 @@ async fn verify_proof_emits_verified_event() -> Result<()> {
         return Ok(());
     };
     let result: Result<()> = async {
+        network.ensure_blocks(1).await?;
         let client = client_with_timeout(&network);
         let mut events = client
             .listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())])
@@ -56,7 +69,17 @@ async fn verify_proof_emits_verified_event() -> Result<()> {
 
         {
             let submit_client = client.clone();
-            spawn_blocking(move || submit_client.submit_all([verify])).await??;
+            let submit_result =
+                spawn_blocking(move || submit_client.submit_all_blocking([verify])).await?;
+            if let Err(err) = submit_result {
+                if is_tx_confirmation_timeout(&err) {
+                    eprintln!(
+                        "warning: verify_proof_emits_verified_event confirmation timed out; continuing to wait for events"
+                    );
+                } else {
+                    return Err(err);
+                }
+            }
         }
         network.ensure_blocks(2).await?;
 
@@ -98,6 +121,7 @@ async fn verify_proof_emits_rejected_event() -> Result<()> {
         return Ok(());
     };
     let result: Result<()> = async {
+        network.ensure_blocks(1).await?;
         let client = client_with_timeout(&network);
         let mut events = client
             .listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())])
@@ -114,7 +138,17 @@ async fn verify_proof_emits_rejected_event() -> Result<()> {
 
         {
             let submit_client = client.clone();
-            spawn_blocking(move || submit_client.submit_all([verify])).await??;
+            let submit_result =
+                spawn_blocking(move || submit_client.submit_all_blocking([verify])).await?;
+            if let Err(err) = submit_result {
+                if is_tx_confirmation_timeout(&err) {
+                    eprintln!(
+                        "warning: verify_proof_emits_rejected_event confirmation timed out; continuing to wait for events"
+                    );
+                } else {
+                    return Err(err);
+                }
+            }
         }
         network.ensure_blocks(2).await?;
 

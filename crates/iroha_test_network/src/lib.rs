@@ -3150,6 +3150,8 @@ impl NetworkBuilder {
                 ["network", "block_gossip_size"],
                 i64::try_from(peers.len()).unwrap_or(i64::MAX),
             );
+        // Allow larger block sync bursts during tests without dropping updates.
+        base_layer = base_layer.write(["sumeragi", "msg_channel_cap_blocks"], 512i64);
         if da_enabled {
             base_layer = base_layer
                 .write(["sumeragi", "da_enabled"], true)
@@ -6762,6 +6764,26 @@ exit 0
             rbc_flag,
             Some(true),
             "base config should enable DA by default"
+        );
+    }
+
+    #[test]
+    fn base_config_increases_block_queue_capacity() {
+        let _guard = lock_env_guard(&CONFIG_ENV_GUARD);
+        let network = NetworkBuilder::new().build();
+
+        let mut layers = network.config_layers();
+        let _trusted = layers.next().expect("trusted peers layer");
+        let base = layers.next().expect("base config layer").into_owned();
+        let cap = base
+            .get("sumeragi")
+            .and_then(TomlValue::as_table)
+            .and_then(|table| table.get("msg_channel_cap_blocks"))
+            .and_then(TomlValue::as_integer);
+        assert_eq!(
+            cap,
+            Some(512),
+            "test network should raise block queue capacity to avoid dropped sync updates"
         );
     }
 

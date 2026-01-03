@@ -418,6 +418,8 @@ impl Actor {
             if !matches_committed {
                 self.qc_cache
                     .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+                self.qc_signer_tally
+                    .retain(|(_, hash, _, _, _), _| *hash != block_hash);
                 self.execution_qc_cache.remove(&block_hash);
             }
             return Ok(());

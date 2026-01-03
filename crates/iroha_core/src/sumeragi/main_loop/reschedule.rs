@@ -115,6 +115,8 @@ impl Actor {
             self.clean_rbc_sessions_for_block(hash, height);
             self.qc_cache
                 .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
+            self.qc_signer_tally
+                .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
             self.execution_qc_cache.remove(&hash);
             stale_removed = stale_removed.saturating_add(1);
         }
@@ -177,6 +179,8 @@ impl Actor {
                 super::status::inc_prevote_timeout();
                 self.clean_rbc_sessions_for_block(key.0, key.1);
                 self.qc_cache
+                    .retain(|(_, qc_hash, _, _, _), _| qc_hash != &key.0);
+                self.qc_signer_tally
                     .retain(|(_, qc_hash, _, _, _), _| qc_hash != &key.0);
                 self.execution_qc_cache.remove(&key.0);
                 if let Some(highest) = self.highest_qc {
@@ -317,6 +321,8 @@ impl Actor {
         if drop_pending {
             self.clean_rbc_sessions_for_block(block_hash, height);
             self.qc_cache
+                .retain(|(_, qc_hash, _, _, _), _| qc_hash != &block_hash);
+            self.qc_signer_tally
                 .retain(|(_, qc_hash, _, _, _), _| qc_hash != &block_hash);
             self.execution_qc_cache.remove(&block_hash);
         } else {

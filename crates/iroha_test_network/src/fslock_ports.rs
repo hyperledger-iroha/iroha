@@ -221,6 +221,134 @@ impl Drop for AllocatedPort {
     }
 }
 
+/// Reserves a contiguous block of ports and releases them on drop.
+#[derive(Debug)]
+pub struct AllocatedPortBlock {
+    base: u16,
+    count: u16,
+}
+
+impl AllocatedPortBlock {
+    #[allow(clippy::new_without_default)] // has side effects
+    pub fn new(count: u16) -> Self {
+        ensure_fd_limit();
+        assert!(count > 0, "port block must reserve at least one port");
+
+        let mut lock = fslock::LockFile::open(LOCK_FILE).expect("path is valid");
+        lock.lock().expect("this handle doesn't own the file yet");
+
+        let mut value = LockContent::read().expect("should be able to read the data");
+        let excluded = value.ports_in_use.clone();
+
+        fn block_end(base: u16, count: u16) -> Option<u16> {
+            base.checked_add(count.saturating_sub(1))
+        }
+
+        fn block_available(base: u16, count: u16, excluded: &BTreeSet<u16>) -> bool {
+            let Some(end) = block_end(base, count) else {
+                return false;
+            };
+            !(base..=end).any(|port| excluded.contains(&port))
+        }
+
+        fn block_bindable(base: u16, count: u16) -> bool {
+            let Some(end) = block_end(base, count) else {
+                return false;
+            };
+            for port in base..=end {
+                match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)) {
+                    Ok(listener) => drop(listener),
+                    Err(err) => {
+                        if err.kind() == io::ErrorKind::PermissionDenied {
+                            panic!(
+                                "port allocation failed: binding to 127.0.0.1:{port} was denied \
+                                 (Operation not permitted). Integration tests require local \
+                                 socket binds; allow loopback networking or run outside the sandbox."
+                            );
+                        }
+                        tracing::warn!(port, %err, "port block allocation skipped: bind failed");
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+
+        fn try_range(start: u16, end: u16, count: u16, excluded: &BTreeSet<u16>) -> Option<u16> {
+            let span = end.saturating_sub(start).saturating_add(1);
+            if span < count {
+                return None;
+            }
+            let max_base = end.saturating_sub(count.saturating_sub(1));
+            let mut candidate = if start == PORT_RANGE_START {
+                randomized_port_start()
+            } else {
+                start
+            };
+            if candidate < start {
+                candidate = start;
+            }
+            if candidate > max_base {
+                candidate = start;
+            }
+            for base in candidate..=max_base {
+                if block_available(base, count, excluded) && block_bindable(base, count) {
+                    return Some(base);
+                }
+            }
+            for base in start..candidate {
+                if block_available(base, count, excluded) && block_bindable(base, count) {
+                    return Some(base);
+                }
+            }
+            None
+        }
+
+        let base = try_range(PORT_RANGE_START, PORT_RANGE_PREFERRED_END, count, &excluded)
+            .or_else(|| {
+                try_range(
+                    PORT_RANGE_EPHEMERAL_START,
+                    PORT_RANGE_FALLBACK_END,
+                    count,
+                    &excluded,
+                )
+            })
+            .unwrap_or_else(|| panic!("Failed to get empty port block"));
+
+        let end = block_end(base, count).expect("block range should fit in u16");
+        value.ports_in_use.extend(base..=end);
+        value.write().expect("should be able to write the data");
+        lock.unlock().expect("this handle still holds the lock");
+
+        Self { base, count }
+    }
+
+    /// First port in the reserved block.
+    pub fn base(&self) -> u16 {
+        self.base
+    }
+
+    /// Number of ports reserved in the block.
+    pub fn count(&self) -> u16 {
+        self.count
+    }
+}
+
+impl Drop for AllocatedPortBlock {
+    fn drop(&mut self) {
+        let mut lock = fslock::LockFile::open(LOCK_FILE).expect("path is valid");
+        lock.lock().expect("doesn't hold it yet");
+        let mut value = LockContent::read().expect("should read fine");
+        if let Some(end) = self.base.checked_add(self.count.saturating_sub(1)) {
+            for port in self.base..=end {
+                value.ports_in_use.remove(&port);
+            }
+        }
+        value.write().expect("should save the result file");
+        lock.unlock().expect("still holds it");
+    }
+}
+
 fn ensure_fd_limit() {
     #[cfg(unix)]
     {
@@ -297,6 +425,26 @@ mod tests {
             port.0 < PORT_RANGE_EPHEMERAL_START,
             "allocated port should avoid OS ephemeral range; got {}",
             port.0
+        );
+    }
+
+    #[test]
+    fn allocated_port_block_reserves_consecutive_ports() {
+        let block = AllocatedPortBlock::new(4);
+        let base = block.base();
+        let count = block.count();
+        let end = base
+            .checked_add(count.saturating_sub(1))
+            .expect("block range fits in u16");
+        assert!(base >= PORT_RANGE_START);
+        assert!(
+            end <= PORT_RANGE_FALLBACK_END,
+            "allocated port block should stay within bounds; got {base}-{end}"
+        );
+        assert_eq!(
+            end.saturating_sub(base).saturating_add(1),
+            count,
+            "allocated port block should be contiguous"
         );
     }
 

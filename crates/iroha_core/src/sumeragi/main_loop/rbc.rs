@@ -2072,8 +2072,20 @@ impl Actor {
         }
         for key in removed {
             let existed = self.subsystems.da_rbc.rbc.sessions.remove(key).is_some();
+            self.subsystems.da_rbc.rbc.pending.remove(key);
             self.clear_rbc_session_roster(key);
             self.subsystems.da_rbc.rbc.status_handle.remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .payload_rebroadcast_last_sent
+                .remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .ready_rebroadcast_last_sent
+                .remove(key);
+            self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(key);
             if existed {
                 debug!(
                     block_hash = ?key.0,
