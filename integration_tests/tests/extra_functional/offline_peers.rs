@@ -23,8 +23,7 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
     let Some(network) = sandbox::build_network_or_skip(
         NetworkBuilder::new().with_peers(4),
         stringify!(genesis_block_is_committed_with_some_offline_peers),
-    )?
-    else {
+    ) else {
         return Ok(());
     };
     let genesis = network.genesis();

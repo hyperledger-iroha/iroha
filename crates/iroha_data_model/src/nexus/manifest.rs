@@ -543,8 +543,7 @@ mod tests {
     }
 
     fn cbdc_manifest_fixture() -> AssetPermissionManifest {
-        let uaid_hex =
-            "0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
+        let uaid_hex = "0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
         let uaid = UniversalAccountId::from_hash(
             Hash::from_str(uaid_hex).expect("fixture uaid hex must parse"),
         );
@@ -591,11 +590,9 @@ mod tests {
     #[test]
     fn cbdc_manifest_fixture_matches_serialized_json() {
         let manifest = cbdc_manifest_fixture();
-        let expected =
-            norito::json::to_value(&manifest).expect("serialize manifest to JSON");
+        let expected = norito::json::to_value(&manifest).expect("serialize manifest to JSON");
         if std::env::var_os("IROHA_DUMP_MANIFEST_JSON").is_some() {
-            let rendered =
-                norito::json::to_string_pretty(&expected).expect("render manifest JSON");
+            let rendered = norito::json::to_string_pretty(&expected).expect("render manifest JSON");
             eprintln!("{rendered}");
         }
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))

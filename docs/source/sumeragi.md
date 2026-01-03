@@ -12,7 +12,7 @@ Overview
 ### NPoS mode configuration (operators)
 
 1. **Select NPoS at boot.** Set `sumeragi.consensus_mode = "npos"` in `iroha_config`. Keeping this on `permissioned` falls back to the legacy topology regardless of the other knobs.
-2. **Choose the roster source.** `sumeragi.use_stake_snapshot_roster = true` tells the validator to hydrate the epoch roster from the staking snapshot provider (required for production NPoS). Leaving it `false` continues to mirror `trusted_peers` so small devnets can stage upgrades without the staking sidecar.
+2. **Choose the roster source.** `sumeragi.use_stake_snapshot_roster = true` tells the validator to hydrate the epoch roster from the staking snapshot provider (required for production NPoS). Leaving it `false` continues to mirror `trusted_peers` so small devnets can stage upgrades without the staking sidecar. When no public-lane stake records exist, NPoS treats every roster peer as equal stake for quorum checks; once stake records exist, every roster peer must have stake data.
 3. **Define epoch cadence.** `sumeragi.epoch_length_blocks` controls how long a validator set lives. Within each epoch, `sumeragi.npos.vrf.commit_window_blocks` and `.reveal_window_blocks` fence the VRF commit/reveal RPCs, and the on-chain `sumeragi.block_time_ms` target informs telemetry dashboards and the pacemaker expectation (keep `sumeragi.npos.block_time` aligned as a bootstrap fallback). When `sumeragi_npos_parameters` is present on-chain (genesis or governance), its `epoch_length_blocks` and VRF commit/reveal windows are authoritative and override the local config values.
 4. **Calibrate collector fan-out.**
    - `sumeragi.npos.k_aggregators` decides how many collectors assemble votes per slot.
