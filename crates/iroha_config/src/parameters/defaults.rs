@@ -2410,7 +2410,8 @@ pub mod governance {
     pub fn jdg_signature_schemes() -> Vec<String> {
         JDG_SIGNATURE_SCHEMES
             .iter()
-            .map(|scheme| scheme.to_string())
+            .copied()
+            .map(str::to_string)
             .collect()
     }
 
@@ -2815,5 +2816,16 @@ pub mod settlement {
         pub const XOR_ONLY_PCT: u8 = 10;
         /// Halt threshold percentage.
         pub const HALT_PCT: u8 = 2;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::governance;
+
+    #[test]
+    fn jdg_signature_schemes_includes_simple_threshold() {
+        let schemes = governance::jdg_signature_schemes();
+        assert!(schemes.contains(&"simple_threshold".to_string()));
     }
 }

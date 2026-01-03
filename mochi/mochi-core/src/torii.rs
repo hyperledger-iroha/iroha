@@ -213,10 +213,10 @@ impl ToriiError {
                 message,
             } => {
                 let mut detail = status.to_string();
-                if let Some(message) = message {
-                    if !message.is_empty() {
-                        detail = format!("{detail} - {message}");
-                    }
+                if let Some(message) = message
+                    && !message.is_empty()
+                {
+                    detail = format!("{detail} - {message}");
                 }
                 let mut info = ToriiErrorInfo::with_detail(
                     ToriiErrorKind::UnexpectedStatus,

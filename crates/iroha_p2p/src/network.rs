@@ -1857,6 +1857,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
 
     /// Wait for update of [`OnlinePeers`].
     ///
+    /// # Errors
     /// Returns an error if the network actor has shut down and the watch channel is closed.
     pub async fn wait_online_peers_update<P>(
         &mut self,
@@ -5200,10 +5201,10 @@ mod tests {
     }
 
     fn enter_test_runtime() -> Option<tokio::runtime::EnterGuard<'static>> {
+        static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
         if tokio::runtime::Handle::try_current().is_ok() {
             return None;
         }
-        static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
         let rt = RUNTIME.get_or_init(|| {
             tokio::runtime::Builder::new_current_thread()
                 .enable_io()

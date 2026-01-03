@@ -911,6 +911,7 @@ fn write_scripts(out_dir: &Path, peers: u16) -> Result<()> {
     writeln!(start_file, "#!/usr/bin/env bash")?;
     writeln!(start_file, "set -euo pipefail")?;
     writeln!(start_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
+    writeln!(start_file, "cd \"$DIR\"")?;
     writeln!(
         start_file,
         "DEFAULT_IROHAD_BIN=\"{}\"",

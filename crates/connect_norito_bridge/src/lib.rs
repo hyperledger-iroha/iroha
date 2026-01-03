@@ -687,11 +687,10 @@ fn generate_range_proof(
     blindings.push(last_blinding);
 
     let mut proof = Vec::with_capacity(OFFLINE_RANGE_PROOF_BYTES);
-    for bit_index in 0..OFFLINE_RANGE_PROOF_BITS {
+    for (bit_index, blinding) in blindings.iter().enumerate() {
         let bit = ((value >> bit_index) & 1) == 1;
         let bit_scalar = Scalar::from(u64::from(bit));
-        let commitment =
-            RISTRETTO_BASEPOINT_POINT * bit_scalar + pedersen_generator_h() * blindings[bit_index];
+        let commitment = RISTRETTO_BASEPOINT_POINT * bit_scalar + pedersen_generator_h() * blinding;
         let (a0, a1, mut e0, mut s0, mut s1) = if bit {
             let mut alpha = random_scalar(&mut rng);
             let e0 = random_scalar(&mut rng);
@@ -700,7 +699,7 @@ fn generate_range_proof(
             let a1 = pedersen_generator_h() * alpha;
             let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
             let mut e1 = challenge - e0;
-            let s1 = alpha + e1 * blindings[bit_index];
+            let s1 = alpha + e1 * blinding;
             alpha.zeroize();
             e1.zeroize();
             (a0, a1, e0, s0, s1)
@@ -713,7 +712,7 @@ fn generate_range_proof(
             let a1 = pedersen_generator_h() * s1 - commitment_minus_g * e1;
             let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
             let e0 = challenge - e1;
-            let s0 = alpha + e0 * blindings[bit_index];
+            let s0 = alpha + e0 * blinding;
             alpha.zeroize();
             e1.zeroize();
             (a0, a1, e0, s0, s1)
@@ -1521,7 +1520,7 @@ pub unsafe extern "C" fn connect_norito_offline_receipt_challenge(
             receiver,
             asset,
             amount,
-            issued_at_ms as u64,
+            issued_at_ms,
             nonce,
         )?;
 
@@ -7766,8 +7765,8 @@ mod accel_tests {
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = cstring("usd#bank");
-        let inputs = vec![0x11_u8; 32];
-        let outputs = vec![0x22_u8; 32];
+        let inputs = [0x11_u8; 32];
+        let outputs = [0x22_u8; 32];
         let proof = cstring(
             r#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"}}"#,
         );
@@ -11467,7 +11466,7 @@ mod signed_transaction_fixture_tests {
             "payload must start after signature + payload length header"
         );
         assert_eq!(
-            payload_len as usize,
+            payload_len,
             payload_bytes.len(),
             "payload length header must match fixture payload length"
         );

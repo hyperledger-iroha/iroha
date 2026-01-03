@@ -182,6 +182,8 @@ impl<'a> PenaltyApplier<'a> {
                 record.recorded_at_height,
                 self.config.consensus_mode,
             );
+            let is_censorship =
+                matches!(record.evidence.payload, EvidencePayload::Censorship { .. });
             let prf_seed = match consensus_mode {
                 ConsensusMode::Permissioned => None,
                 ConsensusMode::Npos => epoch_seeds.get(&evidence_epoch(&record.evidence)).copied(),
@@ -199,6 +201,11 @@ impl<'a> PenaltyApplier<'a> {
             let slash_id = Hash::new(key.clone());
             // Resolve validators before opening a write transaction to avoid re-entrant locks.
             let mut applied_here = offenders.is_empty();
+            if is_censorship && offenders.is_empty() {
+                // TODO: attribute censorship evidence to responsible validators before slashing.
+                applied_here = false;
+                outcome.pending = outcome.pending.saturating_add(1);
+            }
             let mut locators = Vec::new();
             for signer in offenders {
                 if let Some(locator) = self.locate_validator_in_roster(signer, roster) {
@@ -1005,6 +1012,64 @@ mod tests {
         let outcome = applier.apply_consensus_penalties(5)?;
         assert_eq!(outcome.applied, 0);
         assert_eq!(outcome.slashed, 0);
+
+        let view = state.world.consensus_evidence.view();
+        let updated = view.get(&key).expect("evidence present");
+        assert!(!updated.penalty_applied);
+        assert_eq!(updated.penalty_applied_at_height, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn consensus_penalties_defer_censorship_evidence() -> Result<()> {
+        let state = fresh_state();
+        let mut config = test_sumeragi_config();
+        config.npos.reconfig.activation_lag_blocks = 0;
+
+        let key_pair = KeyPair::random();
+        let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB1; 32]));
+        let payload = TransactionSubmissionReceiptPayload {
+            tx_hash: tx_hash.clone(),
+            submitted_at_ms: 10,
+            submitted_at_height: 2,
+            signer: key_pair.public_key().clone(),
+        };
+        let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
+        let evidence = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship {
+                tx_hash,
+                receipts: vec![receipt],
+            },
+        };
+        let record = EvidenceRecord {
+            evidence,
+            recorded_at_height: 2,
+            recorded_at_view: 1,
+            recorded_at_ms: 321,
+            penalty_applied: false,
+            penalty_applied_at_height: None,
+        };
+        let key = evidence_key(&record.evidence);
+        {
+            let mut block = state.world.consensus_evidence.block();
+            block.insert(key.clone(), record.clone());
+            block.commit();
+        }
+
+        let applier = PenaltyApplier::new(
+            &state,
+            &config,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let outcome = applier.apply_consensus_penalties(5)?;
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.slashed, 0);
+        assert_eq!(outcome.pending, 1);
 
         let view = state.world.consensus_evidence.view();
         let updated = view.get(&key).expect("evidence present");

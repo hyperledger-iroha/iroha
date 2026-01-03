@@ -324,7 +324,7 @@ fn read_len(body: &[u8], offset: &mut usize) -> Result<usize, Error> {
     Ok(len)
 }
 
-fn read_slice<'a>(body: &'a [u8], offset: usize, len: usize) -> Result<&'a [u8], Error> {
+fn read_slice(body: &[u8], offset: usize, len: usize) -> Result<&[u8], Error> {
     let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
     if end > body.len() {
         return Err(Error::LengthMismatch);
@@ -904,6 +904,17 @@ mod tests {
             seq: 2,
             kind: FrameKind::Control(sample_approve_control()),
         }
+    }
+
+    #[test]
+    fn read_slice_bounds_check() {
+        let body = [10u8, 20, 30, 40];
+        let slice = read_slice(&body, 1, 2).expect("slice");
+        assert_eq!(slice, &[20, 30]);
+        assert!(matches!(
+            read_slice(&body, 3, 2),
+            Err(Error::LengthMismatch)
+        ));
     }
 
     fn sample_reject_frame() -> ConnectFrameV1 {

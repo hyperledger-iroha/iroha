@@ -1904,7 +1904,11 @@ impl Actor {
             return;
         }
 
-        let cooldown = self.config.npos.block_time.max(Duration::from_millis(200));
+        let block_time = {
+            let view = self.state.view();
+            view.world.parameters().sumeragi().block_time()
+        };
+        let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
         let cooldown_elapsed =
             now.saturating_duration_since(self.pending.last_commit_pipeline_run) >= cooldown;
         if !cooldown_elapsed {
@@ -4007,7 +4011,12 @@ impl Actor {
             ConsensusMode::Npos => self.epoch_manager.as_ref().map_or(0, EpochManager::epoch),
         };
 
-        let topology_peers = self.roster_for_vote_with_mode(block_hash, height, consensus_mode);
+        let topology_peers = self.roster_for_vote_with_mode(
+            block_hash,
+            height,
+            view,
+            consensus_mode,
+        );
         if topology_peers.is_empty() {
             return;
         }

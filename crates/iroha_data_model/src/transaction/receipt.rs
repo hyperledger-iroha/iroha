@@ -59,6 +59,9 @@ impl TransactionSubmissionReceipt {
     }
 
     /// Verify the receipt signature against the payload signer.
+    ///
+    /// # Errors
+    /// Returns any signature verification error from `iroha_crypto` if the signature is invalid.
     pub fn verify(&self) -> Result<(), iroha_crypto::Error> {
         self.signature
             .verify(&self.payload.signer, &self.payload.signing_bytes())

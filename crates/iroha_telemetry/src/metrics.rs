@@ -13919,9 +13919,10 @@ impl Metrics {
 
     /// Record attachment sanitization latency in milliseconds.
     pub fn observe_torii_attachment_sanitize_ms(&self, millis: u64) {
+        let millis = u32::try_from(millis).unwrap_or(u32::MAX);
         self.torii_attachment_sanitize_ms
             .with_label_values::<&str>(&[])
-            .observe(millis as f64);
+            .observe(f64::from(millis));
     }
 
     /// Record FASTPQ execution mode resolution metrics.

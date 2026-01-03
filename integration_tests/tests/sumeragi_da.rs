@@ -1069,7 +1069,7 @@ where
         writer
             .write("telemetry_enabled", true)
             .write("telemetry_profile", "full")
-            .write(["logger", "level"], "INFO")
+            .write(["logger", "level"], "WARN")
             .write(["network", "max_frame_bytes"], CONSENSUS_FRAME_BUDGET_BYTES)
             .write(
                 ["network", "max_frame_bytes_consensus"],
