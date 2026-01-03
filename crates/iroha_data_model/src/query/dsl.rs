@@ -234,8 +234,8 @@ where
 
 /// Lightweight predicate container.
 ///
-/// Serialized with a stable wire wrapper so predicate payloads remain backward
-/// compatible while still carrying runtime filter data.
+/// Serialized with a stable wire wrapper so predicate payloads remain consistent
+/// while still carrying runtime filter data.
 #[derive(Debug)]
 pub struct CompoundPredicate<T> {
     payload: Option<std::sync::Arc<dyn core::any::Any + Send + Sync + 'static>>,
@@ -429,7 +429,7 @@ enum CompoundPredicateWire {
     TxPredicate(CommittedTxPredicate),
 }
 
-// Manual Norito core codec: represent as unit for wire compatibility.
+// Manual Norito core codec: represent as unit for stable wire layout.
 impl<T> norito::core::NoritoSerialize for CompoundPredicate<T> {
     fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
         let wire = self.to_wire();

@@ -36,7 +36,7 @@ mod poly;
 pub mod poseidon;
 mod transcript;
 
-// Backwards-compatible re-exports for the default (Pallas) backend.
+// Re-exports for the default (Pallas) backend.
 #[cfg(feature = "goldilocks_backend")]
 pub use backend::goldilocks::{
     Group as GoldilocksGroup, IpaProof as GoldilocksIpaProof, IpaProver as GoldilocksIpaProver,

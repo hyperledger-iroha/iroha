@@ -1,6 +1,20 @@
 # Status
 
 ## Latest Updates
+- Removed legacy derived-multisig references (derived-key checks/metrics/tests), simplified multisig direct-sign guarding, and updated multisig docs/roadmap accordingly.
+- Resolved DA lane-config test mismatches by splitting runtime vs model LaneConfig in DA modules, Kura tests, and scheduler telemetry, and renamed the StateTransaction AXT refresh helper to the directory-based API.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core multisig_account_direct_signing_rejected_in_validation -- --nocapture` (passed).
+- Deferred RBC init/chunk/READY background sends until after proposal/hint/BlockCreated posting by splitting RBC plan install vs broadcast, and added unit coverage for background ordering.
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-tests cargo test -p iroha_core assemble_proposal_schedules_rbc_after_proposal_messages -- --nocapture` (failed: pre-existing compile errors in `crates/iroha_core/src/da/shard_cursor.rs` duplicate `LaneConfig` import, `crates/iroha_core/src/gossiper.rs` private `WithOrigin`, multiple `crates/iroha_core/src/kura.rs` `LaneConfig` type mismatches, and `crates/iroha_core/src/state.rs` missing `refresh_axt_policies_from_space_directory`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Filtered restricted gossip targets to online commit-topology peers, made inbound gossip drop invalid entries without discarding valid batches, added gossiper coverage, and updated Nexus docs across locales.
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (failed: pre-existing compile errors in `crates/iroha_core/src/da/shard_cursor.rs` duplicate `LaneConfig` import and config/data-model `LaneConfig` mismatches, `crates/iroha_core/src/da/proofs.rs`/`da/receipts.rs` `LaneConfig` mismatches, `crates/iroha_core/src/kura.rs` `LaneConfig` mismatches, and `crates/iroha_core/src/state.rs` missing `refresh_axt_policies_from_space_directory`).
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (timed out after 300s during compile).
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (passed).
+- Added multisig-derived telemetry counters to metrics registry/struct so derived-account tracking compiles cleanly.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core derived_multisig_helpers_match_expected_values -- --nocapture` (timed out after 300s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
 - Removed SoraFS `anon-compatible`/`SoraNetCompatible` variants across Rust/JS/Python/Android bindings, updated stubs/tests, and tightened SoraNet capability validation; dropped query-lane and genesis-bootstrap compatibility shims; fail executor validation on undecodable verdicts; refreshed SoraFS/Swift docs to remove legacy labels.
 - Tests: not run (not requested).
 - Made genesis topology entries accept optional `pop_hex`, added PoP merge support, and updated downstream parsing/build/tests plus genesis docs/translations.

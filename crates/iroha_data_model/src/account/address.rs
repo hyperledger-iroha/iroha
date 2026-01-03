@@ -599,7 +599,6 @@ const CONTROLLER_MAX_LEN: usize = 1024;
 const CONTROLLER_SINGLE_KEY_TAG: u8 = 0x00;
 const CONTROLLER_MULTISIG_TAG: u8 = 0x01;
 const CONTROLLER_MULTISIG_MEMBER_MAX: usize = 255;
-const LEGACY_LOCAL_DIGEST_DELTA: usize = 4;
 
 const fn is_valid_controller_tag(byte: u8) -> bool {
     matches!(byte, CONTROLLER_SINGLE_KEY_TAG | CONTROLLER_MULTISIG_TAG)
@@ -758,18 +757,7 @@ fn ensure_local_selector_boundary(
 ) -> Result<(), AccountAddressError> {
     match bytes.get(controller_cursor) {
         Some(&tag) if is_valid_controller_tag(tag) => Ok(()),
-        Some(_) => {
-            if controller_cursor >= LEGACY_LOCAL_DIGEST_DELTA
-                && let Some(&candidate) = bytes.get(controller_cursor - LEGACY_LOCAL_DIGEST_DELTA)
-                && is_valid_controller_tag(candidate)
-            {
-                return Err(AccountAddressError::LocalDigestTooShort {
-                    expected: LOCAL_SELECTOR_DIGEST_LEN,
-                    found: LOCAL_SELECTOR_DIGEST_LEN - LEGACY_LOCAL_DIGEST_DELTA,
-                });
-            }
-            Ok(())
-        }
+        Some(_) => Ok(()),
         None => {
             let digest_start = controller_cursor.saturating_sub(LOCAL_SELECTOR_DIGEST_LEN);
             let found = bytes
@@ -1274,9 +1262,7 @@ pub enum AccountAddressError {
     #[error("invalid compressed digit value: {0}")]
     InvalidCompressedDigit(u8),
     /// Local-domain selector digest shorter than the 12-byte requirement.
-    #[error(
-        "local domain digest too short: expected {expected} bytes, found {found}"
-    )]
+    #[error("local domain digest too short: expected {expected} bytes, found {found}")]
     LocalDigestTooShort {
         /// Required digest length (always 12 bytes for Norm v1).
         expected: usize,

@@ -196,8 +196,22 @@ fn start_test_network_with_builder(
         return None;
     }
 
+    if let Err(err) = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
+        let report = Report::new(err);
+        if let Some(reason) = sandbox::sandbox_reason(&report) {
+            eprintln!(
+                "sandboxed network restriction detected while running asset tests; skipping ({reason})"
+            );
+            return None;
+        }
+        panic!("failed during bind preflight: {report}");
+    }
+
     let serial_guard = sandbox::serial_guard();
-    let guard = START_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let guard = START_MUTEX
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
 
     if matches!(GENESIS_STATUS.get(), Some(Err(()))) {
         eprintln!("Skipping test: failed to start network (cached)");

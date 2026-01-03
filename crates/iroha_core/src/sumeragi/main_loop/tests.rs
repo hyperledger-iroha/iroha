@@ -4639,7 +4639,10 @@ async fn rebroadcast_highest_pending_block_skips_aborted() {
             } if created.block.hash() == high.hash()
         )
     });
-    assert!(broadcast_low, "expected non-aborted pending block to be rebroadcast");
+    assert!(
+        broadcast_low,
+        "expected non-aborted pending block to be rebroadcast"
+    );
     assert!(
         !broadcast_high,
         "aborted pending block should not be rebroadcast"
@@ -4924,12 +4927,7 @@ async fn precommit_vote_skips_block_sync_update_for_aborted_pending() {
         bls_sig: Vec::new(),
         signature: Vec::new(),
     };
-    sign_vote_for_view(
-        &mut vote,
-        &chain,
-        &topology,
-        std::slice::from_ref(&keypair),
-    );
+    sign_vote_for_view(&mut vote, &chain, &topology, std::slice::from_ref(&keypair));
     actor.handle_vote(vote);
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
@@ -5645,7 +5643,9 @@ async fn try_form_qc_from_votes_skips_aborted_pending_block() {
     }
 
     assert!(
-        !actor.qc_cache.contains_key(&(Phase::Precommit, block_hash, height, 0, epoch)),
+        !actor
+            .qc_cache
+            .contains_key(&(Phase::Precommit, block_hash, height, 0, epoch)),
         "aborted pending blocks must not aggregate QCs"
     );
 
@@ -18175,6 +18175,79 @@ async fn assemble_proposal_skips_view_overflow() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.rbc_chunk_max_bytes = 1024;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = 1u64;
+    let view = 0u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_idx = actor
+        .local_validator_index(&actor.state.view())
+        .expect("local validator index");
+
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            /*leader_index*/ 0,
+            /*local_validator_index*/ local_idx,
+            Instant::now(),
+        )
+        .expect("proposal assembly should succeed");
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let mut proposal_indexes = Vec::new();
+    let mut rbc_indexes = Vec::new();
+    for (idx, post) in posts.iter().enumerate() {
+        let msg = match post {
+            BackgroundPost::Post { msg, .. } => msg,
+            _ => continue,
+        };
+        match msg {
+            BlockMessage::ProposalHint(_)
+            | BlockMessage::Proposal(_)
+            | BlockMessage::BlockCreated(_) => proposal_indexes.push(idx),
+            BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_) | BlockMessage::RbcReady(_) => {
+                rbc_indexes.push(idx)
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        !proposal_indexes.is_empty(),
+        "proposal messages should be enqueued"
+    );
+    assert!(!rbc_indexes.is_empty(), "RBC messages should be enqueued");
+    let last_proposal = *proposal_indexes.iter().max().expect("proposal index");
+    let first_rbc = *rbc_indexes.iter().min().expect("RBC index");
+    assert!(
+        first_rbc > last_proposal,
+        "RBC messages should be enqueued after proposal messages"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn refresh_npos_seed_updates_collector_params_from_world() {
     use iroha_data_model::parameter::system::SumeragiNposParameters;
 
@@ -24275,7 +24348,10 @@ fn dispatch_background_request_rbc_chunk_drops_when_full() {
     assert!(result.is_err());
     handle.join().expect("thread joins");
 
-    match rx.try_recv().expect("prefilled message should remain queued") {
+    match rx
+        .try_recv()
+        .expect("prefilled message should remain queued")
+    {
         BackgroundPost::Broadcast {
             msg: BlockMessage::ConsensusParams(_),
             ..
@@ -24460,7 +24536,10 @@ fn dispatch_background_request_rbc_chunk_drops_when_full() {
     assert!(result.is_err());
     handle.join().expect("thread joins");
 
-    match rx.try_recv().expect("prefilled message should remain queued") {
+    match rx
+        .try_recv()
+        .expect("prefilled message should remain queued")
+    {
         BackgroundPost::Broadcast {
             msg: BlockMessage::ConsensusParams(_),
             ..
@@ -30138,10 +30217,7 @@ fn pending_block_replace_new_subject_resets_vote_and_timestamp() {
         pending.last_gate_satisfied.is_none(),
         "gate satisfaction must reset on new subject"
     );
-    assert!(
-        !pending.aborted,
-        "aborted state must reset on new subject"
-    );
+    assert!(!pending.aborted, "aborted state must reset on new subject");
     assert!(
         !pending.kura_aborted,
         "kura aborted state must reset on new subject"

@@ -482,8 +482,7 @@ mod tests {
         fs::write(pipeline_dir.join("block_1.norito"), b"invalid").expect("invalid sidecar");
 
         let mut sink = std::io::BufWriter::new(Vec::<u8>::new());
-        let err =
-            print_sidecar(&mut sink, temp.path(), 1).expect_err("invalid layout should fail");
+        let err = print_sidecar(&mut sink, temp.path(), 1).expect_err("invalid layout should fail");
         assert!(
             err.to_string().contains("no indexed pipeline sidecar"),
             "unexpected error: {err}"

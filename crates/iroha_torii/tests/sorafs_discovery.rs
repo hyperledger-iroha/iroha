@@ -72,6 +72,7 @@ use iroha_torii::{
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, to_bytes};
 use sorafs_car::{ChunkStore, por_json::proof_from_value};
+use sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1;
 use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, AvailabilityTier, BLAKE3_256_MULTIHASH_CODE,
     CapabilityTlv, CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
@@ -86,7 +87,6 @@ use sorafs_manifest::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
 };
-use sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1;
 use tempfile::tempdir;
 use tower::ServiceExt as _;
 
@@ -3147,9 +3147,7 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
 
 #[test]
 fn disk_fixtures_detect_advert_key_mismatch() {
-    let fixtures = [
-        ("advert_v1.to", "envelope_v1.to"),
-    ];
+    let fixtures = [("advert_v1.to", "envelope_v1.to")];
 
     for (advert_path, envelope_path) in fixtures {
         let fixture = fixture_from_disk(advert_path, envelope_path);

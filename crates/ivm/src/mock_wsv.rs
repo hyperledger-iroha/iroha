@@ -3572,7 +3572,7 @@ impl IVMHost for WsvHost {
                                             Err(VMError::PermissionDenied)
                                         };
                                     }
-                                    if alias_matches(&["wsv.create_nft"]) {
+                                    if alias_matches(&["wsv.nft_mint_asset"]) {
                                         let nft_s = payload
                                             .get("nft_id")
                                             .and_then(|v| v.as_str())
@@ -3593,7 +3593,7 @@ impl IVMHost for WsvHost {
                                             return Err(VMError::PermissionDenied);
                                         }
                                     }
-                                    if alias_matches(&["wsv.transfer_nft"]) {
+                                    if alias_matches(&["wsv.nft_transfer_asset"]) {
                                         let from_s = payload
                                             .get("from")
                                             .and_then(|v| v.as_str())
@@ -3620,7 +3620,7 @@ impl IVMHost for WsvHost {
                                             return Err(VMError::PermissionDenied);
                                         }
                                     }
-                                    if alias_matches(&["wsv.burn_nft"]) {
+                                    if alias_matches(&["wsv.nft_burn_asset"]) {
                                         let nft_s = payload
                                             .get("nft_id")
                                             .and_then(|v| v.as_str())
@@ -3634,7 +3634,7 @@ impl IVMHost for WsvHost {
                                             return Err(VMError::PermissionDenied);
                                         }
                                     }
-                                    if alias_matches(&["wsv.set_nft_data"]) {
+                                    if alias_matches(&["wsv.nft_set_metadata"]) {
                                         let nft_s = payload
                                             .get("nft_id")
                                             .and_then(|v| v.as_str())
@@ -3657,7 +3657,7 @@ impl IVMHost for WsvHost {
                                             return Err(VMError::PermissionDenied);
                                         }
                                     }
-                                    if alias_matches(&["wsv.create_domain"]) {
+                                    if alias_matches(&["wsv.register_domain"]) {
                                         let domain_s = payload
                                             .get("domain_id")
                                             .and_then(|v| v.as_str())
@@ -3671,7 +3671,7 @@ impl IVMHost for WsvHost {
                                             return Err(VMError::PermissionDenied);
                                         }
                                     }
-                                    if alias_matches(&["wsv.create_account"]) {
+                                    if alias_matches(&["wsv.register_account"]) {
                                         let account_s = payload
                                             .get("account_id")
                                             .and_then(|v| v.as_str())
@@ -3699,7 +3699,7 @@ impl IVMHost for WsvHost {
                                             return Err(VMError::PermissionDenied);
                                         }
                                     }
-                                    if alias_matches(&["wsv.create_asset_definition"]) {
+                                    if alias_matches(&["wsv.register_asset_definition"]) {
                                         return Err(VMError::NoritoInvalid);
                                     }
                                     if alias_matches(&["wsv.create_role"]) {

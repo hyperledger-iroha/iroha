@@ -42,18 +42,6 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<CouncilSubcommand>,
     },
-    /// Derive council membership using VRF proofs (server feature: `gov_vrf`)
-    #[command(name = "council-derive-vrf", hide = true)]
-    CouncilDeriveVrf(DeriveVrfArgs),
-    /// Persist council membership (on-chain) using VRF proofs (server feature: `gov_vrf`)
-    #[command(name = "council-persist", hide = true)]
-    CouncilPersist(PersistCouncilArgs),
-    /// Generate a JSON array of VRF candidates for testing
-    #[command(name = "council-gen-vrf", hide = true)]
-    CouncilGenVrf(GenVrfArgs),
-    /// Derive council via VRF and persist it on-chain in one step
-    #[command(name = "council-derive-and-persist", hide = true)]
-    CouncilDeriveAndPersist(DeriveAndPersistArgs),
     /// Show governance unlock sweep stats (expired locks at current height)
     UnlockStats(UnlockStatsArgs),
     /// Get a referendum by id
@@ -97,10 +85,6 @@ impl Run for Command {
                 Some(CouncilSubcommand::Replace(cmd)) => cmd.run(context),
                 None => args.run(context),
             },
-            Command::CouncilDeriveVrf(args) => args.run(context),
-            Command::CouncilPersist(args) => args.run(context),
-            Command::CouncilGenVrf(args) => args.run(context),
-            Command::CouncilDeriveAndPersist(args) => args.run(context),
             Command::UnlockStats(args) => args.run(context),
             Command::ReferendumGet(args) => args.run(context),
             Command::TallyGet(args) => args.run(context),

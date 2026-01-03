@@ -37,7 +37,6 @@ Options:
 ";
 
 const CANONICAL_PROFILE_HANDLE: &str = "sorafs.sf1@1.0.0";
-const LEGACY_PROFILE_HANDLE: &str = "sorafs-sf1";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = match parse_cli() {
@@ -590,15 +589,12 @@ fn load_existing_manifest_signatures(
         .get("profile")
         .and_then(Value::as_str)
         .ok_or_else(|| "manifest signatures missing profile field".to_owned())?;
-    let mut profile_ok = profile == CANONICAL_PROFILE_HANDLE
-        || profile == LEGACY_PROFILE_HANDLE
-        || profile == vectors.profile_id;
+    let mut profile_ok = profile == CANONICAL_PROFILE_HANDLE || profile == vectors.profile_id;
     if !profile_ok && let Some(aliases) = root.get("profile_aliases").and_then(Value::as_array) {
-        profile_ok = aliases.iter().filter_map(Value::as_str).any(|alias| {
-            alias == CANONICAL_PROFILE_HANDLE
-                || alias == LEGACY_PROFILE_HANDLE
-                || alias == vectors.profile_id
-        });
+        profile_ok = aliases
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|alias| alias == CANONICAL_PROFILE_HANDLE || alias == vectors.profile_id);
     }
     if !profile_ok {
         return Err(

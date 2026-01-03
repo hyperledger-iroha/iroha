@@ -1,6 +1,7 @@
 //! Kagami localnet bootstrap coverage for permissioned Sumeragi.
 
 use std::{
+    any::Any,
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -32,8 +33,8 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
     let temp_dir = localnet_tempdir()?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let api_ports = AllocatedPortBlock::new(LOCALNET_PEERS);
-        let p2p_ports = AllocatedPortBlock::new(LOCALNET_PEERS);
+        let api_ports = alloc_port_block(LOCALNET_PEERS)?;
+        let p2p_ports = alloc_port_block(LOCALNET_PEERS)?;
         let base_api_port = api_ports.base();
         let base_p2p_port = p2p_ports.base();
         generate_localnet(&out_dir, base_api_port, base_p2p_port)?;
@@ -79,6 +80,21 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         return Err(err);
     }
     Ok(())
+}
+
+fn alloc_port_block(count: u16) -> Result<AllocatedPortBlock> {
+    std::panic::catch_unwind(|| AllocatedPortBlock::new(count))
+        .map_err(|panic| eyre!(panic_message(panic)))
+}
+
+fn panic_message(panic: Box<dyn Any + Send>) -> String {
+    if let Some(message) = panic.as_ref().downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = panic.as_ref().downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "port allocation panicked".to_string()
+    }
 }
 
 struct KagamiLocalnet {

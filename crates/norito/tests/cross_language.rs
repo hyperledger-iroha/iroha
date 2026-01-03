@@ -30,8 +30,8 @@ fn python_sequence_fixture_with_wrong_minor_version_is_rejected() {
         norito::core::VERSION_MINOR,
         "fixture should exercise non-v1 minor version",
     );
-    let err = norito::decode_from_bytes::<Vec<u8>>(&bytes)
-        .expect_err("fixture must be rejected in v1");
+    let err =
+        norito::decode_from_bytes::<Vec<u8>>(&bytes).expect_err("fixture must be rejected in v1");
     assert!(matches!(err, norito::Error::UnsupportedMinorVersion { .. }));
 }
 

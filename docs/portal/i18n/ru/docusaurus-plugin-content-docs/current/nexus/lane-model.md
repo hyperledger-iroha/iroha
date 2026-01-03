@@ -105,7 +105,7 @@ LaneConfigEntry {
 
 ## Configuration & Norito types
 
-- `LaneCatalog`, `LaneMetadata`, и `DataSpaceCatalog` находятся в `iroha_data_model::nexus` и предоставляют Norito-совместимые структуры для manifests и SDKs.
+- `LaneCatalog`, `LaneConfig`, и `DataSpaceCatalog` находятся в `iroha_data_model::nexus` и предоставляют Norito-совместимые структуры для manifests и SDKs.
 - `LaneConfig` находится в `iroha_config::parameters::actual::Nexus` и автоматически выводится из каталога; Norito encoding не требуется, так как это внутренний runtime helper.
 - Пользовательская конфигурация (`iroha_config::parameters::user::Nexus`) продолжает принимать декларативные descriptors lane и dataspace; парсинг теперь выводит геометрию и отклоняет невалидные aliases или дублирующиеся lane IDs.
 

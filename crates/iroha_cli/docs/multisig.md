@@ -30,10 +30,7 @@ To simplify explanations, accounts are identified by the last four digits of the
 - `85B6` represents the multi-signature __account__ you provide with `--account` (or let the CLI
   generate in the signatory domain). The generated controller key is random and its private half is
   discarded because direct multisig signing is forbidden (`torii_multisig_direct_sign_reject_total`).
-  Deterministically derived multisig identifiers are quarantined at admission and tracked via
-  `multisig_derived_account_detected_total` to aid migration away from deterministic keys.
-  The CLI also rejects registrations that try to reuse the legacy deterministic controller id; omit
-  `--account` to generate a fresh controller or supply a random/non-derivable id.
+  Omit `--account` to generate a fresh controller or supply your own random id.
 
 - The multi-signature account consists of three __signatories__: `AD22`, `3EC5`, and `2F8B`.
 - Each signatory has an assigned __weight__:

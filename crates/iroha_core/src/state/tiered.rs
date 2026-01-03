@@ -1417,7 +1417,7 @@ mod tests {
     use iroha_data_model::{
         block::BlockHeader,
         consensus::ExecutionQcRecord,
-        nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId},
+        nexus::{LaneCatalog, LaneConfig, LaneId},
     };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
@@ -1564,20 +1564,20 @@ mod tests {
         let mut backend = TieredStateBackend::new(true, 1, Some(temp.path().to_path_buf()), 4);
 
         let lane_count = NonZeroU32::new(4).expect("lane count");
-        let lane0 = LaneMetadata::default();
-        let lane1 = LaneMetadata {
+        let lane0 = LaneConfig::default();
+        let lane1 = LaneConfig {
             id: LaneId::from(1),
             alias: "beta".to_string(),
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
         let initial_catalog =
             LaneCatalog::new(lane_count, vec![lane0.clone(), lane1.clone()]).expect("catalog");
         let initial_cfg = RuntimeLaneConfig::from_catalog(&initial_catalog);
 
-        let lane2 = LaneMetadata {
+        let lane2 = LaneConfig {
             id: LaneId::from(2),
             alias: "gamma".to_string(),
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
         let extended_catalog = LaneCatalog::new(
             lane_count,
@@ -1624,9 +1624,9 @@ mod tests {
 
         let initial_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 alias: "Alpha Lane".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("initial catalog");
@@ -1651,9 +1651,9 @@ mod tests {
 
         let updated_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 alias: "Payments Lane".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("updated catalog");

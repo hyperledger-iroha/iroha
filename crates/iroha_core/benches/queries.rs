@@ -9,10 +9,8 @@ use std::sync::LazyLock;
 
 use criterion::Criterion;
 use iroha_core::{
-    query::snapshot::{
-        CursorMode as LaneCursorMode, run_on_snapshot, run_on_snapshot_with_mode,
-    },
     prelude::*,
+    query::snapshot::{CursorMode as LaneCursorMode, run_on_snapshot, run_on_snapshot_with_mode},
     query::store::LiveQueryStore,
     smartcontracts::{Execute, ValidQuery, isi::query::QueryLimits},
     state::{State, World},

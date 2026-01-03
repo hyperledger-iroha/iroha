@@ -419,9 +419,9 @@ use crate::{
 #[doc = "Builder utilities for composing typed queries."]
 pub mod builder;
 // Use the full DSL by default; swap for a lightweight version under `fast_dsl`.
-/// Legacy ergonomic DSL for building queries.
+/// Ergonomic DSL for building queries.
 #[cfg(not(feature = "fast_dsl"))]
-#[doc = "Compat declarative query DSL."]
+#[doc = "Declarative query DSL."]
 pub mod dsl;
 /// Optimised DSL variant that avoids intermediate allocations.
 #[cfg(feature = "fast_dsl")]
@@ -626,10 +626,10 @@ mod model {
             + Send
             + Sync,
     {
-        /// Compatibility constructor that accepts the concrete query in non-`fast_dsl` builds
-        /// and ignores it in `fast_dsl` builds where the query payload is carried elsewhere.
+        /// Constructor that accepts the concrete query in non-`fast_dsl` builds and ignores it
+        /// in `fast_dsl` builds where the query payload is carried elsewhere.
         #[inline]
-        pub fn new_compat(
+        pub fn new_with_query(
             #[cfg(not(feature = "fast_dsl"))] query: Box<dyn super::Query<Item = T> + Send + Sync>,
             #[cfg(feature = "fast_dsl")] (): (),
             predicate: CompoundPredicate<T>,
@@ -2250,7 +2250,7 @@ mod json_roundtrip_tests {
         set_query_registry(crate::query_registry![ErasedIterQuery<Domain>]);
 
         // Build a simple iterable query box for domains
-        let qwf: QueryWithFilter<Domain> = QueryWithFilter::new_compat(
+        let qwf: QueryWithFilter<Domain> = QueryWithFilter::new_with_query(
             Box::new(FindDomains),
             CompoundPredicate::PASS,
             SelectorTuple::default(),

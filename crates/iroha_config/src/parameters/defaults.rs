@@ -737,7 +737,7 @@ pub mod network {
     /// Default stagger between parallel dial attempts for multiple addresses (Happy Eyeballs)
     pub const HAPPY_EYEBALLS_STAGGER: Duration = Duration::from_millis(100);
 
-    // P2P bounded queue capacities (always enforced; historical feature flag retained for compatibility)
+    // P2P bounded queue capacities (always enforced)
     // Defaults tuned for ~20,000 TPS environments: prioritize headroom for gossip/low-priority
     // traffic while keeping consensus/control queues responsive.
     /// Capacity for priority queues fed by high-importance messages.

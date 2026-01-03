@@ -160,5 +160,4 @@ async fn vk_register_update_return_202() {
         .unwrap();
     let resp_upd = app.clone().oneshot(req_upd).await.unwrap();
     assert_eq!(resp_upd.status(), http::StatusCode::ACCEPTED);
-
 }

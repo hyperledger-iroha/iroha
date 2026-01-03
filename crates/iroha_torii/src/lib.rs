@@ -337,18 +337,16 @@ pub use routing::{
     ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions, RegisterPinManifestDto,
     RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
     SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
-    ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs,
-    handle_get_contract_code_bytes, handle_get_proof, handle_get_vk, handle_list_proofs,
-    handle_list_vk, handle_post_contract_call, handle_post_contract_deploy,
-    handle_post_contract_instance, handle_post_contract_instance_activate,
-    handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
-    handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
-    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
+    ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs, handle_get_contract_code_bytes,
+    handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_call,
+    handle_post_contract_deploy, handle_post_contract_instance,
+    handle_post_contract_instance_activate, handle_post_sorafs_register_manifest,
+    handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
+    handle_post_sumeragi_evidence_submit, handle_post_vk_register, handle_post_vk_update,
     handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
-    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count,
-    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots,
-    handle_v1_zk_submit_proof, handle_v1_zk_verify, handle_v1_zk_vote_tally,
-    signed_find_proof_by_id,
+    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
+    handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots, handle_v1_zk_submit_proof,
+    handle_v1_zk_verify, handle_v1_zk_vote_tally, signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -2170,11 +2168,12 @@ async fn handler_proofs_query(
     ensure_proof_api_version(&app, negotiated, "v1/proofs/query")?;
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-        return routing::handle_queries(
+        return routing::handle_queries_with_opts(
             app.query_service.clone(),
             app.state.clone(),
             signed,
             tel,
+            crate::NoritoQuery(QueryOptions::default()),
             format,
         )
         .await;
@@ -2184,11 +2183,12 @@ async fn handler_proofs_query(
     check_access_enforced(&app, &headers, None, "v1/proofs/query", enforce).await?;
 
     let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-    routing::handle_queries(
+    routing::handle_queries_with_opts(
         app.query_service.clone(),
         app.state.clone(),
         signed,
         tel,
+        crate::NoritoQuery(QueryOptions::default()),
         format,
     )
     .await
@@ -9353,11 +9353,12 @@ async fn handler_signed_query(
     };
 
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
-        return routing::handle_queries(
+        return routing::handle_queries_with_opts(
             app.query_service.clone(),
             app.state.clone(),
             query_request,
             tel.clone(),
+            crate::NoritoQuery(QueryOptions::default()),
             format,
         )
         .await;
@@ -9385,11 +9386,12 @@ async fn handler_signed_query(
         )));
     }
 
-    routing::handle_queries(
+    routing::handle_queries_with_opts(
         app.query_service.clone(),
         app.state.clone(),
         query_request,
         tel,
+        crate::NoritoQuery(QueryOptions::default()),
         format,
     )
     .await

@@ -7,7 +7,7 @@ These guidelines apply to the `crates/iroha_schema` crate.
 - Impacts derive macros and code generation in related crates.
 
 ## Development workflow
-- Preserve backward compatibility of generated schema where possible; document breaking changes.
+- Update generated schema and document breaking changes.
 - Add unit tests for new or modified schema types and conversions.
 - When schema output changes, update any fixtures and regenerate examples used in docs if applicable.
 - Test: `cargo test -p iroha_schema`.

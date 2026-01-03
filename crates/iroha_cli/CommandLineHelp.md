@@ -192,10 +192,10 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha gov proposal-get`↴](#iroha-gov-proposal-get)
 * [`iroha gov locks-get`↴](#iroha-gov-locks-get)
 * [`iroha gov council`↴](#iroha-gov-council)
-* [`iroha gov council derive-vrf`↴](#iroha-gov-council-derive-vrf) *(alias: `iroha gov council-derive-vrf`)*
-* [`iroha gov council persist`↴](#iroha-gov-council-persist) *(alias: `iroha gov council-persist`)*
-* [`iroha gov council gen-vrf`↴](#iroha-gov-council-gen-vrf) *(alias: `iroha gov council-gen-vrf`)*
-* [`iroha gov council derive-and-persist`↴](#iroha-gov-council-derive-and-persist) *(alias: `iroha gov council-derive-and-persist`)*
+* [`iroha gov council derive-vrf`↴](#iroha-gov-council-derive-vrf)
+* [`iroha gov council persist`↴](#iroha-gov-council-persist)
+* [`iroha gov council gen-vrf`↴](#iroha-gov-council-gen-vrf)
+* [`iroha gov council derive-and-persist`↴](#iroha-gov-council-derive-and-persist)
 * [`iroha gov unlock-stats`↴](#iroha-gov-unlock-stats)
 * [`iroha gov referendum-get`↴](#iroha-gov-referendum-get)
 * [`iroha gov tally-get`↴](#iroha-gov-tally-get)
@@ -2992,10 +2992,6 @@ Governance helpers (app API convenience)
 * `proposal-get` — Get a governance proposal by id (hex)
 * `locks-get` — Get locks for a referendum id
 * `council` — Get current sortition council
-* `council-derive-vrf` — Derive council membership using VRF proofs (server feature: gov_vrf)
-* `council-persist` — Persist council membership (on-chain) using VRF proofs (server feature: gov_vrf)
-* `council-gen-vrf` — Generate a JSON array of VRF candidates for testing
-* `council-derive-and-persist` — Derive council via VRF and persist it on-chain in one step
 * `unlock-stats` — Show governance unlock sweep stats (expired locks at current height)
 * `referendum-get` — Get a referendum by id
 * `tally-get` — Get a tally snapshot by referendum id
@@ -3182,8 +3178,7 @@ Get current sortition council
 
 ## `iroha gov council derive-vrf`
 
-Derive council membership using VRF proofs (server feature: gov_vrf). This command is also
-available as the legacy alias `iroha gov council-derive-vrf`.
+Derive council membership using VRF proofs (server feature: gov_vrf).
 
 **Usage:** `iroha gov council derive-vrf [OPTIONS] --committee-size <N>`
 
@@ -3204,8 +3199,7 @@ available as the legacy alias `iroha gov council-derive-vrf`.
 
 ## `iroha gov council persist`
 
-Persist council membership (on-chain) using VRF proofs (server feature: gov_vrf). This command is
-also available via the alias `iroha gov council-persist`.
+Persist council membership (on-chain) using VRF proofs (server feature: gov_vrf).
 
 **Usage:** `iroha gov council persist [OPTIONS] --committee-size <COMMITTEE_SIZE> --candidates-file <PATH> --authority <AUTHORITY> --private-key <HEX>`
 
@@ -3227,7 +3221,7 @@ also available via the alias `iroha gov council-persist`.
 
 ## `iroha gov council gen-vrf`
 
-Generate a JSON array of VRF candidates for testing (alias: `iroha gov council-gen-vrf`).
+Generate a JSON array of VRF candidates for testing.
 
 **Usage:** `iroha gov council gen-vrf [OPTIONS] --chain-id <CHAIN_ID>`
 
@@ -3261,7 +3255,7 @@ Generate a JSON array of VRF candidates for testing (alias: `iroha gov council-g
 
 ## `iroha gov council derive-and-persist`
 
-Derive council via VRF and persist it on-chain in one step (alias: `iroha gov council-derive-and-persist`).
+Derive council via VRF and persist it on-chain in one step.
 
 **Usage:** `iroha gov council derive-and-persist [OPTIONS] --committee-size <COMMITTEE_SIZE> --candidates-file <PATH> --authority <AUTHORITY> --private-key <HEX>`
 

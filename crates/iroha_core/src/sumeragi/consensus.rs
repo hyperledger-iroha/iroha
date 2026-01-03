@@ -296,7 +296,7 @@ pub fn compute_consensus_handshake_caps_from_view(
     )
 }
 
-/// Handshake gate structure for p2p compatibility checks.
+/// Handshake gate structure for p2p checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandshakeGate {
     /// Local chain id.

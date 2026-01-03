@@ -708,7 +708,7 @@ impl Actor {
                 );
             };
 
-            let rbc_plan = self.prepare_rbc_plan(rbc::RbcPlanInputs {
+            let mut rbc_plan = self.prepare_rbc_plan(rbc::RbcPlanInputs {
                 signed_block: &signed_block,
                 transactions: &transactions_for_plan,
                 routing: &routing_batch,
@@ -721,10 +721,12 @@ impl Actor {
             })?;
             drop(payload_bytes);
 
-            if let Some(plan) = rbc_plan {
-                self.apply_rbc_session_plan(plan.primary)?;
-                if let Some(dup) = plan.duplicate {
-                    self.apply_rbc_session_plan(dup)?;
+            if let Some(plan) = rbc_plan.as_ref() {
+                // Install RBC sessions up front so local proposal handling sees the session,
+                // but defer RBC network traffic until proposal messages are enqueued.
+                self.install_rbc_session_plan(&plan.primary)?;
+                if let Some(dup) = plan.duplicate.as_ref() {
+                    self.install_rbc_session_plan(dup)?;
                 }
                 self.publish_rbc_backlog_snapshot();
             }
@@ -732,9 +734,6 @@ impl Actor {
             // Loop back consensus messages locally so the leader participates immediately.
             self.handle_proposal_hint(proposal_hint)?;
             self.handle_proposal(proposal.clone())?;
-            if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
-                self.handle_block_created(block_msg)?;
-            }
 
             let topology_peers = topology.as_ref();
             let local_peer_id = self.common_config.peer.id().clone();
@@ -764,6 +763,17 @@ impl Actor {
                     peer: peer.clone(),
                     msg: block_created_msg.clone(),
                 });
+            }
+
+            if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
+                self.handle_block_created(block_msg)?;
+            }
+
+            if let Some(plan) = rbc_plan.take() {
+                self.broadcast_rbc_session_plan(plan.primary)?;
+                if let Some(dup) = plan.duplicate {
+                    self.broadcast_rbc_session_plan(dup)?;
+                }
             }
 
             let relay_envelopes = crate::sumeragi::status::lane_relay_envelopes_snapshot();

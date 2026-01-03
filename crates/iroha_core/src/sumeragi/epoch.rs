@@ -202,16 +202,6 @@ impl EpochManager {
         VrfNoteResult::Accepted
     }
 
-    /// Backward-compatible wrapper: note a VRF commit without reporting result.
-    pub fn note_commit_at_height(&mut self, height: u64, c: VrfCommit) {
-        let _ = self.try_note_commit_at_height(height, c);
-    }
-
-    /// Backward-compatible wrapper: note a VRF reveal without reporting result.
-    pub fn note_reveal_at_height(&mut self, height: u64, r: VrfReveal) {
-        let _ = self.try_note_reveal_at_height(height, r);
-    }
-
     /// Called on each block commit; advances epoch and computes new seed at epoch boundaries.
     pub fn on_block_commit(&mut self, height: u64) {
         if self.epoch_length_blocks == 0 {
@@ -485,7 +475,7 @@ mod tests {
         em.set_params(10, 3, 6);
         // Height 1..3: commit window
         for h in 1..=3 {
-            em.note_commit_at_height(
+            let _ = em.try_note_commit_at_height(
                 h,
                 VrfCommit {
                     epoch: 0,
@@ -500,7 +490,7 @@ mod tests {
         let d = iroha_crypto::blake2::Digest::finalize(h);
         let mut commit = [0u8; 32];
         commit.copy_from_slice(&d[..32]);
-        em.note_commit_at_height(
+        let _ = em.try_note_commit_at_height(
             3,
             VrfCommit {
                 epoch: 0,
@@ -510,7 +500,7 @@ mod tests {
         );
         // Height 4..6: reveal window
         for hh in 4..=6 {
-            em.note_reveal_at_height(
+            let _ = em.try_note_reveal_at_height(
                 hh,
                 VrfReveal {
                     epoch: 0,
@@ -520,7 +510,7 @@ mod tests {
             );
         }
         // Valid reveal for signer 2
-        em.note_reveal_at_height(
+        let _ = em.try_note_reveal_at_height(
             6,
             VrfReveal {
                 epoch: 0,
@@ -542,7 +532,7 @@ mod tests {
         let mut em = EpochManager::new_from_chain(&chain);
         em.set_params(10, 3, 6);
         // Commit in window for signer 3
-        em.note_commit_at_height(
+        let _ = em.try_note_commit_at_height(
             2,
             VrfCommit {
                 epoch: 0,
@@ -551,7 +541,7 @@ mod tests {
             },
         );
         // Invalid reveal (hash does not match commit) for signer 3 within reveal window
-        em.note_reveal_at_height(
+        let _ = em.try_note_reveal_at_height(
             5,
             VrfReveal {
                 epoch: 0,
@@ -560,7 +550,7 @@ mod tests {
             },
         );
         // Commit outside window for signer 4 (ignored)
-        em.note_commit_at_height(
+        let _ = em.try_note_commit_at_height(
             8,
             VrfCommit {
                 epoch: 0,

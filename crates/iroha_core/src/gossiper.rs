@@ -602,7 +602,7 @@ impl TransactionGossiper {
             size_bytes = encoded_len,
             targets = targets.len(),
             %dataspace_id,
-            "gossiping restricted transactions to commit topology"
+            "gossiping restricted transactions to online commit topology"
         );
         self.record_sent_metric(
             GossipPlane::Restricted,
@@ -791,6 +791,11 @@ impl TransactionGossiper {
         tx_count: usize,
         seed: u64,
     ) -> RestrictedTargetPlan {
+        let online: BTreeSet<_> = fallback_targets.iter().cloned().collect();
+        let commit_topology: Vec<PeerId> = commit_topology
+            .into_iter()
+            .filter(|peer| online.contains(peer))
+            .collect();
         let (capped_commit, _) = Self::select_targets_with_seed(commit_topology, target_cap, seed);
         if !capped_commit.is_empty() {
             return RestrictedTargetPlan::Send {
@@ -883,7 +888,6 @@ impl TransactionGossiper {
         let lane_catalog = state_view.nexus.lane_catalog.clone();
         let lane_config = state_view.nexus.lane_config.clone();
         drop(state_view);
-        let batch_txs = routes.len();
 
         for (idx, tx) in txs.into_iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
@@ -897,17 +901,17 @@ impl TransactionGossiper {
                     None,
                     &[],
                     self.target_cap_for_plane(plane),
-                    batch_txs,
+                    1,
                     0,
                 );
-                return;
+                continue;
             };
             if let Err(reason) = validate_route(&lane_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
                     reason,
-                    "dropping transaction gossip batch due to invalid route"
+                    "dropping transaction gossip entry due to invalid route"
                 );
                 self.record_drop_metric(
                     plane,
@@ -918,10 +922,10 @@ impl TransactionGossiper {
                     None,
                     &[],
                     self.target_cap_for_plane(plane),
-                    batch_txs,
+                    1,
                     0,
                 );
-                return;
+                continue;
             }
             let expected_plane = dataspace_plane(&lane_config, route.dataspace_id).or({
                 if self.dataspace_cfg.drop_unknown_dataspace {
@@ -934,7 +938,7 @@ impl TransactionGossiper {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
-                    "dropping transaction gossip batch due to unknown dataspace"
+                    "dropping transaction gossip entry due to unknown dataspace"
                 );
                 self.record_drop_metric(
                     plane,
@@ -945,15 +949,15 @@ impl TransactionGossiper {
                     None,
                     &[],
                     self.target_cap_for_plane(plane),
-                    batch_txs,
+                    1,
                     0,
                 );
-                return;
+                continue;
             };
             if plane == GossipPlane::Restricted && route.dataspace_id == DataSpaceId::GLOBAL {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
-                    "restricted plane reported global dataspace; dropping batch"
+                    "restricted plane reported global dataspace; dropping entry"
                 );
                 self.record_drop_metric(
                     plane,
@@ -964,10 +968,10 @@ impl TransactionGossiper {
                     None,
                     &[],
                     self.target_cap_for_plane(plane),
-                    batch_txs,
+                    1,
                     0,
                 );
-                return;
+                continue;
             }
             if expected_plane != plane {
                 iroha_logger::warn!(
@@ -975,7 +979,7 @@ impl TransactionGossiper {
                     dataspace_id = %route.dataspace_id,
                     plane = ?plane,
                     expected_plane = ?expected_plane,
-                    "dropping transaction gossip batch due to plane mismatch"
+                    "dropping transaction gossip entry due to plane mismatch"
                 );
                 self.record_drop_metric(
                     plane,
@@ -986,10 +990,10 @@ impl TransactionGossiper {
                     None,
                     &[],
                     self.target_cap_for_plane(plane),
-                    batch_txs,
+                    1,
                     0,
                 );
-                return;
+                continue;
             }
 
             let (max_clock_drift, tx_limits) = {
@@ -1257,18 +1261,35 @@ fn partition_gossip_batch(
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, collections::BTreeSet, num::NonZeroUsize};
+    use std::{borrow::Cow, collections::BTreeSet, num::NonZeroUsize, sync::Arc, time::Duration};
 
-    use iroha_config::parameters::actual::{
-        DataspaceGossipFallback, LaneConfig as LaneGeometry, RestrictedPublicPayload,
+    use iroha_config::{
+        kura::{FsyncMode, InitMode},
+        parameters::{
+            actual::{
+                DataspaceGossipFallback, Kura as KuraConfig, LaneConfig as LaneGeometry,
+                LaneProfile, Queue as QueueConfig, RelayMode, RestrictedPublicPayload,
+                SoranetHandshake, SoranetPrivacy, SoranetVpn,
+            },
+            defaults,
+        },
     };
+    use iroha_config_base::WithOrigin;
+    use iroha_crypto::KeyPair;
     use iroha_data_model::{ChainId, Level, isi::Log, transaction::TransactionBuilder};
+    use iroha_primitives::{addr::socket_addr, time::TimeSource};
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
     };
+    use tempfile::tempdir;
 
     use super::*;
-    use crate::queue::RoutingDecision;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::RoutingDecision,
+        state::{State, World},
+    };
 
     fn build_transaction(message: &str) -> (SignedTransaction, AcceptedTransaction<'static>) {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
@@ -1278,6 +1299,73 @@ mod tests {
             .sign(ALICE_KEYPAIR.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
         (signed, accepted)
+    }
+
+    fn test_network_config(addr: iroha_primitives::addr::SocketAddr) -> NetworkConfig {
+        let public_addr = addr.clone();
+        NetworkConfig {
+            address: WithOrigin::inline(addr),
+            public_address: WithOrigin::inline(public_addr),
+            relay_mode: RelayMode::Disabled,
+            relay_hub_address: None,
+            relay_ttl: defaults::network::RELAY_TTL,
+            soranet_handshake: SoranetHandshake::default(),
+            soranet_privacy: SoranetPrivacy::default(),
+            soranet_vpn: SoranetVpn::default(),
+            lane_profile: LaneProfile::Core,
+            require_sm_handshake_match: defaults::network::REQUIRE_SM_HANDSHAKE_MATCH,
+            require_sm_openssl_preview_match: defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
+            idle_timeout: defaults::network::IDLE_TIMEOUT,
+            peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
+            trust_gossip: defaults::network::TRUST_GOSSIP,
+            trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
+            trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
+            trust_penalty_unknown_peer: defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
+            trust_min_score: defaults::network::TRUST_MIN_SCORE,
+            dns_refresh_interval: None,
+            dns_refresh_ttl: None,
+            quic_enabled: false,
+            tls_enabled: false,
+            tls_listen_address: None,
+            prefer_ws_fallback: false,
+            p2p_queue_cap_high: defaults::network::P2P_QUEUE_CAP_HIGH,
+            p2p_queue_cap_low: defaults::network::P2P_QUEUE_CAP_LOW,
+            p2p_post_queue_cap: defaults::network::P2P_POST_QUEUE_CAP,
+            happy_eyeballs_stagger: defaults::network::HAPPY_EYEBALLS_STAGGER,
+            addr_ipv6_first: false,
+            max_incoming: None,
+            max_total_connections: None,
+            accept_rate_per_ip_per_sec: None,
+            accept_burst_per_ip: None,
+            max_accept_buckets: defaults::network::MAX_ACCEPT_BUCKETS,
+            accept_bucket_idle: defaults::network::ACCEPT_BUCKET_IDLE,
+            accept_prefix_v4_bits: defaults::network::ACCEPT_PREFIX_V4_BITS,
+            accept_prefix_v6_bits: defaults::network::ACCEPT_PREFIX_V6_BITS,
+            accept_rate_per_prefix_per_sec: None,
+            accept_burst_per_prefix: None,
+            low_priority_rate_per_sec: None,
+            low_priority_burst: None,
+            low_priority_bytes_per_sec: None,
+            low_priority_bytes_burst: None,
+            allowlist_only: false,
+            allow_keys: Vec::new(),
+            deny_keys: Vec::new(),
+            allow_cidrs: Vec::new(),
+            deny_cidrs: Vec::new(),
+            disconnect_on_post_overflow: defaults::network::DISCONNECT_ON_POST_OVERFLOW,
+            max_frame_bytes: defaults::network::MAX_FRAME_BYTES.get(),
+            tcp_nodelay: defaults::network::TCP_NODELAY,
+            tcp_keepalive: Some(defaults::network::TCP_KEEPALIVE),
+            max_frame_bytes_consensus: defaults::network::MAX_FRAME_BYTES_CONSENSUS.get(),
+            max_frame_bytes_control: defaults::network::MAX_FRAME_BYTES_CONTROL.get(),
+            max_frame_bytes_block_sync: defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get(),
+            max_frame_bytes_tx_gossip: defaults::network::MAX_FRAME_BYTES_TX_GOSSIP.get(),
+            max_frame_bytes_peer_gossip: defaults::network::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
+            max_frame_bytes_health: defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
+            max_frame_bytes_other: defaults::network::MAX_FRAME_BYTES_OTHER.get(),
+            tls_only_v1_3: true,
+            quic_max_idle_timeout: None,
+        }
     }
 
     #[test]
@@ -1663,7 +1751,7 @@ mod tests {
 
         let plan = TransactionGossiper::restricted_target_plan_with_targets(
             commit.clone(),
-            Vec::new(),
+            commit.clone(),
             cap,
             DataspaceGossipFallback::UsePublicOverlay,
             RestrictedPublicPayload::Forward,
@@ -1703,7 +1791,7 @@ mod tests {
 
         let plan = TransactionGossiper::restricted_target_plan_with_targets(
             duplicated.clone(),
-            Vec::new(),
+            duplicated.clone(),
             None,
             DataspaceGossipFallback::UsePublicOverlay,
             RestrictedPublicPayload::Forward,
@@ -1719,6 +1807,30 @@ mod tests {
                 assert_eq!(targets, expected, "duplicates should be removed");
             }
             other => panic!("expected deduped commit plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn restricted_plan_filters_commit_topology_to_online_peers() {
+        let online_peer: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
+        let offline_peer: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
+        let seed = 0xDEC0_1DED;
+
+        let plan = TransactionGossiper::restricted_target_plan_with_targets(
+            vec![online_peer.clone(), offline_peer],
+            vec![online_peer.clone()],
+            None,
+            DataspaceGossipFallback::UsePublicOverlay,
+            RestrictedPublicPayload::Forward,
+            1,
+            seed,
+        );
+
+        match plan {
+            RestrictedTargetPlan::Send { targets, .. } => {
+                assert_eq!(targets, vec![online_peer]);
+            }
+            other => panic!("expected filtered commit plan, got {other:?}"),
         }
     }
 
@@ -1761,5 +1873,74 @@ mod tests {
             }
             other => panic!("expected capped fallback plan, got {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossip_accepts_valid_entries_with_invalid_routes_present() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let shutdown = ShutdownSignal::new();
+        let network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
+        let (network, _child) = IrohaNetwork::start(
+            KeyPair::random(),
+            network_cfg,
+            None,
+            None,
+            None,
+            shutdown.clone(),
+        )
+        .await
+        .expect("network starts");
+
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            network,
+            queue: Arc::clone(&queue),
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        let (invalid_signed, _) = build_transaction("invalid");
+        let (valid_signed, _) = build_transaction("valid");
+        let invalid_route = GossipRoute {
+            lane_id: LaneId::new(9),
+            dataspace_id: DataSpaceId::new(9),
+        };
+        let valid_route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+        };
+        gossiper.handle_transaction_gossip(TransactionGossip {
+            txs: vec![invalid_signed, valid_signed],
+            routes: vec![invalid_route, valid_route],
+            plane: GossipPlane::Public,
+        });
+
+        assert_eq!(queue.tx_len(), 1);
+        shutdown.send();
     }
 }

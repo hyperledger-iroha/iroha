@@ -42,7 +42,7 @@ pub use staking::*;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct LaneLifecyclePlan {
     /// Lane metadata to add or replace.
-    pub additions: Vec<LaneMetadata>,
+    pub additions: Vec<LaneConfig>,
     /// Lane identifiers to retire.
     pub retire: Vec<LaneId>,
 }
@@ -352,9 +352,6 @@ impl Default for LaneConfig {
     }
 }
 
-/// Historical alias retained for backwards compatibility.
-pub type LaneMetadata = LaneConfig;
-
 /// Declarative visibility profile for a lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema, Display)]
 pub enum LaneVisibility {
@@ -648,7 +645,7 @@ impl norito::json::JsonDeserialize for LaneLifecyclePlan {
         use norito::json::MapVisitor;
 
         let mut visitor = MapVisitor::new(parser)?;
-        let mut additions: Option<Vec<LaneMetadata>> = None;
+        let mut additions: Option<Vec<LaneConfig>> = None;
         let mut retire: Option<Vec<LaneId>> = None;
 
         while let Some(key) = visitor.next_key()? {
@@ -679,7 +676,7 @@ impl norito::json::JsonDeserialize for LaneLifecyclePlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaneCatalog {
     lane_count: NonZeroU32,
-    lanes: Vec<LaneMetadata>,
+    lanes: Vec<LaneConfig>,
 }
 
 impl LaneCatalog {
@@ -688,7 +685,7 @@ impl LaneCatalog {
     /// # Errors
     /// Returns a [`LaneCatalogError`] when lane metadata violates alias uniqueness, identifier
     /// uniqueness, or exceeds the configured lane count.
-    pub fn new(lane_count: NonZeroU32, lanes: Vec<LaneMetadata>) -> Result<Self, LaneCatalogError> {
+    pub fn new(lane_count: NonZeroU32, lanes: Vec<LaneConfig>) -> Result<Self, LaneCatalogError> {
         let mut seen_ids = BTreeSet::new();
         let mut seen_aliases = BTreeSet::new();
 
@@ -721,13 +718,13 @@ impl LaneCatalog {
 
     /// Metadata for all registered lanes.
     #[must_use]
-    pub fn lanes(&self) -> &[LaneMetadata] {
+    pub fn lanes(&self) -> &[LaneConfig] {
         &self.lanes
     }
 
     /// Find a lane by alias.
     #[must_use]
-    pub fn by_alias(&self, alias: &str) -> Option<&LaneMetadata> {
+    pub fn by_alias(&self, alias: &str) -> Option<&LaneConfig> {
         self.lanes.iter().find(|lane| lane.alias == alias)
     }
 
@@ -746,7 +743,7 @@ impl LaneCatalog {
             }
         }
 
-        let mut merged: Vec<LaneMetadata> = self
+        let mut merged: Vec<LaneConfig> = self
             .lanes
             .iter()
             .filter(|lane| !retire_set.contains(&lane.id))
@@ -767,7 +764,7 @@ impl Default for LaneCatalog {
     fn default() -> Self {
         Self {
             lane_count: NonZeroU32::new(1).expect("nonzero lane count"),
-            lanes: vec![LaneMetadata::default()],
+            lanes: vec![LaneConfig::default()],
         }
     }
 }
@@ -988,11 +985,11 @@ mod tests {
         let lane_count = NonZeroU32::new(2).expect("nonzero");
         let catalog = LaneCatalog::new(
             lane_count,
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "alpha".into(),
                 description: None,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("valid catalog");
@@ -1002,17 +999,17 @@ mod tests {
         let dup = LaneCatalog::new(
             lane_count,
             vec![
-                LaneMetadata {
+                LaneConfig {
                     id: LaneId::new(0),
                     alias: "dup".into(),
                     description: None,
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
-                LaneMetadata {
+                LaneConfig {
                     id: LaneId::new(0),
                     alias: "dup".into(),
                     description: None,
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
             ],
         )
@@ -1021,11 +1018,11 @@ mod tests {
 
         let out_of_range = LaneCatalog::new(
             lane_count,
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(5),
                 alias: "gamma".into(),
                 description: None,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect_err("out of range lane");
@@ -1120,19 +1117,19 @@ mod tests {
         let lane_count = NonZeroU32::new(2).expect("nonzero");
         let base = LaneCatalog::new(
             lane_count,
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "alpha".into(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("base catalog");
 
         let plan = LaneLifecyclePlan {
-            additions: vec![LaneMetadata {
+            additions: vec![LaneConfig {
                 id: LaneId::new(1),
                 alias: "beta".into(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
             retire: Vec::new(),
         };
@@ -1180,7 +1177,7 @@ mod tests {
 pub mod prelude {
     pub use super::{
         DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneCatalogError, LaneConfig, LaneId, LaneIdError, LaneLifecyclePlan, LaneMetadata,
+        LaneCatalogError, LaneConfig, LaneId, LaneIdError, LaneLifecyclePlan,
         LaneRelayEmergencyValidatorSet, LaneStorageProfile, LaneStorageProfileParseError,
         LaneVisibility, LaneVisibilityParseError, ShardId,
     };

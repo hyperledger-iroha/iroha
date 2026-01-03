@@ -74,5 +74,4 @@ fn genesis_roundtrip_inspection() {
     assert_eq!(bare, versioned_2, "bare payload mismatch");
 
     decode_versioned_signed_block(&framed).expect("decode versioned genesis");
-
 }

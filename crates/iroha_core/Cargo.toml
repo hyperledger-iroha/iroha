@@ -61,7 +61,7 @@ ids_projection = ["iroha_data_model/ids_projection"]
 fast_dsl = ["iroha_data_model/fast_dsl"]
 # Enable deterministic mock verifier for Kaigi privacy-mode tests.
 kaigi_privacy_mocks = []
-# ZK verifier feature flags are kept for compatibility but ship enabled by default.
+# ZK verifier feature flags ship enabled by default.
 zk-halo2 = ["dep:kaigi_zk"]
 zk-groth16 = []
 zk-stark = []

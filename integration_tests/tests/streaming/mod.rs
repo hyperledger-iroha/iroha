@@ -746,7 +746,10 @@ mod tests {
             Some(Value::Number(Number::U64(value))) => *value,
             _ => panic!("policy.max_relays must be a number"),
         };
-        assert_eq!(max_relays, u64::from(vector.ticket.policy.as_ref().unwrap().max_relays));
+        assert_eq!(
+            max_relays,
+            u64::from(vector.ticket.policy.as_ref().unwrap().max_relays)
+        );
 
         let revocation = root
             .get("ticket_revocation")
@@ -776,7 +779,10 @@ mod tests {
             revocation_signature,
             &hex_encode(vector.ticket_revocation.revocation_signature)
         );
-        assert_eq!(revocation_reason, u64::from(vector.ticket_revocation.reason_code));
+        assert_eq!(
+            revocation_reason,
+            u64::from(vector.ticket_revocation.reason_code)
+        );
     }
 
     #[test]
@@ -893,39 +899,6 @@ mod tests {
 
         let err = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
             .expect_err("viewer lacking bundled bit must be rejected");
-        assert!(matches!(
-            err,
-            StreamingProcessError::ManifestEntropyModeNotNegotiated { .. }
-        ));
-    }
-
-    #[test]
-    fn mixed_cluster_negotiation_rejects_legacy_viewer() {
-        let handle = bundled_streaming_handle(4);
-        let vector = bundled_test_vector();
-        let bundled_viewer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let bundled_peer = make_peer(&bundled_viewer, 12_349);
-        let bundled_bits = CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
-        seed_viewer_negotiation(&handle, &bundled_peer, bundled_bits, vector.max_chunk_len());
-
-        let announce =
-            manifest_announce_for_viewer(&handle, &bundled_peer, vector.manifest.clone())
-                .expect("bundled viewer must accept manifest");
-        assert!(
-            announce
-                .manifest
-                .capabilities
-                .contains(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
-            "accepted manifest must advertise bundled entropy support"
-        );
-
-        let legacy_viewer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let legacy_peer = make_peer(&legacy_viewer, 12_350);
-        let legacy_bits = CapabilityFlags::from_bits(0);
-        seed_viewer_negotiation(&handle, &legacy_peer, legacy_bits, vector.max_chunk_len());
-
-        let err = manifest_announce_for_viewer(&handle, &legacy_peer, vector.manifest.clone())
-            .expect_err("legacy viewer must be rejected in bundled clusters");
         assert!(matches!(
             err,
             StreamingProcessError::ManifestEntropyModeNotNegotiated { .. }
@@ -1129,13 +1102,11 @@ mod tests {
     }
 
     #[test]
-    fn bundled_manifest_handles_mixed_viewer_populations() {
+    fn bundled_manifest_handles_hybrid_viewers() {
         let handle = bundled_streaming_handle_with_accel(4, actual::BundleAcceleration::CpuSimd);
         let vector = bundled_test_vector();
         let (_publisher, hybrid_viewer) = test_keypairs();
-        let (_publisher2, legacy_viewer) = test_keypairs();
         let hybrid_peer = make_peer(&hybrid_viewer, 12_356);
-        let legacy_peer = make_peer(&legacy_viewer, 12_357);
 
         let negotiated_hybrid = CapabilityFlags::from_bits(
             0b0111
@@ -1166,20 +1137,6 @@ mod tests {
                 .contains(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU),
             "CPU handle must normalize away GPU-only bits"
         );
-
-        let negotiated_legacy = CapabilityFlags::from_bits(0b0111);
-        seed_viewer_negotiation(
-            &handle,
-            &legacy_peer,
-            negotiated_legacy,
-            vector.max_chunk_len(),
-        );
-        let err = manifest_announce_for_viewer(&handle, &legacy_peer, vector.manifest.clone())
-            .expect_err("legacy viewer lacking bundled bits must be rejected");
-        assert!(matches!(
-            err,
-            StreamingProcessError::ManifestEntropyModeNotNegotiated { .. }
-        ));
 
         // Ensure subsequent announcements for the hybrid viewer remain valid.
         manifest_announce_for_viewer(&handle, &hybrid_peer, vector.manifest.clone())

@@ -96,7 +96,7 @@ fn run_syscall(vm: &mut IVM, syscall: u32, regs: &[(u8, u64)]) {
 }
 
 #[test]
-fn host_bridges_create_and_transfer_nft() {
+fn host_bridges_nft_mint_and_transfer() {
     // Accounts and NFT id
     let owner = seeded_account(1);
     let recipient = seeded_account(2);
@@ -586,7 +586,7 @@ fn host_bridges_mint_asset() {
 }
 
 #[test]
-fn host_bridges_set_nft_data_and_burn_nft() {
+fn host_bridges_nft_set_metadata_and_burn() {
     // Setup an owner and NFT id
     let owner = seeded_account(13);
     let nft_id: NftId = "n0$wonder".parse().unwrap();

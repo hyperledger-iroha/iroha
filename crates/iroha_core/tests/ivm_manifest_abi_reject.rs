@@ -10,10 +10,10 @@ use iroha_core::{
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
+    executor::{IvmAdmissionError, ValidationFail},
     metadata::Metadata,
     prelude::*,
     smart_contract::manifest,
-    validation_fail::{IvmAdmissionError, ValidationFail},
 };
 use iroha_primitives::json::Json;
 use ivm::{ProgramMetadata, encoding};

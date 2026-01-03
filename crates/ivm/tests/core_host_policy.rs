@@ -132,7 +132,7 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
     let dsid = DataSpaceId::new(7);
     let manifest_root = [0x11; 32];
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 1);
-    let mut host = CoreHost::new().with_axt_policy_from_snapshot(&snapshot);
+    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
 
     let descriptor = make_descriptor(dsid);
     let desc_ptr = store_tlv(
@@ -676,7 +676,7 @@ fn core_host_enforces_policy_snapshot() {
         version: AxtPolicySnapshot::compute_version(&entries),
         entries,
     };
-    let mut host = CoreHost::new().with_axt_policy_from_snapshot(&snapshot);
+    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
 
     let descriptor = make_descriptor(dsid);
     let desc_ptr = store_tlv(
@@ -772,7 +772,7 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
     let dsid = DataSpaceId::new(22);
     let manifest_root = [0xAB; 32];
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 4);
-    let mut host = CoreHost::new().with_axt_policy_from_snapshot(&snapshot);
+    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
 
     let descriptor = make_descriptor(dsid);
     let desc_ptr = store_tlv(

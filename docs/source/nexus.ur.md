@@ -56,7 +56,7 @@ Data Spaces Model
 - Governance: membership/rotation manifest governance section سے، on-chain proposals/multisig یا external governance anchored by nexus txs/attestations۔
 
 Dataspace-aware gossip
-- Gossip batches اب plane tag (public vs restricted) لاتے ہیں؛ restricted batches commit topology کے مطابق unicast ہوتے ہیں (`transaction_gossip_restricted_target_cap`) جبکہ public batches `transaction_gossip_public_target_cap` استعمال کرتے ہیں (`null` = broadcast)۔ Targets کی reshuffle cadence `transaction_gossip_public_target_reshuffle_ms` اور `transaction_gossip_restricted_target_reshuffle_ms` سے آتی ہے۔ خالی topology میں `transaction_gossip_restricted_public_payload` (default `refuse`) کے ذریعے restricted payloads کو public overlay پر forward یا refuse کیا جا سکتا ہے۔ Telemetry fallback attempts، forward/drop counts اور policy دکھاتا ہے۔
+- Gossip batches اب plane tag (public vs restricted) لاتے ہیں؛ restricted batches commit topology کے online peers کو unicast ہوتے ہیں (`transaction_gossip_restricted_target_cap`) جبکہ public batches `transaction_gossip_public_target_cap` استعمال کرتے ہیں (`null` = broadcast)۔ Targets کی reshuffle cadence `transaction_gossip_public_target_reshuffle_ms` اور `transaction_gossip_restricted_target_reshuffle_ms` سے آتی ہے۔ جب commit topology میں online peers نہیں ہوں تو `transaction_gossip_restricted_public_payload` (default `refuse`) کے ذریعے restricted payloads کو public overlay پر forward یا refuse کیا جا سکتا ہے۔ Telemetry fallback attempts، forward/drop counts اور policy دکھاتا ہے۔
 - Unknown dataspaces اگر `transaction_gossip_drop_unknown_dataspace` enable ہو تو re-queue ہوتے ہیں؛ ورنہ restricted targeting پر fall back۔
 - Receive-side validation غلط lane/dataspace یا plane tag mismatch والی batches drop کرتی ہے۔
 
