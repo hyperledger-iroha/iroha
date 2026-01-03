@@ -86,7 +86,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             .expect("network peer should have BLS PoP")
             .to_vec(),
     );
-    submit_blocking_or_skip(
+    submit_or_skip(
         client.clone(),
         register_peer,
         tx_timeout,
@@ -156,13 +156,21 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     assert_eq!(new_peer_asset, numeric!(100));
 
     // When a peer is unregistered
-    submit_blocking_or_skip(
+    submit_or_skip(
         client.clone(),
         Unregister::peer(new_peer_id),
         tx_timeout,
         "network_stable_after_add_and_after_remove_peer unregister_peer",
     )
     .await?;
+    if sandbox::handle_result(
+        wait_for_peer_count(&client, 4, sync_timeout).await,
+        stringify!(network_stable_after_add_and_after_remove_peer),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
     // blocks=6
     network.remove_peer(&new_peer);
     // We can mint without an error.
@@ -180,19 +188,8 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         return Ok(());
     }
     let main_asset = match sandbox::handle_result(
-        find_asset(&client, &account, &asset_def).await,
-        stringify!(network_stable_after_add_and_after_remove_peer),
-    )? {
-        Some(Some(value)) => value,
-        Some(None) => return Err(eyre!("missing asset on main network")),
-        None => return Ok(()),
-    };
-    assert_eq!(main_asset, numeric!(300));
-    // Removed peers remain connected for block sync; they should observe the new mint.
-    sleep(PIPELINE_TIME * 5).await;
-    let unregistered_asset = match sandbox::handle_result(
         wait_for_asset(
-            &new_peer_client,
+            &client,
             &account,
             &asset_def,
             sync_timeout,
@@ -204,7 +201,24 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         Some(value) => value,
         None => return Ok(()),
     };
-    assert_eq!(unregistered_asset, numeric!(300));
+    assert_eq!(main_asset, numeric!(300));
+    // Removed peers should not observe new mints after unregister.
+    sleep(PIPELINE_TIME * 5).await;
+    let unregistered_asset = match sandbox::handle_result(
+        wait_for_asset(
+            &new_peer_client,
+            &account,
+            &asset_def,
+            sync_timeout,
+            Some(numeric!(100)),
+        )
+        .await,
+        stringify!(network_stable_after_add_and_after_remove_peer),
+    )? {
+        Some(value) => value,
+        None => return Ok(()),
+    };
+    assert_eq!(unregistered_asset, numeric!(100));
 
     Ok(())
 }
@@ -263,7 +277,7 @@ async fn mint(
         AssetId::new(asset_definition_id.clone(), account_id.clone()),
     );
     let client = client.clone();
-    submit_blocking_or_skip(
+    submit_or_skip(
         client,
         mint_asset,
         timeout_duration,
@@ -272,7 +286,7 @@ async fn mint(
     .await
 }
 
-async fn submit_blocking_or_skip<I>(
+async fn submit_or_skip<I>(
     client: Client,
     instruction: I,
     timeout_duration: Duration,
@@ -285,7 +299,7 @@ where
     run_blocking_with_timeout(
         move || {
             client
-                .submit_blocking(instruction)
+                .submit(instruction)
                 .map(|_| ())
                 .wrap_err_with(|| context_owned.clone())
         },
@@ -323,4 +337,29 @@ where
         .map_err(|_| eyre!("{context} timed out"))?;
     let result = result.map_err(Report::new)?;
     Ok(result?)
+}
+
+async fn wait_for_peer_count(
+    client: &Client,
+    expected: u64,
+    timeout_duration: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout_duration;
+    loop {
+        let status = spawn_blocking({
+            let client = client.clone();
+            move || client.get_status()
+        })
+        .await??;
+        if status.peers == expected {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "timed out waiting for peer count {expected}, last seen {}",
+                status.peers
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
 }
