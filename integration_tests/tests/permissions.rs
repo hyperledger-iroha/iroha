@@ -66,12 +66,16 @@ fn debug_print_genesis_transactions() {
     let asset_definition_id = "xor#wonderland".parse().expect("Valid");
     let invalid_instruction =
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
-    let network = NetworkBuilder::new()
-        .with_config_layer(|layer| {
-            layer.write(["confidential", "enabled"], true);
-        })
-        .with_genesis_instruction(invalid_instruction)
-        .build();
+    let Some(network) = sandbox::build_network_or_skip(
+        NetworkBuilder::new()
+            .with_config_layer(|layer| {
+                layer.write(["confidential", "enabled"], true);
+            })
+            .with_genesis_instruction(invalid_instruction),
+        stringify!(debug_print_genesis_transactions),
+    ) else {
+        return;
+    };
     let genesis = network.genesis();
     for (tx_idx, tx) in genesis.0.transactions_vec().iter().enumerate() {
         println!("tx #{tx_idx}");
@@ -122,12 +126,16 @@ async fn genesis_transactions_are_validated_by_executor() {
     let asset_definition_id = "xor#wonderland".parse().expect("Valid");
     let invalid_instruction =
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
-    let network = NetworkBuilder::new()
-        .with_config_layer(|layer| {
-            layer.write(["confidential", "enabled"], true);
-        })
-        .with_genesis_instruction(invalid_instruction)
-        .build();
+    let Some(network) = sandbox::build_network_or_skip(
+        NetworkBuilder::new()
+            .with_config_layer(|layer| {
+                layer.write(["confidential", "enabled"], true);
+            })
+            .with_genesis_instruction(invalid_instruction),
+        stringify!(genesis_transactions_are_validated_by_executor),
+    ) else {
+        return;
+    };
     // Build `irohad` ahead of the timeout so the initial binary compilation does not consume the limit.
     iroha_test_network::Program::Irohad
         .resolve()

@@ -116,13 +116,9 @@ const STARTUP_STATUS_WARN_GRACE: Duration = Duration::from_secs(5);
 /// Minimum spacing between repeated warning logs for startup status failures after the grace.
 const STARTUP_STATUS_WARN_INTERVAL: Duration = Duration::from_secs(5);
 
-type GenesisBuilderFn =
-    Box<
-        dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock
-            + Send
-            + Sync
-            + 'static,
-    >;
+type GenesisBuilderFn = Box<
+    dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
+>;
 
 fn read_env_duration(var: &str, default: Duration) -> Duration {
     if let Ok(val) = std::env::var(var) {
@@ -3035,8 +3031,11 @@ impl NetworkBuilder {
 
         // Build a preview genesis so we can derive the consensus fingerprint from the
         // actual on-chain parameters (including the built-in genesis scaffolding).
-        let preview_genesis =
-            genesis_factory(genesis_isi.clone(), peer_ids.clone(), topology_entries.clone());
+        let preview_genesis = genesis_factory(
+            genesis_isi.clone(),
+            peer_ids.clone(),
+            topology_entries.clone(),
+        );
         let mut parameter_state = iroha_data_model::parameter::Parameters::default();
         for tx in preview_genesis.0.external_transactions() {
             if let Executable::Instructions(batch) = tx.instructions() {

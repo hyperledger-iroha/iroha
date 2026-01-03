@@ -16,7 +16,9 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     domain::CanRegisterDomain, parameter::CanSetParameters,
 };
-use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
+use iroha_genesis::{
+    GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction,
+};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 use iroha_version::BuildLine;

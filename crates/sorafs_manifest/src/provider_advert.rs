@@ -1084,9 +1084,10 @@ impl ProviderAdvertBodyV1 {
                 .iter()
                 .any(|hint| hint.protocol == TransportProtocol::SoraNetRelay);
             if has_soranet_hint
-                && !self.capabilities.iter().any(|cap| {
-                    cap.cap_type == CapabilityType::SoraNetHybridPq
-                })
+                && !self
+                    .capabilities
+                    .iter()
+                    .any(|cap| cap.cap_type == CapabilityType::SoraNetHybridPq)
             {
                 return Err(AdvertValidationError::SoranetTransportWithoutCapability);
             }

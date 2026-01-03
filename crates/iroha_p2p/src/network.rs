@@ -24,10 +24,7 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::{
     KeyPair,
     soranet::{
-        pow::{
-            Parameters as PowParameters, TicketRevocationStore,
-            TicketRevocationStoreLimits,
-        },
+        pow::{Parameters as PowParameters, TicketRevocationStore, TicketRevocationStoreLimits},
         puzzle,
     },
 };

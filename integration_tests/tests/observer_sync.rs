@@ -18,8 +18,12 @@ fn observer_node_catches_up() -> Result<()> {
     init_instruction_registry();
 
     // Prepare a validator network that satisfies DA quorum requirements.
-    let builder = NetworkBuilder::new().with_min_peers(4);
-    let (network, rt) = builder.build_blocking();
+    let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
+        NetworkBuilder::new().with_min_peers(4),
+        stringify!(observer_node_catches_up),
+    ) else {
+        return Ok(());
+    };
 
     // Build observer peer (sync-only) ahead of validator bootstrap so validators trust it.
     let observer = NetworkPeerBuilder::new()

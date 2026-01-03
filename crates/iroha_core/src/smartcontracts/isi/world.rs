@@ -7453,10 +7453,9 @@ pub mod isi {
             };
             let key_label = peer_id.public_key().to_string();
             let candidate_id = derive_validator_key_id(peer_id.public_key());
-            if let Some(conflict) =
-                consensus_key_ids_for_public_key(world, &key_label)
-                    .into_iter()
-                    .find(|id| id != &candidate_id)
+            if let Some(conflict) = consensus_key_ids_for_public_key(world, &key_label)
+                .into_iter()
+                .find(|id| id != &candidate_id)
             {
                 crate::sumeragi::status::record_peer_key_policy_reject(
                     PeerKeyPolicyRejectReason::IdentifierCollision,

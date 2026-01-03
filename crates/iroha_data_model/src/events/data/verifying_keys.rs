@@ -51,7 +51,6 @@ mod model {
         /// New record stored in the registry.
         pub record: crate::proof::VerifyingKeyRecord,
     }
-
 }
 
 #[cfg(feature = "json")]

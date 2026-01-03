@@ -670,7 +670,6 @@ impl Parameters {
             ..*self
         }
     }
-
 }
 
 /// Errors surfaced while validating tickets.

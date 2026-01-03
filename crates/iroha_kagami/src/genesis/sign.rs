@@ -328,13 +328,11 @@ mod tests {
         )
         .expect("valid pops");
         assert_eq!(
-            entries[0].peer,
-            peer_a,
+            entries[0].peer, peer_a,
             "entries should respect topology order"
         );
         assert_eq!(
-            entries[1].peer,
-            peer_b,
+            entries[1].peer, peer_b,
             "entries should respect topology order"
         );
     }

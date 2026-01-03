@@ -1642,11 +1642,8 @@ mod tests {
             .clone();
         let signed_bytes = STANDARD.decode(signed_b64).expect("decode signed ticket");
         let signed = SignedTicket::decode(&signed_bytes).expect("decode signed ticket");
-        let binding = ChallengeBinding::new(
-            &state.descriptor_commit,
-            &state.relay_id,
-            Some(&[0x11; 32]),
-        );
+        let binding =
+            ChallengeBinding::new(&state.descriptor_commit, &state.relay_id, Some(&[0x11; 32]));
         pow::verify_signed_ticket(&signed, &public, &binding, &state.pow_params, None)
             .expect("signed ticket verifies");
         assert_eq!(

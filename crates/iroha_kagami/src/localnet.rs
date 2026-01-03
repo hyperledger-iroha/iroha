@@ -99,9 +99,7 @@ impl CanonicalHost {
         let has_prefix = trimmed.starts_with('[');
         let has_suffix = trimmed.ends_with(']');
         if has_prefix != has_suffix {
-            return Err(eyre!(
-                "`{field}` has unmatched '[' or ']': `{raw}`"
-            ));
+            return Err(eyre!("`{field}` has unmatched '[' or ']': `{raw}`"));
         }
         let unbracketed = if has_prefix && trimmed.len() >= 2 {
             &trimmed[1..trimmed.len() - 1]
@@ -992,7 +990,10 @@ fn repo_root_path() -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
-        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), Path::to_path_buf);
+        .map_or_else(
+            || PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            Path::to_path_buf,
+        );
     root.canonicalize().unwrap_or(root)
 }
 
@@ -1039,9 +1040,15 @@ fn write_scripts(out_dir: &Path, peers: u16) -> Result<()> {
         default_irohad_release.display()
     )?;
     writeln!(start_file, "if [ -z \"${{IROHAD_BIN:-}}\" ]; then")?;
-    writeln!(start_file, "  if [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then")?;
+    writeln!(
+        start_file,
+        "  if [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then"
+    )?;
     writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_DEBUG\"")?;
-    writeln!(start_file, "  elif [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then")?;
+    writeln!(
+        start_file,
+        "  elif [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then"
+    )?;
     writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_RELEASE\"")?;
     writeln!(
         start_file,
@@ -1114,8 +1121,7 @@ fn copy_rans_tables(out_dir: &Path) -> Result<()> {
     }
     if !copied_seed {
         let seed_path = dest.join("rans_seed0.toml");
-        fs::write(&seed_path, RANS_SEED0_TABLE)
-            .wrap_err("write embedded rANS table")?;
+        fs::write(&seed_path, RANS_SEED0_TABLE).wrap_err("write embedded rANS table")?;
     }
     Ok(())
 }
@@ -2053,14 +2059,8 @@ mod tests {
 
         let start_contents = fs::read_to_string(&start_path).expect("read start script");
         let (debug_path, release_path) = default_irohad_bin_paths();
-        let expected_debug = format!(
-            "DEFAULT_IROHAD_BIN_DEBUG=\"{}\"",
-            debug_path.display()
-        );
-        let expected_release = format!(
-            "DEFAULT_IROHAD_BIN_RELEASE=\"{}\"",
-            release_path.display()
-        );
+        let expected_debug = format!("DEFAULT_IROHAD_BIN_DEBUG=\"{}\"", debug_path.display());
+        let expected_release = format!("DEFAULT_IROHAD_BIN_RELEASE=\"{}\"", release_path.display());
         assert!(
             start_contents.lines().any(|line| line == expected_debug),
             "start script should set debug default"

@@ -135,7 +135,6 @@ impl Parameters {
     pub fn with_difficulty(self, difficulty: u8) -> Self {
         Self { difficulty, ..self }
     }
-
 }
 
 /// Errors surfaced while verifying puzzle tickets.
