@@ -1,6 +1,27 @@
 # Status
 
 ## Latest Updates
+- Preserved persisted RBC invalid flags when rebuilding sessions from disk and added unit coverage for invalid-session roundtrips.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus SDK quickstarts doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Skip emitting RBC READY on invalid sessions (e.g., payload-hash mismatches) and added coverage to ensure invalid sessions do not mark sent-ready.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (timed out after 120s; stable toolchain warns about unstable fmt options).
+- Translated the Nexus privacy commitments doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Cleared BlockCreated payload-mismatch state by purging RBC caches and replay/availability throttles, with unit coverage for payload mismatch cleanup and RBC store-eviction cache cleanup.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Increased test-network Sumeragi block queue capacity to reduce BlockSyncUpdate drops during integration runs and added unit coverage for the new default.
+- Tests: `cargo test -p integration_tests --test mod events::proof::verify_proof_emits_verified_event -- --nocapture` (passed; warnings about unused import/dead code in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` and `crates/iroha_core/src/sumeragi/network_topology.rs`).
+- Tests: `cargo test -p iroha_test_network base_config_increases_block_queue_capacity -- --nocapture` (passed; same warnings in `iroha_core`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus ledger refactor plan across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Cleaned up RBC store-eviction handling to drop pending/rebroadcast/persisted session caches and added unit coverage for eviction cleanup.
+- Tests: not run (not requested).
 - Replay now resolves per-block validator rosters from commit-roster journals/sidecars during Kura rebuilds, with a regression test covering roster ordering on restart.
 - Tests: `cargo test -p iroha_core replay_uses_commit_roster_journal_for_signature_order -- --nocapture` (timed out after 180s while running filtered binaries; target test passed; warnings about unused import/dead code in Sumeragi and unused-mut in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
 - Tests: `TEST_NETWORK_TMP_DIR=/Users/mtakemiya/dev/iroha/tmp/test_network IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_recovers_after_peer_restart -- --nocapture --test-threads=1`.

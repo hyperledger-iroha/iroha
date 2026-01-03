@@ -1091,6 +1091,24 @@ mod tests {
     }
 
     #[test]
+    fn persisted_invalid_session_roundtrips_as_invalid() {
+        let key = session_key(9);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let roster = vec![test_peer_id(1)];
+
+        let mut session = RbcSession::test_new(1, None, None, 0);
+        session.record_ready(1, vec![0xAA]);
+        session.record_ready(1, vec![0xBB]);
+        assert!(session.is_invalid());
+
+        let persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
+        let rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
+        assert!(rebuilt.is_invalid());
+        assert!(rebuilt.recovered_from_disk());
+    }
+
+    #[test]
     fn compaction_drops_delivered_chunk_bytes() {
         let dir = tempdir().unwrap();
         let key = session_key(2);

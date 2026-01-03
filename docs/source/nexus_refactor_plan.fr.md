@@ -34,7 +34,7 @@ coherente et testable sans tenter de livrer toutes les corrections dans un patch
   glue host pour smart-contracts.
 - `crates/iroha_data_model`: schema autoritatif pour les donnees on-chain et les requetes.
 - `crates/iroha`: API client utilisee par CLI, tests, SDK.
-- `crates/iroha_cli`: CLI operateur, refl ete actuellement de nombreuses APIs dans `iroha`.
+- `crates/iroha_cli`: CLI operateur, reflete actuellement de nombreuses APIs dans `iroha`.
 - `crates/ivm`: VM bytecode Kotodama, points d'entree d'integration host pointer-ABI.
 - `crates/norito`: codec de serialization avec adaptateurs JSON et backends AoS/NCB.
 - `integration_tests`: assertions cross-component couvrant genesis/bootstrap, Sumeragi, triggers,
@@ -110,7 +110,7 @@ coherente et testable sans tenter de livrer toutes les corrections dans un patch
    - S'assurer que les operations CLI (`audit`, `gov`, `sumeragi`, `ivm`) reposent sur les fonctions
      client partagees `iroha` pour eviter le drift.
    - Les tests de snapshot JSON CLI vivent dans `tests/cli/json_snapshot.rs`; les maintenir a jour
-     pour que la sortie des commandes core reste align ee sur la reference JSON canonique.
+     pour que la sortie des commandes core reste alignee sur la reference JSON canonique.
 
 ### Phase E - Durcissement du codec Norito
 1. **Schema registry**
@@ -145,7 +145,7 @@ coherente et testable sans tenter de livrer toutes les corrections dans un patch
 - Scaffolding de la Phase A (snapshot trait + wiring telemetrie) - voir les taches actionnables
   dans les updates de roadmap.
 - L'audit recent des defauts pour `sumeragi`, `state` et `ivm` a mis en evidence:
-  - `sumeragi`: des allowances dead-code prot egent la diffusion des proofs view-change, l'etat
+  - `sumeragi`: des allowances dead-code protegent la diffusion des proofs view-change, l'etat
     de replay VRF et l'export telemetrie EMA. Ils restent gate jusqu'a ce que la simplification du
     flux de consensus et l'integration lanes/proofs de la Phase C soient livrees.
   - `state`: le nettoyage `Cell` et le routage telemetrie passent dans la piste telemetrie WSV
@@ -154,7 +154,7 @@ coherente et testable sans tenter de livrer toutes les corrections dans un patch
   - `ivm`: l'exposition du toggle CUDA, la validation des envelopes et la couverture Halo2/Metal
     s'alignent sur le travail de frontiere host de la Phase D plus le theme transversal
     d'acceleration GPU; les kernels restent dans le backlog GPU dedie jusqu'a readiness.
-- Preparer un RFC cross-team res umant ce plan pour sign-off avant de livrer des changements
+- Preparer un RFC cross-team resumant ce plan pour sign-off avant de livrer des changements
   de code invasifs.
 
 ## 5. Questions ouvertes

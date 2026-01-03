@@ -5884,6 +5884,10 @@ impl Actor {
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
         };
+        if session.is_invalid() {
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            return Ok(());
+        }
 
         let result = (|| -> Result<Option<RbcReady>> {
             if session.sent_ready {
@@ -7585,6 +7589,7 @@ impl RbcSession {
             total_chunks,
             payload_hash,
             expected_chunk_root,
+            invalid,
             ready_signatures,
             delivered,
             deliver_sender,
@@ -7663,7 +7668,7 @@ impl RbcSession {
         session.delivered = delivered;
         session.deliver_sender = deliver_sender;
         session.deliver_signature = deliver_signature;
-        session.invalid = false;
+        session.invalid = invalid;
         session.recovered_from_disk = true;
         Ok(session)
     }

@@ -12,7 +12,7 @@ use iroha::data_model::{
 use iroha_core::sumeragi::rbc_status;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Map, Value};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use toml::Table;
 
 const BLOCK_TARGET: u64 = 6;
@@ -212,7 +212,14 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
     {
         return Ok(());
     }
-    restart_peer.once_block(expected_height).await;
+    timeout(COMMIT_WAIT_BUDGET, restart_peer.once_block(expected_height))
+        .await
+        .map_err(|_| {
+            eyre!(
+                "restart peer failed to reach height {expected_height} within {:?}",
+                COMMIT_WAIT_BUDGET
+            )
+        })?;
 
     wait_for_rbc_session_recovered(
         http.clone(),
