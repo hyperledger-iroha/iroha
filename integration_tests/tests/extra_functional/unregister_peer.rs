@@ -236,7 +236,7 @@ async fn wait_for_asset(
     loop {
         if let Some(value) = find_asset(client, account, asset_definition).await? {
             if expected.as_ref().map_or(true, |expected| value == *expected) {
-            return Ok(value);
+                return Ok(value);
             }
         }
         if Instant::now() >= deadline {

@@ -67,7 +67,7 @@ impl Actor {
         let telemetry = self.telemetry_handle();
         let now = Instant::now();
         let deferred = defer_qc_for_missing_block(
-            self.block_known_locally(block_hash),
+            self.block_payload_available_locally(block_hash),
             retry_window,
             now,
             block_hash,
@@ -183,7 +183,7 @@ impl Actor {
         block_hash: &HashOf<BlockHeader>,
         reason: MissingBlockClearReason,
     ) {
-        let block_known_locally = self.block_known_locally(*block_hash);
+        let block_known_locally = self.block_payload_available_locally(*block_hash);
         let allowed = missing_block_clear_allowed(block_known_locally, reason);
         let stats = allowed
             .then(|| {
