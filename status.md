@@ -1,6 +1,9 @@
 # Status
 
 ## Latest Updates
+- Extended tx confirmation polling to track queued/approved states, backfill rejection reasons from committed queries, and added unit coverage for non-terminal polling/queued timeouts.
+- Tests: not run (not requested).
+- Format: not run (not requested).
 - Split static block validation into state-dependent snapshot + transaction-only pass so keep-voting validation drops `StateView` earlier; added unit coverage for the snapshot path.
 - Tests: `cargo test -p iroha_core validate_static_snapshot_accepts_valid_block -- --nocapture` (failed: `crates/iroha_core/src/sumeragi/main_loop/tests.rs` calls private `handle_rbc_store_evictions`).
 - Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).

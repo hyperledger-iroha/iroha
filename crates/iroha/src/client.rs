@@ -4036,6 +4036,100 @@ mod evidence_http_tests {
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
         assert_eq!(snapshots[1].url.path(), "/query");
     }
+
+    #[test]
+    fn pipeline_status_rejection_without_reason_uses_committed_query() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+        };
+
+        use crate::{
+            crypto::{MerkleProof, PrivateKey, PublicKey},
+            data_model::{
+                ValidationFail,
+                prelude::{AccountId, ChainId, DomainId, TransactionBuilder},
+                query::CommittedTransaction,
+                transaction::{
+                    TransactionEntrypoint, TransactionResult,
+                    error::TransactionRejectionReason,
+                },
+            },
+        };
+
+        let chain: ChainId = "hash-chain".parse().unwrap();
+        let domain: DomainId = "wonderland".parse().unwrap();
+        let public_key: PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        let authority = AccountId::new(domain, public_key);
+        let private_key: PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+        let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
+        let hash = tx.hash();
+        let entry = TransactionEntrypoint::External(tx);
+        let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "nope".to_string(),
+        ));
+        let result = TransactionResult(Err(reason.clone()));
+        let committed = CommittedTransaction {
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH])),
+            entrypoint_hash: entry.hash(),
+            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            entrypoint: entry,
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            result,
+        };
+        let status_payload = norito::json!({
+            "kind": "Transaction",
+            "content": {
+                "hash": "deadbeef",
+                "status": { "kind": "Rejected" },
+            },
+        });
+        let status_body =
+            norito::json::to_string(&status_payload).expect("status payload");
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("lock snapshot store").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => {
+                        Ok(json_response(StatusCode::OK, &status_body))
+                    }
+                    "/query" => {
+                        let response = QueryResponse::Iterable(QueryOutput {
+                            batch: QueryOutputBatchBoxTuple {
+                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(vec![
+                                    committed.clone(),
+                                ])],
+                            },
+                            remaining_items: 0,
+                            continue_cursor: None,
+                        });
+                        Ok(norito_response(StatusCode::OK, &response))
+                    }
+                    path => Err(eyre::eyre!("unexpected request path: {path}")),
+                }
+            }
+        };
+
+        let result = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            client.transaction_confirmation_status(hash)
+        });
+
+        assert_eq!(
+            result.expect("confirmation status query"),
+            Some(super::TxConfirmationStatus::Rejected(Some(reason)))
+        );
+    }
 }
 
 /// Private structure to incapsulate error reporting for HTTP response.
@@ -4082,6 +4176,8 @@ impl From<ResponseReport> for eyre::Report {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TxConfirmationStatus {
+    Queued,
+    Approved,
     Committed,
     Applied,
     Rejected(Option<TransactionRejectionReason>),
@@ -4721,6 +4817,9 @@ impl Client {
                 }
                 TxConfirmationStatus::Rejected(None) => Err(eyre!("Transaction rejected")),
                 TxConfirmationStatus::Expired => Err(eyre!("Transaction expired")),
+                TxConfirmationStatus::Queued | TxConfirmationStatus::Approved => {
+                    Err(eyre!("Transaction status not finalized"))
+                }
             }
         } else {
             Err(fallback_err)
@@ -4738,7 +4837,21 @@ impl Client {
         let mut last_err: Option<eyre::Report> = None;
         for attempt in 0..=retries {
             match check() {
-                Ok(Some(outcome)) => return Ok(Some(outcome)),
+                Ok(Some(outcome)) => match outcome {
+                    status @ (TxConfirmationStatus::Queued | TxConfirmationStatus::Approved) => {
+                        debug!(
+                            attempt,
+                            ?delay,
+                            status = ?status,
+                            "tx confirmation status not final; retrying"
+                        );
+                        if attempt == retries {
+                            return Ok(None);
+                        }
+                        tokio::time::sleep(delay).await;
+                    }
+                    other => return Ok(Some(other)),
+                },
                 Ok(None) => {
                     debug!(
                         attempt,
@@ -4783,7 +4896,15 @@ impl Client {
         hash: HashOf<SignedTransaction>,
     ) -> Result<Option<TxConfirmationStatus>> {
         match self.transaction_pipeline_status(hash) {
-            Ok(Some(status)) => Ok(Some(status)),
+            Ok(Some(status)) => match status {
+                TxConfirmationStatus::Queued
+                | TxConfirmationStatus::Approved
+                | TxConfirmationStatus::Rejected(None) => {
+                    let committed = self.transaction_committed(hash)?;
+                    Ok(committed.or(Some(status)))
+                }
+                _ => Ok(Some(status)),
+            },
             Ok(None) => self.transaction_committed(hash),
             Err(err) => {
                 warn!(
@@ -7579,6 +7700,8 @@ fn tx_confirmation_status_from_kind(
     rejection: Option<TransactionRejectionReason>,
 ) -> Option<TxConfirmationStatus> {
     match kind {
+        "Queued" => Some(TxConfirmationStatus::Queued),
+        "Approved" => Some(TxConfirmationStatus::Approved),
         "Committed" => Some(TxConfirmationStatus::Committed),
         "Applied" => Some(TxConfirmationStatus::Applied),
         "Rejected" => Some(TxConfirmationStatus::Rejected(rejection)),
@@ -7645,6 +7768,34 @@ where
 
     loop {
         tokio::select! {
+            biased;
+            _ = poll.tick(), if poll_enabled => {
+                match status_check() {
+                    Ok(Some(status)) => match status {
+                        TxConfirmationStatus::Queued => {
+                            if let Some(first) = queued_at {
+                                let elapsed = first.elapsed();
+                                if elapsed > max_queued_duration {
+                                    warn!(%hash, ?elapsed, "transaction remained queued");
+                                    return Err(eyre!("transaction queued for too long"));
+                                }
+                            } else {
+                                queued_at = Some(Instant::now());
+                                debug!(%hash, "transaction entered queue");
+                            }
+                        }
+                        TxConfirmationStatus::Approved => {}
+                        TxConfirmationStatus::Committed | TxConfirmationStatus::Applied => return Ok(hash),
+                        TxConfirmationStatus::Rejected(Some(reason)) => return Err(tx_rejection_to_report(&reason)),
+                        TxConfirmationStatus::Rejected(None) => return Err(eyre!("Transaction rejected")),
+                        TxConfirmationStatus::Expired => return Err(eyre!("Transaction expired")),
+                    },
+                    Ok(None) => {}
+                    Err(err) => {
+                        debug!(%hash, ?err, "pipeline status poll failed; retrying");
+                    }
+                }
+            }
             event = event_iterator.next(), if stream_open => {
                 match event {
                     Some(Ok(EventBox::Pipeline(this_event))) => {
@@ -7731,20 +7882,6 @@ where
                                 "Connection dropped without `Committed/Applied` or `Rejected` event",
                             ));
                         }
-                    }
-                }
-            }
-            _ = poll.tick(), if poll_enabled => {
-                match status_check() {
-                    Ok(Some(status)) => match status {
-                        TxConfirmationStatus::Committed | TxConfirmationStatus::Applied => return Ok(hash),
-                        TxConfirmationStatus::Rejected(Some(reason)) => return Err(tx_rejection_to_report(&reason)),
-                        TxConfirmationStatus::Rejected(None) => return Err(eyre!("Transaction rejected")),
-                        TxConfirmationStatus::Expired => return Err(eyre!("Transaction expired")),
-                    },
-                    Ok(None) => {}
-                    Err(err) => {
-                        debug!(%hash, ?err, "pipeline status poll failed; retrying");
                     }
                 }
             }
@@ -7844,6 +7981,36 @@ mod tx_hash_tests {
                     Ok(None)
                 } else {
                     Ok(Some(super::TxConfirmationStatus::Committed))
+                }
+            },
+            Duration::from_millis(0),
+            3,
+        )
+        .await;
+
+        let outcome = result
+            .unwrap()
+            .expect("expected committed transaction outcome");
+        assert!(matches!(outcome, super::TxConfirmationStatus::Committed));
+        assert!(attempts.load(Ordering::SeqCst) >= 3);
+    }
+
+    #[tokio::test]
+    async fn retry_transaction_committed_ignores_non_terminal_statuses() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+        let result = super::Client::retry_transaction_committed(
+            move || {
+                let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
+                match count {
+                    0 => Ok(Some(super::TxConfirmationStatus::Queued)),
+                    1 => Ok(Some(super::TxConfirmationStatus::Approved)),
+                    _ => Ok(Some(super::TxConfirmationStatus::Committed)),
                 }
             },
             Duration::from_millis(0),
@@ -7995,6 +8162,25 @@ mod tx_hash_tests {
     }
 
     #[test]
+    fn tx_confirmation_status_from_pipeline_payload_accepts_non_terminal_kinds() {
+        let queued_payload = norito::json!({
+            "content": { "status": { "kind": "Queued" } },
+        });
+        let approved_payload = norito::json!({
+            "status": "Approved",
+        });
+
+        assert_eq!(
+            super::tx_confirmation_status_from_pipeline_payload(&queued_payload),
+            Some(super::TxConfirmationStatus::Queued)
+        );
+        assert_eq!(
+            super::tx_confirmation_status_from_pipeline_payload(&approved_payload),
+            Some(super::TxConfirmationStatus::Approved)
+        );
+    }
+
+    #[test]
     fn tx_confirmation_status_from_committed_result_maps_outcomes() {
         use crate::data_model::{
             ValidationFail,
@@ -8108,11 +8294,13 @@ mod tx_confirmation_stream_tests {
     use crate::{
         crypto::{Hash, HashOf},
         data_model::{
+            ValidationFail,
             events::{
                 EventBox,
                 pipeline::{PipelineEventBox, TransactionEvent, TransactionStatus},
             },
             nexus::{DataSpaceId, LaneId},
+            transaction::error::TransactionRejectionReason,
             transaction::SignedTransaction,
         },
     };
@@ -8164,6 +8352,63 @@ mod tx_confirmation_stream_tests {
         )
         .await;
         assert_eq!(result.unwrap(), hash);
+    }
+
+    #[tokio::test]
+    async fn polling_queued_honors_max_duration() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([10_u8; Hash::LENGTH]));
+        let mut events = stream::empty::<Result<EventBox, eyre::Report>>();
+
+        let err = listen_for_tx_confirmation_stream_with_status_check(
+            &mut events,
+            hash,
+            Duration::from_millis(20),
+            Duration::from_millis(5),
+            || Ok(Some(super::TxConfirmationStatus::Queued)),
+        )
+        .await
+        .expect_err("queued timeout should error");
+        assert!(err.to_string().contains("transaction queued for too long"));
+    }
+
+    #[tokio::test]
+    async fn polling_rejects_even_with_busy_stream() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([11_u8; Hash::LENGTH]));
+        let queued_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
+            hash: hash.clone(),
+            block_height: None,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+            status: TransactionStatus::Queued,
+        }));
+        let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
+        let mut events = UnboundedReceiverStream::new(rx);
+        for _ in 0..128 {
+            let _ = tx.send(Ok(queued_event.clone()));
+        }
+        let mut checks = 0u8;
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::InternalError(
+            "rejected".to_string(),
+        ));
+
+        let err = listen_for_tx_confirmation_stream_with_status_check(
+            &mut events,
+            hash,
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+            || {
+                checks = checks.saturating_add(1);
+                Ok(Some(super::TxConfirmationStatus::Rejected(Some(
+                    rejection.clone(),
+                ))))
+            },
+        )
+        .await
+        .expect_err("expected rejection from status polling");
+        assert!(err.to_string().contains("Transaction rejected"));
+        assert!(checks > 0);
     }
 
     #[test]

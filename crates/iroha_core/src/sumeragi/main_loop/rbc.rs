@@ -2067,7 +2067,7 @@ impl Actor {
         }
     }
 
-    fn handle_rbc_store_evictions(&mut self, removed: &[SessionKey]) {
+    pub(crate) fn handle_rbc_store_evictions(&mut self, removed: &[SessionKey]) {
         if removed.is_empty() {
             return;
         }
