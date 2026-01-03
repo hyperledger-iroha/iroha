@@ -3954,9 +3954,7 @@ impl NetworkPeer {
             Some(PeerLifecycleEvent::ServerStarted) => Ok(()),
             Some(PeerLifecycleEvent::Terminated { status }) => {
                 let err = if let Some(preview) = self.stderr_preview() {
-                    eyre!(
-                        "Peer exited unexpectedly ({status:?}); stderr preview:\n{preview}"
-                    )
+                    eyre!("Peer exited unexpectedly ({status:?}); stderr preview:\n{preview}")
                 } else {
                     eyre!("Peer exited unexpectedly ({status:?})")
                 };
@@ -4811,6 +4809,26 @@ mod post_genesis_liveness_tests {
         assert_eq!(block_height.total, 3);
         assert_eq!(block_height.non_empty, 2);
         assert_eq!(next_height, 4);
+    }
+}
+
+#[cfg(test)]
+mod start_event_tests {
+    use tokio::sync::broadcast;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn waits_until_server_started_event() {
+        let (tx, rx) = broadcast::channel(4);
+        tokio::spawn(async move {
+            let _ = tx.send(PeerLifecycleEvent::Spawned);
+            let _ = tx.send(PeerLifecycleEvent::BlockApplied { height: 1 });
+            let _ = tx.send(PeerLifecycleEvent::ServerStarted);
+        });
+
+        let event = wait_for_start_event(rx).await;
+        assert!(matches!(event, Some(PeerLifecycleEvent::ServerStarted)));
     }
 }
 
@@ -5711,7 +5729,7 @@ mod tests {
 
     #[test]
     fn status_error_is_connection_refused_ignores_other_errors() {
-        let err = std::io::Error::new(ErrorKind::Other, "other");
+        let err = std::io::Error::other("other");
         let report = Report::from(err);
         assert!(!status_error_is_connection_refused(&report));
     }

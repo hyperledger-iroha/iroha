@@ -7188,6 +7188,7 @@ pub struct ToolkitPackArgs {
 }
 
 impl Run for ToolkitPackArgs {
+    #[allow(clippy::too_many_lines)]
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let ToolkitPackArgs {
             input,
@@ -7212,7 +7213,7 @@ impl Run for ToolkitPackArgs {
             return Err(eyre!("chunk store PoR layout diverged from CAR plan"));
         }
 
-        let car_stats = write_pack_car(&car_out, &plan, &payload)?;
+        let car_stats = write_pack_car(car_out.as_ref(), &plan, &payload)?;
         if car_stats.chunk_profile != descriptor.profile {
             return Err(eyre!("computed CAR used unexpected chunking profile"));
         }
@@ -7281,9 +7282,7 @@ impl Run for ToolkitPackArgs {
         });
 
         let chunk_digest_sha3 = compute_chunk_digest_sha3(&plan.chunks);
-        let mut hybrid_output = None;
-
-        if let Some(recipient) = hybrid_recipient {
+        let hybrid_output = if let Some(recipient) = hybrid_recipient {
             let aad = build_hybrid_manifest_aad(
                 &manifest_digest,
                 chunk_digest_sha3,
@@ -7294,12 +7293,14 @@ impl Run for ToolkitPackArgs {
                 .wrap_err("failed to encrypt hybrid payload envelope")?;
             let envelope_bytes =
                 norito::to_bytes(&envelope).wrap_err("failed to encode hybrid payload envelope")?;
-            hybrid_output = Some(HybridEnvelopeArtefact {
+            Some(HybridEnvelopeArtefact {
                 envelope,
                 bytes: envelope_bytes,
                 aad,
-            });
-        }
+            })
+        } else {
+            None
+        };
 
         if let Some(path) = manifest_out.as_ref() {
             ensure_parent_dir(path)?;
@@ -7331,7 +7332,7 @@ impl Run for ToolkitPackArgs {
             }
         }
 
-        let mut report = build_pack_report(PackReportContext {
+        let mut report = build_pack_report(&PackReportContext {
             profile: &chunk_profile,
             plan: &plan,
             car_stats: &car_stats,
@@ -7437,12 +7438,12 @@ fn build_pack_plan(input: &Path, profile: ChunkProfile) -> Result<(CarBuildPlan,
 }
 
 fn write_pack_car(
-    car_out: &Option<PathBuf>,
+    car_out: Option<&PathBuf>,
     plan: &CarBuildPlan,
     payload: &[u8],
 ) -> Result<CarWriteStats> {
     let writer = CarWriter::new(plan, payload).wrap_err("failed to prepare CAR writer")?;
-    if let Some(path) = car_out.as_ref() {
+    if let Some(path) = car_out {
         ensure_parent_dir(path)?;
         let file = fs::File::create(path)
             .wrap_err_with(|| format!("failed to create `{}`", path.display()))?;
@@ -7473,7 +7474,7 @@ fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
     let mut hasher = Sha3::v256();
     for chunk in chunks {
         hasher.update(&chunk.offset.to_le_bytes());
-        hasher.update(&(chunk.length as u64).to_le_bytes());
+        hasher.update(&u64::from(chunk.length).to_le_bytes());
         hasher.update(&chunk.digest);
     }
     let mut out = [0u8; 32];
@@ -7497,13 +7498,16 @@ fn build_hybrid_manifest_aad(
     aad.extend_from_slice(&chunk_digest_sha3);
     if let Some(name) = manifest_filename {
         let name_bytes = name.as_bytes();
-        aad.extend_from_slice(&(name_bytes.len() as u32).to_be_bytes());
+        let name_len = u32::try_from(name_bytes.len())
+            .expect("manifest filename length fits u32");
+        aad.extend_from_slice(&name_len.to_be_bytes());
         aad.extend_from_slice(name_bytes);
     }
     aad
 }
 
-fn build_pack_report(ctx: PackReportContext<'_>) -> Value {
+#[allow(clippy::too_many_lines)]
+fn build_pack_report(ctx: &PackReportContext<'_>) -> Value {
     let chunk_digests: Vec<Value> = ctx
         .plan
         .chunks
@@ -7512,7 +7516,7 @@ fn build_pack_report(ctx: PackReportContext<'_>) -> Value {
             let mut obj = Map::new();
             obj.insert("offset".into(), Value::from(chunk.offset));
             obj.insert("length".into(), Value::from(chunk.length));
-            obj.insert("digest_blake3".into(), Value::from(encode(&chunk.digest)));
+            obj.insert("digest_blake3".into(), Value::from(encode(chunk.digest)));
             Value::Object(obj)
         })
         .collect();
@@ -7542,12 +7546,18 @@ fn build_pack_report(ctx: PackReportContext<'_>) -> Value {
         .map(Value::from)
         .collect();
     chunking_obj.insert("profile_aliases".into(), Value::Array(alias_values.clone()));
-    chunking_obj.insert("min_size".into(), Value::from(ctx.profile.min_size as u64));
+    chunking_obj.insert(
+        "min_size".into(),
+        Value::from(u64::from(ctx.profile.min_size)),
+    );
     chunking_obj.insert(
         "target_size".into(),
-        Value::from(ctx.profile.target_size as u64),
+        Value::from(u64::from(ctx.profile.target_size)),
     );
-    chunking_obj.insert("max_size".into(), Value::from(ctx.profile.max_size as u64));
+    chunking_obj.insert(
+        "max_size".into(),
+        Value::from(u64::from(ctx.profile.max_size)),
+    );
     chunking_obj.insert(
         "break_mask".into(),
         Value::from(format!("0x{:04x}", ctx.profile.break_mask)),
@@ -7560,7 +7570,7 @@ fn build_pack_report(ctx: PackReportContext<'_>) -> Value {
     let mut pin_policy_obj = Map::new();
     pin_policy_obj.insert(
         "min_replicas".into(),
-        Value::from(ctx.manifest.pin_policy.min_replicas as u64),
+        Value::from(u64::from(ctx.manifest.pin_policy.min_replicas)),
     );
     pin_policy_obj.insert(
         "storage_class".into(),
@@ -7617,7 +7627,7 @@ fn build_pack_report(ctx: PackReportContext<'_>) -> Value {
     );
     manifest_obj.insert(
         "car_digest_hex".into(),
-        Value::from(encode(&ctx.manifest.car_digest)),
+        Value::from(encode(ctx.manifest.car_digest)),
     );
     manifest_obj.insert(
         "car_cid_hex".into(),
@@ -7646,7 +7656,7 @@ fn build_pack_report(ctx: PackReportContext<'_>) -> Value {
         .iter()
         .map(|sig| {
             let mut obj = Map::new();
-            obj.insert("signer_hex".into(), Value::from(encode(&sig.signer)));
+            obj.insert("signer_hex".into(), Value::from(encode(sig.signer)));
             obj.insert("signature_hex".into(), Value::from(encode(&sig.signature)));
             Value::Object(obj)
         })
@@ -12432,7 +12442,7 @@ mod tests {
         let mut hasher = Sha3::v256();
         for chunk in &plan.chunks {
             hasher.update(&chunk.offset.to_le_bytes());
-            hasher.update(&(chunk.length as u64).to_le_bytes());
+            hasher.update(&u64::from(chunk.length).to_le_bytes());
             hasher.update(&chunk.digest);
         }
         let mut expected = [0u8; 32];

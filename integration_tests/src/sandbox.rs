@@ -9,7 +9,7 @@ use std::{
 };
 
 use eyre::{Report, Result};
-use iroha_test_network::{Network, NetworkBuilder};
+use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use tokio::runtime::{Handle, Runtime};
 
 /// Optional guard that limits concurrent integration tests which spin up a network.
@@ -45,7 +45,7 @@ impl SerializedNetwork {
     }
 
     fn shutdown_blocking_inner(&self) {
-        if self.network.peers().iter().any(|peer| peer.is_running()) {
+        if self.network.peers().iter().any(NetworkPeer::is_running) {
             let shutdown = || match Runtime::new() {
                 Ok(rt) => {
                     let _ = rt.block_on(self.network.shutdown());
@@ -215,7 +215,7 @@ impl Drop for OverrideGuard {
 
 fn default_network_parallelism() -> usize {
     let cores = thread::available_parallelism()
-        .map(|value| value.get())
+        .map(std::num::NonZeroUsize::get)
         .unwrap_or(1);
     let per_network = MIN_NETWORK_PEERS.max(1);
     cores.saturating_div(per_network).max(1)
@@ -229,12 +229,11 @@ fn network_parallelism_limit() -> usize {
     if let Some(value) = test_override_parallelism().filter(|value| *value > 0) {
         return value;
     }
-    if let Ok(raw) = env::var(NETWORK_PARALLELISM_ENV) {
-        if let Ok(parsed) = raw.trim().parse::<usize>() {
-            if parsed > 0 {
-                return parsed;
-            }
-        }
+    if let Ok(raw) = env::var(NETWORK_PARALLELISM_ENV)
+        && let Ok(parsed) = raw.trim().parse::<usize>()
+        && parsed > 0
+    {
+        return parsed;
     }
     default_network_parallelism()
 }
@@ -323,14 +322,12 @@ pub fn start_network_blocking_or_skip(
 
 /// Build a blocking test network without starting peers; skip when the sandbox forbids binding.
 ///
-/// # Errors
-///
-/// Returns the underlying [`eyre::Report`] when the build panics for non-sandbox reasons.
+/// Returns `None` when sandbox restrictions prevent binding; panics for non-sandbox failures.
 #[allow(dead_code)] // Shared helper: not every integration binary uses it.
 pub fn build_network_blocking_or_skip(
     builder: NetworkBuilder,
     context: &str,
-) -> Result<Option<(SerializedNetwork, Runtime)>> {
+) -> Option<(SerializedNetwork, Runtime)> {
     let guard = serial_guard();
     let builder = builder.with_min_peers(MIN_NETWORK_PEERS);
     let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
@@ -344,12 +341,12 @@ pub fn build_network_blocking_or_skip(
                 eprintln!(
                     "sandboxed network restriction detected while running {context}; skipping network build ({reason})"
                 );
-                return Ok(None);
+                return None;
             }
             panic::resume_unwind(panic);
         }
     };
-    Ok(Some((SerializedNetwork::new(network, guard), runtime)))
+    Some((SerializedNetwork::new(network, guard), runtime))
 }
 
 /// Attempt to start an async test network; fail when the sandbox forbids binding sockets.
@@ -387,14 +384,9 @@ pub async fn start_network_async_or_skip(
 
 /// Build an async test network without starting peers; skip when the sandbox forbids binding.
 ///
-/// # Errors
-///
-/// Returns the underlying [`eyre::Report`] when the build panics for non-sandbox reasons.
+/// Returns `None` when sandbox restrictions prevent binding; panics for non-sandbox failures.
 #[allow(dead_code)] // Shared helper: not every integration binary uses it.
-pub fn build_network_or_skip(
-    builder: NetworkBuilder,
-    context: &str,
-) -> Result<Option<SerializedNetwork>> {
+pub fn build_network_or_skip(builder: NetworkBuilder, context: &str) -> Option<SerializedNetwork> {
     let guard = serial_guard();
     let builder = builder.with_min_peers(MIN_NETWORK_PEERS);
     let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.build())) {
@@ -406,12 +398,12 @@ pub fn build_network_or_skip(
                 eprintln!(
                     "sandboxed network restriction detected while running {context}; skipping network build ({reason})"
                 );
-                return Ok(None);
+                return None;
             }
             panic::resume_unwind(panic);
         }
     };
-    Ok(Some(SerializedNetwork::new(network, guard)))
+    Some(SerializedNetwork::new(network, guard))
 }
 
 /// Convert a result into an optional value, tagging sandbox-related denials as errors.
@@ -616,8 +608,7 @@ mod tests {
         let result = build_network_or_skip(
             NetworkBuilder::new(),
             "build_network_or_skip_returns_network",
-        )
-        .expect("build should succeed");
+        );
         assert!(result.is_some(), "expected a network to be built");
     }
 
@@ -626,8 +617,7 @@ mod tests {
         let result = build_network_blocking_or_skip(
             NetworkBuilder::new(),
             "build_network_blocking_or_skip_returns_network",
-        )
-        .expect("build should succeed");
+        );
         assert!(result.is_some(), "expected a network to be built");
     }
 

@@ -315,9 +315,11 @@ mod tests {
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         peer::PeerId,
     };
+    use iroha_primitives::numeric::Numeric;
     use tempfile::tempdir;
 
     use super::*;
+    use crate::sumeragi::stake_snapshot::CommitStakeSnapshotEntry;
 
     fn sample_cert(view: u64) -> (CommitCertificate, ValidatorSetCheckpoint) {
         cert_with_height(2, view)
@@ -357,6 +359,19 @@ mod tests {
             None,
         );
         (cert, checkpoint)
+    }
+
+    fn sample_stake_snapshot(roster: &[PeerId]) -> CommitStakeSnapshot {
+        CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(&roster.to_vec()),
+            entries: roster
+                .iter()
+                .map(|peer| CommitStakeSnapshotEntry {
+                    peer_id: peer.clone(),
+                    stake: Numeric::new(10, 0),
+                })
+                .collect(),
+        }
     }
 
     fn retention(limit: usize) -> NonZeroUsize {
@@ -400,6 +415,75 @@ mod tests {
         let snapshots = loaded.snapshots();
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].commit_certificate.view, high_view_cert.view);
+    }
+
+    #[test]
+    fn journal_loads_v1_payload_without_stake_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let payload = PersistedCommitRosters {
+            version: 1,
+            entries: vec![CommitRosterRecord {
+                height: cert.height,
+                block_hash: cert.block_hash,
+                commit_certificate: cert.clone(),
+                validator_checkpoint: checkpoint.clone(),
+                stake_snapshot: None,
+            }],
+        };
+        let bytes = norito::to_bytes(&payload).expect("encode payload");
+        std::fs::write(&path, bytes).expect("write payload");
+
+        let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
+        let snapshots = loaded.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0],
+            CommitRosterSnapshot {
+                commit_certificate: cert,
+                validator_checkpoint: checkpoint,
+                stake_snapshot: None,
+            }
+        );
+    }
+
+    #[test]
+    fn journal_roundtrips_stake_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let stake_snapshot = sample_stake_snapshot(&cert.validator_set);
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(
+            cert.clone(),
+            checkpoint.clone(),
+            Some(stake_snapshot.clone()),
+        );
+        journal.persist().expect("persist");
+
+        let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
+        let snapshots = loaded.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].stake_snapshot, Some(stake_snapshot));
+    }
+
+    #[test]
+    fn journal_rejects_unsupported_version() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let payload = PersistedCommitRosters {
+            version: 99,
+            entries: Vec::new(),
+        };
+        let bytes = norito::to_bytes(&payload).expect("encode payload");
+        std::fs::write(&path, bytes).expect("write payload");
+
+        let err = CommitRosterJournal::load(path, retention(4)).expect_err("unsupported version");
+        assert!(matches!(
+            err,
+            CommitRosterJournalError::UnsupportedVersion { .. }
+        ));
     }
 
     #[test]

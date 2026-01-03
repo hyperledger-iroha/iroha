@@ -2190,8 +2190,7 @@ async fn block_sync_update_accepts_pre_activation_signature_after_mode_flip() {
         .find(|candidate| {
             let topo = super::network_topology::Topology::new(roster.clone());
             let npos_leader = topo.leader_index_prf(seed, height, *candidate);
-            let candidate_usize =
-                usize::try_from(*candidate).expect("candidate view fits usize");
+            let candidate_usize = usize::try_from(*candidate).expect("candidate view fits usize");
             npos_leader != (candidate_usize % roster_len)
         })
         .expect("find view with differing rotations");
@@ -9654,8 +9653,7 @@ fn block_sync_update_uses_activation_height_mode_tag() {
         .find(|candidate| {
             let topo = super::network_topology::Topology::new(roster.clone());
             let npos_leader = topo.leader_index_prf(seed, height, *candidate);
-            let candidate_usize =
-                usize::try_from(*candidate).expect("candidate view fits usize");
+            let candidate_usize = usize::try_from(*candidate).expect("candidate view fits usize");
             npos_leader != (candidate_usize % roster_len)
         })
         .expect("find view with differing rotations");
@@ -9704,8 +9702,7 @@ fn block_sync_update_uses_activation_height_mode_tag() {
     assert_eq!(checkpoint.validator_set, roster);
     assert_eq!(checkpoint.signatures.len(), 1);
     assert_eq!(
-        usize::try_from(checkpoint.signatures[0].index())
-            .expect("signature index fits usize"),
+        usize::try_from(checkpoint.signatures[0].index()).expect("signature index fits usize"),
         signer_index
     );
 }
@@ -19737,9 +19734,12 @@ async fn block_created_skips_pending_insert_while_processing() {
     harness.shutdown.send();
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn block_created_requests_missing_parent_on_height_gap() {
-    let mut harness = test_actor_harness(4).await;
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = false;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
     let state_height = actor.state.view().height() as u64;
@@ -20951,6 +20951,112 @@ fn validate_block_sync_qc_accepts_any_quorum_signers() {
     assert_eq!(signers.len(), 3);
     assert_eq!(present, 3);
     assert!(signers.contains(&ValidatorIndex::try_from(3u32).expect("validator index parses")));
+}
+
+#[test]
+fn validate_block_sync_qc_accepts_npos_rotated_signers_across_views() {
+    let chain: ChainId = "block-sync-npos-views".parse().expect("chain id parses");
+    let (keypairs, topology) = sample_bls_topology(4);
+    let seed = [0x5A; 32];
+    let height = 8u64;
+    let block_view = 0u64;
+    let base_leader = topology.leader_index_prf(seed, height, block_view);
+    let mut qc_view = None;
+    for candidate in 1..20u64 {
+        if topology.leader_index_prf(seed, height, candidate) != base_leader {
+            qc_view = Some(candidate);
+            break;
+        }
+    }
+    let qc_view = qc_view.expect("expected view with different leader rotation");
+
+    let block_topology =
+        super::topology_for_view(&topology, height, block_view, super::NPOS_TAG, Some(seed));
+    let qc_topology =
+        super::topology_for_view(&topology, height, qc_view, super::NPOS_TAG, Some(seed));
+
+    let canonical_peers: Vec<_> = topology.as_ref().iter().take(3).cloned().collect();
+    let block_signers: BTreeSet<ValidatorIndex> = canonical_peers
+        .iter()
+        .filter_map(|peer| {
+            block_topology
+                .as_ref()
+                .iter()
+                .position(|p| p == peer)
+                .and_then(|idx| ValidatorIndex::try_from(idx).ok())
+        })
+        .collect();
+    let qc_signers: BTreeSet<ValidatorIndex> = canonical_peers
+        .iter()
+        .filter_map(|peer| {
+            qc_topology
+                .as_ref()
+                .iter()
+                .position(|p| p == peer)
+                .and_then(|idx| ValidatorIndex::try_from(idx).ok())
+        })
+        .collect();
+
+    assert_eq!(block_signers.len(), 3);
+    assert_eq!(qc_signers.len(), 3);
+    assert_ne!(
+        block_signers, qc_signers,
+        "rotation should shift signer indices"
+    );
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x74; Hash::LENGTH]));
+    let signers_bitmap = super::build_signers_bitmap(&qc_signers, topology.as_ref().len());
+    let qc_stub = crate::sumeragi::consensus::Qc {
+        phase: crate::sumeragi::consensus::Phase::Precommit,
+        subject_block_hash: block_hash,
+        height,
+        view: qc_view,
+        epoch: 0,
+        aggregate: crate::sumeragi::consensus::QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    let preimage = super::qc_bls_preimage(&qc_stub, &chain, super::NPOS_TAG);
+    let mut signatures = Vec::with_capacity(qc_signers.len());
+    for signer in &qc_signers {
+        let idx = usize::try_from(*signer).expect("signer fits usize");
+        let peer = qc_topology
+            .as_ref()
+            .get(idx)
+            .expect("signer present in topology");
+        let kp = keypairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching keypair for signer");
+        let sig = Signature::new(kp.private_key(), &preimage);
+        signatures.push(sig.payload().to_vec());
+    }
+    let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+    let aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate succeeds");
+
+    let qc = crate::sumeragi::consensus::Qc {
+        aggregate: crate::sumeragi::consensus::QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature: aggregate_signature,
+        },
+        ..qc_stub
+    };
+
+    let result = super::validate_block_sync_qc(
+        &qc,
+        &topology,
+        &block_signers,
+        block_view,
+        &chain,
+        super::NPOS_TAG,
+        Some(seed),
+    )
+    .expect("block sync QC should validate across NPoS view rotations");
+    assert_eq!(result.0.len(), 3);
+    assert_eq!(result.1, 3);
 }
 
 #[test]
