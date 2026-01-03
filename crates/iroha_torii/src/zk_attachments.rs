@@ -1631,7 +1631,7 @@ mod tests {
     use axum::http::HeaderMap;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use flate2::{Compression, write::GzEncoder};
-    use hyper::body::to_bytes;
+    use http_body_util::BodyExt as _;
     use iroha_crypto::Hash;
     use std::{io::Write as _, sync::Once};
 
@@ -1872,7 +1872,12 @@ mod tests {
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::CREATED);
-        let meta_bytes = to_bytes(response.into_body()).await.expect("response body");
+        let meta_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
         let meta_text = std::str::from_utf8(&meta_bytes).expect("utf8");
         let meta: AttachmentMeta = json::from_json(meta_text).expect("meta");
         assert_eq!(meta.content_type, super::JSON_MIME_TYPE);
@@ -1904,7 +1909,12 @@ mod tests {
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::CREATED);
-        let meta_bytes = to_bytes(response.into_body()).await.expect("meta body");
+        let meta_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("meta body")
+            .to_bytes();
         let meta_text = std::str::from_utf8(&meta_bytes).expect("utf8 meta");
         let meta: AttachmentMeta = json::from_json(meta_text).expect("meta");
         let expected_id = hex::encode::<[u8; 32]>(Hash::new(payload).into());
@@ -1917,7 +1927,12 @@ mod tests {
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = to_bytes(response.into_body()).await.expect("body bytes");
+        let body_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body bytes")
+            .to_bytes();
         assert_eq!(body_bytes.as_ref(), payload);
     }
 }

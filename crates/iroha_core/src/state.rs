@@ -1747,7 +1747,7 @@ pub struct WorldBlock<'world> {
     external_event_buf: CellBlock<'world, Vec<EventBox>>,
 }
 
-impl WorldBlock<'_> {
+impl<'world> WorldBlock<'world> {
     /// Drain and return any events that were emitted into the external buffer during
     /// the current block application. Intended for tests and block-assembly paths.
     pub fn take_external_events(&mut self) -> Vec<EventBox> {
@@ -1769,6 +1769,13 @@ impl WorldBlock<'_> {
         let pbox = iroha_data_model::events::pipeline::PipelineEventBox::Warning(ev);
         self.external_event_buf
             .push(iroha_data_model::events::EventBox::from(pbox));
+    }
+
+    /// Mutable access to VRF epoch randomness and participation records.
+    pub fn vrf_epochs_mut(
+        &mut self,
+    ) -> &mut StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord> {
+        &mut self.vrf_epochs
     }
 }
 

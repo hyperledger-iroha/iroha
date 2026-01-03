@@ -934,8 +934,8 @@ mod tests {
         let peer_id = PeerId::from(key_pair.public_key().clone());
 
         let network_cfg = NetworkConfig {
-            address: WithOrigin::inline(listen_addr.into()),
-            public_address: WithOrigin::inline(listen_addr.into()),
+            address: WithOrigin::inline(listen_addr.clone().into()),
+            public_address: WithOrigin::inline(listen_addr.clone().into()),
             relay_mode: RelayMode::Disabled,
             relay_hub_address: None,
             relay_ttl: iroha_config::parameters::defaults::network::RELAY_TTL,

@@ -31,7 +31,7 @@ fn ensure_quota_config() {
             iroha_config::parameters::actual::AttachmentSanitizerMode::InProcess,
             iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS,
             None,
-            iroha_torii::routing::MaybeTelemetry::disabled(),
+            iroha_torii::MaybeTelemetry::disabled(),
         );
     });
 }
