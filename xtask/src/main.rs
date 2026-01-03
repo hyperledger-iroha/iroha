@@ -11,7 +11,6 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     process,
-    str::FromStr,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -43,20 +42,13 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_crypto::{
-    Algorithm, Hash, KeyPair, PrivateKey, PublicKey, Signature,
+    Algorithm, KeyPair, PrivateKey, PublicKey, Signature,
     soranet::certificate::CertificateValidationPhase,
 };
 use iroha_data_model::{
     account::address::compliance_vectors::compliance_vectors_json,
-    asset::AssetDefinitionId,
-    name::Name,
-    nexus::{
-        Allowance, AllowanceWindow, AmxRole, AssetPermissionManifest, CapabilityScope, DataSpaceId,
-        DenyDirective, ManifestEffect, ManifestEntry, ManifestVersion, SmartContractId,
-        UniversalAccountId,
-    },
+    nexus::AssetPermissionManifest,
 };
-use iroha_primitives::numeric::Numeric;
 use iroha_torii::{
     MaybeTelemetry, OnlinePeersProvider,
     test_utils::{TestDataDirGuard, mk_minimal_root_cfg},
@@ -10227,243 +10219,6 @@ fn verify_openapi_manifest(
     Ok(())
 }
 
-fn parse_uaid(value: &str) -> Result<UniversalAccountId, String> {
-    let suffix = value
-        .strip_prefix("uaid:")
-        .ok_or_else(|| format!("UAID {value} must start with 'uaid:'"))?;
-    let hash =
-        Hash::from_str(suffix).map_err(|err| format!("invalid UAID hash in {value}: {err}"))?;
-    Ok(UniversalAccountId::from_hash(hash))
-}
-
-fn parse_numeric(value: &Value, context: &str) -> Result<Numeric, String> {
-    let raw = match value {
-        Value::String(text) => text.clone(),
-        _ => json::to_string(value)
-            .map_err(|err| format!("{context}: failed to format numeric literal: {err}"))?,
-    };
-    Numeric::from_str(&raw)
-        .map_err(|err| format!("{context}: failed to parse numeric value {raw}: {err}"))
-}
-
-fn parse_role(value: Option<&Value>, context: &str) -> Result<Option<AmxRole>, String> {
-    let as_str = match value {
-        Some(Value::String(text)) => Some(text.as_str()),
-        Some(Value::Object(obj)) => obj.get("role").and_then(Value::as_str),
-        _ => None,
-    };
-    match as_str {
-        Some("Initiator") => Ok(Some(AmxRole::Initiator)),
-        Some("Participant") => Ok(Some(AmxRole::Participant)),
-        Some(other) => Err(format!("{context}: unsupported AMX role {other}")),
-        None => Ok(None),
-    }
-}
-
-fn parse_window(value: &Value, context: &str) -> Result<AllowanceWindow, String> {
-    if let Some(text) = value.as_str() {
-        return match text {
-            "PerSlot" => Ok(AllowanceWindow::PerSlot),
-            "PerMinute" => Ok(AllowanceWindow::PerMinute),
-            "PerDay" => Ok(AllowanceWindow::PerDay),
-            other => Err(format!("{context}: unsupported allowance window {other}")),
-        };
-    }
-
-    if let Some(obj) = value.as_object()
-        && let Some(nested) = obj.get("window")
-    {
-        return parse_window(nested, context);
-    }
-
-    Err(format!("{context}: allowance window must be a string"))
-}
-
-fn parse_manifest_effect(effect_value: &Value, idx: usize) -> Result<ManifestEffect, String> {
-    let effect_obj = effect_value
-        .as_object()
-        .ok_or_else(|| format!("manifest entry #{idx} missing effect object"))?;
-
-    let empty_details = Value::Object(Default::default());
-
-    let (decision, details_value) = if let Some(decision) = effect_obj.get("decision") {
-        (
-            decision
-                .as_str()
-                .ok_or_else(|| format!("manifest entry #{idx} decision must be a string"))?,
-            effect_obj.get("details").unwrap_or(&empty_details),
-        )
-    } else if effect_obj.len() == 1 {
-        effect_obj
-            .iter()
-            .next()
-            .map(|(key, value)| (key.as_str(), value))
-            .expect("non-empty effect")
-    } else {
-        return Err(format!(
-            "manifest entry #{idx} effect must contain exactly one decision"
-        ));
-    };
-
-    match decision {
-        "Allow" => {
-            let detail_obj = details_value
-                .as_object()
-                .ok_or_else(|| format!("manifest entry #{idx} allow effect must be an object"))?;
-            let max_amount = detail_obj
-                .get("max_amount")
-                .map(|raw| parse_numeric(raw, &format!("manifest entry #{idx} max_amount")))
-                .transpose()?;
-            let window_value = detail_obj.get("window").ok_or_else(|| {
-                format!("manifest entry #{idx} allow effect missing window field")
-            })?;
-            let window = parse_window(window_value, &format!("manifest entry #{idx} window"))?;
-            Ok(ManifestEffect::Allow(Allowance { max_amount, window }))
-        }
-        "Deny" => {
-            let detail_obj = details_value
-                .as_object()
-                .ok_or_else(|| format!("manifest entry #{idx} deny effect must be an object"))?;
-            let reason = detail_obj
-                .get("reason")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            Ok(ManifestEffect::Deny(DenyDirective { reason }))
-        }
-        other => Err(format!(
-            "manifest entry #{idx} has unsupported effect {other}"
-        )),
-    }
-}
-
-fn decode_space_directory_manifest(value: &Value) -> Result<AssetPermissionManifest, String> {
-    let manifest_obj = value
-        .as_object()
-        .ok_or_else(|| "capability manifest must be a JSON object".to_owned())?;
-    let version_value = manifest_obj
-        .get("version")
-        .ok_or_else(|| "capability manifest missing version".to_owned())?;
-    let version = match version_value {
-        Value::Number(num) => match num.as_u64() {
-            Some(1) => ManifestVersion::V1,
-            Some(other) => {
-                return Err(format!(
-                    "unsupported capability manifest version literal {other}"
-                ));
-            }
-            None => {
-                return Err("capability manifest version must be an unsigned integer".to_owned());
-            }
-        },
-        Value::String(text) => match text.as_str() {
-            "1" | "V1" => ManifestVersion::V1,
-            other => {
-                return Err(format!(
-                    "unsupported capability manifest version literal {other}"
-                ));
-            }
-        },
-        Value::Object(obj) => match obj.get("version").and_then(Value::as_str) {
-            Some("V1") => ManifestVersion::V1,
-            Some(other) => {
-                return Err(format!(
-                    "unsupported capability manifest version literal {other}"
-                ));
-            }
-            None => return Err("capability manifest version object missing `version`".to_owned()),
-        },
-        _ => {
-            return Err("capability manifest version must be a number or string".to_owned());
-        }
-    };
-    let uaid_value = manifest_obj
-        .get("uaid")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "capability manifest missing uaid field".to_owned())?;
-    let uaid = parse_uaid(uaid_value)?;
-    let dataspace_value = manifest_obj
-        .get("dataspace")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "capability manifest missing dataspace field".to_owned())?;
-    let issued_ms = manifest_obj
-        .get("issued_ms")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "capability manifest missing issued_ms field".to_owned())?;
-    let activation_epoch = manifest_obj
-        .get("activation_epoch")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "capability manifest missing activation_epoch field".to_owned())?;
-    let expiry_epoch = manifest_obj.get("expiry_epoch").and_then(Value::as_u64);
-    let entries_value = manifest_obj
-        .get("entries")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "capability manifest missing entries array".to_owned())?;
-
-    let mut entries: Vec<ManifestEntry> = Vec::with_capacity(entries_value.len());
-    for (idx, entry_value) in entries_value.iter().enumerate() {
-        let entry_obj = entry_value
-            .as_object()
-            .ok_or_else(|| format!("manifest entry #{idx} must be a JSON object"))?;
-        let scope_obj = entry_obj
-            .get("scope")
-            .and_then(Value::as_object)
-            .ok_or_else(|| format!("manifest entry #{idx} missing scope object"))?;
-        let scope = CapabilityScope {
-            dataspace: scope_obj
-                .get("dataspace")
-                .and_then(Value::as_u64)
-                .map(DataSpaceId::from),
-            program: scope_obj
-                .get("program")
-                .and_then(Value::as_str)
-                .map(SmartContractId::from_str)
-                .transpose()
-                .map_err(|err| format!("manifest entry #{idx} contains invalid program: {err}"))?,
-            method: scope_obj
-                .get("method")
-                .and_then(Value::as_str)
-                .map(Name::from_str)
-                .transpose()
-                .map_err(|err| format!("manifest entry #{idx} contains invalid method: {err}"))?,
-            asset: scope_obj
-                .get("asset")
-                .and_then(Value::as_str)
-                .map(AssetDefinitionId::from_str)
-                .transpose()
-                .map_err(|err| format!("manifest entry #{idx} contains invalid asset id: {err}"))?,
-            role: parse_role(
-                scope_obj.get("role"),
-                &format!("manifest entry #{idx} role"),
-            )?,
-        };
-
-        let effect_value = entry_obj
-            .get("effect")
-            .ok_or_else(|| format!("manifest entry #{idx} missing effect object"))?;
-        let effect = parse_manifest_effect(effect_value, idx)?;
-
-        let notes = entry_obj
-            .get("notes")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        entries.push(ManifestEntry {
-            scope,
-            effect,
-            notes,
-        });
-    }
-
-    Ok(AssetPermissionManifest {
-        version,
-        uaid,
-        dataspace: DataSpaceId::from(dataspace_value),
-        issued_ms,
-        activation_epoch,
-        expiry_epoch,
-        entries,
-    })
-}
-
 fn encode_space_directory_manifest(input: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
     if !input.exists() {
         return Err(format!("manifest JSON `{}` does not exist", input.display()).into());
@@ -10474,15 +10229,9 @@ fn encode_space_directory_manifest(input: &Path, output: &Path) -> Result<(), Bo
 
     let contents = fs::read(input)
         .map_err(|err| format!("failed to read manifest JSON `{}`: {err}", input.display()))?;
-    let manifest_value: Value = norito::json::from_slice(&contents).map_err(|err| {
+    let manifest: AssetPermissionManifest = norito::json::from_slice(&contents).map_err(|err| {
         format!(
             "failed to parse `{}` as capability manifest JSON: {err}",
-            input.display()
-        )
-    })?;
-    let manifest = decode_space_directory_manifest(&manifest_value).map_err(|err| {
-        format!(
-            "failed to validate `{}` as capability manifest: {err}",
             input.display()
         )
     })?;
@@ -10864,29 +10613,13 @@ mod space_directory_tests {
   ]
 }"#;
 
-    const ADJACENT_MANIFEST: &str = r#"{
-  "version": {"version": "V1"},
+    const INVALID_MANIFEST: &str = r#"{
+  "version": 2,
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 12,
   "issued_ms": 1700000000000,
   "activation_epoch": 1024,
-  "entries": [
-    {
-      "scope": {
-        "dataspace": 12,
-        "program": "adjacent.demo",
-        "method": "call",
-        "role": { "role": "Participant" }
-      },
-      "effect": {
-        "decision": "Allow",
-        "details": {
-          "max_amount": "42",
-          "window": { "window": "PerSlot" }
-        }
-      }
-    }
-  ]
+  "entries": []
 }"#;
 
     #[test]
@@ -10907,22 +10640,11 @@ mod space_directory_tests {
     }
 
     #[test]
-    fn decode_accepts_adjacent_tagged_effects() {
-        let manifest_value: Value =
-            norito::json::from_str(ADJACENT_MANIFEST).expect("parse adjacent manifest");
-        let manifest =
-            decode_space_directory_manifest(&manifest_value).expect("decode adjacent manifest");
-        assert_eq!(manifest.version, ManifestVersion::V1);
-        assert_eq!(manifest.entries.len(), 1);
-
-        let entry = &manifest.entries[0];
-        assert_eq!(entry.scope.role, Some(AmxRole::Participant));
-        match &entry.effect {
-            ManifestEffect::Allow(allowance) => {
-                assert_eq!(allowance.window, AllowanceWindow::PerSlot);
-            }
-            other => panic!("expected allow effect, got {other:?}"),
-        }
+    fn reject_unsupported_manifest_version() {
+        assert!(
+            norito::json::from_str::<AssetPermissionManifest>(INVALID_MANIFEST).is_err(),
+            "unsupported manifest versions must be rejected"
+        );
     }
 }
 
