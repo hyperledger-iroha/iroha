@@ -1416,6 +1416,7 @@ mod bundle_inspect_tests {
         assert_eq!(summary.version, AGGREGATE_PROOF_VERSION_V1);
     }
 
+    #[allow(clippy::too_many_lines)]
     fn sample_transfer() -> OfflineToOnlineTransfer {
         use iroha::data_model::offline::{
             AggregateProofEnvelope, OfflineSpendReceipt, OfflineToOnlineTransfer,

@@ -293,7 +293,7 @@ async fn sumeragi_status_endpoint_locked_qc_monotonic() {
     );
 }
 
-#[allow(clippy::await_holding_lock)]
+#[allow(clippy::await_holding_lock, clippy::too_many_lines)]
 #[tokio::test]
 async fn sumeragi_status_endpoint_reflects_leader_and_highest_qc() {
     let _guard = status_lock().lock().unwrap();
@@ -364,14 +364,12 @@ async fn sumeragi_status_endpoint_reflects_leader_and_highest_qc() {
         membership_mismatch
             .get("active_peers")
             .and_then(norito::json::Value::as_array)
-            .map(|peers| peers.is_empty())
-            .unwrap_or(false)
+            .is_some_and(Vec::is_empty)
     );
     assert!(
         membership_mismatch
             .get("last_peer")
-            .map(norito::json::Value::is_null)
-            .unwrap_or(false)
+            .is_some_and(norito::json::Value::is_null)
     );
     assert_eq!(
         membership_mismatch
@@ -394,14 +392,12 @@ async fn sumeragi_status_endpoint_reflects_leader_and_highest_qc() {
     assert!(
         membership_mismatch
             .get("last_local_hash")
-            .map(norito::json::Value::is_null)
-            .unwrap_or(false)
+            .is_some_and(norito::json::Value::is_null)
     );
     assert!(
         membership_mismatch
             .get("last_remote_hash")
-            .map(norito::json::Value::is_null)
-            .unwrap_or(false)
+            .is_some_and(norito::json::Value::is_null)
     );
     assert_eq!(
         membership_mismatch
