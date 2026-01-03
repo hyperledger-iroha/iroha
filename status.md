@@ -1,10 +1,13 @@
 # Status
 
 ## Latest Updates
+- Wait for tx confirmation event-stream setup (bounded connect timeout) before submitting, and continue status polling when the stream can't be established; added connect-timeout unit coverage.
+- Tests: not run (not requested).
+- Format: not run (not requested).
 - Resolved merge conflicts across status/roadmap docs and Sumeragi RBC store-eviction visibility.
 - Tests: not run (merge resolution only).
 - Format: not run (not requested).
-- Extended tx confirmation polling to track queued/approved states, backfill rejection reasons from committed queries, and added unit coverage for non-terminal polling/queued timeouts.
+- Extended tx confirmation polling to decode base64 rejection reasons, capture approved block heights, and skip committed backfills for queued/approved statuses when possible; added unit coverage for polling/block-height behavior.
 - Tests: not run (not requested).
 - Format: not run (not requested).
 - Translated the Sumeragi pacemaker doc across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
