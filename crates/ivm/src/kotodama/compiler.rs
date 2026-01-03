@@ -8,7 +8,7 @@
 //!
 //! Kotodama targets the IVM bytecode format exclusively. All helpers in this
 //! module emit the canonical wide encoding introduced for the first release; no
-//! deprecated instruction layouts are generated.
+//! alternate instruction layouts are generated.
 
 use std::collections::{BTreeSet, HashMap};
 

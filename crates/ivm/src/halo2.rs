@@ -538,7 +538,7 @@ mod tests {
             let via_poseidon = crate::poseidon::poseidon2(a, b);
             assert_eq!(
                 via_super, via_poseidon,
-                "super_hash must mirror legacy Poseidon implementation for ({a:#x}, {b:#x})"
+                "super_hash must mirror the Poseidon implementation for ({a:#x}, {b:#x})"
             );
             let via_canonical = iroha_zkp_halo2::poseidon::hash2_u64(a, b);
             assert_eq!(

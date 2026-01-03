@@ -1089,7 +1089,6 @@ fn test_sumeragi_config() -> SumeragiConfig {
         collectors_redundant_send_r: 1,
         block_max_transactions: None,
         block_max_payload_bytes: None,
-        msg_channel_cap: None,
         msg_channel_cap_votes: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
         msg_channel_cap_block_payload:
             iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
@@ -5606,6 +5605,48 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
             epoch
         )),
         "conflicting precommit QC should not be aggregated"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn try_form_qc_from_votes_skips_aborted_pending_block() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 2;
+    let view = 0;
+    let block = sample_block(height, view, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, u64::from(view));
+    pending.mark_aborted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+    let required = topology.min_votes_for_commit();
+
+    for signer_idx in 0..required {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Precommit,
+            block_hash,
+            height,
+            view: u64::from(view),
+            epoch,
+            signer: u32::try_from(signer_idx).expect("signer index fits u32"),
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        };
+        sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+        actor.handle_vote(vote);
+    }
+
+    assert!(
+        !actor.qc_cache.contains_key(&(Phase::Precommit, block_hash, height, 0, epoch)),
+        "aborted pending blocks must not aggregate QCs"
     );
 
     harness.shutdown.send();

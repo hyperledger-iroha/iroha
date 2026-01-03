@@ -683,98 +683,6 @@ fn shield_rejected_when_policy_disallows() {
 }
 
 #[test]
-fn shield_rejects_legacy_encrypted_payload_version() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-
-    let domain_id: DomainId = "zkd".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "legacyshield#zkd".parse().unwrap();
-    let owner: AccountId = "erin@zkd".parse().unwrap();
-    for instr in [
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
-        Mint::asset_numeric(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .unwrap();
-    }
-
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-        None,
-    );
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register zk asset");
-    stx.apply();
-
-    let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
-        nonzero!(2_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    ));
-    let mut stx2 = block2.transaction();
-
-    let base_payload = ConfidentialEncryptedPayload::new([5u8; 32], [7u8; 24], vec![9u8; 48]);
-    let mut encoded = encode_adaptive(&base_payload);
-    encoded[0] = 0;
-    let legacy_payload: ConfidentialEncryptedPayload =
-        decode_adaptive(&encoded).expect("mutated payload decodes");
-    assert_eq!(legacy_payload.version(), 0);
-    assert!(!legacy_payload.is_supported());
-
-    let shield = iroha_data_model::isi::zk::Shield::new(
-        asset_def_id.clone(),
-        owner.clone(),
-        100u128,
-        [3u8; 32],
-        legacy_payload,
-    );
-    let err = stx2
-        .world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx2, &owner, InstructionBox::from(shield))
-        .expect_err("shield must reject legacy payload versions");
-
-    match err {
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
-            assert!(
-                msg.contains("unsupported confidential payload version"),
-                "unexpected error message: {msg}"
-            );
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
-#[test]
 fn unshield_rejected_when_policy_disallows() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -1191,7 +1099,6 @@ fn zk_roots_are_bounded_in_world_state() {
         proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
         poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
-        vk_deprecated_cap_per_backend: defaults::zk::vk::DEPRECATED_CAP_PER_BACKEND,
         max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
         max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
         max_commitments_per_tx: defaults::confidential::MAX_COMMITMENTS_PER_TX,
@@ -1335,7 +1242,6 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
         poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
-        vk_deprecated_cap_per_backend: defaults::zk::vk::DEPRECATED_CAP_PER_BACKEND,
         max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
         max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
         max_commitments_per_tx: defaults::confidential::MAX_COMMITMENTS_PER_TX,

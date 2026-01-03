@@ -86,6 +86,7 @@ use sorafs_manifest::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
 };
+use sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1;
 use tempfile::tempdir;
 use tower::ServiceExt as _;
 
@@ -119,6 +120,20 @@ fn chunk_range_capability(span: u32, granularity: u32) -> CapabilityTlv {
 
 fn default_range_capability() -> CapabilityTlv {
     chunk_range_capability(32, 1)
+}
+
+fn soranet_pq_capability() -> CapabilityTlv {
+    let payload = ProviderCapabilitySoranetPqV1 {
+        supports_guard: true,
+        supports_majority: false,
+        supports_strict: false,
+    }
+    .to_bytes()
+    .expect("construct soranet pq capability payload");
+    CapabilityTlv {
+        cap_type: CapabilityType::SoraNetHybridPq,
+        payload,
+    }
 }
 
 #[derive(Clone)]
@@ -331,45 +346,45 @@ fn torii_mesh_enforces_grease_policy() {
                 &[CapabilityType::ToriiGateway, CapabilityType::VendorReserved],
                 registry.clone(),
             ),
-            ToriiNode::new("legacy", &[CapabilityType::ToriiGateway], registry.clone()),
+            ToriiNode::new("strict", &[CapabilityType::ToriiGateway], registry.clone()),
         ],
-        &[("modern", "relay"), ("relay", "legacy")],
+        &[("modern", "relay"), ("relay", "strict")],
     );
 
     mesh.publish("modern", &grease_fixture.advert, ISSUED_AT + 45)
         .expect("GREASE-enabled advert must propagate");
     assert_eq!(
-        mesh.node("legacy")
+        mesh.node("strict")
             .capabilities_for(&grease_fixture.advert.body.provider_id),
         Some(vec![CapabilityType::ToriiGateway]),
-        "legacy node keeps only recognised capabilities when GREASE is allowed"
+        "strict node keeps only recognised capabilities when GREASE is allowed"
     );
     assert!(
-        mesh.node("legacy").rejection_reasons().is_empty(),
-        "legacy node should not reject GREASE advert with flag set"
+        mesh.node("strict").rejection_reasons().is_empty(),
+        "strict node should not reject GREASE advert with flag set"
     );
 
     mesh.publish("modern", &strict_fixture.advert, ISSUED_AT + 60)
         .expect("origin accepts advert");
     assert!(
-        mesh.node("legacy")
+        mesh.node("strict")
             .capabilities_for(&strict_fixture.advert.body.provider_id)
             .is_none(),
-        "legacy node must drop adverts with unknown capabilities when GREASE is disabled"
+        "strict node must drop adverts with unknown capabilities when GREASE is disabled"
     );
     assert!(
-        mesh.node("legacy")
+        mesh.node("strict")
             .rejection_reasons()
             .iter()
             .any(|reason| reason.contains("unknown capabilities")),
-        "legacy node should record rejection for unknown capabilities"
+        "strict node should record rejection for unknown capabilities"
     );
 }
 
 #[test]
 fn provider_cache_warns_when_chunk_range_missing() {
     let signing_key = SigningKey::from_bytes(&[0x90; 32]);
-    let legacy_fixture = make_signed_advert(
+    let missing_range_fixture = make_signed_advert(
         &signing_key,
         [0xAA; 32],
         [0xBB; 32],
@@ -379,7 +394,7 @@ fn provider_cache_warns_when_chunk_range_missing() {
         }],
         false,
     );
-    let registry = admission_registry_from_fixtures(std::slice::from_ref(&legacy_fixture));
+    let registry = admission_registry_from_fixtures(std::slice::from_ref(&missing_range_fixture));
     let mut cache = ProviderAdvertCache::new(
         [
             CapabilityType::ToriiGateway,
@@ -389,11 +404,11 @@ fn provider_cache_warns_when_chunk_range_missing() {
     );
 
     let result = cache
-        .ingest(legacy_fixture.advert.clone(), ISSUED_AT + 15)
-        .expect("legacy advert should be accepted with warnings");
+        .ingest(missing_range_fixture.advert.clone(), ISSUED_AT + 15)
+        .expect("advert should be accepted with warnings");
     assert!(
         matches!(result.outcome, AdvertIngest::Stored { .. }),
-        "legacy advert must be stored"
+        "advert must be stored"
     );
     assert!(
         result
@@ -403,7 +418,7 @@ fn provider_cache_warns_when_chunk_range_missing() {
     );
 
     let record = cache
-        .record_by_provider(&legacy_fixture.advert.body.provider_id)
+        .record_by_provider(&missing_range_fixture.advert.body.provider_id)
         .expect("record stored");
     assert!(
         record
@@ -471,7 +486,7 @@ fn provider_cache_rejects_soranet_transport_without_capability() {
         [
             CapabilityType::ToriiGateway,
             CapabilityType::ChunkRangeFetch,
-            CapabilityType::SoraNetCompatible,
+            CapabilityType::SoraNetHybridPq,
         ],
         Arc::new(registry),
     );
@@ -509,10 +524,7 @@ fn provider_cache_accepts_soranet_transport_with_capability() {
                 cap_type: CapabilityType::ToriiGateway,
                 payload: Vec::new(),
             },
-            CapabilityTlv {
-                cap_type: CapabilityType::SoraNetCompatible,
-                payload: Vec::new(),
-            },
+            soranet_pq_capability(),
             chunk_range_capability(8, 1),
         ],
         false,
@@ -522,7 +534,7 @@ fn provider_cache_accepts_soranet_transport_with_capability() {
         [
             CapabilityType::ToriiGateway,
             CapabilityType::ChunkRangeFetch,
-            CapabilityType::SoraNetCompatible,
+            CapabilityType::SoraNetHybridPq,
         ],
         registry,
     );
@@ -540,7 +552,7 @@ fn provider_cache_accepts_soranet_transport_with_capability() {
     assert!(
         record
             .known_capabilities()
-            .contains(&CapabilityType::SoraNetCompatible),
+            .contains(&CapabilityType::SoraNetHybridPq),
         "soranet capability must be retained on ingest"
     );
     assert!(
@@ -911,7 +923,7 @@ fn make_signed_advert(
         .any(|cap| cap.cap_type == CapabilityType::ChunkRangeFetch);
     let has_soranet = capabilities
         .iter()
-        .any(|cap| cap.cap_type == CapabilityType::SoraNetCompatible);
+        .any(|cap| cap.cap_type == CapabilityType::SoraNetHybridPq);
     let stream_budget = has_chunk_range.then_some(StreamBudgetV1 {
         max_in_flight: 8,
         max_bytes_per_sec: 9_000_000,
@@ -3136,7 +3148,6 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
 #[test]
 fn disk_fixtures_detect_advert_key_mismatch() {
     let fixtures = [
-        ("advert_legacy_v1.to", "envelope_legacy_v1.to"),
         ("advert_v1.to", "envelope_v1.to"),
     ];
 

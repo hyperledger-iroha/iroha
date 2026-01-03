@@ -169,25 +169,25 @@ fn mixed_capability_peers_honour_grease_policy() {
                 "relay",
                 &[CapabilityType::ToriiGateway, CapabilityType::VendorReserved],
             ),
-            TestNode::new("legacy", &[CapabilityType::ToriiGateway]),
+            TestNode::new("strict", &[CapabilityType::ToriiGateway]),
         ],
-        &[("modern", "relay"), ("relay", "legacy")],
+        &[("modern", "relay"), ("relay", "strict")],
     );
 
     mesh.publish("modern", modern_advert.clone(), ISSUED_AT + 90)
         .expect("GREASE-allowed advert should propagate");
 
-    let legacy_caps = mesh
-        .node("legacy")
+    let strict_caps = mesh
+        .node("strict")
         .capabilities_for(&modern_advert.body.provider_id)
-        .expect("legacy node should accept GREASE advert");
+        .expect("strict node should accept GREASE advert");
     assert_eq!(
-        legacy_caps,
+        strict_caps,
         vec![CapabilityType::ToriiGateway],
-        "legacy node keeps only known capabilities"
+        "strict node keeps only known capabilities"
     );
     assert!(
-        mesh.node("legacy").rejection_reasons().is_empty(),
+        mesh.node("strict").rejection_reasons().is_empty(),
         "GREASE-enabled advert should not record rejections"
     );
 
@@ -215,21 +215,21 @@ fn mixed_capability_peers_honour_grease_policy() {
                 "relay",
                 &[CapabilityType::ToriiGateway, CapabilityType::VendorReserved],
             ),
-            TestNode::new("legacy", &[CapabilityType::ToriiGateway]),
+            TestNode::new("strict", &[CapabilityType::ToriiGateway]),
         ],
-        &[("modern", "relay"), ("relay", "legacy")],
+        &[("modern", "relay"), ("relay", "strict")],
     );
 
     mesh.publish("modern", strict_advert.clone(), ISSUED_AT + 120)
         .expect("origin accepts advert it can verify");
 
     assert!(
-        mesh.node("legacy")
+        mesh.node("strict")
             .capabilities_for(&strict_advert.body.provider_id)
             .is_none(),
-        "legacy node must drop adverts with unknown capabilities when GREASE is disabled"
+        "strict node must drop adverts with unknown capabilities when GREASE is disabled"
     );
-    let rejection_messages = mesh.node("legacy").rejection_reasons();
+    let rejection_messages = mesh.node("strict").rejection_reasons();
     assert_eq!(rejection_messages.len(), 1);
     assert!(
         rejection_messages[0].contains("VendorReserved"),

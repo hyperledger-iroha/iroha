@@ -17,13 +17,13 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair, PublicKey};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, bls_normal_pop_prove};
 use iroha_data_model::{
     parameter::system::SumeragiConsensusMode,
     peer::PeerId,
     prelude::{AccountId, ChainId, DomainId},
 };
-use iroha_genesis::RawGenesisTransaction;
+use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_version::build_line::BuildLine;
 use norito::json::{self, Map, Value};
 use once_cell::sync::OnceCell;
@@ -49,6 +49,16 @@ fn timestamp_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis()
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(TABLE[(byte >> 4) as usize] as char);
+        out.push(TABLE[(byte & 0x0F) as usize] as char);
+    }
+    out
 }
 
 /// Result alias for supervisor operations.
@@ -2892,8 +2902,10 @@ impl PeerSpec {
 
         let config_path = peer_dir.join("config.toml");
 
-        let key_pair = KeyPair::random();
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (public_key, private_key) = key_pair.into_parts();
+        let pop = bls_normal_pop_prove(&private_key)
+            .map_err(|err| std::io::Error::other(err.to_string()))?;
 
         Ok(Self {
             alias,
@@ -2907,6 +2919,7 @@ impl PeerSpec {
             keys: PeerKeys {
                 public_key,
                 private_key: ExposedPrivateKey(private_key),
+                pop,
             },
         })
     }
@@ -2934,6 +2947,22 @@ impl PeerSpec {
             .map(|peer| toml::Value::String(peer.trusted_peer_entry()))
             .collect();
         root.insert("trusted_peers".into(), toml::Value::Array(trusted));
+        let trusted_pops = all_peers
+            .iter()
+            .map(|peer| {
+                let mut entry = toml::Table::new();
+                entry.insert(
+                    "public_key".into(),
+                    toml::Value::String(peer.keys.public_key.to_string()),
+                );
+                entry.insert(
+                    "pop_hex".into(),
+                    toml::Value::String(encode_hex(peer.pop_bytes())),
+                );
+                toml::Value::Table(entry)
+            })
+            .collect();
+        root.insert("trusted_peers_pop".into(), toml::Value::Array(trusted_pops));
 
         let mut network = toml::Table::new();
         network.insert("address".into(), toml::Value::String(self.p2p_bind.clone()));
@@ -3049,6 +3078,10 @@ impl PeerSpec {
         self.keys.public_key.clone().into()
     }
 
+    fn pop_bytes(&self) -> &[u8] {
+        &self.keys.pop
+    }
+
     fn torii_base_http(&self) -> String {
         format!("http://{}", self.torii_public)
     }
@@ -3058,6 +3091,7 @@ impl PeerSpec {
 struct PeerKeys {
     public_key: PublicKey,
     private_key: ExposedPrivateKey,
+    pop: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -3094,8 +3128,11 @@ impl GenesisMaterial {
             genesis_profile,
             vrf_seed_hex,
         )?;
-        let topology: Vec<PeerId> = peers.iter().map(|spec| spec.peer_id()).collect();
-        let manifest = genesis::with_topology(manifest, topology, Vec::new());
+        let topology: Vec<GenesisTopologyEntry> = peers
+            .iter()
+            .map(|spec| GenesisTopologyEntry::new(spec.peer_id(), spec.pop_bytes().to_vec()))
+            .collect();
+        let manifest = genesis::with_topology(manifest, topology);
         let json = norito::json::to_vec_pretty(&manifest)?;
         fs::write(&manifest_path, json)?;
 
@@ -4742,7 +4779,9 @@ JSON
         let actual_peer_ids: Vec<PeerId> = topology
             .iter()
             .map(|entry| {
-                norito::json::from_value(entry.clone()).expect("topology entry should decode")
+                let decoded: GenesisTopologyEntry =
+                    norito::json::from_value(entry.clone()).expect("topology entry should decode");
+                decoded.peer
             })
             .collect();
         let expected_peer_ids: Vec<PeerId> = supervisor

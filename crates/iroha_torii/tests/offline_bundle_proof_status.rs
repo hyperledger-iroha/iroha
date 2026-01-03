@@ -286,7 +286,10 @@ fn build_fixtures(include_proof: bool) -> Fixtures {
         scalar_bytes(1),
         scalar_bytes(2),
     );
-    certificate.allowance.commitment = balance_proof.initial_commitment.commitment.clone();
+    certificate
+        .allowance
+        .commitment
+        .clone_from(&balance_proof.initial_commitment.commitment);
 
     let receipt_one = build_receipt(
         &chain_id,

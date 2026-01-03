@@ -252,8 +252,6 @@ pub struct VerifyingKeyRecord {
     pub vk_bytes_cid: Option<String>,
     /// Block height when the verifier becomes active (inclusive).
     pub activation_height: Option<u64>,
-    /// Block height when the verifier transitions to deprecated state (inclusive).
-    pub deprecation_height: Option<u64>,
     /// Block height when the verifier is withdrawn and must not be used.
     pub withdraw_height: Option<u64>,
     /// Optional inline verifying key bytes. Some deployments may store only commitments.
@@ -314,7 +312,6 @@ impl VerifyingKeyRecord {
             metadata_uri_cid: None,
             vk_bytes_cid: None,
             activation_height: None,
-            deprecation_height: None,
             withdraw_height: None,
             key: None,
             status: ConfidentialStatus::Proposed,
@@ -327,9 +324,6 @@ impl VerifyingKeyRecord {
         self.status.is_active()
     }
 }
-
-/// Backwards-compatible alias for [`ConfidentialStatus`].
-pub type VkStatus = ConfidentialStatus;
 
 /// Attachment of a zero-knowledge proof to a transaction.
 /// Exactly one of `vk_ref` or `vk_inline` must be provided.
@@ -416,8 +410,7 @@ impl norito::NoritoSerialize for ProofAttachment {
         write_prefixed(&mut writer, &self.vk_ref)?;
         write_prefixed(&mut writer, &self.vk_inline)?;
 
-        // Omit trailing default fields to preserve compatibility with legacy
-        // payloads that predate vk_commitment/envelope_hash/lane_privacy.
+        // Omit trailing default fields to keep payloads compact and deterministic.
         let tail = if self.lane_privacy.is_some() {
             3
         } else if self.envelope_hash.is_some() {
@@ -886,7 +879,6 @@ mod tests {
             metadata_uri_cid: Some("ipfs://halo2-transfer".into()),
             vk_bytes_cid: Some("ipfs://vk-transfer".into()),
             activation_height: Some(10),
-            deprecation_height: Some(20),
             withdraw_height: Some(30),
             key: Some(VerifyingKeyBox {
                 backend: "halo2/ipa".into(),

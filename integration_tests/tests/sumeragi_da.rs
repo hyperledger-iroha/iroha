@@ -498,7 +498,7 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
                 .write(["sumeragi", "require_wsv_exec_qc"], true)
                 .write(
                     ["sumeragi", "rbc_chunk_max_bytes"],
-                    i64::try_from(rbc_chunk_max_bytes).unwrap_or(i64::MAX),
+                    i64::from(rbc_chunk_max_bytes),
                 )
                 .write(["sumeragi", "rbc_session_ttl_secs"], 600i64)
                 .write(["sumeragi", "rbc_disk_store_ttl_secs"], 600i64);
@@ -1375,6 +1375,7 @@ where
         .saturating_add(extra_peers.saturating_mul(RBC_DELIVER_BUDGET_PER_EXTRA_PEER_MS));
     let commit_budget_ms = COMMIT_BUDGET_MS
         .saturating_add(extra_peers.saturating_mul(COMMIT_BUDGET_PER_EXTRA_PEER_MS));
+    #[allow(clippy::cast_precision_loss)]
     let throughput_floor_mib_s =
         (payload_mib / ((deliver_budget_ms as f64) / 1000.0)).min(THROUGHPUT_FLOOR_MIB_S);
 
@@ -1452,12 +1453,11 @@ where
             {
                 break;
             }
-            if Instant::now() >= deadline {
-                panic!(
-                    "expected RBC status snapshot persisted in {}",
-                    snapshot_file.display()
-                );
-            }
+            assert!(
+                Instant::now() < deadline,
+                "expected RBC status snapshot persisted in {}",
+                snapshot_file.display()
+            );
             sleep(Duration::from_millis(200)).await;
         }
     }

@@ -117,7 +117,7 @@ pub struct Audit {
     /// Return a non-zero status code when Local-domain selectors are detected.
     #[arg(long = "fail-on-warning")]
     fail_on_warning: bool,
-    /// Succeed even if parse errors were encountered (allow auditing legacy dumps).
+    /// Succeed even if parse errors were encountered (allow auditing large dumps).
     #[arg(long = "allow-errors")]
     allow_errors: bool,
     /// Output format (`json` for structured reports, `csv` for spreadsheet ingestion).
@@ -256,7 +256,7 @@ pub struct Normalize {
     /// Only emit conversions for Local-domain selectors.
     #[arg(long = "only-local")]
     only_local: bool,
-    /// Succeed even if parse errors were encountered (allow auditing legacy dumps).
+    /// Succeed even if parse errors were encountered (allow auditing large dumps).
     #[arg(long = "allow-errors")]
     allow_errors: bool,
 }

@@ -1,12 +1,12 @@
 //! Debug/test-only environment flag helpers.
 //!
-//! Production builds must not honour the legacy `IVM_*` debug env toggles. We
+//! Production builds must not honour the `IVM_*` debug env toggles. We
 //! gate the checks on `debug_assertions`/tests so release binaries ignore them
 //! while keeping the knobs available for local debugging and CI.
 
 /// Return `true` when the provided environment flag is set **and** the build is
 /// running with debug assertions (dev/tests). Release builds always return
-/// `false` so production nodes ignore the legacy debug shims.
+/// `false` so production nodes ignore debug shims.
 #[inline]
 pub(crate) fn dev_env_flag(name: &str) -> bool {
     cfg!(any(test, debug_assertions)) && std::env::var_os(name).is_some()

@@ -27,6 +27,7 @@ use nonzero_ext::nonzero;
 use norito::json::Value;
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     // Given: a 7-peer network and a simple state change
     let builder = NetworkBuilder::new()
@@ -156,10 +157,8 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
                     }
                 }
                 Err(QueryError::Validation(ValidationFail::QueryFailed(
-                    QueryExecutionFail::Find(FindError::Asset(_)),
-                )))
-                | Err(QueryError::Validation(ValidationFail::QueryFailed(
-                    QueryExecutionFail::NotFound,
+                    QueryExecutionFail::Find(FindError::Asset(_))
+                    | QueryExecutionFail::NotFound,
                 ))) => {
                     pending.push(format!("{}: asset not found", peer.id()));
                 }

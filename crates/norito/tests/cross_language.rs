@@ -1,5 +1,4 @@
 //! Cross-language fixture parity with Python and Java bindings.
-//! Legacy fixtures should be rejected under the fixed v1 layout.
 
 fn hex_to_bytes(hex: &str) -> Vec<u8> {
     let cleaned: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
@@ -21,7 +20,7 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn legacy_python_sequence_fixture_is_rejected() {
+fn python_sequence_fixture_with_wrong_minor_version_is_rejected() {
     let hex = "4e5254300027055a2713834c8240055a2713834c82400015000000000000002fc2516e36ed1be83f040404040401000000020000000300000004000000";
     let bytes = hex_to_bytes(hex);
     assert_eq!(&bytes[0..4], b"NRT0");
@@ -32,7 +31,7 @@ fn legacy_python_sequence_fixture_is_rejected() {
         "fixture should exercise non-v1 minor version",
     );
     let err = norito::decode_from_bytes::<Vec<u8>>(&bytes)
-        .expect_err("legacy fixture must be rejected in v1");
+        .expect_err("fixture must be rejected in v1");
     assert!(matches!(err, norito::Error::UnsupportedMinorVersion { .. }));
 }
 

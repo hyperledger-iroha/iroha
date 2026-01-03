@@ -3599,7 +3599,7 @@ pub mod codec {
         pub fn build_manifest(&self, mut params: BaselineManifestParams) -> ManifestV1 {
             assert!(
                 self.header.entropy_mode.is_bundled(),
-                "legacy rANS manifests are no longer supported"
+                "rANS manifests without bundled tables are not supported"
             );
             params.capabilities = params
                 .capabilities
@@ -4177,7 +4177,7 @@ pub mod codec {
         pub fn new(config: BaselineEncoderConfig) -> Self {
             assert!(
                 config.entropy_mode.is_bundled(),
-                "legacy rANS entropy mode is no longer supported in the streaming baseline encoder"
+                "rANS entropy mode without bundled tables is not supported in the streaming baseline encoder"
             );
             assert!(
                 config.bundle_width >= 2,
@@ -8446,9 +8446,9 @@ pub mod codec {
         }
 
         #[test]
-        fn entropy_mode_parsing_rejects_legacy_strings() {
+        fn entropy_mode_parsing_rejects_unknown_strings() {
             assert_eq!(EntropyMode::from_str("rans"), Err(()));
-            assert_eq!(EntropyMode::from_str("rans-legacy"), Err(()));
+            assert_eq!(EntropyMode::from_str("rans-unknown"), Err(()));
             assert_eq!(EntropyMode::from_str("cabac"), Err(()));
             assert_eq!(
                 EntropyMode::from_str("rans_bundled"),

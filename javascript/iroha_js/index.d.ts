@@ -1879,7 +1879,7 @@ export interface SorafsGatewayFetchOptions {
   maxPeers?: number;
   retryBudget?: number;
   transportPolicy?: "soranet-first" | "soranet-strict" | "direct-only";
-  anonymityPolicy?: "anon-compatible" | "anon-guard-pq" | "anon-majority-pq" | "anon-strict-pq";
+  anonymityPolicy?: "anon-guard-pq" | "anon-majority-pq" | "anon-strict-pq";
   writeMode?: "read-only" | "upload-pq-only" | string;
   policyOverride?: SorafsGatewayPolicyOverride;
   localProxy?: SorafsLocalProxyOptions;
@@ -1893,7 +1893,7 @@ export interface SorafsGatewayFetchOptions {
 
 export interface SorafsGatewayPolicyOverride {
   transportPolicy?: "soranet-first" | "soranet-strict" | "direct-only";
-  anonymityPolicy?: "anon-compatible" | "anon-guard-pq" | "anon-majority-pq" | "anon-strict-pq";
+  anonymityPolicy?: "anon-guard-pq" | "anon-majority-pq" | "anon-strict-pq";
 }
 
 export interface SorafsGatewayCarArchive {

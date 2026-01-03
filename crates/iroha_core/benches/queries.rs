@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 
 use criterion::Criterion;
 use iroha_core::{
-    pipeline::query_lane::{
+    query::snapshot::{
         CursorMode as LaneCursorMode, run_on_snapshot, run_on_snapshot_with_mode,
     },
     prelude::*,

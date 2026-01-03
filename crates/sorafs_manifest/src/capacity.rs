@@ -428,19 +428,6 @@ pub struct ReplicationAssignmentV1 {
     pub lane: Option<String>,
 }
 
-/// Backwards-compatible alias for legacy code referencing profile capacities.
-pub type ProfileCapacity = ChunkerCommitmentV1;
-/// Backwards-compatible alias for legacy lane commitment name.
-pub type LaneCommitment = LaneCommitmentV1;
-/// Backwards-compatible alias for legacy pricing schedule name.
-pub type PricingSchedule = PricingScheduleV1;
-/// Backwards-compatible alias for legacy replication assignment name.
-pub type ReplicationAssignment = ReplicationAssignmentV1;
-/// Backwards-compatible alias for legacy pricing validation error name.
-pub type PricingValidationError = PricingScheduleError;
-/// Backwards-compatible alias for legacy metadata validation error name.
-pub type MetadataValidationError = MetadataError;
-
 impl ReplicationAssignmentV1 {
     fn validate(&self) -> Result<(), AssignmentError> {
         if self.provider_id.iter().all(|&byte| byte == 0) {

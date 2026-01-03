@@ -44,11 +44,10 @@ pub use capacity::{
     CAPACITY_TELEMETRY_VERSION_V1, CapacityDeclarationV1, CapacityDeclarationValidationError,
     CapacityDisputeEvidenceError, CapacityDisputeEvidenceV1, CapacityDisputeKind,
     CapacityDisputeV1, CapacityDisputeValidationError, CapacityMetadataEntry, CapacityTelemetryV1,
-    CapacityTelemetryValidationError, ChunkerCommitmentError, ChunkerCommitmentV1, LaneCommitment,
-    LaneCommitmentError, LaneCommitmentV1, MetadataError, MetadataValidationError, PricingSchedule,
-    PricingScheduleError, PricingScheduleV1, PricingValidationError, ProfileCapacity,
-    REPLICATION_ORDER_VERSION_V1, ReplicationAssignment, ReplicationAssignmentV1,
-    ReplicationOrderSlaV1, ReplicationOrderV1, ReplicationOrderValidationError, SlaError,
+    CapacityTelemetryValidationError, ChunkerCommitmentError, ChunkerCommitmentV1,
+    LaneCommitmentError, LaneCommitmentV1, MetadataError, PricingScheduleError, PricingScheduleV1,
+    REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+    ReplicationOrderV1, ReplicationOrderValidationError, SlaError,
 };
 pub use chunker_registry::{ChunkerProfileDescriptor, DEFAULT_MULTIHASH_CODE, MANIFEST_DAG_CODEC};
 pub use deal::{

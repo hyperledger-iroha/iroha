@@ -75,8 +75,6 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
         poseidon_params_id: iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
-        vk_deprecated_cap_per_backend:
-            iroha_config::parameters::defaults::zk::vk::DEPRECATED_CAP_PER_BACKEND,
         kaigi_roster_join_vk: None,
         kaigi_roster_leave_vk: None,
         kaigi_usage_vk: None,

@@ -29,7 +29,8 @@ suivants :
   - `parameters` : paramètres initiaux du réseau.
   - `instructions` : instructions encodées avec Norito.
   - `ivm_triggers` : triggers avec exécutables bytecode IVM.
-  - `topology` : topologie initiale des pairs.
+  - `topology` : topologie initiale des pairs. Chaque entrée peut inclure
+    `pop_hex` (optionnel) pour le PoP, mais il doit être présent avant la signature.
 - `crypto` : instantané de configuration cryptographique reflétant
   `iroha_config.crypto` (`default_hash`, `allowed_signing`,
   `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`).

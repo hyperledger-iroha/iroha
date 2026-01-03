@@ -1139,7 +1139,7 @@ pub enum AccountAddressErrorCode {
     InvalidCompressedBase,
     /// Digit outside compressed alphabet bounds.
     InvalidCompressedDigit,
-    /// Local-domain digest shorter than the required 12-byte selector (legacy Local-8 input).
+    /// Local-domain digest shorter than the required 12-byte selector.
     LocalDigestTooShort,
     /// Address string format unsupported.
     UnsupportedAddressFormat,
@@ -1273,9 +1273,9 @@ pub enum AccountAddressError {
     /// Encountered a digit value outside of the compressed alphabet size.
     #[error("invalid compressed digit value: {0}")]
     InvalidCompressedDigit(u8),
-    /// Local-domain selector digest shorter than the 12-byte requirement (legacy Local-8 payload).
+    /// Local-domain selector digest shorter than the 12-byte requirement.
     #[error(
-        "local domain digest too short: expected {expected} bytes, found {found} (legacy Local-8 input)"
+        "local domain digest too short: expected {expected} bytes, found {found}"
     )]
     LocalDigestTooShort {
         /// Required digest length (always 12 bytes for Norm v1).
@@ -1734,7 +1734,7 @@ mod tests {
         canonical.drain(digest_start + 8..digest_start + 12);
 
         let err = AccountAddress::from_canonical_bytes(&canonical)
-            .expect_err("legacy Local-8 payload must be rejected");
+            .expect_err("short digest payload must be rejected");
         assert!(matches!(
             err,
             AccountAddressError::LocalDigestTooShort {

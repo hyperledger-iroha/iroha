@@ -3,22 +3,14 @@
 use std::{
     collections::HashMap,
     fmt::{Debug, Write as _},
-    num::{NonZeroU16, NonZeroU64},
+    num::NonZeroU64,
     thread,
     time::Duration,
 };
 
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
-use iroha_data_model::{
-    executor::ExecutorDataModel,
-    parameter::{
-        Parameters, SmartContractParameters, SumeragiParameters, system::SumeragiConsensusMode,
-    },
-    proof::ProofRecord,
-    query::QueryOutputBatchBoxTuple,
-    smart_contract::manifest::ContractManifest,
-};
+use iroha_data_model::query::QueryOutputBatchBoxTuple;
 use iroha_torii_shared::uri as torii_uri;
 use iroha_version::codec::EncodeVersioned;
 use norito::{
@@ -120,11 +112,7 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
         | StatusCode::NOT_FOUND
         | StatusCode::UNPROCESSABLE_ENTITY => {
             let body = resp.body();
-            let decoded = norito::decode_from_bytes::<ValidationFail>(body).or_else(|_| {
-                let mut cursor = body.as_slice();
-                ValidationFail::decode_all(&mut cursor)
-            });
-            match decoded {
+            match norito::decode_from_bytes::<ValidationFail>(body) {
                 Ok(fail) => Err(QueryError::Validation(fail)),
                 Err(decode_err) => {
                     if resp.status() == StatusCode::NOT_FOUND {
@@ -157,25 +145,10 @@ fn decode_query_response_body(
     body: &[u8],
     json_err: Option<&json::Error>,
 ) -> QueryResult<QueryResponse> {
-    if let Ok(res) = norito::decode_from_bytes::<QueryResponse>(body) {
-        return Ok(res);
-    }
-
-    for offset in [4usize, 8, 12] {
-        if offset < body.len()
-            && let Ok(res) = norito::decode_from_bytes::<QueryResponse>(&body[offset..])
-        {
-            return Ok(res);
-        }
-    }
-
     let mut cursor = body;
     match QueryResponse::decode_all(&mut cursor) {
         Ok(res) => Ok(res),
         Err(primary_err) => {
-            if let Some(fallback) = decode_query_response_fallback(body) {
-                return Ok(fallback);
-            }
             let mut msg = String::from(
                 "Failed to decode response from Iroha. \
                  You are likely using a version of the client library \
@@ -186,18 +159,6 @@ fn decode_query_response_body(
             }
             let report = Report::new(primary_err).wrap_err(msg);
             Err(report.into())
-        }
-    }
-}
-
-/// Try decoding a query response using a more permissive Parameters layout.
-fn decode_query_response_fallback(body: &[u8]) -> Option<QueryResponse> {
-    let mut cursor = body;
-    match compat::CompatQueryResponse::decode_all(&mut cursor) {
-        Ok(decoded) => Some(decoded.into()),
-        Err(err) => {
-            eprintln!("Compat query decode failed: {err:?}");
-            None
         }
     }
 }
@@ -298,411 +259,6 @@ fn is_decode_error(err: &QueryError) -> bool {
     }
 }
 
-/// Permissive decoder used to handle parameter payloads that may violate
-/// non-zero invariants by falling back to sensible defaults.
-mod compat {
-    use std::collections::BTreeMap;
-
-    use iroha_data_model::{
-        Decode, Encode,
-        parameter::{CustomParameter, CustomParameterId},
-        query::{QueryOutput, SingularQueryOutputBox},
-    };
-
-    use super::*;
-
-    #[derive(Debug, Encode, Decode)]
-    pub(super) enum CompatQueryResponse {
-        Singular(Box<CompatSingularOutput>),
-        Iterable(QueryOutput),
-    }
-
-    #[derive(Debug, Encode, Decode)]
-    pub(super) enum CompatSingularOutput {
-        ExecutorDataModel(ExecutorDataModel),
-        Parameters(CompatParameters),
-        ProofRecord(ProofRecord),
-        ContractManifest(ContractManifest),
-        ActiveAbiVersions(crate::data_model::query::runtime::ActiveAbiVersions),
-        Asset(crate::data_model::asset::value::Asset),
-    }
-
-    #[derive(Debug, Encode, Decode)]
-    pub(super) struct CompatParameters {
-        sumeragi: CompatSumeragiParameters,
-        block: CompatBlockParameters,
-        transaction: CompatTransactionParameters,
-        executor: CompatSmartContractParameters,
-        smart_contract: CompatSmartContractParameters,
-        custom: BTreeMap<CustomParameterId, CustomParameter>,
-    }
-
-    #[derive(Debug, Encode, Decode)]
-    struct CompatSumeragiParameters {
-        block_time_ms: u64,
-        commit_time_ms: u64,
-        max_clock_drift_ms: u64,
-        collectors_k: u16,
-        collectors_redundant_send_r: u8,
-        da_enabled: bool,
-        next_mode: Option<u8>,
-        mode_activation_height: Option<u64>,
-    }
-
-    #[derive(Debug, Encode, Decode)]
-    struct CompatBlockParameters {
-        max_transactions: u64,
-    }
-
-    #[derive(Debug, Encode, Decode)]
-    struct CompatTransactionParameters {
-        max_signatures: u64,
-        max_instructions: u64,
-        ivm_bytecode_size: u64,
-        max_tx_bytes: u64,
-        max_decompressed_bytes: u64,
-        max_metadata_depth: u16,
-        require_height_ttl: bool,
-        require_sequence: bool,
-    }
-
-    #[derive(Debug, Encode, Decode)]
-    struct CompatSmartContractParameters {
-        fuel: u64,
-        memory: u64,
-        execution_depth: u8,
-    }
-
-    /// Produce a `CompatQueryResponse` carrying zeroed parameters for testing fallback decode paths.
-    #[cfg(test)]
-    pub(super) fn encode_zeroed_parameters_response() -> Vec<u8> {
-        let params = CompatParameters {
-            sumeragi: CompatSumeragiParameters {
-                block_time_ms: 0,
-                commit_time_ms: 0,
-                max_clock_drift_ms: 0,
-                collectors_k: 0,
-                collectors_redundant_send_r: 0,
-                da_enabled: false,
-                next_mode: None,
-                mode_activation_height: None,
-            },
-            block: CompatBlockParameters {
-                max_transactions: 0,
-            },
-            transaction: CompatTransactionParameters {
-                max_signatures: 0,
-                max_instructions: 0,
-                ivm_bytecode_size: 0,
-                max_tx_bytes: 0,
-                max_decompressed_bytes: 0,
-                max_metadata_depth: 0,
-                require_height_ttl: false,
-                require_sequence: false,
-            },
-            executor: CompatSmartContractParameters {
-                fuel: 0,
-                memory: 0,
-                execution_depth: 0,
-            },
-            smart_contract: CompatSmartContractParameters {
-                fuel: 0,
-                memory: 0,
-                execution_depth: 0,
-            },
-            custom: BTreeMap::new(),
-        };
-        CompatQueryResponse::Singular(Box::new(CompatSingularOutput::Parameters(params))).encode()
-    }
-
-    fn to_nonzero_u64(value: u64, default: NonZeroU64) -> NonZeroU64 {
-        NonZeroU64::new(value).unwrap_or(default)
-    }
-
-    fn to_nonzero_u16(value: u16, default: NonZeroU16) -> NonZeroU16 {
-        NonZeroU16::new(value).unwrap_or(default)
-    }
-
-    fn sumeragi_params_from_compat(
-        value: &CompatSumeragiParameters,
-        defaults: &Parameters,
-    ) -> SumeragiParameters {
-        let defaults = defaults.sumeragi();
-        SumeragiParameters {
-            block_time_ms: if value.block_time_ms == 0 {
-                defaults.block_time_ms
-            } else {
-                value.block_time_ms
-            },
-            commit_time_ms: if value.commit_time_ms == 0 {
-                defaults.commit_time_ms
-            } else {
-                value.commit_time_ms
-            },
-            max_clock_drift_ms: if value.max_clock_drift_ms == 0 {
-                defaults.max_clock_drift_ms
-            } else {
-                value.max_clock_drift_ms
-            },
-            collectors_k: if value.collectors_k == 0 {
-                defaults.collectors_k
-            } else {
-                value.collectors_k
-            },
-            collectors_redundant_send_r: if value.collectors_redundant_send_r == 0 {
-                defaults.collectors_redundant_send_r
-            } else {
-                value.collectors_redundant_send_r
-            },
-            da_enabled: value.da_enabled,
-            next_mode: value.next_mode.map(|m| match m {
-                1 => SumeragiConsensusMode::Npos,
-                _ => SumeragiConsensusMode::Permissioned,
-            }),
-            mode_activation_height: value.mode_activation_height,
-            key_activation_lead_blocks: defaults.key_activation_lead_blocks,
-            key_overlap_grace_blocks: defaults.key_overlap_grace_blocks,
-            key_expiry_grace_blocks: defaults.key_expiry_grace_blocks,
-            key_require_hsm: defaults.key_require_hsm,
-            key_allowed_algorithms: defaults.key_allowed_algorithms.clone(),
-            key_allowed_hsm_providers: defaults.key_allowed_hsm_providers.clone(),
-        }
-    }
-
-    fn block_params_from_compat(
-        value: &CompatBlockParameters,
-        defaults: &Parameters,
-    ) -> iroha_data_model::parameter::BlockParameters {
-        iroha_data_model::parameter::BlockParameters {
-            max_transactions: to_nonzero_u64(
-                value.max_transactions,
-                defaults.block().max_transactions(),
-            ),
-        }
-    }
-
-    fn transaction_params_from_compat(
-        value: &CompatTransactionParameters,
-        defaults: &Parameters,
-    ) -> iroha_data_model::parameter::TransactionParameters {
-        iroha_data_model::parameter::TransactionParameters::with_max_signatures(
-            to_nonzero_u64(
-                value.max_signatures,
-                defaults.transaction().max_signatures(),
-            ),
-            to_nonzero_u64(
-                value.max_instructions,
-                defaults.transaction().max_instructions(),
-            ),
-            to_nonzero_u64(
-                value.ivm_bytecode_size,
-                defaults.transaction().ivm_bytecode_size(),
-            ),
-            to_nonzero_u64(value.max_tx_bytes, defaults.transaction().max_tx_bytes()),
-            to_nonzero_u64(
-                value.max_decompressed_bytes,
-                defaults.transaction().max_decompressed_bytes(),
-            ),
-            to_nonzero_u16(
-                value.max_metadata_depth,
-                defaults.transaction().max_metadata_depth(),
-            ),
-        )
-        .with_ingress_enforcement(value.require_height_ttl, value.require_sequence)
-    }
-
-    fn smart_contract_params_from_compat(
-        value: &CompatSmartContractParameters,
-        defaults: &SmartContractParameters,
-    ) -> SmartContractParameters {
-        SmartContractParameters {
-            fuel: to_nonzero_u64(value.fuel, defaults.fuel()),
-            memory: to_nonzero_u64(value.memory, defaults.memory()),
-            execution_depth: if value.execution_depth == 0 {
-                defaults.execution_depth()
-            } else {
-                value.execution_depth
-            },
-        }
-    }
-
-    impl From<CompatQueryResponse> for QueryResponse {
-        fn from(value: CompatQueryResponse) -> Self {
-            match value {
-                CompatQueryResponse::Iterable(iter) => QueryResponse::Iterable(iter),
-                CompatQueryResponse::Singular(singular) => {
-                    QueryResponse::Singular((*singular).into())
-                }
-            }
-        }
-    }
-
-    impl From<CompatSingularOutput> for SingularQueryOutputBox {
-        fn from(value: CompatSingularOutput) -> Self {
-            match value {
-                CompatSingularOutput::ExecutorDataModel(v) => {
-                    SingularQueryOutputBox::ExecutorDataModel(v)
-                }
-                CompatSingularOutput::Parameters(v) => SingularQueryOutputBox::Parameters(v.into()),
-                CompatSingularOutput::ProofRecord(v) => SingularQueryOutputBox::ProofRecord(v),
-                CompatSingularOutput::ContractManifest(v) => {
-                    SingularQueryOutputBox::ContractManifest(v)
-                }
-                CompatSingularOutput::ActiveAbiVersions(v) => {
-                    SingularQueryOutputBox::ActiveAbiVersions(v)
-                }
-                CompatSingularOutput::Asset(v) => SingularQueryOutputBox::Asset(v),
-            }
-        }
-    }
-
-    impl From<CompatParameters> for Parameters {
-        fn from(value: CompatParameters) -> Self {
-            let defaults = Parameters::default();
-            let sumeragi = sumeragi_params_from_compat(&value.sumeragi, &defaults);
-            let block = block_params_from_compat(&value.block, &defaults);
-            let transaction = transaction_params_from_compat(&value.transaction, &defaults);
-            let executor_defaults = defaults.executor();
-            let smart_contract_defaults = defaults.smart_contract();
-            let executor = smart_contract_params_from_compat(&value.executor, &executor_defaults);
-            let smart_contract =
-                smart_contract_params_from_compat(&value.smart_contract, &smart_contract_defaults);
-
-            Parameters {
-                sumeragi,
-                block,
-                transaction,
-                executor,
-                smart_contract,
-                custom: value.custom,
-            }
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use std::collections::BTreeMap;
-
-        use super::*;
-
-        fn zeroed_compat_sumeragi() -> CompatSumeragiParameters {
-            CompatSumeragiParameters {
-                block_time_ms: 0,
-                commit_time_ms: 0,
-                max_clock_drift_ms: 0,
-                collectors_k: 0,
-                collectors_redundant_send_r: 0,
-                da_enabled: false,
-                next_mode: None,
-                mode_activation_height: None,
-            }
-        }
-
-        #[test]
-        fn compat_parameters_zeroed_defaults_apply() {
-            let compat = CompatParameters {
-                sumeragi: zeroed_compat_sumeragi(),
-                block: CompatBlockParameters {
-                    max_transactions: 0,
-                },
-                transaction: CompatTransactionParameters {
-                    max_signatures: 0,
-                    max_instructions: 0,
-                    ivm_bytecode_size: 0,
-                    max_tx_bytes: 0,
-                    max_decompressed_bytes: 0,
-                    max_metadata_depth: 0,
-                    require_height_ttl: true,
-                    require_sequence: true,
-                },
-                executor: CompatSmartContractParameters {
-                    fuel: 0,
-                    memory: 0,
-                    execution_depth: 0,
-                },
-                smart_contract: CompatSmartContractParameters {
-                    fuel: 0,
-                    memory: 0,
-                    execution_depth: 0,
-                },
-                custom: BTreeMap::new(),
-            };
-
-            let defaults = Parameters::default();
-            let params = Parameters::from(compat);
-
-            assert_eq!(
-                params.sumeragi().block_time_ms,
-                defaults.sumeragi().block_time_ms
-            );
-            assert_eq!(
-                params.sumeragi().commit_time_ms,
-                defaults.sumeragi().commit_time_ms
-            );
-            assert_eq!(
-                params.sumeragi().max_clock_drift_ms,
-                defaults.sumeragi().max_clock_drift_ms
-            );
-            assert_eq!(
-                params.sumeragi().collectors_k,
-                defaults.sumeragi().collectors_k
-            );
-            assert_eq!(
-                params.sumeragi().collectors_redundant_send_r,
-                defaults.sumeragi().collectors_redundant_send_r
-            );
-            assert_eq!(
-                params.block().max_transactions(),
-                defaults.block().max_transactions()
-            );
-            assert_eq!(
-                params.transaction().max_signatures(),
-                defaults.transaction().max_signatures()
-            );
-            assert_eq!(
-                params.transaction().max_instructions(),
-                defaults.transaction().max_instructions()
-            );
-            assert_eq!(
-                params.transaction().ivm_bytecode_size(),
-                defaults.transaction().ivm_bytecode_size()
-            );
-            assert_eq!(
-                params.transaction().max_tx_bytes(),
-                defaults.transaction().max_tx_bytes()
-            );
-            assert_eq!(
-                params.transaction().max_decompressed_bytes(),
-                defaults.transaction().max_decompressed_bytes()
-            );
-            assert_eq!(
-                params.transaction().max_metadata_depth(),
-                defaults.transaction().max_metadata_depth()
-            );
-            assert!(params.transaction().require_height_ttl());
-            assert!(params.transaction().require_sequence());
-            assert_eq!(params.executor().fuel(), defaults.executor().fuel());
-            assert_eq!(params.executor().memory(), defaults.executor().memory());
-            assert_eq!(
-                params.smart_contract().execution_depth(),
-                defaults.smart_contract().execution_depth()
-            );
-        }
-
-        #[test]
-        fn compat_sumeragi_next_mode_mapping() {
-            let defaults = Parameters::default();
-            let mut compat = zeroed_compat_sumeragi();
-            compat.next_mode = Some(1);
-            let params = sumeragi_params_from_compat(&compat, &defaults);
-            assert_eq!(params.next_mode, Some(SumeragiConsensusMode::Npos));
-
-            compat.next_mode = Some(99);
-            let params = sumeragi_params_from_compat(&compat, &defaults);
-            assert_eq!(params.next_mode, Some(SumeragiConsensusMode::Permissioned));
-        }
-    }
-}
 fn decode_singular_query_response(
     resp: &http::Response<Vec<u8>>,
 ) -> QueryResult<SingularQueryOutputBox> {
@@ -1024,14 +580,14 @@ mod query_errors_handling {
         data_model::ValidationFail,
         http::StatusCode as HttpStatusCode,
         http_default::{RequestSnapshot, with_send_hook},
-        query::compat,
     };
 
     #[test]
     fn certain_errors() -> Result<()> {
         let responses = vec![(StatusCode::UNPROCESSABLE_ENTITY, ValidationFail::TooComplex)];
         for (status_code, err) in responses {
-            let resp = Response::builder().status(status_code).body(err.encode())?;
+            let body = norito::to_bytes(&err)?;
+            let resp = Response::builder().status(status_code).body(body)?;
 
             match decode_query_response(&resp) {
                 Err(QueryError::Validation(actual)) => {
@@ -1159,7 +715,7 @@ mod query_errors_handling {
 
     #[test]
     fn validation_fail_with_json_content_type_is_parsed() -> Result<()> {
-        let body = ValidationFail::TooComplex.encode();
+        let body = norito::to_bytes(&ValidationFail::TooComplex)?;
         let response = Response::builder()
             .status(HttpStatusCode::UNPROCESSABLE_ENTITY)
             .header("content-type", "application/json")
@@ -1188,27 +744,6 @@ mod query_errors_handling {
                 Ok(())
             }
             other => Err(eyre!("expected Validation error, got {other:?}")),
-        }
-    }
-
-    #[test]
-    fn compat_only_payload_falls_back_successfully() -> Result<()> {
-        // Construct a payload with zero values in places where strict decoding requires non-zero.
-        let compat_body = compat::encode_zeroed_parameters_response();
-
-        let response = Response::builder()
-            .status(HttpStatusCode::OK)
-            .header("content-type", APPLICATION_NORITO)
-            .body(compat_body)?;
-
-        let decoded = decode_query_response(&response)?;
-        // Must not panic and must produce a response (shape not asserted further).
-        if let QueryResponse::Singular(_) = decoded {
-            Ok(())
-        } else {
-            Err(eyre!(
-                "expected singular response from compat decoder, got {decoded:?}"
-            ))
         }
     }
 

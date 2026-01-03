@@ -29,7 +29,8 @@ Iroha. الملف عبارة عن كائن JSON يحتوي الحقول التا
   - `parameters`: معاملات الشبكة الابتدائية.
   - `instructions`: تعليمات مشفَّرة باستخدام Norito.
   - `ivm_triggers`: triggers مع ملفات تنفيذية لـ IVM.
-  - `topology`: طوبولوجيا الـ peers الابتدائية.
+  - `topology`: طوبولوجيا الـ peers الابتدائية. يمكن أن يتضمن كل إدخال
+    `pop_hex` (اختياري) لإثبات الحيازة، لكنه يجب أن يكون موجودًا قبل التوقيع.
 - `crypto`: لقطة (snapshot) لإعدادات التشفير، تعكس
   `iroha_config.crypto` (`default_hash`, `allowed_signing`,
   `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`).

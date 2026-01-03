@@ -647,7 +647,6 @@ mod tests {
             collectors_redundant_send_r: 1,
             block_max_transactions: None,
             block_max_payload_bytes: None,
-            msg_channel_cap: None,
             msg_channel_cap_votes:
                 iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
             msg_channel_cap_block_payload:

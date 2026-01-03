@@ -221,54 +221,6 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         )),
     )?;
 
-    let mut legacy_proposal = proposal_v1.clone();
-    legacy_proposal.capabilities = vec![CapabilityTlv {
-        cap_type: CapabilityType::ToriiGateway,
-        payload: Vec::new(),
-    }];
-    legacy_proposal.stream_budget = None;
-    legacy_proposal.transport_hints = None;
-    let legacy_advert = build_advert(&legacy_proposal, &provider_signing_key, 360, 960, 2_000, 24)?;
-    let legacy_envelope = build_envelope(
-        legacy_proposal.clone(),
-        legacy_advert.body.clone(),
-        360,
-        960,
-        &council_key,
-    )?;
-    let legacy_record = AdmissionRecord::new(legacy_envelope.clone())?;
-
-    write_binary(
-        out_dir,
-        "proposal_legacy_v1.to",
-        &norito::to_bytes(&legacy_proposal)?,
-    )?;
-    write_json(
-        out_dir,
-        "proposal_legacy_v1.json",
-        Value::Object(build_proposal_summary(&legacy_proposal)),
-    )?;
-    write_binary(
-        out_dir,
-        "advert_legacy_v1.to",
-        &norito::to_bytes(&legacy_advert)?,
-    )?;
-    write_json(
-        out_dir,
-        "advert_legacy_v1.json",
-        Value::Object(build_advert_summary(&legacy_advert)),
-    )?;
-    write_binary(
-        out_dir,
-        "envelope_legacy_v1.to",
-        &norito::to_bytes(&legacy_envelope)?,
-    )?;
-    write_json(
-        out_dir,
-        "envelope_legacy_v1.json",
-        Value::Object(build_envelope_summary(&legacy_envelope, &legacy_record)),
-    )?;
-
     let plan_payload: Vec<u8> = (0..(64 * 1024)).map(|idx| (idx % 251) as u8).collect();
     let plan = CarBuildPlan::single_file_with_profile(&plan_payload, ChunkProfile::DEFAULT)?;
     let plan_specs = plan.chunk_fetch_specs();
@@ -702,8 +654,8 @@ fn write_readme(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
 These files are generated via `cargo run -p sorafs_car --features cli --bin provider_admission_fixtures`.\n\
 They provide deterministic governance proposals, adverts, envelopes, renewals, and revocations for\n\
 integration tests across Rust, Torii, and CLI tooling.\n\n\
-Additional artifacts capture legacy providers (without range capability) and a sample multi-source\n\
-fetch plan so SDKs can exercise downgrade paths and chunk scheduling end-to-end.\n\n\
+Additional artifacts include a sample multi-source fetch plan so SDKs can exercise chunk scheduling\n\
+end-to-end.\n\n\
 Do not edit manually; rerun the generator if data changes.\n",
     );
     content.push('\n');

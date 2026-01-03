@@ -91,7 +91,6 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::CustomInstruction);
         $macro!(iroha_data_model::isi::verifying_keys::RegisterVerifyingKey);
         $macro!(iroha_data_model::isi::verifying_keys::UpdateVerifyingKey);
-        $macro!(iroha_data_model::isi::verifying_keys::DeprecateVerifyingKey);
         $macro!(iroha_data_model::isi::sorafs::RegisterPinManifest);
         $macro!(iroha_data_model::isi::sorafs::ApprovePinManifest);
         $macro!(iroha_data_model::isi::sorafs::RetirePinManifest);

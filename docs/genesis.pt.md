@@ -27,7 +27,8 @@ quando uma rede Iroha é iniciada. O arquivo é um objeto JSON com estes campos:
   - `parameters`: parâmetros iniciais da rede.
   - `instructions`: instruções codificadas com Norito.
   - `ivm_triggers`: triggers com executáveis de bytecode IVM.
-  - `topology`: topologia inicial de peers.
+  - `topology`: topologia inicial de peers. Cada entrada pode incluir
+    `pop_hex` (opcional) para o PoP, mas ele deve estar presente antes da assinatura.
 - `crypto`: snapshot de criptografia espelhado de `iroha_config.crypto`
   (`default_hash`, `allowed_signing`, `allowed_curve_ids`,
   `sm2_distid_default`, `sm_openssl_preview`). `allowed_curve_ids` espelha

@@ -282,12 +282,6 @@ fn is_zero_u16(value: &u16) -> bool {
     *value == 0
 }
 
-// Norito's `skip_serializing_if` predicates take a reference to the field value.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-pub(crate) fn is_zero_u32(value: &u32) -> bool {
-    *value == 0
-}
-
 /// Retention policy negotiated for a DA blob.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]

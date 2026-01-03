@@ -12,7 +12,7 @@ use iroha_data_model::{
     parameter::{SumeragiParameter, system::SumeragiConsensusMode},
     prelude::*,
 };
-use iroha_genesis::RawGenesisTransaction;
+use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 
 use super::{ensure_npos_parameters, generate::ConsensusModeArg};
 use crate::{Outcome, RunArgs, tui};
@@ -100,11 +100,8 @@ impl<T: Write> RunArgs<T> for Args {
                 norito::json::from_str(&topology).wrap_err("parse --topology JSON")?;
             // Put topology into a dedicated transaction so it remains separate
             // from other genesis instructions.
-            let pops = build_topology_pops(&topology, &self.peer_pops)?;
-            builder = builder
-                .next_transaction()
-                .set_topology(topology)
-                .set_topology_pop(pops);
+            let entries = build_topology_entries(&topology, &self.peer_pops)?;
+            builder = builder.next_transaction().set_topology(entries);
         }
         if let Some(mode) = next_consensus_mode {
             builder =
@@ -161,12 +158,11 @@ fn load_genesis_key(
     }
 }
 
-fn build_topology_pops(
+fn build_topology_entries(
     topology: &[PeerId],
     peer_pops: &[String],
-) -> Result<Vec<iroha_genesis::GenesisPeerPop>, color_eyre::eyre::Error> {
+) -> Result<Vec<GenesisTopologyEntry>, color_eyre::eyre::Error> {
     use iroha_crypto::PublicKey;
-    use iroha_genesis::GenesisPeerPop;
 
     if peer_pops.is_empty() {
         return Err(eyre!(
@@ -174,11 +170,10 @@ fn build_topology_pops(
         ));
     }
 
-    let topo_keys: Vec<PublicKey> = topology
+    let topo_set: BTreeSet<PublicKey> = topology
         .iter()
         .map(|pid| pid.public_key().clone())
         .collect();
-    let topo_set: BTreeSet<PublicKey> = topo_keys.iter().cloned().collect();
 
     let mut map: BTreeMap<PublicKey, Vec<u8>> = BTreeMap::new();
     for kv in peer_pops {
@@ -212,14 +207,16 @@ fn build_topology_pops(
         ));
     }
 
-    Ok(topo_keys
+    Ok(topology
         .iter()
-        .map(|pk| GenesisPeerPop {
-            public_key: pk.clone(),
-            pop: map
-                .get(pk)
-                .cloned()
-                .expect("topology keys validated against pop map"),
+        .map(|peer| {
+            let pk = peer.public_key();
+            GenesisTopologyEntry::new(
+                peer.clone(),
+                map.get(pk)
+                    .cloned()
+                    .expect("topology keys validated against pop map"),
+            )
         })
         .collect())
 }
@@ -318,11 +315,11 @@ mod tests {
     }
 
     #[test]
-    fn topology_pop_order_matches_topology() {
+    fn topology_entries_order_matches_topology() {
         let peer_a = PeerId::new(CryptoKeyPair::random().public_key().clone());
         let peer_b = PeerId::new(CryptoKeyPair::random().public_key().clone());
         let topology = vec![peer_a.clone(), peer_b.clone()];
-        let pops = build_topology_pops(
+        let entries = build_topology_entries(
             &topology,
             &[
                 format!("{}=01", peer_a.public_key()),
@@ -331,14 +328,14 @@ mod tests {
         )
         .expect("valid pops");
         assert_eq!(
-            pops[0].public_key,
-            *peer_a.public_key(),
-            "pops should respect topology order"
+            entries[0].peer,
+            peer_a,
+            "entries should respect topology order"
         );
         assert_eq!(
-            pops[1].public_key,
-            *peer_b.public_key(),
-            "pops should respect topology order"
+            entries[1].peer,
+            peer_b,
+            "entries should respect topology order"
         );
     }
 

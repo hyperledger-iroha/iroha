@@ -18,7 +18,7 @@ use norito::json;
 use tower::ServiceExt as _;
 
 #[tokio::test]
-async fn vk_register_update_deprecate_return_202() {
+async fn vk_register_update_return_202() {
     // Minimal state and queue
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -81,27 +81,6 @@ async fn vk_register_update_deprecate_return_202() {
                     async move {
                         iroha_torii::handle_post_vk_update(chain_id, queue, state, telemetry, req)
                             .await
-                    }
-                }
-            }),
-        )
-        .route(
-            "/v1/zk/vk/deprecate",
-            post({
-                let chain_id = chain_id.clone();
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |req: NoritoJson<iroha_torii::ZkVkDeprecateDto>| {
-                    let chain_id = chain_id.clone();
-                    let queue = queue.clone();
-                    let state = state.clone();
-                    let telemetry = telemetry.clone();
-                    async move {
-                        iroha_torii::handle_post_vk_deprecate(
-                            chain_id, queue, state, telemetry, req,
-                        )
-                        .await
                     }
                 }
             }),
@@ -182,20 +161,4 @@ async fn vk_register_update_deprecate_return_202() {
     let resp_upd = app.clone().oneshot(req_upd).await.unwrap();
     assert_eq!(resp_upd.status(), http::StatusCode::ACCEPTED);
 
-    // 3) Deprecate
-    let body_dep_value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.to_string()),
-        iroha_torii::json_entry("private_key", exposed),
-        iroha_torii::json_entry("backend", "halo2/ipa"),
-        iroha_torii::json_entry("name", "vk_add"),
-    ]);
-    let body_dep = json::to_json(&body_dep_value).unwrap();
-    let req_dep = http::Request::builder()
-        .method("POST")
-        .uri("/v1/zk/vk/deprecate")
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(body_dep))
-        .unwrap();
-    let resp_dep = app.clone().oneshot(req_dep).await.unwrap();
-    assert_eq!(resp_dep.status(), http::StatusCode::ACCEPTED);
 }

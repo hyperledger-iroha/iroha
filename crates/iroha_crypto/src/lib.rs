@@ -2447,14 +2447,14 @@ mod tests {
     fn bls_pop_rejects_unhashed_message() {
         use crate::secrecy::ExposeSecret;
 
-        // Legacy PoP signed over POP_DST || pk (unhashed) must now be rejected.
+        // PoP signed over POP_DST || pk (unhashed) must be rejected.
         let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (_alg, pk_bytes) = kp.public_key().to_bytes();
-        let mut legacy_msg = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
-        legacy_msg.extend_from_slice(POP_DST.as_bytes());
-        legacy_msg.extend_from_slice(pk_bytes);
+        let mut unhashed_msg = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
+        unhashed_msg.extend_from_slice(POP_DST.as_bytes());
+        unhashed_msg.extend_from_slice(pk_bytes);
         let pop = signature::bls::BlsNormal::sign(
-            &legacy_msg,
+            &unhashed_msg,
             match kp.private_key().0.expose_secret() {
                 PrivateKeyInner::BlsNormal(sk) => sk,
                 _ => unreachable!(),

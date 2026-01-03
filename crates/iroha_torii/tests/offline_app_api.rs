@@ -150,7 +150,10 @@ fn build_fixtures() -> Fixtures {
         scalar_bytes(1),
         scalar_bytes(2),
     );
-    certificate.allowance.commitment = balance_proof.initial_commitment.commitment.clone();
+    certificate
+        .allowance
+        .commitment
+        .clone_from(&balance_proof.initial_commitment.commitment);
 
     let mut receipt = OfflineSpendReceipt {
         tx_id: Hash::new(b"receipt-1"),

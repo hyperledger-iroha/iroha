@@ -686,7 +686,7 @@ impl AxtRejectReason {
         }
     }
 
-    /// Backwards-compatible alias used in legacy logging paths.
+    /// Alias for telemetry call sites.
     #[must_use]
     pub const fn as_label(self) -> &'static str {
         self.label()

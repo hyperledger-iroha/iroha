@@ -961,8 +961,9 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
     let cap_type = match head.trim().to_ascii_lowercase().as_str() {
         "torii" | "torii-gateway" => CapabilityType::ToriiGateway,
         "quic" | "quic-noise" => CapabilityType::QuicNoise,
-        "soranet" | "soranet-compatible" => CapabilityType::SoraNetCompatible,
-        "soranet-pq" | "soranet_pq" | "soranet-hybrid-pq" => CapabilityType::SoraNetHybridPq,
+        "soranet" | "soranet-pq" | "soranet_pq" | "soranet-hybrid-pq" => {
+            CapabilityType::SoraNetHybridPq
+        }
         "range" | "chunk-range" => CapabilityType::ChunkRangeFetch,
         "vendor" | "vendor-reserved" => CapabilityType::VendorReserved,
         other => {

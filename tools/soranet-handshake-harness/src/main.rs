@@ -237,7 +237,7 @@ fn main() -> Result<(), HarnessError> {
             );
             if matches!(handshake_suite, HandshakeSuite::Nk1NoiseXx) {
                 println!(
-                    "note: transcript assumes legacy nk1.noise_xx; nk2/nk3 coverage remains a work in progress"
+                    "note: transcript assumes nk1.noise_xx; nk2/nk3 coverage remains a work in progress"
                 );
             }
 

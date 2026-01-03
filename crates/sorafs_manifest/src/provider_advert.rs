@@ -202,8 +202,6 @@ pub enum CapabilityType {
     ToriiGateway = 0x0001,
     /// Provider exposes QUIC retrieval with Noise handshake.
     QuicNoise = 0x0002,
-    /// Provider accepts SoraNet anonymous fetches.
-    SoraNetCompatible = 0x0003,
     /// Provider supports ranged chunk requests for multi-source fetch.
     ChunkRangeFetch = 0x0004,
     /// Provider advertises hybrid SoraNet PQ support (stage flags).
@@ -1087,10 +1085,7 @@ impl ProviderAdvertBodyV1 {
                 .any(|hint| hint.protocol == TransportProtocol::SoraNetRelay);
             if has_soranet_hint
                 && !self.capabilities.iter().any(|cap| {
-                    matches!(
-                        cap.cap_type,
-                        CapabilityType::SoraNetCompatible | CapabilityType::SoraNetHybridPq
-                    )
+                    cap.cap_type == CapabilityType::SoraNetHybridPq
                 })
             {
                 return Err(AdvertValidationError::SoranetTransportWithoutCapability);
@@ -1456,9 +1451,16 @@ mod tests {
             protocol: TransportProtocol::SoraNetRelay,
             priority: 0,
         }]);
+        let pq_payload = ProviderCapabilitySoranetPqV1 {
+            supports_guard: true,
+            supports_majority: false,
+            supports_strict: false,
+        }
+        .to_bytes()
+        .expect("encode soranet_pq");
         advert.body.capabilities.push(CapabilityTlv {
-            cap_type: CapabilityType::SoraNetCompatible,
-            payload: Vec::new(),
+            cap_type: CapabilityType::SoraNetHybridPq,
+            payload: pq_payload,
         });
         advert.body.validate().unwrap();
     }

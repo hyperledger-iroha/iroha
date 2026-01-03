@@ -64,16 +64,15 @@ async fn trigger_completion_success_should_produce_event() -> Result<()> {
         match timeout(event_timeout, events.next()).await {
             Ok(Some(_)) => Ok(()),
             Ok(None) => Err(eyre::eyre!("event stream ended unexpectedly")),
-            Err(err) => {
-                if let Some(reason) = sandbox::sandbox_reason(&eyre::eyre!(err.to_string())) {
+            Err(err) => sandbox::sandbox_reason(&eyre::eyre!(err.to_string())).map_or_else(
+                || Err(err.into()),
+                |reason| {
                     Err(eyre::eyre!(
                         "sandboxed network restriction detected during {}: {reason}",
                         stringify!(trigger_completion_success_should_produce_event)
                     ))
-                } else {
-                    Err(err.into())
-                }
-            }
+                },
+            ),
         }
     };
     let event_result = tokio::try_join!(submit_trigger, wait_event);

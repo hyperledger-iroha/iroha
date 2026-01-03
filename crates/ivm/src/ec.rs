@@ -15,7 +15,7 @@ pub fn ec_add(a: u64, b: u64) -> [u8; 48] {
     r.to_affine().to_compressed()
 }
 
-/// EC add returning the legacy truncated u64 used by VM registers.
+/// EC add returning the truncated u64 used by VM registers.
 pub fn ec_add_truncated(a: u64, b: u64) -> u64 {
     to_u64(&ec_add(a, b))
 }
@@ -27,7 +27,7 @@ pub fn ec_mul(point_scalar: u64, scalar: u64) -> [u8; 48] {
     r.to_affine().to_compressed()
 }
 
-/// Scalar multiplication returning the legacy truncated u64 used by VM registers.
+/// Scalar multiplication returning the truncated u64 used by VM registers.
 pub fn ec_mul_truncated(point_scalar: u64, scalar: u64) -> u64 {
     to_u64(&ec_mul(point_scalar, scalar))
 }
@@ -42,7 +42,7 @@ pub fn pairing_check(a: u64, b: u64) -> Vec<u8> {
     buf
 }
 
-/// Pairing check returning the legacy truncated u64 used by VM registers.
+/// Pairing check returning the truncated u64 used by VM registers.
 pub fn pairing_check_truncated(a: u64, b: u64) -> u64 {
     let buf = pairing_check(a, b);
     to_u64(&buf)

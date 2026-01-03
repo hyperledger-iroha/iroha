@@ -2785,17 +2785,6 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/vk/deprecate".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Deprecate a verification key.",
-            "Deprecate a verification key entry.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/zk/vk/{backend}/{name}".to_owned(),
         Value::Object(json_get_operation(
             "ZK",

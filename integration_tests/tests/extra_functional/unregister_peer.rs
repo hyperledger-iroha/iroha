@@ -234,10 +234,10 @@ async fn wait_for_asset(
 ) -> Result<Numeric> {
     let deadline = Instant::now() + timeout_duration;
     loop {
-        if let Some(value) = find_asset(client, account, asset_definition).await? {
-            if expected.as_ref().map_or(true, |expected| value == *expected) {
-                return Ok(value);
-            }
+        if let Some(value) = find_asset(client, account, asset_definition).await?
+            && expected.as_ref().is_none_or(|expected| value == *expected)
+        {
+            return Ok(value);
         }
         if Instant::now() >= deadline {
             if expected.is_some() {
@@ -305,7 +305,7 @@ async fn ensure_blocks_or_skip(
         .await
         .map_err(Report::new)?
         .map(|_| ());
-    sandbox::handle_result(result, context).map(|opt| opt.map(|_| ()))
+    sandbox::handle_result(result, context)
 }
 
 async fn run_blocking_with_timeout<T, F>(
@@ -321,6 +321,5 @@ where
     let result = timeout(timeout_duration, join)
         .await
         .map_err(|_| eyre!("{context} timed out"))?;
-    let result = result.map_err(Report::new)?;
-    Ok(result?)
+    result.map_err(Report::new)?
 }

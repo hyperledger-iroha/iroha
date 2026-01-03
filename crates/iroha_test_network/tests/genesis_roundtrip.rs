@@ -12,11 +12,11 @@ fn genesis_roundtrip_decode() {
     let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(bls.public_key().clone());
     let topology = UniqueVec::from_iter([peer]);
-    let pop = iroha_genesis::GenesisPeerPop {
-        public_key: bls.public_key().clone(),
-        pop: iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-    };
-    let genesis = genesis_factory(Vec::new(), topology, vec![pop]);
+    let entry = iroha_genesis::GenesisTopologyEntry::new(
+        PeerId::new(bls.public_key().clone()),
+        iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+    );
+    let genesis = genesis_factory(Vec::new(), topology, vec![entry]);
     let wire = genesis
         .0
         .encode_wire()

@@ -232,11 +232,6 @@ impl From<crate::isi::verifying_keys::UpdateVerifyingKey> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::verifying_keys::DeprecateVerifyingKey> for InstructionBox {
-    fn from(i: crate::isi::verifying_keys::DeprecateVerifyingKey) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
 // Allow direct boxing of consensus key lifecycle instructions.
 impl From<crate::isi::consensus_keys::RegisterConsensusKey> for InstructionBox {
     fn from(i: crate::isi::consensus_keys::RegisterConsensusKey) -> Self {
@@ -248,8 +243,8 @@ impl From<crate::isi::consensus_keys::RotateConsensusKey> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::consensus_keys::DeprecateConsensusKey> for InstructionBox {
-    fn from(i: crate::isi::consensus_keys::DeprecateConsensusKey) -> Self {
+impl From<crate::isi::consensus_keys::DisableConsensusKey> for InstructionBox {
+    fn from(i: crate::isi::consensus_keys::DisableConsensusKey) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1981,7 +1976,7 @@ pub mod prelude {
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
             SetPoseidonParamsLifecycle,
         },
-        consensus_keys::{DeprecateConsensusKey, RegisterConsensusKey, RotateConsensusKey},
+        consensus_keys::{DisableConsensusKey, RegisterConsensusKey, RotateConsensusKey},
         content::{PublishContentBundle, RetireContentBundle},
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,

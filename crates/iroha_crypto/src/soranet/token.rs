@@ -669,10 +669,10 @@ impl PersistentTokenStore {
             return Ok(());
         }
 
-        match decode_adaptive::<TokenStoreSnapshot>(&bytes) {
-            Ok(snapshot) => self.ingest_snapshot(snapshot, now),
-            Err(decode_err) => self.load_legacy(&bytes, now, &decode_err)?,
-        }
+        let snapshot = decode_adaptive::<TokenStoreSnapshot>(&bytes).map_err(|decode_err| {
+            TokenStoreError::Parse(format!("norito decode failed: {decode_err}"))
+        })?;
+        self.ingest_snapshot(snapshot, now);
 
         self.prune_expired(now);
         self.enforce_capacity();
@@ -687,60 +687,6 @@ impl PersistentTokenStore {
             }
             let _ = self.records.insert(entry.id, TokenRecord { expires_at });
         }
-    }
-
-    fn load_legacy(
-        &mut self,
-        bytes: &[u8],
-        now: SystemTime,
-        decode_err: &norito::core::Error,
-    ) -> Result<(), TokenStoreError> {
-        let contents = String::from_utf8_lossy(bytes);
-        let mut parsed_any = false;
-        for (idx, line) in contents.lines().enumerate() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let mut parts = trimmed.split_whitespace();
-            let Some(id_hex) = parts.next() else {
-                return Err(TokenStoreError::Parse(format!(
-                    "line {idx} missing token id"
-                )));
-            };
-            let Some(expires) = parts.next() else {
-                return Err(TokenStoreError::Parse(format!("line {idx} missing expiry")));
-            };
-            if parts.next().is_some() {
-                return Err(TokenStoreError::Parse(format!(
-                    "line {idx} has trailing fields"
-                )));
-            }
-            let bytes = hex::decode(id_hex)
-                .map_err(|err| TokenStoreError::Parse(format!("line {idx} id decode: {err}")))?;
-            if bytes.len() != 32 {
-                return Err(TokenStoreError::Parse(format!(
-                    "line {idx} id must decode to 32 bytes"
-                )));
-            }
-            let mut id = [0u8; 32];
-            id.copy_from_slice(&bytes);
-            let expires_secs: u64 = expires.parse().map_err(|err| {
-                TokenStoreError::Parse(format!("line {idx} expiry parse failed: {err}"))
-            })?;
-            parsed_any = true;
-            let expires_at = UNIX_EPOCH + Duration::from_secs(expires_secs);
-            if is_expired(expires_at, now) || exceeds_ttl(expires_at, now, self.limits.max_ttl) {
-                continue;
-            }
-            self.records.insert(id, TokenRecord { expires_at });
-        }
-        if parsed_any {
-            return Ok(());
-        }
-        Err(TokenStoreError::Parse(format!(
-            "norito decode failed: {decode_err}"
-        )))
     }
 
     fn prune_expired(&mut self, now: SystemTime) {
@@ -1294,18 +1240,37 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("valid >= epoch")
             .as_secs();
-        let content = format!(
-            "{} {expired}\n{} {valid}\n",
-            hex::encode([0xAA; 32]),
-            hex::encode([0xBB; 32]),
-            expired = expired_secs,
-            valid = valid_secs
-        );
-        std::fs::write(&path, content).expect("write fixtures");
+        let snapshot = TokenStoreSnapshot {
+            entries: vec![
+                TokenStoreEntry {
+                    id: [0xAA; 32],
+                    expires_at_secs: expired_secs,
+                },
+                TokenStoreEntry {
+                    id: [0xBB; 32],
+                    expires_at_secs: valid_secs,
+                },
+            ],
+        };
+        let content = encode_adaptive(&snapshot);
+        std::fs::write(&path, content).expect("write snapshot");
 
         let store = PersistentTokenStore::load(&path, limits, now).expect("load");
         assert!(!store.contains(&[0xAA; 32], now));
         assert!(store.contains(&[0xBB; 32], now));
         assert_eq!(store.len(now), 1);
+    }
+
+    #[test]
+    fn persistent_store_rejects_non_norito_snapshot() {
+        let limits = TokenStoreLimits::new(2, Duration::from_secs(120)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("invalid_store.txt");
+
+        std::fs::write(&path, b"not norito").expect("write invalid");
+        let err = PersistentTokenStore::load(&path, limits, now)
+            .expect_err("invalid snapshot should fail");
+        assert!(matches!(err, TokenStoreError::Parse(_)));
     }
 }

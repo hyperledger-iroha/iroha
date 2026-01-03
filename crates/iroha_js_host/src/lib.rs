@@ -2181,7 +2181,7 @@ pub struct JsGatewayFetchOptions {
     pub retry_budget: Option<u32>,
     /// Transport policy label (`soranet-first`, `soranet-strict`, `direct-only`).
     pub transport_policy: Option<String>,
-    /// Anonymity policy label (`anon-compatible`, `anon-guard-pq`, `anon-majority-pq`, `anon-strict-pq`).
+    /// Anonymity policy label (`anon-guard-pq`, `anon-majority-pq`, `anon-strict-pq`).
     pub anonymity_policy: Option<String>,
     /// Write-mode hint controlling PQ enforcement (`read-only`, `upload-pq-only`).
     pub write_mode: Option<String>,
@@ -3317,7 +3317,7 @@ fn apply_gateway_options(
         }
         config.anonymity_policy = AnonymityPolicy::parse(trimmed).ok_or_else(|| {
             invalid_arg(
-                "anonymityPolicy must be one of 'anon-compatible', 'anon-guard-pq', 'anon-majority-pq', or 'anon-strict-pq'",
+                "anonymityPolicy must be one of 'anon-guard-pq', 'anon-majority-pq', or 'anon-strict-pq'",
             )
         })?;
         config.anonymity_policy_override = Some(config.anonymity_policy);

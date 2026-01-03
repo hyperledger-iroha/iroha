@@ -336,16 +336,16 @@ pub use routing::{
     KaigiRelaySummaryListDto, MaybeTelemetry, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
     ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions, RegisterPinManifestDto,
     RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
-    SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkDeprecateDto,
-    ZkVkRegisterDto, ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs,
+    SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
+    ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs,
     handle_get_contract_code_bytes, handle_get_proof, handle_get_vk, handle_list_proofs,
     handle_list_vk, handle_post_contract_call, handle_post_contract_deploy,
     handle_post_contract_instance, handle_post_contract_instance_activate,
     handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
     handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
-    handle_post_vk_deprecate, handle_post_vk_register, handle_post_vk_update,
-    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
-    handle_v1_new_view_json, handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count,
+    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
+    handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
+    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count,
     handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots,
     handle_v1_zk_submit_proof, handle_v1_zk_verify, handle_v1_zk_vote_tally,
     signed_find_proof_by_id,
@@ -8960,60 +8960,6 @@ async fn handler_post_vk_update(
     .map(IntoResponse::into_response)
 }
 
-#[cfg(feature = "app_api")]
-async fn handler_post_vk_deprecate(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    request: NoritoJson<crate::routing::ZkVkDeprecateDto>,
-) -> Result<AxResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return crate::routing::handle_post_vk_deprecate(
-            app.chain_id.clone(),
-            app.queue.clone(),
-            app.state.clone(),
-            app.telemetry.clone(),
-            request,
-        )
-        .await
-        .map(IntoResponse::into_response);
-    }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        None,
-        "v1/zk/vk/deprecate",
-        app.api_token_enforced(),
-    );
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
-    if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    crate::routing::handle_post_vk_deprecate(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        request,
-    )
-    .await
-    .map(IntoResponse::into_response)
-}
-
 async fn handler_post_transaction(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -11318,7 +11264,6 @@ impl Torii {
                 // VK registry lifecycle (app API convenience): register, update, deprecate
                 .route("/v1/zk/vk/register", post(handler_post_vk_register))
                 .route("/v1/zk/vk/update", post(handler_post_vk_update))
-                .route("/v1/zk/vk/deprecate", post(handler_post_vk_deprecate))
                 .route(
                     "/v1/zk/vk/{backend}/{name}",
                     get(handler_get_vk_by_backend_name),
@@ -13692,7 +13637,7 @@ mod gateway_denylist_loader_tests {
             cid_utf8: None,
             url: None,
             account_id: None,
-            account_alias: Some("legacy@sora".to_string()),
+            account_alias: Some("alias@sora".to_string()),
             jurisdiction: None,
             reason: Some("alias".to_string()),
             issued_at: Some("2025-04-15T00:00:00Z".to_string()),
@@ -13708,12 +13653,12 @@ mod gateway_denylist_loader_tests {
 
         match kind {
             sorafs::gateway::DenylistKind::AccountAlias(ref alias) => {
-                assert_eq!(alias, "legacy@sora");
+                assert_eq!(alias, "alias@sora");
             }
             other => panic!("unexpected denylist kind: {other:?}"),
         }
 
-        assert_eq!(metadata.alias(), Some("legacy@sora"));
+        assert_eq!(metadata.alias(), Some("alias@sora"));
         assert_eq!(metadata.reason(), Some("alias"));
     }
 

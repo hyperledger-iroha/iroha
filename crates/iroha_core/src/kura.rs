@@ -64,7 +64,6 @@ impl From<CommittedBlock> for Arc<SignedBlock> {
 const INDEX_FILE_NAME: &str = "blocks.index";
 const DATA_FILE_NAME: &str = "blocks.data";
 const HASHES_FILE_NAME: &str = "blocks.hashes";
-const MERGE_LEDGER_FILE_NAME: &str = "merge_ledger.log";
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
@@ -428,7 +427,6 @@ impl Kura {
         let primary_lane = lane_config.primary();
         let roster_retention = config.block_sync_roster_retention;
         let roster_sidecar_retention = config.roster_sidecar_retention;
-        Self::reject_legacy_artifacts(&store_dir)?;
 
         let blocks_root = Self::select_block_store_root(&store_dir, primary_lane);
         let mut block_store =
@@ -546,36 +544,6 @@ impl Kura {
     #[must_use]
     pub fn roster_sidecar_retention(&self) -> NonZeroUsize {
         self.roster_sidecar_retention
-    }
-
-    fn reject_legacy_artifacts(store_dir: &Path) -> Result<()> {
-        for name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
-            let path = store_dir.join(name);
-            if path.exists() {
-                return Err(Error::LegacyArtifact {
-                    path,
-                    kind: "legacy block store root",
-                });
-            }
-        }
-
-        let legacy_merge_log = store_dir.join(MERGE_LEDGER_FILE_NAME);
-        if legacy_merge_log.exists() {
-            return Err(Error::LegacyArtifact {
-                path: legacy_merge_log,
-                kind: "legacy merge ledger",
-            });
-        }
-
-        let legacy_pipeline_root = store_dir.join(PIPELINE_DIR_NAME);
-        if legacy_pipeline_root.exists() {
-            return Err(Error::LegacyArtifact {
-                path: legacy_pipeline_root,
-                kind: "legacy pipeline sidecar directory",
-            });
-        }
-
-        Ok(())
     }
 
     fn select_block_store_root(store_dir: &Path, lane: &LaneConfigEntry) -> PathBuf {
@@ -3692,13 +3660,6 @@ pub enum Error {
     Locked(PathBuf),
     /// Block writer thread unavailable; persistence notifications cannot be delivered
     BlockWriterUnavailable,
-    /// Legacy Kura layout artifacts are present in the configured storage directory
-    LegacyArtifact {
-        /// Path to the offending artifact.
-        path: PathBuf,
-        /// Artifact kind for diagnostics.
-        kind: &'static str,
-    },
     /// Conversion of wide integer into narrow integer failed. This error cannot be caught at compile time at present
     IntConversion(#[from] std::num::TryFromIntError),
     /// Blocks count differs hashes file and index file
@@ -3769,7 +3730,7 @@ mod tests {
         prelude::{Executor, IvmBytecode},
         transaction::TransactionBuilder,
     };
-    use iroha_genesis::{GenesisBuilder, GenesisPeerPop};
+    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_test_samples::{
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
     };
@@ -4477,99 +4438,6 @@ mod tests {
     }
 
     #[test]
-    fn kura_rejects_legacy_block_root_files() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let legacy_index = dir.path().join(INDEX_FILE_NAME);
-        fs::write(&legacy_index, []).expect("seed legacy index");
-        let config = KuraConfig {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(dir.path().to_path_buf()),
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-        };
-
-        let err = Kura::new(&config, &RuntimeLaneConfig::default())
-            .expect_err("legacy block artifacts should be rejected");
-        match err {
-            Error::LegacyArtifact { path, kind } => {
-                assert_eq!(kind, "legacy block store root");
-                assert_eq!(path, legacy_index);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn kura_rejects_legacy_merge_artifacts() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let legacy_merge = dir.path().join(MERGE_LEDGER_FILE_NAME);
-        fs::write(&legacy_merge, []).expect("seed legacy merge log");
-        let config = KuraConfig {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(dir.path().to_path_buf()),
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-        };
-
-        let err = Kura::new(&config, &RuntimeLaneConfig::default())
-            .expect_err("legacy merge artifacts should be rejected");
-        match err {
-            Error::LegacyArtifact { path, kind } => {
-                assert_eq!(kind, "legacy merge ledger");
-                assert_eq!(path, legacy_merge);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn kura_rejects_root_pipeline_directory() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pipeline_root = dir.path().join(PIPELINE_DIR_NAME);
-        fs::create_dir_all(&pipeline_root).expect("create legacy pipeline root");
-        let config = KuraConfig {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(dir.path().to_path_buf()),
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-        };
-
-        let err = Kura::new(&config, &RuntimeLaneConfig::default())
-            .expect_err("legacy pipeline root should be rejected");
-        match err {
-            Error::LegacyArtifact { path, kind } => {
-                assert_eq!(kind, "legacy pipeline sidecar directory");
-                assert_eq!(path, pipeline_root);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
     fn store_block_reports_writer_channel_closed() {
         let kura = Kura::blank_kura_for_testing();
         kura.block_notify_rx.lock().take();
@@ -5039,10 +4907,10 @@ mod tests {
             KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
         let peer_id = PeerId::new(leader_public_key.clone());
         let topology = Topology::new(vec![peer_id]);
-        let topology_pop = vec![GenesisPeerPop {
-            public_key: leader_public_key.clone(),
-            pop: bls_normal_pop_prove(&leader_private_key).expect("generate BLS PoP"),
-        }];
+        let topology_entries = vec![GenesisTopologyEntry::new(
+            PeerId::new(leader_public_key.clone()),
+            bls_normal_pop_prove(&leader_private_key).expect("generate BLS PoP"),
+        )];
 
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
@@ -5096,8 +4964,7 @@ mod tests {
 
         let genesis =
             GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
-                .set_topology(topology.as_ref().to_owned())
-                .set_topology_pop(topology_pop)
+                .set_topology(topology_entries)
                 .build_and_sign(&genesis_key_pair)
                 .expect("genesis block should be built");
 

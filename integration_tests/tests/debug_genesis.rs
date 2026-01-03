@@ -1,6 +1,5 @@
 //! Inspect genesis encoding/decoding behaviour for troubleshooting.
 
-use eyre::Result;
 use integration_tests::sandbox;
 use iroha_data_model::{
     block::{
@@ -13,7 +12,7 @@ use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::codec::encode_adaptive;
 
 #[test]
-fn genesis_roundtrip_inspection() -> Result<()> {
+fn genesis_roundtrip_inspection() {
     init_instruction_registry();
 
     let Some(network) = sandbox::build_network_or_skip(
@@ -22,7 +21,7 @@ fn genesis_roundtrip_inspection() -> Result<()> {
             .with_auto_populated_trusted_peers(),
         stringify!(genesis_roundtrip_inspection),
     ) else {
-        return Ok(());
+        return;
     };
 
     let genesis = network.genesis();
@@ -76,5 +75,4 @@ fn genesis_roundtrip_inspection() -> Result<()> {
 
     decode_versioned_signed_block(&framed).expect("decode versioned genesis");
 
-    Ok(())
 }

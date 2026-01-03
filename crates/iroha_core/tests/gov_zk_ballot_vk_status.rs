@@ -4,7 +4,7 @@
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn zk_ballot_rejects_when_vk_deprecated() {
+fn zk_ballot_rejects_when_vk_not_active() {
     use base64::Engine;
     use iroha_core::{
         executor::Executor, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
@@ -78,6 +78,7 @@ fn zk_ballot_rejects_when_vk_deprecated() {
     vk_record.status = ConfidentialStatus::Active;
     vk_record.key = Some(vk_box);
     vk_record.gas_schedule_id = Some("halo2_default".into());
+    let vk_key = vk_record.key.clone();
     let exec = Executor::default();
     let reg_instr: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
@@ -85,7 +86,7 @@ fn zk_ballot_rejects_when_vk_deprecated() {
     }
     .into();
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_instr)
-        .expect("register deprecated vk");
+        .expect("register vk");
 
     // Create election referencing the same VK
     let create = CreateElection {
@@ -99,10 +100,25 @@ fn zk_ballot_rejects_when_vk_deprecated() {
         domain_tag: "gov:ballot:v1".to_string(),
     };
     create.execute(&ALICE_ID, &mut stx).expect("create ok");
-    let dep_instr: InstructionBox =
-        iroha_data_model::isi::verifying_keys::DeprecateVerifyingKey { id: vk_id.clone() }.into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), dep_instr)
-        .expect("deprecate vk");
+    let mut vk_record2 = VerifyingKeyRecord::new(
+        2,
+        "ballot_v1",
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        [0x44; 32],
+        commitment,
+    );
+    vk_record2.vk_len = 3;
+    vk_record2.status = ConfidentialStatus::Proposed;
+    vk_record2.key = vk_key;
+    vk_record2.gas_schedule_id = Some("halo2_default".into());
+    let upd_instr: InstructionBox = iroha_data_model::isi::verifying_keys::UpdateVerifyingKey {
+        id: vk_id.clone(),
+        record: vk_record2,
+    }
+    .into();
+    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), upd_instr)
+        .expect("update vk");
     stx.world.governance_referenda_mut().insert(
         "ref-vk".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
@@ -123,6 +139,6 @@ fn zk_ballot_rejects_when_vk_deprecated() {
     let result = cast.execute(&ALICE_ID, &mut stx);
     assert!(
         result.is_err(),
-        "ballot with Deprecated VK must be rejected"
+        "ballot with non-active VK must be rejected"
     );
 }

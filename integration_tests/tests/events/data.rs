@@ -119,8 +119,7 @@ async fn transaction_execution_should_produce_events(
             .await
             .wrap_err_with(|| {
                 format!(
-                    "{context}: timed out waiting for next event; missing: {:?}; unexpected: {:?}",
-                    expected_domains, unexpected_domains
+                    "{context}: timed out waiting for next event; missing: {expected_domains:?}; unexpected: {unexpected_domains:?}"
                 )
             })?;
         let event = match event_opt {

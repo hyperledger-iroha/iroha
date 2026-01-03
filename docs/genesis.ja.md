@@ -19,7 +19,8 @@ translator: manual
   - `parameters` – 初期ネットワークパラメータ。
   - `instructions` – Norito でエンコードされた命令列。
   - `ivm_triggers` – IVM バイトコードを実行するトリガー。
-  - `topology` – 初期ピアトポロジ。
+  - `topology` – 初期ピアトポロジ。各エントリには PoP 用の `pop_hex`
+    （任意）を含められますが、署名前には必須です。
 - `crypto` – `iroha_config.crypto` のスナップショット（`default_hash`, `allowed_signing`, `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`）。`allowed_curve_ids` は `crypto.curves.allowed_curve_ids` を反映し、どのカーブ ID が許可されているかをマニフェスト側で公開します。`allowed_signing` に `sm2` を含める場合は、ハッシュ既定値も必ず `sm3-256` に変更してください。`sm` 機能を有効にせずビルドしたバイナリは `sm2` を含む設定を拒否します。
 
 例（`kagami genesis generate default` の出力。命令列は一部省略）:

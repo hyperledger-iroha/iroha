@@ -1401,19 +1401,9 @@ fn decode_status_response(resp: &Response<Vec<u8>>) -> Result<Status> {
     if is_json {
         norito::json::from_slice(body).map_err(Into::into)
     } else {
-        match decode_from_bytes::<Status>(body) {
-            Ok(status) => Ok(status),
-            Err(framed_err) => {
-                // Fallback for compat peers that responded with bare Norito payloads.
-                let mut slice = body.as_slice();
-                DecodeAll::decode_all(&mut slice).map_err(|bare_err| {
-                    eyre!(
-                        "norito decode failed (framed payload): {framed_err}; \
-                         bare payload fallback also failed: {bare_err}"
-                    )
-                })
-            }
-        }
+        let mut slice = body.as_slice();
+        DecodeAll::decode_all(&mut slice)
+            .map_err(|err| eyre!("failed to decode status Norito payload: {err}"))
     }
 }
 
@@ -2323,17 +2313,9 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            return match decode_from_bytes::<SumeragiStatusWire>(resp.body()) {
-                Ok(wire) => Ok(wire),
-                Err(framed_err) => {
-                    let mut slice: &[u8] = resp.body().as_slice();
-                    DecodeAll::decode_all(&mut slice).map_err(|bare_err| {
-                        eyre!(
-                            "Failed to decode sumeragi status Norito payload: framed={framed_err}; bare={bare_err}"
-                        )
-                    })
-                }
-            };
+            return decode_from_bytes::<SumeragiStatusWire>(resp.body()).map_err(|err| {
+                eyre!("Failed to decode sumeragi status Norito payload: {err}")
+            });
         }
         norito::json::from_slice(resp.body())
             .map_err(|e| eyre!("Failed to decode sumeragi status JSON payload: {e}"))
@@ -2362,17 +2344,9 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            let wire = match decode_from_bytes::<SumeragiStatusWire>(resp.body()) {
-                Ok(wire) => wire,
-                Err(framed_err) => {
-                    let mut slice: &[u8] = resp.body().as_slice();
-                    DecodeAll::decode_all(&mut slice).map_err(|bare_err| {
-                        eyre!(
-                            "Failed to decode sumeragi status Norito payload: framed={framed_err}; bare={bare_err}"
-                        )
-                    })?
-                }
-            };
+            let wire = decode_from_bytes::<SumeragiStatusWire>(resp.body()).map_err(|err| {
+                eyre!("Failed to decode sumeragi status Norito payload: {err}")
+            })?;
             return Ok(sumeragi_status_json_payload(&wire));
         }
         Ok(norito::json::from_slice(resp.body())?)
@@ -2405,17 +2379,9 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         let wire = if content_type.starts_with(APPLICATION_NORITO) {
-            match decode_from_bytes::<SumeragiStatusWire>(resp.body()) {
-                Ok(wire) => wire,
-                Err(framed_err) => {
-                    let mut slice: &[u8] = resp.body().as_slice();
-                    DecodeAll::decode_all(&mut slice).map_err(|bare_err| {
-                        eyre!(
-                            "Failed to decode sumeragi status Norito payload: framed={framed_err}; bare={bare_err}"
-                        )
-                    })?
-                }
-            }
+            decode_from_bytes::<SumeragiStatusWire>(resp.body()).map_err(|err| {
+                eyre!("Failed to decode sumeragi status Norito payload: {err}")
+            })?
         } else {
             norito::json::from_slice(resp.body())?
         };
@@ -2574,17 +2540,8 @@ impl Client {
         if content_type.starts_with(APPLICATION_NORITO) {
             use norito::json::{Map, Value};
 
-            let wire = match decode_from_bytes::<ExecRootWire>(resp.body()) {
-                Ok(wire) => wire,
-                Err(framed_err) => {
-                    let mut slice: &[u8] = resp.body().as_slice();
-                    DecodeAll::decode_all(&mut slice).map_err(|bare_err| {
-                        eyre!(
-                            "Failed to decode exec_root Norito payload: framed={framed_err}; bare={bare_err}"
-                        )
-                    })?
-                }
-            };
+            let wire = decode_from_bytes::<ExecRootWire>(resp.body())
+                .map_err(|err| eyre!("Failed to decode exec_root Norito payload: {err}"))?;
             let mut map = Map::new();
             map.insert(
                 "block_hash".into(),
@@ -2627,19 +2584,8 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            let record_opt = match decode_from_bytes::<Option<ExecutionQcRecord>>(resp.body()) {
-                Ok(record) => record,
-                Err(framed_err) => {
-                    let mut slice: &[u8] = resp.body().as_slice();
-                    <Option<ExecutionQcRecord> as DecodeAll>::decode_all(&mut slice).map_err(
-                        |bare_err| {
-                            eyre!(
-                                "Failed to decode exec_qc Norito payload: framed={framed_err}; bare={bare_err}"
-                            )
-                        },
-                    )?
-                }
-            };
+            let record_opt = decode_from_bytes::<Option<ExecutionQcRecord>>(resp.body())
+                .map_err(|err| eyre!("Failed to decode exec_qc Norito payload: {err}"))?;
             return Ok(exec_qc_json_payload(hash_hex, record_opt));
         }
         norito::json::from_slice(resp.body()).map_err(Into::into)
@@ -2766,8 +2712,7 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            let mut slice: &[u8] = resp.body().as_slice();
-            let wire = SumeragiQcSnapshot::decode_all(&mut slice)
+            let wire = decode_from_bytes::<SumeragiQcSnapshot>(resp.body())
                 .map_err(|e| eyre!("Failed to decode sumeragi qc Norito payload: {e}"))?;
             return Ok(sumeragi_qc_json_payload(wire));
         }
@@ -4887,7 +4832,7 @@ impl Client {
                             )
                             .await
                         };
-                        if let Some(mut iterator) = event_iterator {
+                        if let Some(iterator) = event_iterator {
                             iterator.close().await;
                         }
                         match result {
@@ -6005,7 +5950,7 @@ impl Client {
     ///
     /// When `block_hash_hex` is provided the request appends `?block_hash=<hash>` so Torii returns a
     /// deterministic sampling plan rooted in `block_hash || client_blob_id`. Callers that do not need
-    /// the sampling plan can use [`Self::get_da_manifest_bundle`] for the legacy behaviour.
+    /// the sampling plan can use [`Self::get_da_manifest_bundle`] for the default behaviour.
     ///
     /// # Errors
     ///
@@ -7826,28 +7771,6 @@ impl Client {
         Ok(())
     }
 
-    /// Convenience: POST `/v1/zk/vk/deprecate` with a JSON DTO body.
-    /// # Errors
-    /// Returns an error if the HTTP request fails or the response is not `202 Accepted`.
-    pub fn post_zk_vk_deprecate(&self, value: &norito::json::Value) -> Result<()> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/vk/deprecate");
-        let body = norito::json::to_vec(value)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if resp.status() != StatusCode::ACCEPTED {
-            return Err(eyre!(
-                "Failed to deprecate VK with HTTP status: {}. {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(())
-    }
-
     /// Convenience: GET `/v1/zk/vk/{backend}/{name}` as JSON Value.
     ///
     /// # Errors
@@ -8696,7 +8619,7 @@ mod tx_confirmation_stream_tests {
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([12_u8; Hash::LENGTH]));
         let queued_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
-            hash: hash.clone(),
+            hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::GLOBAL,

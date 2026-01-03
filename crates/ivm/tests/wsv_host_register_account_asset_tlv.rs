@@ -115,10 +115,10 @@ fn register_asset_rejects_name_pointer() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    // Attempt to register an asset using a Name pointer (legacy path) should fail.
-    let legacy_name = make_tlv(PointerType::Name as u16, b"rose");
+    // Attempt to register an asset using a Name pointer (invalid path) should fail.
+    let invalid_name = make_tlv(PointerType::Name as u16, b"rose");
     vm.memory
-        .preload_input(0, &legacy_name)
+        .preload_input(0, &invalid_name)
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);

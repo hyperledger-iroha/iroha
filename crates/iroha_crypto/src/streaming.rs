@@ -562,160 +562,49 @@ pub struct StreamingSessionSnapshot {
     pub kyber_remote_fingerprint: Option<Hash>,
 }
 
-#[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-struct StreamingSessionSnapshotV1 {
-    role: CapabilityRole,
-    session_id: Hash,
-    key_counter: u64,
-    suite: EncryptionSuite,
-    kem_suite_id: Option<u8>,
-    sts_root: [u8; 32],
-    latest_gck: Option<Vec<u8>>,
-    last_content_key_id: Option<u64>,
-    last_content_key_valid_from: Option<u64>,
-    cadence: Option<SessionCadenceSnapshot>,
-    kyber_remote_public: Option<Vec<u8>>,
-    kyber_remote_fingerprint: Option<Hash>,
-}
-
-impl From<StreamingSessionSnapshotV1> for StreamingSessionSnapshot {
-    fn from(legacy: StreamingSessionSnapshotV1) -> Self {
-        Self {
-            role: legacy.role,
-            session_id: legacy.session_id,
-            key_counter: legacy.key_counter,
-            suite: legacy.suite,
-            kem_suite_id: legacy
-                .kem_suite_id
-                .unwrap_or_else(|| mlkem_suite_to_id(STREAMING_DEFAULT_KEM_SUITE)),
-            sts_root: legacy.sts_root,
-            latest_gck: legacy.latest_gck,
-            last_content_key_id: legacy.last_content_key_id,
-            last_content_key_valid_from: legacy.last_content_key_valid_from,
-            cadence: legacy.cadence,
-            transport_capabilities: None,
-            negotiated_capabilities: None,
-            kyber_remote_public: legacy.kyber_remote_public,
-            kyber_remote_fingerprint: legacy.kyber_remote_fingerprint,
-        }
-    }
-}
-
-fn decode_len_prefixed_option<'a, T, F>(
-    bytes: &'a [u8],
-    mut decode_inner: F,
-) -> Result<(Option<T>, usize), norito::Error>
-where
-    F: FnMut(&'a [u8]) -> Result<(T, usize), norito::Error>,
-{
-    if bytes.is_empty() {
-        return Err(norito::Error::LengthMismatch);
-    }
-    match bytes[0] {
-        0 => Ok((None, 1)),
-        1 => {
-            const HEADER_SIZE: usize = 1 + 8;
-            if bytes.len() < HEADER_SIZE {
-                return Err(norito::Error::LengthMismatch);
-            }
-            let mut len_bytes = [0u8; 8];
-            len_bytes.copy_from_slice(&bytes[1..HEADER_SIZE]);
-            let payload_len = usize::try_from(u64::from_le_bytes(len_bytes))
-                .map_err(|_| norito::Error::LengthMismatch)?;
-            let data_start = HEADER_SIZE;
-            let data_end = data_start
-                .checked_add(payload_len)
-                .ok_or(norito::Error::LengthMismatch)?;
-            if data_end > bytes.len() {
-                return Err(norito::Error::LengthMismatch);
-            }
-            let (value, used) = decode_inner(&bytes[data_start..data_end])?;
-            if used != payload_len {
-                return Err(norito::Error::LengthMismatch);
-            }
-            Ok((Some(value), data_end))
-        }
-        tag => Err(norito::Error::invalid_tag("Option", tag)),
-    }
-}
-
-fn decode_streaming_session_snapshot_from_slice(
-    bytes: &[u8],
-) -> Result<(StreamingSessionSnapshot, usize), norito::Error> {
-    let mut offset = 0;
-    let (role, used) = <CapabilityRole as DecodeFromSlice>::decode_from_slice(bytes)?;
-    offset += used;
-    let (session_id, used) = <Hash as DecodeFromSlice>::decode_from_slice(&bytes[offset..])?;
-    offset += used;
-    let (key_counter, used) = <u64 as DecodeFromSlice>::decode_from_slice(&bytes[offset..])?;
-    offset += used;
-    let (suite, used) = <EncryptionSuite as DecodeFromSlice>::decode_from_slice(&bytes[offset..])?;
-    offset += used;
-    let (kem_suite_id, used) = <u8 as DecodeFromSlice>::decode_from_slice(&bytes[offset..])?;
-    offset += used;
-    let (sts_root, used) = <[u8; 32] as DecodeFromSlice>::decode_from_slice(&bytes[offset..])?;
-    offset += used;
-    let (latest_gck, used) = decode_len_prefixed_option(&bytes[offset..], |slice| {
-        <Vec<u8> as DecodeFromSlice>::decode_from_slice(slice)
-    })?;
-    offset += used;
-    let (last_content_key_id, used) = decode_len_prefixed_option(&bytes[offset..], |slice| {
-        <u64 as DecodeFromSlice>::decode_from_slice(slice)
-    })?;
-    offset += used;
-    let (last_content_key_valid_from, used) =
-        decode_len_prefixed_option(&bytes[offset..], |slice| {
-            <u64 as DecodeFromSlice>::decode_from_slice(slice)
-        })?;
-    offset += used;
-    let (cadence, used) = decode_len_prefixed_option(&bytes[offset..], |slice| {
-        SessionCadenceSnapshot::decode_from_slice(slice)
-    })?;
-    offset += used;
-    let (kyber_remote_public, used) = decode_len_prefixed_option(&bytes[offset..], |slice| {
-        <Vec<u8> as DecodeFromSlice>::decode_from_slice(slice)
-    })?;
-    offset += used;
-    let (kyber_remote_fingerprint, used) = decode_len_prefixed_option(&bytes[offset..], |slice| {
-        <Hash as DecodeFromSlice>::decode_from_slice(slice)
-    })?;
-    offset += used;
-
-    Ok((
-        StreamingSessionSnapshot {
-            role,
-            session_id,
-            key_counter,
-            suite,
-            kem_suite_id,
-            sts_root,
-            latest_gck,
-            last_content_key_id,
-            last_content_key_valid_from,
-            cadence,
-            transport_capabilities: None,
-            negotiated_capabilities: None,
-            kyber_remote_public,
-            kyber_remote_fingerprint,
-        },
-        offset,
-    ))
-}
-
 impl<'a> DecodeFromSlice<'a> for StreamingSessionSnapshot {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
-        match norito::core::decode_field_canonical::<StreamingSessionSnapshot>(bytes) {
-            Ok(decoded) => Ok(decoded),
-            Err(norito::Error::LengthMismatch | norito::Error::DecodePanic { .. }) => {
-                if let Ok((legacy, used)) =
-                    norito::core::decode_field_canonical::<StreamingSessionSnapshotV1>(bytes)
-                {
-                    return Ok((legacy.into(), used));
-                }
-                decode_streaming_session_snapshot_from_slice(bytes)
-            }
-            Err(err) => Err(err),
-        }
+        norito::core::decode_field_canonical::<StreamingSessionSnapshot>(bytes)
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn streaming_session_snapshot_decode_roundtrip() {
+        let snapshot = StreamingSessionSnapshot {
+            role: CapabilityRole::Viewer,
+            session_id: [0x11; 32],
+            key_counter: 1,
+            suite: EncryptionSuite::X25519ChaCha20Poly1305([0x22; 32]),
+            kem_suite_id: mlkem_suite_to_id(STREAMING_DEFAULT_KEM_SUITE),
+            sts_root: [0x33; 32],
+            latest_gck: Some(vec![0x44, 0x45]),
+            last_content_key_id: Some(7),
+            last_content_key_valid_from: Some(8),
+            cadence: None,
+            transport_capabilities: None,
+            negotiated_capabilities: None,
+            kyber_remote_public: None,
+            kyber_remote_fingerprint: None,
+        };
+        let bytes = norito::codec::encode_adaptive(&snapshot);
+        let (decoded, used) =
+            StreamingSessionSnapshot::decode_from_slice(&bytes).expect("decode snapshot");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn streaming_session_snapshot_rejects_invalid_payload() {
+        let err = StreamingSessionSnapshot::decode_from_slice(b"invalid payload")
+            .expect_err("invalid snapshot should fail");
+        assert!(matches!(
+            err,
+            norito::Error::LengthMismatch | norito::Error::DecodePanic { .. }
+        ));
     }
 }
 

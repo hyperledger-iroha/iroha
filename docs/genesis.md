@@ -11,7 +11,7 @@ A `genesis.json` file defines the first transactions that run when an Iroha netw
   - `parameters` – initial network parameters.
   - `instructions` – structured Norito instructions (e.g., `{ "Register": { "Domain": { "id": "wonderland" }}}`). Raw byte arrays are not accepted, and `SetParameter` instructions are rejected here—seed parameters via the `parameters` block and let normalization/signing inject the instructions.
   - `ivm_triggers` – triggers with IVM bytecode executables.
-  - `topology` – initial peer topology. Each entry keeps the peer and its PoP together: `{ "peer": <PeerId>, "pop_hex": "<hex>" }`. The legacy `topology_pop` block is not accepted.
+  - `topology` – initial peer topology. Each entry keeps the peer and its PoP together: `{ "peer": <PeerId>, "pop_hex": "<hex>" }`. `pop_hex` may be omitted while composing, but must be present before signing.
 - `crypto` – cryptography snapshot mirrored from `iroha_config.crypto` (`default_hash`, `allowed_signing`, `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`). `allowed_curve_ids` mirrors `crypto.curves.allowed_curve_ids` so manifests can advertise which controller curves the cluster accepts. Tooling enforces SM combinations: manifests that list `sm2` must also switch the hash to `sm3-256`, while builds compiled without the `sm` feature reject `sm2` entirely. Normalization injects a `crypto_manifest_meta` custom parameter into the signed genesis; nodes refuse to start if the injected payload disagrees with the advertised snapshot.
 
 Example (`kagami genesis generate default` output, instructions trimmed):

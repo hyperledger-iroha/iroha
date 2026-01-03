@@ -10,7 +10,7 @@ use std::{
 use blake2::{Blake2b512, digest::Digest};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{parameter::system::SumeragiConsensusMode, peer::PeerId};
-use iroha_genesis::{GenesisPeerPop, RawGenesisTransaction};
+use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use norito::json;
 
 use crate::workspace_root;
@@ -184,18 +184,13 @@ fn inject_topology(
     let consensus_mode = manifest
         .consensus_mode()
         .unwrap_or(SumeragiConsensusMode::Permissioned);
-    let topology: Vec<PeerId> = peers.iter().map(|peer| peer.peer_id.clone()).collect();
-    let pops: Vec<GenesisPeerPop> = peers
+    let topology: Vec<GenesisTopologyEntry> = peers
         .iter()
-        .map(|peer| GenesisPeerPop {
-            public_key: peer.peer_id.public_key().clone(),
-            pop: peer.pop.clone(),
-        })
+        .map(|peer| GenesisTopologyEntry::new(peer.peer_id.clone(), peer.pop.clone()))
         .collect();
     let manifest = manifest
         .into_builder()
         .set_topology(topology)
-        .set_topology_pop(pops)
         .build_raw()
         .with_consensus_mode(consensus_mode)
         .with_consensus_meta();
@@ -254,6 +249,16 @@ fn render_config(
         .map(|peer| format!("  \"{}@{}\"", peer.public_key, peer.address))
         .collect::<Vec<_>>()
         .join(",\n");
+    let trusted_peers_pop = peers
+        .iter()
+        .map(|peer| {
+            format!(
+                "  {{ public_key = \"{}\", pop_hex = \"{}\" }}",
+                peer.public_key, peer.pop_hex
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
     format!(
         r#"# Sample config for {slug} (generated via cargo xtask kagami-profiles)
 chain = "{chain}"
@@ -262,6 +267,9 @@ private_key = "{node_sk}"
 
 trusted_peers = [
 {trusted_peers}
+]
+trusted_peers_pop = [
+{trusted_peers_pop}
 ]
 
 [network]
@@ -287,6 +295,7 @@ public_key = "{genesis_pk}"
         node_pk = node.public_key,
         node_sk = node.private_key,
         trusted_peers = trusted_peers,
+        trusted_peers_pop = trusted_peers_pop,
         p2p = node.address.split(':').next_back().unwrap_or("1337"),
         genesis_pk = genesis_public_key,
         stream_pub = STREAM_ID_PUBLIC,
@@ -540,10 +549,15 @@ mod tests {
             peers.len(),
             "topology should be populated inside the manifest"
         );
+        let pop_count = tx0
+            .topology()
+            .iter()
+            .filter(|entry| entry.pop_hex.as_deref().is_some_and(|hex| !hex.is_empty()))
+            .count();
         assert_eq!(
-            tx0.topology_pop().len(),
+            pop_count,
             peers.len(),
-            "topology_pop should mirror the topology entries"
+            "pop_hex should be embedded for every topology entry"
         );
         let value = json::to_value(&patched).expect("serialize patched genesis");
         let tx0 = value
@@ -552,10 +566,6 @@ mod tests {
             .and_then(|txs| txs.first())
             .and_then(norito::json::Value::as_object)
             .expect("first transaction present");
-        assert!(
-            !tx0.contains_key("topology_pop"),
-            "legacy topology_pop must be omitted"
-        );
         let topo = tx0["topology"].as_array().expect("topology array present");
         assert_eq!(topo.len(), peers.len());
         let first = topo[0].as_object().expect("topology entry object");

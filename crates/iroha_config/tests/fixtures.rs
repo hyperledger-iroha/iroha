@@ -818,7 +818,6 @@ fn minimal_config_snapshot() {
                 collectors_redundant_send_r: 1,
                 block_max_transactions: None,
                 block_max_payload_bytes: None,
-                msg_channel_cap: None,
                 msg_channel_cap_votes: 8192,
                 msg_channel_cap_block_payload: 128,
                 msg_channel_cap_rbc_chunks: 1024,
@@ -1458,7 +1457,6 @@ fn minimal_config_snapshot() {
                 bridge_proof_max_future_drift_blocks: 0,
                 poseidon_params_id: None,
                 pedersen_params_id: None,
-                vk_deprecated_cap_per_backend: 256,
                 kaigi_roster_join_vk: None,
                 kaigi_roster_leave_vk: None,
                 kaigi_usage_vk: None,
@@ -1849,7 +1847,7 @@ fn torii_strict_addresses_enabled_by_default() {
         .expect("config should be valid");
     assert!(
         config.torii.strict_addresses,
-        "torii.strict_addresses should default to true so production clusters reject legacy aliases"
+        "torii.strict_addresses should default to true so production clusters reject non-canonical aliases"
     );
 }
 

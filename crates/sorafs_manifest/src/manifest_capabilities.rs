@@ -59,7 +59,7 @@ pub struct ManifestCapabilitySummary {
     pub supports_torii_gateway: bool,
     /// Provider advertises QUIC + Noise transport.
     pub supports_quic_noise: bool,
-    /// Provider advertises SoraNet compatibility.
+    /// Provider advertises SoraNet transport support.
     pub supports_soranet: bool,
     /// Provider explicitly advertises SoraNet PQ hybrid capability.
     pub supports_soranet_hybrid_pq: bool,
@@ -127,7 +127,6 @@ pub fn detect_manifest_capabilities(
             match capability.cap_type {
                 CapabilityType::ToriiGateway => summary.supports_torii_gateway = true,
                 CapabilityType::QuicNoise => summary.supports_quic_noise = true,
-                CapabilityType::SoraNetCompatible => summary.supports_soranet = true,
                 CapabilityType::SoraNetHybridPq => {
                     summary.supports_soranet = true;
                     summary.supports_soranet_hybrid_pq = true;

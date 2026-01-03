@@ -28,7 +28,8 @@ translation_last_reviewed: 2025-11-14
   - `parameters` — начальные сетевые параметры.
   - `instructions` — инструкции, закодированные в Norito.
   - `ivm_triggers` — триггеры с исполняемым IVM‑байткодом.
-  - `topology` — начальная топология пиров.
+  - `topology` — начальная топология пиров. Каждая запись может содержать
+    `pop_hex` (опционально) для PoP, но перед подписью он обязателен.
 - `crypto` — снимок криптоконфигурации, отражающий `iroha_config.crypto`
   (`default_hash`, `allowed_signing`, `allowed_curve_ids`,
   `sm2_distid_default`, `sm_openssl_preview`). Поле `allowed_curve_ids`

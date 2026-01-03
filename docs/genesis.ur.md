@@ -31,7 +31,8 @@ translation_last_reviewed: 2025-11-14
   - `parameters`: نیٹ ورک کے ابتدائی parameters۔
   - `instructions`: Norito‑encoded instructions۔
   - `ivm_triggers`: triggers، جن کے ساتھ IVM bytecode executables ہوتے ہیں۔
-  - `topology`: peers کی ابتدائی topology۔
+  - `topology`: peers کی ابتدائی topology۔ ہر entry میں PoP کے لیے `pop_hex`
+    (اختیاری) شامل ہو سکتا ہے مگر سائن کرنے سے پہلے اس کا ہونا ضروری ہے۔
 - `crypto`: کرپٹو کنفیگریشن کا snapshot، جو `iroha_config.crypto` سے mirror
   ہوتا ہے (`default_hash`, `allowed_signing`, `allowed_curve_ids`,
   `sm2_distid_default`, `sm_openssl_preview`)۔ فیلڈ `allowed_curve_ids`,

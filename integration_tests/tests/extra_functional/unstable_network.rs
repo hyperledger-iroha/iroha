@@ -393,7 +393,7 @@ async fn start_network_under_relay(
             .iter()
             .map(iroha_test_network::NetworkPeer::id)
             .collect(),
-        network.topology_pops().to_vec(),
+        network.topology_entries().to_vec(),
     );
     let results = timeout(
         network.peer_startup_timeout(),
@@ -456,6 +456,7 @@ fn is_sandbox_message(message: &str) -> bool {
     lower.contains("permission denied") || lower.contains("operation not permitted")
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn run_or_skip_on_sandbox_panic<T, F>(context: &str, build: F) -> Result<Option<T>>
 where
     F: FnOnce() -> T,
@@ -486,14 +487,13 @@ fn sandbox_panic_skips_network_build() -> Result<()> {
 }
 
 #[test]
-fn non_sandbox_panic_is_propagated() -> Result<()> {
+fn non_sandbox_panic_is_propagated() {
     let result = panic::catch_unwind(|| {
         let _ = run_or_skip_on_sandbox_panic("non_sandbox_panic_is_propagated", || -> usize {
             panic!("boom");
         });
     });
     assert!(result.is_err());
-    Ok(())
 }
 
 #[tokio::test]

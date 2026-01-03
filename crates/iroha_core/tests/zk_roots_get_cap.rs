@@ -75,7 +75,6 @@ fn zk_roots_get_respects_cap_and_max() {
         proof_history_cap: defaults::zk::proof::RECORD_HISTORY_CAP,
         poseidon_params_id: defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: defaults::confidential::PEDERSEN_PARAMS_ID,
-        vk_deprecated_cap_per_backend: defaults::zk::vk::DEPRECATED_CAP_PER_BACKEND,
         max_proof_size_bytes: defaults::confidential::MAX_PROOF_SIZE_BYTES,
         max_nullifiers_per_tx: defaults::confidential::MAX_NULLIFIERS_PER_TX,
         max_commitments_per_tx: defaults::confidential::MAX_COMMITMENTS_PER_TX,

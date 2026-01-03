@@ -3528,12 +3528,6 @@ pub struct Zk {
     /// Pedersen parameter set identifier to embed into confidential policies (if any).
     #[config(env = "ZK_PEDERSEN_PARAMS_ID")]
     pub pedersen_params_id: Option<u32>,
-    /// Maximum number of deprecated verifying-key records to retain per backend (0 = unlimited).
-    #[config(
-        env = "ZK_VK_DEPRECATED_CAP_PER_BACKEND",
-        default = "defaults::zk::vk::DEPRECATED_CAP_PER_BACKEND"
-    )]
-    pub vk_deprecated_cap_per_backend: usize,
     /// Optional verifying key reference used for Kaigi roster join proofs.
     pub kaigi_roster_join_vk: Option<VerifyingKeyRef>,
     /// Optional verifying key reference used for Kaigi roster leave proofs.
@@ -3561,7 +3555,6 @@ impl Zk {
             bridge_proof_max_future_drift_blocks: self.bridge_proof_max_future_drift_blocks,
             poseidon_params_id: self.poseidon_params_id,
             pedersen_params_id: self.pedersen_params_id,
-            vk_deprecated_cap_per_backend: self.vk_deprecated_cap_per_backend,
             kaigi_roster_join_vk: self.kaigi_roster_join_vk.map(VerifyingKeyRef::parse),
             kaigi_roster_leave_vk: self.kaigi_roster_leave_vk.map(VerifyingKeyRef::parse),
             kaigi_usage_vk: self.kaigi_usage_vk.map(VerifyingKeyRef::parse),
@@ -4963,7 +4956,7 @@ pub struct AdaptiveObservability {
         default = "defaults::sumeragi::ADAPTIVE_QC_LATENCY_ALERT_MS"
     )]
     pub qc_latency_alert_ms: u64,
-    /// Minimum number of missing-availability warnings observed between checks to trigger mitigation (legacy name).
+    /// Minimum number of missing-availability warnings observed between checks to trigger mitigation.
     #[config(
         env = "SUMERAGI_ADAPTIVE_DA_RESCHEDULE_BURST",
         default = "defaults::sumeragi::ADAPTIVE_DA_RESCHEDULE_BURST"
@@ -5019,8 +5012,6 @@ pub struct Sumeragi {
     /// Optional cap on payload bytes per block when RBC is disabled (`None` = unlimited).
     #[config(env = "SUMERAGI_BLOCK_MAX_PAYLOAD_BYTES")]
     pub block_max_payload_bytes: Option<NonZeroUsize>,
-    /// Legacy global cap for block-message channels (used when per-queue caps are unset).
-    pub msg_channel_cap: Option<NonZeroUsize>,
     /// Capacity for the vote message channel.
     pub msg_channel_cap_votes: Option<NonZeroUsize>,
     /// Capacity for the block payload channel.
@@ -5602,7 +5593,6 @@ impl Sumeragi {
             collectors_redundant_send_r,
             block_max_transactions,
             block_max_payload_bytes,
-            msg_channel_cap,
             msg_channel_cap_votes,
             msg_channel_cap_block_payload,
             msg_channel_cap_rbc_chunks,
@@ -5676,23 +5666,17 @@ impl Sumeragi {
             ..
         } = debug.rbc;
 
-        let msg_channel_cap = msg_channel_cap.map(NonZeroUsize::get);
         let msg_channel_cap_votes = msg_channel_cap_votes
-            .map(NonZeroUsize::get)
-            .or(msg_channel_cap)
-            .unwrap_or(defaults::sumeragi::MSG_CHANNEL_CAP_VOTES);
+            .map_or(defaults::sumeragi::MSG_CHANNEL_CAP_VOTES, NonZeroUsize::get);
         let msg_channel_cap_block_payload = msg_channel_cap_block_payload
-            .map(NonZeroUsize::get)
-            .or(msg_channel_cap)
-            .unwrap_or(defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD);
+            .map_or(
+                defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
+                NonZeroUsize::get,
+            );
         let msg_channel_cap_rbc_chunks = msg_channel_cap_rbc_chunks
-            .map(NonZeroUsize::get)
-            .or(msg_channel_cap)
-            .unwrap_or(defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS);
+            .map_or(defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS, NonZeroUsize::get);
         let msg_channel_cap_blocks = msg_channel_cap_blocks
-            .map(NonZeroUsize::get)
-            .or(msg_channel_cap)
-            .unwrap_or(defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS);
+            .map_or(defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS, NonZeroUsize::get);
 
         let collectors_ok = if collectors_k == 0 {
             emitter.emit(
@@ -5896,7 +5880,6 @@ impl Sumeragi {
             collectors_redundant_send_r,
             block_max_transactions,
             block_max_payload_bytes,
-            msg_channel_cap,
             msg_channel_cap_votes,
             msg_channel_cap_block_payload,
             msg_channel_cap_rbc_chunks,

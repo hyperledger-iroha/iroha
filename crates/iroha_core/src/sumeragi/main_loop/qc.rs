@@ -266,6 +266,21 @@ impl Actor {
                 return;
             }
         }
+        if self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| pending.aborted)
+        {
+            iroha_logger::debug!(
+                height,
+                view,
+                phase = ?phase,
+                block = ?block_hash,
+                "skipping QC aggregation for aborted pending block"
+            );
+            return;
+        }
 
         let snapshot = self.qc_signer_snapshot(
             phase,

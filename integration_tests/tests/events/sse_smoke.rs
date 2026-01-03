@@ -304,7 +304,9 @@ fn summary_contains(val: &JsonValue, needle: &str) -> bool {
 #[test]
 fn sse_reader_should_stop_honors_deadline_and_shutdown() {
     let shutdown = AtomicBool::new(false);
-    let expired = Instant::now() - Duration::from_millis(1);
+    let expired = Instant::now()
+        .checked_sub(Duration::from_millis(1))
+        .expect("checked_sub should not underflow");
     assert!(sse_reader_should_stop(expired, &shutdown));
 
     let future = Instant::now() + Duration::from_secs(1);

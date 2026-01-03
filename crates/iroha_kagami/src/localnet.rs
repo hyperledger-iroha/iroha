@@ -17,7 +17,7 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::*,
 };
-use iroha_genesis::{GenesisBuilder, GenesisPeerPop, RawGenesisTransaction};
+use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
 use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
 use iroha_version::BuildLine;
@@ -909,21 +909,17 @@ fn apply_parameter_overrides(
 }
 
 fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesisTransaction {
-    let topology = peers
-        .iter()
-        .map(|peer| PeerId::new(peer.public_key.clone()))
-        .collect();
-
     genesis
         .into_builder()
         .next_transaction()
-        .set_topology(topology)
-        .set_topology_pop(
+        .set_topology(
             peers
                 .iter()
-                .map(|peer| GenesisPeerPop {
-                    public_key: peer.public_key.clone(),
-                    pop: peer.bls_pop.clone(),
+                .map(|peer| {
+                    GenesisTopologyEntry::new(
+                        PeerId::new(peer.public_key.clone()),
+                        peer.bls_pop.clone(),
+                    )
                 })
                 .collect(),
         )

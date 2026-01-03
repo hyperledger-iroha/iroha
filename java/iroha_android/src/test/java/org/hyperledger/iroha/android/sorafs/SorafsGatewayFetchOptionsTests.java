@@ -11,7 +11,7 @@ public final class SorafsGatewayFetchOptionsTests {
     anonymityPolicyParsesLabels();
     writeModeHintParsesLabels();
     builderSerialisesExplicitOptions();
-    defaultsProvideCompatiblePolicy();
+    defaultsProvideGuardPolicy();
     gatewayFetchRequestSerialisesProviders();
     System.out.println("[IrohaAndroid] SoraFS gateway option tests passed.");
   }
@@ -26,8 +26,6 @@ public final class SorafsGatewayFetchOptionsTests {
   }
 
   private static void anonymityPolicyParsesLabels() {
-    assert AnonymityPolicy.ANON_COMPATIBLE == AnonymityPolicy.fromLabel("anon-compatible");
-    assert AnonymityPolicy.ANON_COMPATIBLE == AnonymityPolicy.fromLabel("legacy");
     assert AnonymityPolicy.ANON_GUARD_PQ == AnonymityPolicy.fromLabel("stage-a");
     assert AnonymityPolicy.ANON_GUARD_PQ == AnonymityPolicy.fromLabel("anon_guard_pq");
     assert AnonymityPolicy.ANON_MAJORIY_PQ
@@ -74,7 +72,7 @@ public final class SorafsGatewayFetchOptionsTests {
     assert json.size() == 10 : "expected ten entries in JSON map";
   }
 
-  private static void defaultsProvideCompatiblePolicy() {
+  private static void defaultsProvideGuardPolicy() {
     final GatewayFetchOptions options = GatewayFetchOptions.builder().build();
     final Map<String, Object> json = options.toJson();
     assert "soranet-first".equals(json.get("transport_policy"));

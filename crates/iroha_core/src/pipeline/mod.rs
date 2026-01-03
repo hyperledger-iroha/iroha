@@ -2,8 +2,6 @@
 pub mod access;
 pub mod gpu;
 pub mod overlay;
-/// Read-only query execution against a captured state snapshot.
-pub mod query_lane;
 pub mod smallset;
 /// Background ZK verification lane (non-forking).
 pub mod zk_lane;

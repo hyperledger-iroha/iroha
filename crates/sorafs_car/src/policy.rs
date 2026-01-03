@@ -48,9 +48,8 @@ impl fmt::Display for TransportPolicy {
 
 /// Staged anonymity policy enforced for SoraNet paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(clippy::enum_variant_names)]
 pub enum AnonymityPolicy {
-    /// Deprecated compatibility fallback (not user-configurable).
-    Compatible,
     /// Require at least one PQ-capable guard (Stage A).
     #[default]
     GuardPq,
@@ -65,7 +64,6 @@ impl AnonymityPolicy {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Compatible => "anon-compatible",
             Self::GuardPq => "anon-guard-pq",
             Self::MajorityPq => "anon-majority-pq",
             Self::StrictPq => "anon-strict-pq",
@@ -175,9 +173,6 @@ mod tests {
             AnonymityPolicy::parse("ANON-STRICT-PQ"),
             Some(AnonymityPolicy::StrictPq)
         );
-        assert_eq!(AnonymityPolicy::parse("anon-compatible"), None);
-        assert_eq!(AnonymityPolicy::parse("legacy"), None);
-        assert_eq!(AnonymityPolicy::parse("anon_compatible"), None);
         assert_eq!(AnonymityPolicy::parse("nope"), None);
     }
 

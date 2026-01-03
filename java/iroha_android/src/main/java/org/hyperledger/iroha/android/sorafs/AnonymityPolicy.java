@@ -9,8 +9,6 @@ import java.util.Locale;
  * fetch requests or telemetry overrides.
  */
 public enum AnonymityPolicy {
-  /** Backwards compatible behaviour; prefer SoraNet relays but allow classical paths. */
-  ANON_COMPATIBLE("anon-compatible"),
   /** Require at least one PQ-capable guard in the pinned relay set. */
   ANON_GUARD_PQ("anon-guard-pq"),
   /** Require PQ coverage on the majority of SoraNet hops. */
@@ -38,7 +36,6 @@ public enum AnonymityPolicy {
     }
     final String normalised = raw.trim().toLowerCase(Locale.ROOT);
     return switch (normalised) {
-      case "anon-compatible", "legacy" -> ANON_COMPATIBLE;
       case "anon_guard_pq", "anon-guard-pq", "stage_a", "stage-a", "stagea" -> ANON_GUARD_PQ;
       case "anon_majority_pq", "anon-majority-pq", "stage_b", "stage-b", "stageb" -> ANON_MAJORIY_PQ;
       case "anon_strict_pq", "anon-strict-pq", "stage_c", "stage-c", "stagec" -> ANON_STRICT_PQ;

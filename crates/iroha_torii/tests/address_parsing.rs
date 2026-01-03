@@ -316,9 +316,9 @@ async fn invalid_account_segments_increment_metric() {
 #[tokio::test]
 async fn local8_segments_increment_invalid_metric() {
     let (app, metrics) = test_router_with_metrics(false);
-    let literal = "sn1legacyhash@wonderland";
+    let literal = "sn1short@wonderland";
     let reason = AccountId::parse(literal)
-        .expect_err("legacy Local-8 literal must fail to parse")
+        .expect_err("short Local-8 literal must fail to parse")
         .reason();
     let before_invalid = metrics
         .torii_address_invalid_total
@@ -1572,7 +1572,7 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
 #[tokio::test]
 async fn repo_agreements_query_filter_rejects_local8_literal() {
     let (app, metrics) = test_router_with_metrics(false);
-    let literal = "sn1legacyhash@wonderland";
+    let literal = "sn1short@wonderland";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();
@@ -2463,7 +2463,7 @@ async fn offline_revocations_query_filter_rejects_invalid_literal() {
 #[tokio::test]
 async fn offline_revocations_query_filter_rejects_local8_literal() {
     let (app, metrics) = test_router_with_metrics(false);
-    let literal = "sn1legacyhash@wonderland";
+    let literal = "sn1short@wonderland";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();
@@ -2605,7 +2605,7 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
 #[tokio::test]
 async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
     let (app, metrics) = test_router_with_metrics(false);
-    let literal = "sn1legacyhash@wonderland";
+    let literal = "sn1short@wonderland";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -2814,7 +2814,7 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
 #[tokio::test]
 async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
     let (app, metrics) = test_router_with_metrics(false);
-    let literal = "sn1legacyhash@wonderland";
+    let literal = "sn1short@wonderland";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();

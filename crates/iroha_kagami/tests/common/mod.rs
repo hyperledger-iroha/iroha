@@ -7,8 +7,7 @@ use std::{
 };
 
 use color_eyre::eyre::{Result, WrapErr, ensure, eyre};
-use iroha_data_model::{id::ChainId, peer::PeerId};
-use iroha_genesis::{GenesisBuilder, RawGenesisTransaction};
+use iroha_data_model::peer::PeerId;
 
 /// Output of `kagami genesis pop --json`.
 #[derive(Clone, Debug)]
@@ -59,17 +58,30 @@ pub fn minimal_manifest_with_topology(
     chain: &str,
     ivm_dir: impl Into<PathBuf>,
     topology: &[PeerId],
-) -> RawGenesisTransaction {
-    let chain_id = ChainId::from(chain.to_owned());
+) -> norito::json::Value {
+    let mut tx_map = norito::json::Map::new();
+    let topo_entries = topology
+        .iter()
+        .map(|peer| norito::json::value::to_value(peer).expect("serialize peer id"))
+        .collect();
+    tx_map.insert("topology".to_string(), norito::json::Value::Array(topo_entries));
 
-    GenesisBuilder::new_without_executor(chain_id, ivm_dir)
-        .set_topology(topology.to_vec())
-        .set_topology_pop(Vec::new())
-        .build_raw()
+    let mut root = norito::json::Map::new();
+    root.insert("chain".to_string(), norito::json::Value::String(chain.to_owned()));
+    root.insert("executor".to_string(), norito::json::Value::Null);
+    root.insert(
+        "ivm_dir".to_string(),
+        norito::json::Value::String(ivm_dir.into().display().to_string()),
+    );
+    root.insert(
+        "transactions".to_string(),
+        norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
+    );
+    norito::json::Value::Object(root)
 }
 
 /// Serialize a raw genesis manifest to JSON and write it to `path`.
-pub fn write_raw_genesis_to(path: &Path, manifest: &RawGenesisTransaction) -> Result<()> {
+pub fn write_raw_genesis_to(path: &Path, manifest: &norito::json::Value) -> Result<()> {
     let bytes = norito::json::to_vec(manifest).wrap_err("serialize genesis manifest to JSON")?;
     fs::write(path, bytes)
         .wrap_err_with(|| format!("write genesis manifest to {}", path.display()))?;

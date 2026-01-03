@@ -201,7 +201,7 @@ async fn pre_commit_trigger_should_be_executed() -> Result<()> {
                 network
                     .pipeline_time()
                     .checked_div(2)
-                    .unwrap_or(network.pipeline_time()),
+                    .unwrap_or_else(|| network.pipeline_time()),
             );
             timeout(network.sync_timeout(), async {
                 loop {
@@ -242,7 +242,7 @@ async fn mint_nft_for_every_user_every_1_sec() -> Result<()> {
         network
             .pipeline_time()
             .checked_div(2)
-            .unwrap_or(network.pipeline_time()),
+            .unwrap_or_else(|| network.pipeline_time()),
     );
     let expected_count: u64 = 3;
 

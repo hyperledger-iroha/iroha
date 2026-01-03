@@ -2129,11 +2129,6 @@ pub mod zk {
         /// Maximum future drift (in blocks) a bridge proof's end height may lead the current block (0 = unlimited).
         pub const BRIDGE_MAX_FUTURE_DRIFT_BLOCKS: u64 = 0;
     }
-    /// Verifying-key registry defaults.
-    pub mod vk {
-        /// Maximum number of deprecated verifying-key records to retain per backend (0 = unlimited).
-        pub const DEPRECATED_CAP_PER_BACKEND: usize = 256;
-    }
 }
 
 /// Sumeragi (consensus) defaults
@@ -2155,8 +2150,6 @@ pub mod sumeragi {
     pub const DA_MAX_COMMITMENTS_PER_BLOCK: usize = 16;
     /// Maximum DA proof openings permitted in a single block (aggregate cap).
     pub const DA_MAX_PROOF_OPENINGS_PER_BLOCK: usize = 128;
-    /// Legacy global cap for Sumeragi block-message channels (used only when configured).
-    pub const MSG_CHANNEL_CAP: usize = 100;
     /// Default capacity for the vote message channel.
     pub const MSG_CHANNEL_CAP_VOTES: usize = 8_192;
     /// Default capacity for the block payload channel.
