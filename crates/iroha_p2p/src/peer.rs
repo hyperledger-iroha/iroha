@@ -117,7 +117,6 @@ pub struct SoranetHandshakeConfig {
     sig_id: u8,
     resume_hash: Option<Arc<Vec<u8>>>,
     pow_required: bool,
-    pow_binding_version: pow::ChallengeBindingVersion,
     pow_params: Arc<PowParameters>,
     pow_ticket_ttl: Duration,
     puzzle_params: Option<Arc<PuzzleParameters>>,
@@ -174,7 +173,6 @@ impl SoranetHandshakeConfig {
             sig_id,
             resume_hash: resume_hash.map(Arc::new),
             pow_required,
-            pow_binding_version: pow::ChallengeBindingVersion::RelayBoundV1,
             pow_params: Arc::new(pow_params),
             pow_ticket_ttl,
             puzzle_params: puzzle_params.map(Arc::new),
@@ -192,24 +190,22 @@ impl SoranetHandshakeConfig {
     }
 
     fn pow_binding(&self) -> PowBinding<'_> {
-        PowBinding::with_version(
+        PowBinding::new(
             self.descriptor_commit.as_slice(),
             self.relay_id.as_slice(),
             self.resume_hash
                 .as_ref()
                 .map(|value| value.as_ref().as_slice()),
-            self.pow_binding_version,
         )
     }
 
     fn puzzle_binding(&self) -> PuzzleBinding<'_> {
-        PuzzleBinding::with_version(
+        PuzzleBinding::new(
             self.descriptor_commit.as_slice(),
             self.relay_id.as_slice(),
             self.resume_hash
                 .as_ref()
                 .map(|value| value.as_ref().as_slice()),
-            self.pow_binding_version,
         )
     }
 
@@ -304,10 +300,6 @@ impl SoranetHandshakeConfig {
             return false;
         }
         self.pow_required && (self.pow_params.difficulty() > 0 || self.puzzle_params.is_some())
-    }
-
-    pub(crate) fn set_pow_binding_version(&mut self, version: pow::ChallengeBindingVersion) {
-        self.pow_binding_version = version;
     }
 
     /// Removes expired revocations from the backing store and returns the number of entries purged.

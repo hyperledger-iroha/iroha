@@ -6538,51 +6538,6 @@ impl SoranetHandshake {
     }
 }
 
-/// Error reported when parsing PoW binding versions.
-#[derive(Debug, Clone, Error)]
-#[error("unsupported pow binding version `{0}`; expected relay_bound_v1 or legacy_descriptor_only")]
-pub struct PowBindingVersionError(String);
-
-/// User-configurable challenge layout for PoW admission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PowBindingVersionParam {
-    /// Current layout that binds the relay identity and optional transcript hash.
-    #[default]
-    RelayBoundV1,
-    /// Legacy layout used by older fixtures (descriptor-only).
-    LegacyDescriptorOnly,
-}
-
-impl PowBindingVersionParam {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::RelayBoundV1 => "relay_bound_v1",
-            Self::LegacyDescriptorOnly => "legacy_descriptor_only",
-        }
-    }
-
-    fn from_str(value: &str) -> core::result::Result<Self, PowBindingVersionError> {
-        match value {
-            "relay_bound_v1" | "relay-bound-v1" | "relay" => Ok(Self::RelayBoundV1),
-            "legacy_descriptor_only" | "legacy-descriptor-only" | "legacy" => {
-                Ok(Self::LegacyDescriptorOnly)
-            }
-            other => Err(PowBindingVersionError(other.to_owned())),
-        }
-    }
-}
-
-impl From<PowBindingVersionParam> for actual::PowBindingVersion {
-    fn from(value: PowBindingVersionParam) -> Self {
-        match value {
-            PowBindingVersionParam::RelayBoundV1 => actual::PowBindingVersion::RelayBoundV1,
-            PowBindingVersionParam::LegacyDescriptorOnly => {
-                actual::PowBindingVersion::LegacyDescriptorOnly
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod accel_tests {
     use super::*;
@@ -6612,29 +6567,6 @@ mod accel_tests {
     }
 }
 
-impl norito::json::JsonSerialize for PowBindingVersionParam {
-    fn json_serialize(&self, out: &mut String) {
-        norito::json::write_json_string(self.as_str(), out);
-    }
-}
-
-impl norito::json::JsonDeserialize for PowBindingVersionParam {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> core::result::Result<Self, norito::json::Error> {
-        let raw = parser.parse_string()?;
-        Self::from_str(raw.as_str()).map_err(|err| norito::json::Error::Message(err.to_string()))
-    }
-}
-
-impl FromEnvStr for PowBindingVersionParam {
-    type Error = PowBindingVersionError;
-
-    fn from_env_str(value: std::borrow::Cow<'_, str>) -> core::result::Result<Self, Self::Error> {
-        Self::from_str(value.as_ref())
-    }
-}
-
 /// PoW admission settings supplied at the user configuration layer.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct SoranetHandshakePow {
@@ -6654,8 +6586,6 @@ pub struct SoranetHandshakePow {
     revocation_store_ttl_secs: u64,
     #[config(default = "Self::default_revocation_store_path()")]
     revocation_store_path: PathBuf,
-    #[config(default)]
-    binding_version: PowBindingVersionParam,
     /// ML-DSA-44 public key for verifying signed PoW tickets.
     signed_ticket_public_key_hex: Option<WithOrigin<HexBytes>>,
     #[config(nested)]
@@ -6701,7 +6631,6 @@ impl SoranetHandshakePow {
             revocation_store_capacity,
             revocation_store_ttl_secs,
             revocation_store_path,
-            binding_version,
             signed_ticket_public_key_hex,
             puzzle,
         } = self;
@@ -6736,7 +6665,6 @@ impl SoranetHandshakePow {
             signed_ticket_public_key: signed_ticket_public_key_hex
                 .map(|value| value.into_value().into()),
             puzzle: puzzle.parse(),
-            binding_version: binding_version.into(),
         }
     }
 }

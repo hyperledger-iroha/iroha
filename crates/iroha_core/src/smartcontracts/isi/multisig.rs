@@ -111,12 +111,9 @@ fn execute_register(
         )));
     }
 
-    // Derived controller ids are banned; new registrations always stamp the derived flag as false
-    // so admission can quarantine any legacy accounts that surface without metadata.
     let spec_json = Json::new(spec.clone());
     let mut metadata = Metadata::default();
     metadata.insert(spec_key(), Json::new(spec.clone()));
-    metadata.insert(derived_key_flag(), Json::from(false));
 
     Register::account(
         iroha_data_model::account::Account::new(multisig_account_id.clone())
@@ -133,11 +130,6 @@ fn execute_register(
         .account_mut(&multisig_account_id)
         .map_err(map_find_error)?
         .insert(spec_key(), spec_json.clone());
-    state_transaction
-        .world
-        .account_mut(&multisig_account_id)
-        .map_err(map_find_error)?
-        .insert(derived_key_flag(), Json::from(false));
 
     configure_roles(
         state_transaction,
@@ -158,7 +150,6 @@ fn execute_propose(
     let multisig_account = instruction.account.clone();
     let instructions_hash = HashOf::new(&instruction.instructions);
     let multisig_spec = multisig_spec(state_transaction, &multisig_account)?;
-    ensure_not_derived_multisig_account(state_transaction, &multisig_account, &multisig_spec)?;
     let proposer_role = multisig_role_for(&proposer);
     let multisig_role = multisig_role_for(&multisig_account);
     let is_downward_proposal = state_transaction
@@ -257,8 +248,6 @@ fn execute_approve(
             "not qualified to approve multisig".to_owned(),
         ));
     }
-    ensure_not_derived_multisig_account(state_transaction, &multisig_account, &spec)?;
-
     prune_expired(state_transaction, &multisig_account, &instructions_hash)?;
 
     let Ok(mut proposal_value) =
@@ -329,7 +318,6 @@ fn deploy_relayer(
     parent_expires_at_ms: u64,
 ) -> Result<(), ValidationFail> {
     let spec = multisig_spec(state_transaction, relayer)?;
-    ensure_not_derived_multisig_account(state_transaction, relayer, &spec)?;
     let relay_expires_at_ms =
         capped_relay_expiry(now_ms, parent_expires_at_ms, spec.transaction_ttl_ms.get());
 
@@ -425,18 +413,6 @@ fn validate_registration(
         return Err(ValidationFail::NotPermitted(format!(
             "multisig account `{multisig_account}` must belong to domain `{domain_id}`"
         )));
-    }
-    if legacy_derived_multisig_account_id(&domain_id, spec) == *multisig_account {
-        #[cfg(feature = "telemetry")]
-        {
-            telemetry::record_social_rejection(
-                state_transaction.telemetry,
-                "multisig_derived_account",
-            );
-        }
-        return Err(ValidationFail::NotPermitted(
-            DERIVED_KEY_REJECTION.to_owned(),
-        ));
     }
     ensure_quorum_reachable(spec)?;
     ensure_signatories_exist(state_transaction, spec)?;
@@ -577,47 +553,6 @@ fn multisig_spec(
         }
         Err(err) => Err(err),
     }
-}
-
-fn ensure_not_derived_multisig_account(
-    state_transaction: &StateTransaction<'_, '_>,
-    multisig_account: &AccountId,
-    spec: &MultisigSpec,
-) -> Result<(), ValidationFail> {
-    let flag_key = derived_key_flag();
-    if let Ok(raw) = load_account_metadata(state_transaction, multisig_account, &flag_key) {
-        let is_derived: bool = raw
-            .try_into_any_norito()
-            .map_err(|err| metadata_conversion_error(&err))?;
-        if is_derived {
-            #[cfg(feature = "telemetry")]
-            {
-                telemetry::record_social_rejection(
-                    state_transaction.telemetry,
-                    "multisig_derived_account",
-                );
-            }
-            return Err(ValidationFail::NotPermitted(
-                DERIVED_KEY_REJECTION.to_owned(),
-            ));
-        }
-        return Ok(());
-    }
-
-    if legacy_derived_multisig_account_id(multisig_account.domain(), spec) == *multisig_account {
-        #[cfg(feature = "telemetry")]
-        {
-            telemetry::record_social_rejection(
-                state_transaction.telemetry,
-                "multisig_derived_account",
-            );
-        }
-        return Err(ValidationFail::NotPermitted(
-            DERIVED_KEY_REJECTION.to_owned(),
-        ));
-    }
-
-    Ok(())
 }
 
 fn is_multisig(
@@ -830,20 +765,6 @@ fn map_find_error(err: FindError) -> ValidationFail {
     ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
 }
 
-fn legacy_derived_multisig_account_id(
-    domain_id: &iroha_data_model::domain::DomainId,
-    spec: &MultisigSpec,
-) -> AccountId {
-    // Legacy deterministic controller id preserved for detecting and quarantining
-    // pre-existing derived multisig accounts.
-    let seed = HashOf::<(iroha_data_model::domain::DomainId, MultisigSpec)>::new(&(
-        domain_id.clone(),
-        spec.clone(),
-    ));
-    let key_pair = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
-    AccountId::new(domain_id.clone(), key_pair.public_key().clone())
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -882,7 +803,6 @@ mod tests {
         let multisig_id = AccountId::new(domain_id.clone(), multisig_key.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert(spec_key(), Json::new(spec.clone()));
-        metadata.insert(derived_key_flag(), Json::from(false));
         Register::account(
             iroha_data_model::account::Account::new(multisig_id.clone()).with_metadata(metadata),
         )
@@ -963,74 +883,11 @@ mod tests {
             account_after_register.metadata().get(&spec_key).is_some(),
             "multisig spec metadata must be stored on registration"
         );
-        let derived_flag = account_after_register
-            .metadata()
-            .get(&derived_key_flag())
-            .and_then(|json| json.try_into_any_norito::<bool>().ok());
-        assert_eq!(
-            derived_flag,
-            Some(false),
-            "derived flag must be stored as false for non-derived multisig accounts"
-        );
         let stored_spec =
             multisig_spec(&state_transaction, &multisig_id).expect("spec must decode");
         assert_eq!(stored_spec, spec, "spec roundtrip through metadata");
         let cached = cached_multisig_spec(&multisig_id).expect("spec cache should be populated");
         assert_eq!(cached, spec, "spec cache should mirror metadata");
-    }
-
-    #[test]
-    fn multisig_register_rejects_derived_account_id() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(
-            World::new(),
-            kura,
-            query_handle,
-            ChainId::from("multisig-derived-register"),
-        );
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(block_header);
-        let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "derived".parse().unwrap();
-
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
-        let signer1_id = AccountId::new(domain_id.clone(), signer1.public_key().clone());
-        let signer2_id = AccountId::new(domain_id.clone(), signer2.public_key().clone());
-
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
-        Register::account(iroha_data_model::account::Account::new(signer1_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("register signer1");
-        Register::account(iroha_data_model::account::Account::new(signer2_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("register signer2");
-
-        let spec = MultisigSpec {
-            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
-            quorum: NonZeroU16::new(2).unwrap(),
-            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
-        };
-        let derived_id = legacy_derived_multisig_account_id(&domain_id, &spec);
-        let register = MultisigRegister::new(derived_id.clone(), spec.clone());
-
-        let result = Executor::Initial.execute_instruction(
-            &mut state_transaction,
-            &signer1_id,
-            InstructionBox::from(register),
-        );
-        match result {
-            Err(ValidationFail::NotPermitted(msg)) => {
-                assert!(
-                    msg.contains("non-derivable"),
-                    "unexpected error for derived account id: {msg}"
-                );
-            }
-            other => panic!("expected derived-key rejection, got {other:?}"),
-        }
     }
 
     #[test]
@@ -1101,67 +958,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn multisig_propose_rejects_derived_account() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(
-            World::new(),
-            kura,
-            query_handle,
-            ChainId::from("multisig-derived-propose"),
-        );
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(block_header);
-        let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "propose".parse().unwrap();
-
-        let signer1 = KeyPair::random();
-        let signer2 = KeyPair::random();
-        let signer1_id = AccountId::new(domain_id.clone(), signer1.public_key().clone());
-        let signer2_id = AccountId::new(domain_id.clone(), signer2.public_key().clone());
-
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
-        Register::account(iroha_data_model::account::Account::new(signer1_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("register signer1");
-        Register::account(iroha_data_model::account::Account::new(signer2_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("register signer2");
-
-        let spec = MultisigSpec {
-            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
-            quorum: NonZeroU16::new(2).unwrap(),
-            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
-        };
-        let derived_id = legacy_derived_multisig_account_id(&domain_id, &spec);
-        let mut metadata = Metadata::default();
-        metadata.insert(spec_key(), Json::new(spec.clone()));
-        metadata.insert(derived_key_flag(), Json::from(true));
-        Register::account(
-            iroha_data_model::account::Account::new(derived_id.clone()).with_metadata(metadata),
-        )
-        .execute(&signer1_id, &mut state_transaction)
-        .expect("register derived multisig account");
-
-        let propose = MultisigPropose::new(derived_id.clone(), Vec::new(), None);
-        let result = Executor::Initial.execute_instruction(
-            &mut state_transaction,
-            &signer1_id,
-            InstructionBox::from(propose),
-        );
-        match result {
-            Err(ValidationFail::NotPermitted(msg)) => {
-                assert!(
-                    msg.contains("non-derivable"),
-                    "unexpected error for derived multisig account: {msg}"
-                );
-            }
-            other => panic!("expected derived-key rejection, got {other:?}"),
-        }
-    }
 
     #[test]
     fn multisig_signatory_can_propose_without_roles() {

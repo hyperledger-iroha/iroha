@@ -6,10 +6,8 @@ use std::{
 };
 
 use eyre::{Result, eyre};
-use futures_util::StreamExt;
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::get_status_with_retry};
 use iroha::data_model::{
-    events::pipeline::{BlockEventFilter, TransactionEventFilter},
     parameter::BlockParameter,
     prelude::*,
 };
@@ -18,9 +16,8 @@ use iroha_test_samples::gen_account_in;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
 use tokio::{
-    sync::{mpsc, watch},
-    task::{JoinSet, spawn_blocking},
-    time::{sleep, timeout},
+    task::spawn_blocking,
+    time::sleep,
 };
 
 /// Bombard random peers with random mints in multiple rounds, ensuring they all have
@@ -84,7 +81,13 @@ async fn multiple_blocks_created() -> Result<()> {
         return Ok(());
     }
 
-    let blocks = BlocksTracker::start(&network);
+    let mut last_non_empty = match sandbox::handle_result(
+        get_status_with_retry(&leader.client()),
+        stringify!(multiple_blocks_created),
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
 
     // When
     let mut rng = ChaCha8Rng::seed_from_u64(0x4d55_4c54);
@@ -121,11 +124,23 @@ async fn multiple_blocks_created() -> Result<()> {
             }
         }
 
-        let sync_res = timeout(network.sync_timeout(), blocks.sync())
-            .await
-            .map_err(eyre::Report::new);
-        if sandbox::handle_result(sync_res, stringify!(multiple_blocks_created))?.is_none() {
+        if sandbox::handle_result(
+            network
+                .ensure_blocks_with(|height| height.non_empty > last_non_empty)
+                .await,
+            stringify!(multiple_blocks_created),
+        )?
+        .is_none()
+        {
             return Ok(());
+        }
+
+        match sandbox::handle_result(
+            get_status_with_retry(&leader.client()),
+            stringify!(multiple_blocks_created),
+        )? {
+            Some(status) => last_non_empty = status.blocks_non_empty,
+            None => return Ok(()),
         }
     }
 
@@ -176,106 +191,4 @@ async fn multiple_blocks_created() -> Result<()> {
     }
 
     Ok(())
-}
-
-struct BlocksTracker {
-    sync_tx: watch::Sender<bool>,
-    _children: JoinSet<()>,
-}
-
-impl BlocksTracker {
-    fn start(network: &Network) -> Self {
-        enum PeerEvent {
-            Block(u64),
-            Transaction,
-        }
-
-        let mut children = JoinSet::new();
-
-        let (block_tx, mut block_rx) = mpsc::channel::<(PeerEvent, usize)>(10);
-        for (i, peer) in network.peers().iter().cloned().enumerate() {
-            let tx = block_tx.clone();
-            children.spawn(async move {
-                let mut events = peer
-                    .client()
-                    .listen_for_events_async([
-                        EventFilterBox::from(BlockEventFilter::default()),
-                        TransactionEventFilter::default().into(),
-                    ])
-                    .await
-                    .expect("peer should be up");
-                while let Some(Ok(event)) = events.next().await {
-                    match event {
-                        EventBox::Pipeline(PipelineEventBox::Block(x))
-                            if matches!(*x.status(), BlockStatus::Applied) =>
-                        {
-                            let _ = tx
-                                .send((PeerEvent::Block(x.header().height().get()), i))
-                                .await;
-                        }
-                        EventBox::Pipeline(PipelineEventBox::Transaction(x))
-                            if matches!(*x.status(), TransactionStatus::Queued) =>
-                        {
-                            let _ = tx.send((PeerEvent::Transaction, i)).await;
-                        }
-                        _ => {}
-                    }
-                }
-            });
-        }
-
-        let peers_count = network.peers().len();
-        let (sync_tx, _sync_rx) = watch::channel(false);
-        let sync_clone = sync_tx.clone();
-        children.spawn(async move {
-            #[derive(Copy, Clone)]
-            struct PeerState {
-                height: u64,
-                mutated: bool,
-            }
-
-            let mut blocks = vec![
-                PeerState {
-                    height: 0,
-                    mutated: false
-                };
-                peers_count
-            ];
-            loop {
-                tokio::select! {
-                    Some((event, i)) = block_rx.recv() => {
-                        let state = blocks.get_mut(i).unwrap();
-                        match event {
-                            PeerEvent::Block(height) => {
-                                state.height = height;
-                                state.mutated = false;
-                            }
-                            PeerEvent::Transaction => {
-                                state.mutated = true;
-                            }
-                        }
-
-                        let max_height = blocks.iter().map(|x| x.height).max().expect("there is at least 1");
-                        let is_sync = blocks.iter().all(|x| x.height == max_height && !x.mutated);
-                        sync_tx.send_modify(|flag| *flag = is_sync);
-                    }
-                }
-            }
-        });
-
-        Self {
-            sync_tx: sync_clone,
-            _children: children,
-        }
-    }
-
-    async fn sync(&self) {
-        let mut recv = self.sync_tx.subscribe();
-        loop {
-            if *recv.borrow_and_update() {
-                return;
-            }
-            recv.changed().await.unwrap()
-        }
-    }
 }

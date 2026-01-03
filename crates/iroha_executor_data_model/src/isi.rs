@@ -546,7 +546,7 @@ pub mod multisig {
     mod tests {
         use std::collections::BTreeMap;
 
-        use iroha_crypto::{Algorithm, HashOf, KeyPair};
+        use iroha_crypto::{Algorithm, KeyPair};
 
         use super::*;
 

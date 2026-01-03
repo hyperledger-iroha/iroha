@@ -105,8 +105,10 @@ impl Actor {
                         );
                         return;
                     }
-                    let state_view = self.state.view();
-                    let block_time = state_view.world.parameters().sumeragi().block_time();
+                    let block_time = {
+                        let state_view = self.state.view();
+                        state_view.world.parameters().sumeragi().block_time()
+                    };
                     let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
                     if self
                         .block_sync_rebroadcast_log

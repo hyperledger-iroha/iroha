@@ -30059,7 +30059,12 @@ fn pending_block_replace_new_subject_resets_vote_and_timestamp() {
     let block_header_hash = block.hash();
     let mut pending = PendingBlock::new(block, block_hash, 4, 1);
     pending.precommit_vote_sent = true;
+    pending.availability_qc_view = Some(1);
+    pending.last_gate = Some(GateReason::MissingAvailabilityQc);
+    pending.last_gate_satisfied = Some(crate::sumeragi::da::GateSatisfaction::AvailabilityQc);
     pending.last_quorum_reschedule = Some(Instant::now());
+    pending.aborted = true;
+    pending.kura_aborted = true;
     let original_inserted_at = pending.inserted_at;
 
     std::thread::sleep(Duration::from_millis(1));
@@ -30079,6 +30084,26 @@ fn pending_block_replace_new_subject_resets_vote_and_timestamp() {
     assert!(
         pending.last_quorum_reschedule.is_none(),
         "quorum reschedule backoff resets on new subject"
+    );
+    assert!(
+        pending.availability_qc_view.is_none(),
+        "availability QC state must reset on new subject"
+    );
+    assert!(
+        pending.last_gate.is_none(),
+        "gate state must reset on new subject"
+    );
+    assert!(
+        pending.last_gate_satisfied.is_none(),
+        "gate satisfaction must reset on new subject"
+    );
+    assert!(
+        !pending.aborted,
+        "aborted state must reset on new subject"
+    );
+    assert!(
+        !pending.kura_aborted,
+        "kura aborted state must reset on new subject"
     );
     assert_eq!(pending.height, 5);
     assert_eq!(pending.view, 2);

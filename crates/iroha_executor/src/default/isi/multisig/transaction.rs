@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_smart_contract::data_model::{isi::CustomInstruction, query::error::QueryExecutionFail};
 
 use super::*;
@@ -199,6 +200,25 @@ fn now_ms<V: Execute + Visit + ?Sized>(executor: &V) -> u64 {
         .dbg_expect("shouldn't overflow within 584942417 years")
 }
 
+fn ensure_not_derived_multisig_account(
+    multisig_account: &AccountId,
+    spec: &MultisigSpec,
+) -> Result<(), ValidationFail> {
+    let domain_id = multisig_account.domain().clone();
+    let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain_id.clone(), spec.clone()));
+    let derived = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
+    let derived_id = AccountId::new(domain_id, derived.public_key().clone());
+
+    if &derived_id == multisig_account {
+        return Err(ValidationFail::NotPermitted(
+            "multisig account uses deterministically derived controller id; register with a random controller"
+                .to_owned(),
+        ));
+    }
+
+    Ok(())
+}
+
 impl VisitExecute for MultisigApprove {
     fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
         let approver = executor.context().authority.clone();
@@ -224,7 +244,7 @@ impl VisitExecute for MultisigApprove {
             deny!(executor, "not qualified to approve multisig");
         }
 
-        if let Err(err) = ensure_not_derived_multisig_account(&multisig_account, &spec, executor) {
+        if let Err(err) = ensure_not_derived_multisig_account(&multisig_account, &spec) {
             deny!(executor, err);
         }
 
@@ -261,7 +281,7 @@ impl VisitExecute for MultisigApprove {
         }
 
         let spec = multisig_spec(&multisig_account, executor)?;
-        ensure_not_derived_multisig_account(&multisig_account, &spec, executor)?;
+        ensure_not_derived_multisig_account(&multisig_account, &spec)?;
 
         proposal_value.approvals.insert(approver);
         visit_seq!(executor.visit_set_account_key_value(&SetKeyValue::account(
@@ -443,5 +463,43 @@ mod tests {
             approver_is_authorized(&multisig, &other, &spec, true),
             "role-based authorization should allow approver"
         );
+    }
+
+    #[test]
+    fn derived_multisig_account_is_rejected() {
+        let domain: DomainId = "derived".parse().expect("valid domain");
+        let signer = account(7, &domain);
+        let spec = sample_spec(&domain, &signer);
+        let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain.clone(), spec.clone()));
+        let derived = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
+        let multisig_account = AccountId::new(domain, derived.public_key().clone());
+
+        let err = ensure_not_derived_multisig_account(&multisig_account, &spec)
+            .expect_err("derived multisig should be rejected");
+        match &err {
+            ValidationFail::NotPermitted(message) => assert!(
+                message.contains("derived"),
+                "unexpected error: {message}"
+            ),
+            _ => panic!("unexpected error: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn non_derived_multisig_account_is_allowed() {
+        let domain: DomainId = "non-derived".parse().expect("valid domain");
+        let signer = account(8, &domain);
+        let spec = sample_spec(&domain, &signer);
+        let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain.clone(), spec.clone()));
+        let derived = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
+        let derived_id = AccountId::new(domain.clone(), derived.public_key().clone());
+        let multisig_account = account(9, &domain);
+
+        assert_ne!(
+            multisig_account, derived_id,
+            "sanity check: derived id should differ from chosen multisig id"
+        );
+        ensure_not_derived_multisig_account(&multisig_account, &spec)
+            .expect("non-derived multisig should be allowed");
     }
 }

@@ -1832,8 +1832,8 @@ mod tests {
         assert_eq!(sanitize_reason("Hello World!"), "hello_world");
         assert_eq!(sanitize_reason("   "), "unknown");
         assert_eq!(
-            sanitize_reason("Downgrade: TLS/Legacy-Flow"),
-            "downgrade_tls_legacy_flow"
+            sanitize_reason("Downgrade: TLS/Fallback-Flow"),
+            "downgrade_tls_fallback_flow"
         );
         assert_eq!(
             sanitize_reason("Repeated___Separators---Are::Merged"),

@@ -1,12 +1,24 @@
 # Status
 
 ## Latest Updates
-- Skip rebroadcasting aborted pending blocks in precommit sync updates, highest-QC payload rebroadcasts, and pending replay selection; added unit coverage for aborted-pending vote handling and broadcast suppression.
+- Reset pending-block availability/gate/abort state on replacement with a new subject, and expand unit coverage to ensure replacement clears DA/QC gating and aborted flags.
 - Tests: not run (not requested).
+- Resolved merge conflicts in `status.md` and `roadmap.md` after the i23 merge.
+- Tests: not run (merge resolution only).
+- Skip rebroadcasting aborted pending blocks in precommit sync updates, highest-QC payload rebroadcasts, and pending replay selection; added unit coverage for aborted-pending vote handling and broadcast suppression.
+- Tests: `cargo test --workspace` (timed out after 120s; waiting for build directory lock while compiling).
 - Added equal-weight fallback for empty NPoS public-lane stake maps when forming commit snapshots and computing stake quorum, with unit coverage and NPoS docs updated.
 - Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core stake_snapshot_from_roster_falls_back_to_equal_weights_without_stake_records -- --nocapture` (timed out after 120s during compile; retry failed to compile `iroha_core` due to borrow error in `crates/iroha_core/src/sumeragi/main_loop/votes.rs:126`).
 - Avoided Sumeragi stalls under full background queues by dropping non-blocking RBC chunk posts, added unit coverage for the new behavior, and removed debug eprintlns from the block-created path.
 - Tests: not run (not requested).
+- Removed legacy Space Directory manifest JSON support, refreshed docs/fixtures for the v1-only schema, and regenerated Norito `.to` capability payloads.
+- Stabilized `multiple_blocks_created` by syncing on non-empty heights via status polling and added missing CBDC rollout test logs.
+- Enabled snapshots for the restart-peer extra-functional test and waited for snapshot artifacts before shutdown so restart restores state from disk.
+- Tests: `cargo test -p integration_tests --test mod restarted_peer_should_restore_its_state -- --nocapture` (skipped: loopback bind denied in sandbox).
+- Resolved merge conflicts in `status.md`.
+- Updated the unregister-peer churn integration test to wait for the removed peer to observe the post-unregister mint, matching block-sync behavior.
+- Tests: `cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (skipped: loopback bind denied in sandbox).
+- Tests: `cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (failed: `iroha3d` build error, missing `main` in `crates/irohad/src/main.rs`).
 - Treat aborted pending blocks as unknown for consensus checks while still counting their payloads for missing-block tracking, with unit coverage for the new distinction.
 - Tests: not run (not requested).
 - Strengthened Norito streaming snapshot assertions (ticket fields, policy, revocation) and added coverage for large prepaid TEU JSON encoding.

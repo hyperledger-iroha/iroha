@@ -777,12 +777,7 @@ fn verify_puzzle_ticket_binding(
     relay_id: &[u8],
     transcript_hash: Option<&[u8]>,
 ) -> Result<(), puzzle::Error> {
-    let binding = PuzzleBinding::with_version(
-        descriptor_commit,
-        relay_id,
-        transcript_hash,
-        params.binding_version(),
-    );
+    let binding = PuzzleBinding::new(descriptor_commit, relay_id, transcript_hash);
     puzzle::verify(ticket, &binding, params)
 }
 
@@ -793,12 +788,7 @@ fn verify_pow_ticket_binding(
     relay_id: &[u8],
     transcript_hash: Option<&[u8]>,
 ) -> Result<(), pow::Error> {
-    let binding = pow::ChallengeBinding::with_version(
-        descriptor_commit,
-        relay_id,
-        transcript_hash,
-        params.binding_version(),
-    );
+    let binding = pow::ChallengeBinding::new(descriptor_commit, relay_id, transcript_hash);
     pow::verify(ticket, &binding, params)
 }
 
@@ -977,8 +967,7 @@ impl RelayRuntime {
             pow_config.difficulty.min(u8::MAX as u32) as u8,
             Duration::from_secs(pow_config.max_future_skew_secs),
             Duration::from_secs(pow_config.min_ticket_ttl_secs),
-        )
-        .with_binding_version(pow_config.binding_version());
+        );
         let puzzle_params = pow_config.puzzle_parameters(&base_pow_params)?;
         let token_policy = pow_config.token_policy().map_err(RelayError::Config)?;
 
@@ -3992,13 +3981,13 @@ mod tests {
             other => panic!("unexpected puzzle verification error: {other:?}"),
         }
 
-        // Ensure legacy tickets without a resume hash continue to verify.
-        let legacy_binding = PuzzleBinding::new(&descriptor, &relay_id, None);
-        let legacy_ticket =
-            puzzle::mint_ticket(&params, &legacy_binding, Duration::from_secs(180), &mut rng)
-                .expect("mint legacy ticket");
-        verify_puzzle_ticket_binding(&legacy_ticket, &params, &descriptor, &relay_id, None)
-            .expect("legacy ticket should verify without resume hash");
+        // Ensure tickets without a resume hash continue to verify.
+        let base_binding = PuzzleBinding::new(&descriptor, &relay_id, None);
+        let base_ticket =
+            puzzle::mint_ticket(&params, &base_binding, Duration::from_secs(180), &mut rng)
+                .expect("mint ticket without resume hash");
+        verify_puzzle_ticket_binding(&base_ticket, &params, &descriptor, &relay_id, None)
+            .expect("ticket without resume hash should verify");
     }
 
     #[test]

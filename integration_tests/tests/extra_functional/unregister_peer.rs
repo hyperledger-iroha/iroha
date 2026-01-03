@@ -140,7 +140,14 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     }
     // Then the new peer should already have the mint result.
     let new_peer_asset = match sandbox::handle_result(
-        wait_for_asset(&new_peer_client, &account, &asset_def, sync_timeout).await,
+        wait_for_asset(
+            &new_peer_client,
+            &account,
+            &asset_def,
+            sync_timeout,
+            Some(numeric!(100)),
+        )
+        .await,
         stringify!(network_stable_after_add_and_after_remove_peer),
     )? {
         Some(value) => value,
@@ -181,16 +188,23 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         None => return Ok(()),
     };
     assert_eq!(main_asset, numeric!(300));
-    // But not on the unregistered peer's network.
+    // Removed peers remain connected for block sync; they should observe the new mint.
     sleep(PIPELINE_TIME * 5).await;
     let unregistered_asset = match sandbox::handle_result(
-        wait_for_asset(&new_peer_client, &account, &asset_def, sync_timeout).await,
+        wait_for_asset(
+            &new_peer_client,
+            &account,
+            &asset_def,
+            sync_timeout,
+            Some(numeric!(300)),
+        )
+        .await,
         stringify!(network_stable_after_add_and_after_remove_peer),
     )? {
         Some(value) => value,
         None => return Ok(()),
     };
-    assert_eq!(unregistered_asset, numeric!(100));
+    assert_eq!(unregistered_asset, numeric!(300));
 
     Ok(())
 }
@@ -216,13 +230,21 @@ async fn wait_for_asset(
     account: &AccountId,
     asset_definition: &AssetDefinitionId,
     timeout_duration: Duration,
+    expected: Option<Numeric>,
 ) -> Result<Numeric> {
     let deadline = Instant::now() + timeout_duration;
     loop {
         if let Some(value) = find_asset(client, account, asset_definition).await? {
-            return Ok(value);
+            if expected.as_ref().map_or(true, |expected| value == *expected) {
+                return Ok(value);
+            }
         }
         if Instant::now() >= deadline {
+            if expected.is_some() {
+                return Err(eyre!(
+                    "timed out waiting for asset to reach expected value"
+                ));
+            }
             return Err(eyre!("timed out waiting for asset to appear"));
         }
         sleep(Duration::from_millis(200)).await;
