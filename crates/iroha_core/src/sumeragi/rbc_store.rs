@@ -135,11 +135,9 @@ pub(super) struct PersistOutcome {
 }
 
 pub(super) const PERSIST_VERSION: u8 = 3;
-const LEGACY_PERSIST_VERSION: u8 = 2;
-const SUPPORTED_PERSIST_VERSIONS: [u8; 2] = [LEGACY_PERSIST_VERSION, PERSIST_VERSION];
 
 fn persist_version_supported(version: u8) -> bool {
-    SUPPORTED_PERSIST_VERSIONS.contains(&version)
+    version == PERSIST_VERSION
 }
 
 /// Disk-backed store for RBC sessions.
@@ -313,7 +311,7 @@ impl ChunkStore {
             warn!(
                 ?path,
                 version = persisted.format_version(),
-                supported = ?SUPPORTED_PERSIST_VERSIONS,
+                supported = PERSIST_VERSION,
                 "Dropping RBC persisted session with unsupported format version"
             );
             let _ = ChunkStore::delete_path(&path);
@@ -392,7 +390,7 @@ impl ChunkStore {
                         warn!(
                             ?path,
                             version = persisted.format_version(),
-                            supported = ?SUPPORTED_PERSIST_VERSIONS,
+                            supported = PERSIST_VERSION,
                             "Dropping RBC persisted session with unsupported format version"
                         );
                         let _ = Self::delete_path(&path);

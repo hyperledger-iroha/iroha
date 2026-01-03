@@ -78,9 +78,9 @@ fn unknown_syscall_is_rejected_at_admission() {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         block::BlockHeader,
+        executor::ValidationFail,
         prelude::{AssetDefinition, TransactionBuilder},
         transaction::error::TransactionRejectionReason,
-        validation_fail::ValidationFail,
     };
     use nonzero_ext::nonzero;
 

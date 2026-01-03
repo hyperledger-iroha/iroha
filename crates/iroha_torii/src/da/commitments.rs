@@ -294,7 +294,7 @@ mod tests {
             commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as LaneMetadata, LaneId},
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId},
     };
 
     use super::*;
@@ -324,14 +324,14 @@ mod tests {
             .max()
             .unwrap_or(0);
         let lane_count = NonZeroU32::new(max_lane.saturating_add(1)).expect("lane count");
-        let lanes: Vec<LaneMetadata> = entries
+        let lanes: Vec<LaneConfig> = entries
             .iter()
-            .map(|(lane_id, scheme)| LaneMetadata {
+            .map(|(lane_id, scheme)| LaneConfig {
                 id: *lane_id,
                 dataspace_id: DataSpaceId::new(u64::from(lane_id.as_u32())),
                 alias: format!("lane-{}", lane_id.as_u32()),
                 proof_scheme: *scheme,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             })
             .collect();
         let catalog = LaneCatalog::new(lane_count, lanes).expect("lane catalog");

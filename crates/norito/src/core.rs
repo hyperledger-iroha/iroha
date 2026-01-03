@@ -168,8 +168,7 @@ pub mod header_flags {
     /// Sequence length itself is encoded as compact varint instead of fixed u64.
     ///
     /// This applies to the outer length header used by sequences and maps when
-    /// present. Old payloads used fixed 8-byte little-endian length; decoders
-    /// select behavior based on this flag for backward compatibility.
+    /// present. Decoders select behavior based on this flag.
     pub const COMPACT_SEQ_LEN: u8 = 0x10;
     /// Packed-struct omits per-field sizes for self-delimiting/fixed-size fields
     /// and prefixes a compact bitset indicating which fields carry an explicit size.

@@ -192,11 +192,6 @@ impl CoreHost {
         self
     }
 
-    /// Backwards-compatible alias for policy snapshots.
-    pub fn with_axt_policy_from_snapshot(self, snapshot: &AxtPolicySnapshot) -> Self {
-        self.with_axt_policy_snapshot(snapshot)
-    }
-
     pub fn axt_cached_proof_status(&self, dsid: DataSpaceId) -> Option<(bool, Option<[u8; 32]>)> {
         self.axt_proof_cache
             .get(&dsid)

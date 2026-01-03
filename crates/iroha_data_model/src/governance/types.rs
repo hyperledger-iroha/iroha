@@ -463,9 +463,9 @@ pub struct DeployContractProposal {
     pub namespace: String,
     /// Logical contract identifier within the namespace.
     pub contract_id: String,
-    /// Blake2b-32 hash of the compiled `.to` bytecode (field name retained for backward compatibility).
+    /// Blake2b-32 hash of the compiled `.to` bytecode.
     pub code_hash_hex: ContractCodeHash,
-    /// Blake2b-32 hash of the ABI surface expected by hosts (field name retained for backward compatibility).
+    /// Blake2b-32 hash of the ABI surface expected by hosts.
     pub abi_hash_hex: ContractAbiHash,
     /// ABI version string (e.g., `1`).
     pub abi_version: AbiVersion,

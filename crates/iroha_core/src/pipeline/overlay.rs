@@ -24,6 +24,7 @@ use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
     block::BlockHeader,
     errors::CanonicalErrorKind,
+    executor::IvmAdmissionError,
     executor::{
         ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsUpperBoundInfo,
     },
@@ -39,7 +40,6 @@ use iroha_data_model::{
     prelude::{AccountId, ValidationFail},
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{Executable, SignedTransaction},
-    validation_fail::IvmAdmissionError,
 };
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
@@ -632,7 +632,7 @@ pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
             host.set_durable_state_snapshot_from_world(state_ro.world());
             let snapshot = state_ro.axt_policy_snapshot();
             if !snapshot.entries.is_empty() {
-                host = host.with_axt_policy_from_snapshot(&snapshot);
+                host = host.with_axt_policy_snapshot(&snapshot);
             }
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
@@ -847,7 +847,7 @@ pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R: StateReadOnly>(
             host.set_durable_state_snapshot_from_world(state_ro.world());
             let snapshot = state_ro.axt_policy_snapshot();
             if !snapshot.entries.is_empty() {
-                host = host.with_axt_policy_from_snapshot(&snapshot);
+                host = host.with_axt_policy_snapshot(&snapshot);
             }
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
@@ -1122,7 +1122,7 @@ fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmissio
     // Version: accept 2.x
     if meta.version_major != 2 {
         return Err(IvmAdmissionError::UnsupportedVersion(
-            iroha_data_model::validation_fail::UnsupportedVersionInfo {
+            iroha_data_model::executor::UnsupportedVersionInfo {
                 major: meta.version_major,
                 minor: meta.version_minor,
             },
@@ -1142,7 +1142,7 @@ fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmissio
     // Vector length sanity
     if meta.vector_length != 0 && meta.vector_length > ivm::VECTOR_LENGTH_MAX {
         return Err(IvmAdmissionError::VectorLengthTooLarge(
-            iroha_data_model::validation_fail::VectorLengthTooLargeInfo {
+            iroha_data_model::executor::VectorLengthTooLargeInfo {
                 vector_length: meta.vector_length,
                 max_allowed: ivm::VECTOR_LENGTH_MAX,
             },

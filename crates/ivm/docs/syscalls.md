@@ -10,9 +10,8 @@ ABI policy
 - V1 (1): allows the canonical ABI surface listed here and in `abi_syscall_list()`; unknown numbers
   are rejected uniformly across all hosts. The list is kept sorted/deduplicated and the golden test
   fails if ordering or contents drift.
-- Experimental(x): same baseline as V1; feature‑gated hosts may extend handling, but unknown numbers
-  are still rejected by the central policy. For the first release, `Experimental(1)` and
-  `Experimental(2)` map to the V1 surface while retaining distinct `abi_hash` values.
+- Experimental(x): no syscalls are enabled until the versioned surface is defined; unknown numbers
+  are rejected by the central policy.
 
 Admission/host guardrails
 - Admission enforces manifest `code_hash`/`abi_hash` equality for both inline metadata manifests and
@@ -163,7 +162,7 @@ JSON envelope support for EXECUTE_INSTRUCTION
   - `<id>` may be one of:
     - ZK: `zk.RegisterZkAsset`, `zk.Shield`, `zk.ZkTransfer`, `zk.Unshield`, `zk.CreateElection`, `zk.SubmitBallot`, `zk.FinalizeElection`
     - WSV helpers: `wsv.mint_asset`, `wsv.burn_asset`, `wsv.transfer_asset`,
-      `wsv.nft_mint_asset` (`wsv.create_nft` remains as a deprecated alias),
+      `wsv.nft_mint_asset`,
       `wsv.nft_transfer_asset`, `wsv.nft_burn_asset`, `wsv.nft_set_metadata`,
       `wsv.register_domain`, `wsv.register_account`, `wsv.register_asset_definition`,
       `wsv.create_role`, `wsv.delete_role`, `wsv.grant_role`, `wsv.revoke_role`,

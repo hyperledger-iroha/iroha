@@ -1540,7 +1540,7 @@ mod tests {
         consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
         domain::Domain,
         isi::error::InvalidParameterError,
-        nexus::{DataSpaceId, LaneCatalog, LaneMetadata, LaneVisibility, PublicLaneRewardShare},
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneVisibility, PublicLaneRewardShare},
         parameter::{Parameter, system::SumeragiNposParameters},
         peer::Peer,
         prelude::*,
@@ -1743,12 +1743,12 @@ mod tests {
         stx.nexus.fees.fee_asset_id = asset_def_id.to_string();
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(64_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 alias: "lane-9".to_string(),
                 dataspace_id: DataSpaceId::GLOBAL,
                 visibility: LaneVisibility::Public,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -2032,12 +2032,12 @@ mod tests {
         stx.nexus.enabled = true;
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(8_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 alias: "restricted".to_string(),
                 dataspace_id: DataSpaceId::GLOBAL,
                 visibility: LaneVisibility::Restricted,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -2086,19 +2086,19 @@ mod tests {
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
-                LaneMetadata {
+                LaneConfig {
                     id: stake_lane,
                     alias: "public-stake".to_string(),
                     dataspace_id: DataSpaceId::GLOBAL,
                     visibility: LaneVisibility::Public,
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
-                LaneMetadata {
+                LaneConfig {
                     id: admin_lane,
                     alias: "restricted-admin".to_string(),
                     dataspace_id: DataSpaceId::GLOBAL,
                     visibility: LaneVisibility::Restricted,
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
             ],
         )
@@ -2203,12 +2203,12 @@ mod tests {
         stx.nexus.enabled = true;
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(1),
                 alias: "restricted".to_string(),
                 dataspace_id: DataSpaceId::GLOBAL,
                 visibility: LaneVisibility::Restricted,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -2419,12 +2419,12 @@ mod tests {
         stx.nexus.enabled = true;
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(1),
                 alias: "rewards-lane".to_string(),
                 dataspace_id: DataSpaceId::GLOBAL,
                 visibility: LaneVisibility::Public,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -3011,12 +3011,12 @@ mod tests {
         let lane_id = LaneId::new(15);
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(16_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 alias: "stake-snapshot-15".to_string(),
                 dataspace_id: DataSpaceId::GLOBAL,
                 visibility: LaneVisibility::Public,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -3090,12 +3090,12 @@ mod tests {
         let lane_id = LaneId::new(16);
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(17_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 alias: "stake-snapshot-16".to_string(),
                 dataspace_id: DataSpaceId::GLOBAL,
                 visibility: LaneVisibility::Public,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -3172,12 +3172,12 @@ mod tests {
         let lane_id = LaneId::new(17);
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(18_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 alias: "stake-snapshot-17".to_string(),
                 dataspace_id: DataSpaceId::GLOBAL,
                 visibility: LaneVisibility::Public,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");

@@ -50,7 +50,7 @@ fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
 #[test]
 fn runtime_upgrade_abi_gating_pre_post_activation() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, tx::TransactionRejectionReason};
-    use iroha_data_model::validation_fail::{IvmAdmissionError, ValidationFail};
+    use iroha_data_model::executor::{IvmAdmissionError, ValidationFail};
     // moved Cow import to module scope to avoid clippy items-after-statements
 
     // Build world with a domain and an authority account
@@ -536,7 +536,7 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
         kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
         tx::TransactionRejectionReason,
     };
-    use iroha_data_model::validation_fail::{IvmAdmissionError, ValidationFail};
+    use iroha_data_model::executor::{IvmAdmissionError, ValidationFail};
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

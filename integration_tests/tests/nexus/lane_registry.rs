@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 use eyre::Result;
 use iroha_config::parameters::actual::{GovernanceCatalog, GovernanceModule, LaneRegistry};
 use iroha_core::governance::manifest::LaneManifestRegistry;
-use iroha_data_model::nexus::{LaneCatalog, LaneId, LaneMetadata, LaneStorageProfile};
+use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId, LaneStorageProfile};
 use nonzero_ext::nonzero;
 
 fn fixtures_path(relative: &str) -> PathBuf {
@@ -23,23 +23,23 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
     let lane_catalog = LaneCatalog::new(
         nonzero!(3_u32),
         vec![
-            LaneMetadata {
+            LaneConfig {
                 id: LaneId::new(0),
                 alias: "core".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             },
-            LaneMetadata {
+            LaneConfig {
                 id: LaneId::new(1),
                 alias: "governance".to_string(),
                 governance: Some("parliament".to_string()),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             },
-            LaneMetadata {
+            LaneConfig {
                 id: LaneId::new(2),
                 alias: "zk".to_string(),
                 governance: Some("council".to_string()),
                 storage: LaneStorageProfile::CommitmentOnly,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             },
         ],
     )?;

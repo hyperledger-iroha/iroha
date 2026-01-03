@@ -200,7 +200,7 @@ new helpers are available:
 
 ### NFT syscall naming alignment
 
-The following syscalls use data‑model aligned names; legacy aliases have been removed:
+The following syscalls use data‑model aligned names:
 
 | Hex | Constant | Alias | Description |
 |----:|----------|-------|-------------|
@@ -209,4 +209,4 @@ The following syscalls use data‑model aligned names; legacy aliases have been 
 | 0x27 | `SYSCALL_NFT_SET_METADATA` | - | Set NFT metadata/content (key‑value) |
 | 0x28 | `SYSCALL_NFT_BURN_ASSET` | - | Burn an NFT |
 
-Note: These names reflect the canonical `iroha_data_model::nft` terminology. Backward‑compatibility aliases are no longer exported.
+Note: These names reflect the canonical `iroha_data_model::nft` terminology.

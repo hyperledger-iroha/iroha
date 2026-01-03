@@ -105,7 +105,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     }
 
     pub fn sign(message: &[u8], sk: &SecretKey<C>) -> Vec<u8> {
-        // Produce signature with w3f to match compat encoding exactly
+        // Produce signature with w3f to match canonical encoding exactly.
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         if C::NORMAL {
             let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_bytes(&sk.bytes)
@@ -119,8 +119,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     }
 
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey<C>) -> Result<(), Error> {
-        // Delegate to w3f-bls for exact ciphersuite semantics to ensure backward
-        // compatibility with existing signatures and contexts.
+        // Delegate to w3f-bls for exact ciphersuite semantics to keep signature behavior stable.
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         if C::NORMAL {
             let sig = w3f_bls::Signature::<w3f_bls::ZBLS>::from_bytes(signature)

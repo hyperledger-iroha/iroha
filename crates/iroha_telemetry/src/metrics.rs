@@ -4279,7 +4279,7 @@ fn decode_commit_fields(
 }
 
 impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
-    #[allow(clippy::too_many_lines)] // Decoding enumerates every field in order to preserve wire compatibility.
+    #[allow(clippy::too_many_lines)] // Decode enumerates every field in a fixed order for stable wire layouts.
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut used = 0;
         let (mode_tag, staged_mode_tag, staged_mode_activation_height, mode_activation_lag_blocks) =
@@ -6552,7 +6552,7 @@ pub struct Metrics {
     pub nexus_config_diff_total: IntCounterVec,
     /// Number of Nexus lane catalog entries configured on this node.
     pub nexus_lane_configured_total: GenericGauge<AtomicU64>,
-    /// Placeholder lane identifier recorded for compatibility during single-lane operation
+    /// Placeholder lane identifier recorded during single-lane operation
     pub nexus_lane_id_placeholder: GenericGauge<AtomicU64>,
     /// Placeholder data-space identifier recorded during single-lane operation
     pub nexus_dataspace_id_placeholder: GenericGauge<AtomicU64>,

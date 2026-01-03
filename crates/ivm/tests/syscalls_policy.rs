@@ -26,10 +26,6 @@ fn baseline_policy_allows_known_surface_numbers() {
             ivm::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, num),
             "num=0x{num:x}"
         );
-        assert!(
-            ivm::syscalls::is_syscall_allowed(SyscallPolicy::Experimental(1), num),
-            "num=0x{num:x}"
-        );
     }
 }
 
@@ -38,6 +34,28 @@ fn unknown_numbers_rejected() {
     let nums = [0x7Fu32, 0x99u32, 0xEEu32];
     for &n in &nums {
         assert!(!ivm::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, n));
+    }
+}
+
+#[test]
+fn experimental_policy_disallows_known_surface_numbers() {
+    use ivm::syscalls::*;
+    let known = [
+        SYSCALL_ALLOC,
+        SYSCALL_GROW_HEAP,
+        SYSCALL_GET_PUBLIC_INPUT,
+        SYSCALL_GET_PRIVATE_INPUT,
+        SYSCALL_COMMIT_OUTPUT,
+        SYSCALL_PROVE_EXECUTION,
+        SYSCALL_VERIFY_PROOF,
+        SYSCALL_USE_NULLIFIER,
+        SYSCALL_GET_MERKLE_PATH,
+    ];
+    for &num in &known {
+        assert!(
+            !ivm::syscalls::is_syscall_allowed(SyscallPolicy::Experimental(1), num),
+            "experimental policy must not allow num=0x{num:x}"
+        );
     }
 }
 

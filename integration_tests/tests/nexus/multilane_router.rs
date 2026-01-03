@@ -8,8 +8,8 @@ use iroha_config::{
     kura::{FsyncMode, InitMode},
     parameters::{
         actual::{
-            Crypto, Kura as KuraConfig, LaneConfig, LaneRoutingMatcher, LaneRoutingPolicy,
-            LaneRoutingRule,
+            Crypto, Kura as KuraConfig, LaneConfig as LaneDerivedConfig, LaneRoutingMatcher,
+            LaneRoutingPolicy, LaneRoutingRule,
         },
         defaults,
     },
@@ -30,8 +30,8 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneId, LaneMetadata,
-        LaneStorageProfile, LaneVisibility,
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+        LaneConfig as LaneConfigMetadata, LaneId, LaneStorageProfile, LaneVisibility,
     },
     prelude::*,
     transaction::TransactionBuilder,
@@ -45,7 +45,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
     let lane_catalog = LaneCatalog::new(
         NonZeroU32::new(3).expect("non-zero lane count"),
         vec![
-            LaneMetadata {
+            LaneConfigMetadata {
                 id: LaneId::new(0),
                 dataspace_id: DataSpaceId::GLOBAL,
                 alias: "core".to_owned(),
@@ -58,7 +58,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
                 proof_scheme: DaProofScheme::default(),
                 metadata: BTreeMap::default(),
             },
-            LaneMetadata {
+            LaneConfigMetadata {
                 id: LaneId::new(1),
                 dataspace_id: DataSpaceId::new(1),
                 alias: "governance".to_owned(),
@@ -71,7 +71,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
                 proof_scheme: DaProofScheme::default(),
                 metadata: BTreeMap::default(),
             },
-            LaneMetadata {
+            LaneConfigMetadata {
                 id: LaneId::new(2),
                 dataspace_id: DataSpaceId::new(2),
                 alias: "zk".to_owned(),
@@ -179,7 +179,7 @@ fn blank_state() -> State {
 #[test]
 fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
     let (lane_catalog, dataspace_catalog, policy) = sample_catalogs();
-    let lane_config = LaneConfig::from_catalog(&lane_catalog);
+    let lane_config = LaneDerivedConfig::from_catalog(&lane_catalog);
 
     let temp = tempdir()?;
     let store_dir = temp.path().join("kura");

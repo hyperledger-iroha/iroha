@@ -38,7 +38,7 @@ fn encode_fixed_vec_u32(values: &[u32]) -> Vec<u8> {
     bytes
 }
 
-fn encode_compat_tuple_u8_string(value: u8, text: &str) -> Vec<u8> {
+fn encode_fixed_tuple_u8_string(value: u8, text: &str) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&(1u64).to_le_bytes());
     body.push(value);
@@ -55,12 +55,12 @@ fn encode_compat_tuple_u8_string(value: u8, text: &str) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(Header::SIZE + body.len());
     bytes.extend_from_slice(b"NRT0");
     bytes.push(VERSION_MAJOR);
-    bytes.push(0); // compat minor (no adaptive features)
+    bytes.push(0); // default minor (no adaptive features)
     bytes.extend_from_slice(&<(u8, String)>::schema_hash());
     bytes.push(Compression::None as u8);
     bytes.extend_from_slice(&(body.len() as u64).to_le_bytes());
     bytes.extend_from_slice(&checksum.to_le_bytes());
-    bytes.push(0); // compat flags
+    bytes.push(0); // baseline flags
     bytes.extend_from_slice(&body);
     bytes
 }
@@ -222,10 +222,10 @@ fn tuple_decodes_do_not_leak_layout_flags() {
         norito::decode_from_bytes(&modern_bytes).expect("decode modern tuple");
     assert_eq!(modern_decoded, modern);
 
-    let compat_bytes = encode_compat_tuple_u8_string(7, "compat");
-    let compat_decoded: (u8, String) =
-        norito::decode_from_bytes(&compat_bytes).expect("decode compat tuple");
-    assert_eq!(compat_decoded, (7, "compat".to_string()));
+    let fixed_bytes = encode_fixed_tuple_u8_string(7, "fixed");
+    let fixed_decoded: (u8, String) =
+        norito::decode_from_bytes(&fixed_bytes).expect("decode fixed tuple");
+    assert_eq!(fixed_decoded, (7, "fixed".to_string()));
 
     assert_eq!(core::get_decode_flags(), 0, "decode flags should reset");
 }
@@ -243,11 +243,11 @@ fn decode_flags_guard_restores_previous_defaults() {
 
     assert!(
         !core::use_packed_seq(),
-        "packed seq remains disabled despite compat flags"
+        "packed seq remains disabled with baseline flags"
     );
     assert!(
         !core::use_compact_len(),
-        "compact len remains disabled despite compat flags"
+        "compact len remains disabled with baseline flags"
     );
     assert!(
         !core::use_packed_struct(),

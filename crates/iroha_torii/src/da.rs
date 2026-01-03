@@ -5203,7 +5203,7 @@ mod tests {
             ingest::DaStripeLayout,
             types::{BlobDigest, DaRentQuote, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneId, LaneMetadata},
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId},
         sorafs::{
             capacity::ProviderId,
             pin_registry::{ManifestAliasBinding, ManifestDigest},
@@ -5834,12 +5834,12 @@ mod tests {
     }
 
     fn lane_config_with_scheme(lane_id: LaneId, scheme: DaProofScheme) -> LaneConfig {
-        let metadata = LaneMetadata {
+        let metadata = LaneConfig {
             id: lane_id,
             dataspace_id: DataSpaceId::new(u64::from(lane_id.as_u32())),
             alias: format!("lane-{}", lane_id.as_u32()),
             proof_scheme: scheme,
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
 
         let catalog = LaneCatalog::new(

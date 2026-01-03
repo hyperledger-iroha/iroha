@@ -109,7 +109,7 @@ fn pointer_types_markdown_header_and_row_count_ok() {
     let header = lines.next().expect("non-empty table");
     assert!(header.contains("| ID |"));
     assert!(header.contains("| Name |"));
-    assert!(header.contains("| ABI v1/Experimental |"));
+    assert!(header.contains("| ABI v1 |"));
 
     // Count data rows (exclude header and separator)
     let rows = md

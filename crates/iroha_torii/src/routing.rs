@@ -67,7 +67,7 @@ use iroha_data_model::{
     block::{BlockHeader, consensus::EvidenceRecord},
     consensus::{ConsensusKeyRecord, ExecutionQcRecord, ValidatorSetCheckpoint},
     nexus::{
-        DataSpaceCatalog, DataSpaceId, LaneId, LaneLifecyclePlan, LaneMetadata, LaneRelayEnvelope,
+        DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneLifecyclePlan, LaneRelayEnvelope,
         PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
         PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
         UniversalAccountId,
@@ -5166,7 +5166,9 @@ pub async fn handle_queries_with_opts(
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
     use iroha_core::{
-        query::snapshot::{CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode},
+        query::snapshot::{
+            CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode,
+        },
         smartcontracts::isi::query::QueryLimits,
     };
     #[cfg(feature = "telemetry")]
@@ -5265,9 +5267,7 @@ pub async fn handle_queries_with_opts(
     .and_then(|r| {
         r.map_err(|e| match e {
             SnapshotQueryError::Validation(v) => v,
-            SnapshotQueryError::Execution(exec) => {
-                ValidationFail::QueryFailed(exec)
-            }
+            SnapshotQueryError::Execution(exec) => ValidationFail::QueryFailed(exec),
         })
     })?;
 
@@ -5302,26 +5302,6 @@ pub async fn handle_queries_with_opts(
     }
 
     Ok(crate::utils::respond_with_format(resp, format))
-}
-
-/// Backward-compatible wrapper for existing call sites: no per-request overrides.
-#[iroha_futures::telemetry_future]
-pub async fn handle_queries(
-    live_query_store: LiveQueryStoreHandle,
-    state: Arc<CoreState>,
-    query: SignedQuery,
-    tel: MaybeTelemetry,
-    format: crate::utils::ResponseFormat,
-) -> Result<Response> {
-    handle_queries_with_opts(
-        live_query_store,
-        state,
-        query,
-        tel,
-        crate::NoritoQuery(QueryOptions::default()),
-        format,
-    )
-    .await
 }
 
 /// Simple liveness probe. Returns a constant string when Torii is up.
@@ -18385,11 +18365,12 @@ mod query_endpoint_tests {
         let signed = payload.sign(&alice_keypair);
 
         // Execute via handler
-        let response = handle_queries(
+        let response = handle_queries_with_opts(
             LiveQueryStore::start_test(),
             state.clone(),
             signed,
             MaybeTelemetry::for_tests(),
+            crate::NoritoQuery(QueryOptions::default()),
             crate::utils::ResponseFormat::Norito,
         )
         .await
@@ -18459,11 +18440,12 @@ mod query_endpoint_tests {
         let payload = QueryRequest::Start(iter).with_authority(alice_id.clone());
         let signed = payload.sign(&alice_keypair);
 
-        let err = handle_queries(
+        let err = handle_queries_with_opts(
             LiveQueryStore::start_test(),
             state.clone(),
             signed,
             MaybeTelemetry::for_tests(),
+            crate::NoritoQuery(QueryOptions::default()),
             crate::utils::ResponseFormat::Norito,
         )
         .await
@@ -18501,11 +18483,12 @@ mod query_endpoint_tests {
         .with_authority(authority);
         let signed = payload.sign(&signer_key);
 
-        let err = handle_queries(
+        let err = handle_queries_with_opts(
             LiveQueryStore::start_test(),
             state,
             signed,
             MaybeTelemetry::for_tests(),
+            crate::NoritoQuery(QueryOptions::default()),
             crate::utils::ResponseFormat::Norito,
         )
         .await
@@ -35673,7 +35656,7 @@ pub async fn handle_post_configuration(
 pub struct LaneLifecyclePlanDto {
     /// Lane metadata to add or replace.
     #[norito(default)]
-    pub additions: Vec<LaneMetadata>,
+    pub additions: Vec<LaneConfig>,
     /// Lane identifiers to retire.
     #[norito(default)]
     pub retire: Vec<LaneId>,

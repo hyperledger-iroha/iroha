@@ -477,10 +477,9 @@ mod tests {
         let err = ensure_not_derived_multisig_account(&multisig_account, &spec)
             .expect_err("derived multisig should be rejected");
         match &err {
-            ValidationFail::NotPermitted(message) => assert!(
-                message.contains("derived"),
-                "unexpected error: {message}"
-            ),
+            ValidationFail::NotPermitted(message) => {
+                assert!(message.contains("derived"), "unexpected error: {message}")
+            }
             _ => panic!("unexpected error: {err:?}"),
         }
     }

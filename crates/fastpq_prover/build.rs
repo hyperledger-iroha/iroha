@@ -1,8 +1,7 @@
-//! Legacy CUDA build helper for the FASTPQ prover.
+//! CUDA build helper for the FASTPQ prover.
 //!
 //! The runtime kernels are generated via NVRTC/Metal in `gpu.rs`. This build
-//! script remains to support the older static CUDA path when the optional
-//! `cuda` feature is explicitly enabled.
+//! script remains to support the static CUDA path when `fastpq-gpu` is enabled.
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{

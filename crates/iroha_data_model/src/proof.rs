@@ -496,8 +496,7 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
             return Err(ncore::Error::LengthMismatch);
         }
 
-        // Legacy payloads (e.g., confidential wallet fixtures) may omit the trailing
-        // optional fields. Treat any missing tail as `None` to preserve compatibility.
+        // Optional fields may be omitted in compact payloads; treat missing tail as `None`.
         let vk_commitment = if offset == bytes.len() {
             None
         } else {
@@ -782,9 +781,6 @@ impl ProofedCommittedTransaction {
         Self { base, proof }
     }
 }
-
-/// Backwards-compatible alias for proof-bearing committed transaction wrapper.
-pub type CommittedTransactionWithProof = ProofedCommittedTransaction;
 
 #[cfg(test)]
 mod tests {

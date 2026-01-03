@@ -7,8 +7,8 @@ use iroha_config::{
     kura::{FsyncMode, InitMode},
     parameters::{
         actual::{
-            Crypto, Kura as KuraConfig, LaneConfig, LaneRoutingMatcher, LaneRoutingPolicy,
-            LaneRoutingRule,
+            Crypto, Kura as KuraConfig, LaneConfig as LaneDerivedConfig, LaneRoutingMatcher,
+            LaneRoutingPolicy, LaneRoutingRule,
         },
         defaults,
     },
@@ -26,8 +26,8 @@ use iroha_data_model::{
     isi::{InstructionBox, prelude::SetKeyValue},
     metadata::Metadata,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneId, LaneMetadata,
-        LaneStorageProfile, LaneVisibility,
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+        LaneConfig as LaneConfigMetadata, LaneId, LaneStorageProfile, LaneVisibility,
     },
     prelude::*,
     transaction::TransactionBuilder,
@@ -82,7 +82,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
     let lane_catalog = LaneCatalog::new(
         NonZeroU32::new(3).expect("non-zero lane count"),
         vec![
-            LaneMetadata {
+            LaneConfigMetadata {
                 id: LaneId::new(0),
                 dataspace_id: DataSpaceId::GLOBAL,
                 alias: "core".to_string(),
@@ -95,7 +95,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
                 proof_scheme: DaProofScheme::default(),
                 metadata: BTreeMap::default(),
             },
-            LaneMetadata {
+            LaneConfigMetadata {
                 id: LaneId::new(1),
                 dataspace_id: DataSpaceId::new(1),
                 alias: "governance".to_string(),
@@ -108,7 +108,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
                 proof_scheme: DaProofScheme::default(),
                 metadata: BTreeMap::default(),
             },
-            LaneMetadata {
+            LaneConfigMetadata {
                 id: LaneId::new(2),
                 dataspace_id: DataSpaceId::new(2),
                 alias: "zk".to_string(),
@@ -124,7 +124,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         ],
     )
     .expect("static multi-lane catalog");
-    let lane_config = LaneConfig::from_catalog(&lane_catalog);
+    let lane_config = LaneDerivedConfig::from_catalog(&lane_catalog);
 
     let dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),

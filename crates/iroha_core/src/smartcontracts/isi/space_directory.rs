@@ -42,7 +42,7 @@ impl Execute for PublishSpaceDirectoryManifest {
         let manifest_hash = record.manifest_hash;
         upsert_manifest(state_transaction, uaid, record);
         state_transaction.rebuild_space_directory_bindings(uaid);
-        state_transaction.refresh_axt_policies_from_space_directory();
+        state_transaction.refresh_axt_policies_from_directory();
         state_transaction
             .world
             .emit_events(Some(SpaceDirectoryEvent::ManifestActivated(
@@ -87,7 +87,7 @@ impl Execute for ExpireSpaceDirectoryManifest {
                 &state_transaction.nexus.lane_config,
                 state_transaction.axt_current_slot(),
             )?;
-        state_transaction.refresh_axt_policies_from_space_directory();
+        state_transaction.refresh_axt_policies_from_directory();
 
         Ok(())
     }
@@ -133,7 +133,7 @@ impl Execute for RevokeSpaceDirectoryManifest {
             .space_directory_manifests
             .insert(uaid, set);
         state_transaction.rebuild_space_directory_bindings(uaid);
-        state_transaction.refresh_axt_policies_from_space_directory();
+        state_transaction.refresh_axt_policies_from_directory();
 
         state_transaction
             .world

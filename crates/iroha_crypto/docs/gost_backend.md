@@ -230,7 +230,7 @@ we audit/replicate the internals.
      - `crates/iroha_crypto/src/gost/ct/sign.rs` and `verify.rs`: constant-time
        signing/verification entry points, reused by the Torii and executor stacks.
      - `crates/iroha_crypto/tests/gost_ct.rs`: end-to-end regression vectors and
-       cross-checks against the legacy bigint backend.
+       cross-checks against the bigint backend.
    - **Module Skeletons**
      - `DeterministicNonce` trait with `fn next(&mut self, key: &SecretKey, msg: &[u8]) -> Scalar`
        plus an `HmacDrbg` builder that records personalization inputs.

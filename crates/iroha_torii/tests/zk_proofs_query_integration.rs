@@ -90,7 +90,7 @@ async fn proofs_query_find_by_id_returns_norito() {
                 iroha_torii::ProofFindByIdQueryDto,
             >| async move {
                 let signed = iroha_torii::signed_find_proof_by_id(&dto)?;
-                iroha_torii::handle_queries(
+                iroha_torii::handle_queries_with_opts(
                     live_for_route.clone(),
                     state,
                     signed,

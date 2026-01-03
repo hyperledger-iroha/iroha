@@ -38,7 +38,7 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
 
     // Build an iterable query over block headers with fetch_size = 1
     let with_filter: QueryWithFilter<BlockHeader> =
-        QueryWithFilter::new_compat((), CompoundPredicate::PASS, SelectorTuple::default());
+        QueryWithFilter::new_with_query((), CompoundPredicate::PASS, SelectorTuple::default());
     let boxed: QueryBox<QueryOutputBatchBox> = with_filter.into();
     let qwp = QueryWithParams::new(
         &boxed,

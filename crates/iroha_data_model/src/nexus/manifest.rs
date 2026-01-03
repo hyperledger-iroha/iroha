@@ -10,9 +10,9 @@ use norito::codec::{Decode, Encode};
 use super::DataSpaceId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use crate::{asset::AssetDefinitionId, name::Name};
 #[cfg(feature = "json")]
 use norito::json::{self, Map, Value};
-use crate::{asset::AssetDefinitionId, name::Name};
 
 /// Universal account identifier shared across all dataspaces.
 ///
@@ -275,11 +275,7 @@ fn manifest_to_json_value(manifest: &AssetPermissionManifest) -> Value {
     if let Some(expiry_epoch) = manifest.expiry_epoch {
         root.insert("expiry_epoch".into(), Value::from(expiry_epoch));
     }
-    let entries = manifest
-        .entries
-        .iter()
-        .map(entry_to_json_value)
-        .collect();
+    let entries = manifest.entries.iter().map(entry_to_json_value).collect();
     root.insert("entries".into(), Value::Array(entries));
     Value::Object(root)
 }
@@ -333,10 +329,7 @@ fn effect_to_json_value(effect: &ManifestEffect) -> Value {
             if let Some(max_amount) = &allowance.max_amount {
                 details.insert("max_amount".into(), Value::from(max_amount.to_string()));
             }
-            details.insert(
-                "window".into(),
-                Value::from(window_label(allowance.window)),
-            );
+            details.insert("window".into(), Value::from(window_label(allowance.window)));
             effect_obj.insert("Allow".into(), Value::Object(details));
         }
         ManifestEffect::Deny(directive) => {
@@ -361,11 +354,9 @@ fn window_label(window: AllowanceWindow) -> &'static str {
 
 #[cfg(feature = "json")]
 fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, json::Error> {
-    let manifest_obj = value.as_object().ok_or_else(|| {
-        json::Error::InvalidField {
-            field: "manifest".into(),
-            message: "manifest must be a JSON object".into(),
-        }
+    let manifest_obj = value.as_object().ok_or_else(|| json::Error::InvalidField {
+        field: "manifest".into(),
+        message: "manifest must be a JSON object".into(),
     })?;
     let version_value = manifest_obj
         .get("version")
@@ -398,12 +389,12 @@ fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, js
     let entries_value = manifest_obj
         .get("entries")
         .ok_or_else(|| json::Error::missing_field("entries"))?;
-    let entries_array = entries_value.as_array().ok_or_else(|| {
-        json::Error::InvalidField {
+    let entries_array = entries_value
+        .as_array()
+        .ok_or_else(|| json::Error::InvalidField {
             field: "entries".into(),
             message: "entries must be a JSON array".into(),
-        }
-    })?;
+        })?;
     let mut entries = Vec::with_capacity(entries_array.len());
     for (idx, entry_value) in entries_array.iter().enumerate() {
         entries.push(parse_entry(entry_value, idx)?);
@@ -445,12 +436,12 @@ fn parse_uaid_value(value: &Value) -> Result<UniversalAccountId, json::Error> {
             message: "uaid must be a string".into(),
         });
     };
-    let suffix = text.strip_prefix("uaid:").ok_or_else(|| {
-        json::Error::InvalidField {
+    let suffix = text
+        .strip_prefix("uaid:")
+        .ok_or_else(|| json::Error::InvalidField {
             field: "uaid".into(),
             message: "uaid must start with `uaid:`".into(),
-        }
-    })?;
+        })?;
     let hash = Hash::from_str(suffix).map_err(|err| json::Error::InvalidField {
         field: "uaid".into(),
         message: format!("invalid UAID hash: {err}"),
@@ -472,14 +463,18 @@ fn parse_entry(value: &Value, idx: usize) -> Result<ManifestEntry, json::Error> 
         field: format!("entries[{idx}]"),
         message: "entry must be a JSON object".into(),
     })?;
-    let scope_value = entry_obj.get("scope").ok_or_else(|| json::Error::InvalidField {
-        field: format!("entries[{idx}].scope"),
-        message: "missing scope object".into(),
-    })?;
-    let effect_value = entry_obj.get("effect").ok_or_else(|| json::Error::InvalidField {
-        field: format!("entries[{idx}].effect"),
-        message: "missing effect object".into(),
-    })?;
+    let scope_value = entry_obj
+        .get("scope")
+        .ok_or_else(|| json::Error::InvalidField {
+            field: format!("entries[{idx}].scope"),
+            message: "missing scope object".into(),
+        })?;
+    let effect_value = entry_obj
+        .get("effect")
+        .ok_or_else(|| json::Error::InvalidField {
+            field: format!("entries[{idx}].effect"),
+            message: "missing effect object".into(),
+        })?;
     let scope = parse_scope(scope_value, idx)?;
     let effect = parse_effect(effect_value, idx)?;
     let notes = match entry_obj.get("notes") {
@@ -513,32 +508,35 @@ fn parse_scope(value: &Value, idx: usize) -> Result<CapabilityScope, json::Error
         )?)),
     };
     let program = match parse_optional_str(scope_obj, "program", idx)? {
-        Some(value) => Some(SmartContractId::from_str(value).map_err(|err| {
-            json::Error::InvalidField {
-                field: format!("entries[{idx}].scope.program"),
-                message: err.to_string(),
-            }
-        })?),
+        Some(value) => {
+            Some(
+                SmartContractId::from_str(value).map_err(|err| json::Error::InvalidField {
+                    field: format!("entries[{idx}].scope.program"),
+                    message: err.to_string(),
+                })?,
+            )
+        }
         None => None,
     };
     let method = match parse_optional_str(scope_obj, "method", idx)? {
-        Some(value) => Some(Name::from_str(value).map_err(|err| {
-            json::Error::InvalidField {
+        Some(value) => Some(
+            Name::from_str(value).map_err(|err| json::Error::InvalidField {
                 field: format!("entries[{idx}].scope.method"),
                 message: err.to_string(),
-            }
-        })?),
+            })?,
+        ),
         None => None,
     };
-    let asset = match parse_optional_str(scope_obj, "asset", idx)? {
-        Some(value) => Some(AssetDefinitionId::from_str(value).map_err(|err| {
-            json::Error::InvalidField {
-                field: format!("entries[{idx}].scope.asset"),
-                message: err.to_string(),
-            }
-        })?),
-        None => None,
-    };
+    let asset =
+        match parse_optional_str(scope_obj, "asset", idx)? {
+            Some(value) => Some(AssetDefinitionId::from_str(value).map_err(|err| {
+                json::Error::InvalidField {
+                    field: format!("entries[{idx}].scope.asset"),
+                    message: err.to_string(),
+                }
+            })?),
+            None => None,
+        };
     let role = match scope_obj.get("role") {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) => Some(parse_role(text, idx)?),
@@ -617,10 +615,12 @@ fn parse_allowance(value: &Value, idx: usize) -> Result<Allowance, json::Error> 
         field: format!("entries[{idx}].effect.Allow"),
         message: "Allow effect must be a JSON object".into(),
     })?;
-    let window_value = details.get("window").ok_or_else(|| json::Error::InvalidField {
-        field: format!("entries[{idx}].effect.Allow.window"),
-        message: "Allow effect missing window".into(),
-    })?;
+    let window_value = details
+        .get("window")
+        .ok_or_else(|| json::Error::InvalidField {
+            field: format!("entries[{idx}].effect.Allow.window"),
+            message: "Allow effect missing window".into(),
+        })?;
     let window = parse_window(window_value, idx)?;
     let max_amount = match details.get("max_amount") {
         None | Some(Value::Null) => None,

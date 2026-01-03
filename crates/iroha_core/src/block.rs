@@ -83,7 +83,7 @@ use iroha_data_model::{
     isi::{GrantBox, register::RegisterBox, transfer::TransferBox},
     nexus::{
         AssetHandle, AxtBinding, AxtHandleReplayKey, AxtPolicyEntry, AxtRejectReason, DataSpaceId,
-        LaneId, LaneMetadata, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
+        LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
     },
     peer::PeerId,
     permission::Permission,
@@ -328,7 +328,7 @@ impl SettlementBufferSnapshot {
     }
 }
 
-fn parse_lane_settlement_buffer_config(lane: &LaneMetadata) -> Option<LaneSettlementBufferConfig> {
+fn parse_lane_settlement_buffer_config(lane: &LaneConfig) -> Option<LaneSettlementBufferConfig> {
     let account_raw = lane
         .metadata
         .get("settlement.buffer_account")
@@ -382,7 +382,7 @@ fn compute_settlement_buffer_snapshot(
 fn lane_metadata_by_id<'state>(
     state_block: &'state StateBlock<'state>,
     lane_id: LaneId,
-) -> Option<&'state LaneMetadata> {
+) -> Option<&'state LaneConfig> {
     state_block
         .nexus
         .lane_catalog

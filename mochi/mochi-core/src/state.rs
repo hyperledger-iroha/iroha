@@ -79,7 +79,7 @@ impl StateQueryKind {
 
         let query_box: QueryBox<QueryOutputBatchBox> = match self {
             StateQueryKind::Accounts => {
-                let with_filter: QueryWithFilter<Account> = QueryWithFilter::new_compat(
+                let with_filter: QueryWithFilter<Account> = QueryWithFilter::new_with_query(
                     #[cfg(not(feature = "fast_dsl"))]
                     Box::new(FindAccounts),
                     #[cfg(feature = "fast_dsl")]
@@ -90,7 +90,7 @@ impl StateQueryKind {
                 with_filter.into()
             }
             StateQueryKind::Assets => {
-                let with_filter: QueryWithFilter<Asset> = QueryWithFilter::new_compat(
+                let with_filter: QueryWithFilter<Asset> = QueryWithFilter::new_with_query(
                     #[cfg(not(feature = "fast_dsl"))]
                     Box::new(FindAssets),
                     #[cfg(feature = "fast_dsl")]
@@ -101,7 +101,7 @@ impl StateQueryKind {
                 with_filter.into()
             }
             StateQueryKind::AssetDefinitions => {
-                let with_filter: QueryWithFilter<AssetDefinition> = QueryWithFilter::new_compat(
+                let with_filter: QueryWithFilter<AssetDefinition> = QueryWithFilter::new_with_query(
                     #[cfg(not(feature = "fast_dsl"))]
                     Box::new(FindAssetsDefinitions),
                     #[cfg(feature = "fast_dsl")]
@@ -112,7 +112,7 @@ impl StateQueryKind {
                 with_filter.into()
             }
             StateQueryKind::Domains => {
-                let with_filter: QueryWithFilter<Domain> = QueryWithFilter::new_compat(
+                let with_filter: QueryWithFilter<Domain> = QueryWithFilter::new_with_query(
                     #[cfg(not(feature = "fast_dsl"))]
                     Box::new(FindDomains),
                     #[cfg(feature = "fast_dsl")]
@@ -123,7 +123,7 @@ impl StateQueryKind {
                 with_filter.into()
             }
             StateQueryKind::Peers => {
-                let with_filter: QueryWithFilter<PeerId> = QueryWithFilter::new_compat(
+                let with_filter: QueryWithFilter<PeerId> = QueryWithFilter::new_with_query(
                     #[cfg(not(feature = "fast_dsl"))]
                     Box::new(FindPeers),
                     #[cfg(feature = "fast_dsl")]
@@ -787,7 +787,7 @@ mod tests {
             value::Asset,
         },
         domain::{Domain, DomainId},
-        query::{QueryOutputBatchBox, QueryOutputBatchBoxTuple},
+        query::{QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest},
     };
     use iroha_primitives::numeric::{Numeric, NumericSpec};
     use iroha_test_samples::ALICE_ID;
@@ -804,6 +804,17 @@ mod tests {
                 );
                 None
             })
+    }
+
+    #[test]
+    fn build_request_uses_start_variant() {
+        for kind in StateQueryKind::all() {
+            let request = kind.build_request(None);
+            assert!(
+                matches!(request, QueryRequest::Start(_)),
+                "expected QueryRequest::Start for {kind:?}"
+            );
+        }
     }
 
     #[test]

@@ -728,23 +728,15 @@ impl Executor {
             bytes.copy_from_slice(tx_hash.as_ref());
             bytes
         };
-        // Disallow direct signing with multisig accounts (deterministically derived keys must not be usable).
-        // Multisig flows must route through propose/approve instead.
+        // Disallow direct signing with multisig accounts; multisig flows must route through propose/approve.
         {
             let spec_key =
                 iroha_data_model::name::Name::from_str("multisig/spec").expect("static key valid");
-            let derived_key = iroha_data_model::name::Name::from_str("multisig/derived_key")
-                .expect("static key valid");
             let account = state_transaction.world.account(authority).map_err(|err| {
                 ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
             })?;
             let metadata = account.metadata();
-            let spec_present = metadata.contains(&spec_key);
-            let derived_flag = metadata
-                .get(&derived_key)
-                .and_then(|value| value.clone().try_into_any_norito::<bool>().ok())
-                .unwrap_or(false);
-            if spec_present || derived_flag {
+            if metadata.contains(&spec_key) {
                 #[cfg(feature = "telemetry")]
                 crate::telemetry::record_social_rejection(
                     state_transaction.telemetry,
@@ -2518,59 +2510,6 @@ mod tests {
         metadata.insert(
             Name::from_str("multisig/spec").expect("static key"),
             Json::new(spec),
-        );
-
-        let domain: Domain = Domain::new(domain_id.clone()).build(&multisig_id);
-        let multisig_account = Account::new(multisig_id.clone())
-            .with_metadata(metadata)
-            .build(&multisig_id);
-
-        let world = World::with([domain], [multisig_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(block_header);
-
-        let tx = TransactionBuilder::new(chain, multisig_id.clone())
-            .with_executable(Executable::Instructions(Vec::new().into()))
-            .sign(ms_keypair.private_key());
-
-        let executor = super::Executor::Initial;
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-
-        let mut stx = block.transaction();
-        let res = executor.execute_transaction(&mut stx, &multisig_id, tx, &mut ivm_cache);
-        match res {
-            Err(ValidationFail::NotPermitted(msg)) => assert!(
-                msg.contains("direct signing with multisig accounts is forbidden"),
-                "unexpected message: {msg}"
-            ),
-            other => panic!("expected multisig direct signing rejection, got {other:?}"),
-        }
-        #[cfg(feature = "telemetry")]
-        {
-            assert_eq!(
-                stx.telemetry
-                    .metrics_ref()
-                    .multisig_direct_sign_reject_total
-                    .get(),
-                1
-            );
-        }
-    }
-
-    #[test]
-    fn derived_multisig_account_direct_signing_is_rejected() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let chain: iroha_data_model::ChainId = "multisig-derived-direct-sign".parse().unwrap();
-        let ms_keypair = KeyPair::random();
-        let multisig_id = AccountId::new(domain_id.clone(), ms_keypair.public_key().clone());
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            Name::from_str("multisig/derived_key").expect("static key"),
-            Json::from(true),
         );
 
         let domain: Domain = Domain::new(domain_id.clone()).build(&multisig_id);

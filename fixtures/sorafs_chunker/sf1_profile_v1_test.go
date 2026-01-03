@@ -60,7 +60,7 @@ func loadFixture(t *testing.T) chunkerFixture {
 func TestChunkerFixtureConsistency(t *testing.T) {
 	fixture := loadFixture(t)
 
-	if fixture.Profile != "sorafs-sf1" {
+	if fixture.Profile != "sorafs.sf1@1.0.0" {
 		t.Fatalf("unexpected profile: %s", fixture.Profile)
 	}
 	if fixture.ChunkCount != len(fixture.ChunkLengths) {

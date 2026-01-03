@@ -12,8 +12,8 @@ use std::{
 };
 
 use iroha_config::parameters::actual::{
-    LaneCompliance, LaneConfig, LaneRelayEmergency, NexusAxt, NexusEndorsement, NexusFees,
-    NexusStaking,
+    LaneCompliance, LaneConfig as RuntimeLaneConfig, LaneRelayEmergency, NexusAxt,
+    NexusEndorsement, NexusFees, NexusStaking,
 };
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
@@ -26,8 +26,8 @@ use iroha_core::{
 };
 use iroha_data_model::{
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneId, LaneMetadata,
-        LaneStorageProfile, LaneVisibility,
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+        LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile, LaneVisibility,
     },
     prelude::*,
 };
@@ -191,7 +191,7 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
     let metrics = Arc::new(Metrics::default());
     let telemetry = iroha_core::telemetry::StateTelemetry::new(metrics.clone(), true);
 
-    let mut lane_core = LaneMetadata {
+    let mut lane_core = ModelLaneConfig {
         id: LaneId::new(0),
         dataspace_id: DataSpaceId::new(7),
         alias: "core".to_string(),
@@ -200,7 +200,7 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
         governance: Some("parliament".to_string()),
         settlement: Some("xor".to_string()),
         storage: LaneStorageProfile::FullReplica,
-        ..LaneMetadata::default()
+        ..ModelLaneConfig::default()
     };
     lane_core
         .metadata
@@ -209,13 +209,13 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
         "scheduler.starvation_bound_slots".to_string(),
         "33".to_string(),
     );
-    let lane_ops = LaneMetadata {
+    let lane_ops = ModelLaneConfig {
         id: LaneId::new(1),
         dataspace_id: DataSpaceId::new(11),
         alias: "ops".to_string(),
         lane_type: Some("ops".to_string()),
         settlement: Some("xor_lane_weighted".to_string()),
-        ..LaneMetadata::default()
+        ..ModelLaneConfig::default()
     };
     let primary_dataspace = DataSpaceMetadata {
         id: DataSpaceId::new(7),
@@ -414,20 +414,20 @@ fn lane_catalog_size_reflected_in_metric() {
     let initial_catalog = LaneCatalog::new(
         NonZeroU32::new(3).expect("non-zero"),
         vec![
-            LaneMetadata {
+            ModelLaneConfig {
                 id: LaneId::new(0),
                 alias: "core".to_string(),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             },
-            LaneMetadata {
+            ModelLaneConfig {
                 id: LaneId::new(1),
                 alias: "governance".to_string(),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             },
-            LaneMetadata {
+            ModelLaneConfig {
                 id: LaneId::new(2),
                 alias: "zk".to_string(),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             },
         ],
     )
@@ -443,15 +443,15 @@ fn lane_catalog_size_reflected_in_metric() {
     let trimmed_catalog = LaneCatalog::new(
         NonZeroU32::new(2).expect("non-zero"),
         vec![
-            LaneMetadata {
+            ModelLaneConfig {
                 id: LaneId::new(0),
                 alias: "core".to_string(),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             },
-            LaneMetadata {
+            ModelLaneConfig {
                 id: LaneId::new(1),
                 alias: "governance".to_string(),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             },
         ],
     )
@@ -479,14 +479,14 @@ fn governance_lane_setup() -> (
     let lane_catalog = LaneCatalog::new(
         NonZeroU32::new(2).expect("non-zero"),
         vec![
-            LaneMetadata::default(),
-            LaneMetadata {
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
                 id: LaneId::new(1),
                 alias: "governance".to_string(),
                 visibility: LaneVisibility::Restricted,
                 lane_type: Some("governance".to_string()),
                 governance: Some("parliament".to_string()),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             },
         ],
     )
@@ -625,13 +625,13 @@ fn nexus_config_diff_counter_and_event_emitted() {
     let lane_catalog = LaneCatalog::new(
         nonzero!(2_u32),
         vec![
-            LaneMetadata::default(),
-            LaneMetadata {
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
                 id: LaneId::new(1),
                 alias: "governance".to_string(),
                 visibility: LaneVisibility::Restricted,
                 lane_type: Some("governance".to_string()),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             },
         ],
     )
@@ -686,7 +686,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         endorsement: NexusEndorsement::default(),
         axt: NexusAxt::default(),
         lane_relay_emergency: LaneRelayEmergency::default(),
-        lane_config: LaneConfig::from_catalog(&lane_catalog),
+        lane_config: RuntimeLaneConfig::from_catalog(&lane_catalog),
         lane_catalog,
         dataspace_catalog,
         routing_policy,

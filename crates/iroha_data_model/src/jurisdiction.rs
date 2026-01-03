@@ -207,7 +207,7 @@ pub enum JdgVerdict {
     Reject(u32),
 }
 
-/// Legacy threshold scheme with per-signer signatures.
+/// Threshold scheme with per-signer signatures.
 pub const JDG_SIGNATURE_SCHEME_SIMPLE_THRESHOLD: u16 = 1;
 /// Pre-aggregated BLS-normal signature for same-message validation.
 pub const JDG_SIGNATURE_SCHEME_BLS_NORMAL_AGGREGATE: u16 = 2;

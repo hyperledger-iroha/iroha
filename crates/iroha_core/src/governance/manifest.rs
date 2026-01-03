@@ -1181,7 +1181,7 @@ mod tests {
         GovernanceCatalog, GovernanceModule as ConfigGovernanceModule, LaneRegistry,
     };
     use iroha_data_model::{
-        nexus::{LaneCatalog, LaneMetadata},
+        nexus::{LaneCatalog, LaneConfig},
         prelude::Name,
     };
     use nonzero_ext::nonzero;
@@ -1329,11 +1329,11 @@ mod tests {
     fn registry_detects_missing_manifest() {
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "governance".to_string(),
                 governance: Some("parliament".to_string()),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("valid catalog");
@@ -1355,11 +1355,11 @@ mod tests {
     fn registry_loads_present_manifest() {
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "gov".to_string(),
                 governance: Some("parliament".to_string()),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("valid catalog");
@@ -1392,11 +1392,11 @@ mod tests {
     fn cache_manifest_overrides_primary_directory() {
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "gov".to_string(),
                 governance: Some("parliament".to_string()),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("valid catalog");
@@ -1440,11 +1440,11 @@ mod tests {
     fn governance_overlay_supplies_missing_module() {
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "council".to_string(),
                 governance: Some("council".to_string()),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("valid catalog");
@@ -1484,11 +1484,11 @@ mod tests {
     fn manifest_rejects_invalid_validator() {
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "gov".to_string(),
                 governance: Some("parliament".to_string()),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("valid catalog");
@@ -1517,11 +1517,11 @@ mod tests {
         crate::test_alias::ensure();
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "gov".to_string(),
                 governance: Some("parliament".to_string()),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("valid catalog");
@@ -1550,11 +1550,11 @@ mod tests {
         crate::test_alias::ensure();
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "gov".to_string(),
                 governance: Some("parliament".to_string()),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("valid catalog");
@@ -1626,17 +1626,17 @@ mod tests {
         let lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
-                LaneMetadata {
+                LaneConfig {
                     id: LaneId::new(0),
                     alias: "core".to_string(),
                     governance: Some("parliament".to_string()),
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
-                LaneMetadata {
+                LaneConfig {
                     id: LaneId::new(1),
                     alias: "payments".to_string(),
                     governance: Some("parliament".to_string()),
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
             ],
         )

@@ -4,7 +4,7 @@
 The CLI output of `iroha_cli audit witness --decode` (FASTPQ batches are
 enabled by default; pass `--no-fastpq-batches` to suppress them) contains a
 `fastpq_batches` array whose entries include a `row_usage` object. This helper
-loads two such JSON blobs (typically a legacy baseline and a transfer-gadget
+loads two such JSON blobs (typically a baseline and a transfer-gadget
 candidate) and ensures that transfer ratios and total row counts do not exceed
 the configured tolerances.
 """
@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
         "--baseline",
         required=True,
         type=Path,
-        help="Path to the legacy/expected row_usage JSON.",
+        help="Path to the baseline/expected row_usage JSON.",
     )
     parser.add_argument(
         "--candidate",

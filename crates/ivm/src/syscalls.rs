@@ -423,8 +423,6 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
     });
     match policy {
         crate::SyscallPolicy::AbiV1 => v.as_slice(),
-        // First release: Experimental(1) and Experimental(2) mirror v1; other versions are unsupported (empty list).
-        crate::SyscallPolicy::Experimental(1 | 2) => v.as_slice(),
         crate::SyscallPolicy::Experimental(_) => &[],
     }
 }

@@ -565,6 +565,7 @@ pub fn receipt_fingerprint(receipt: &DaIngestReceipt) -> ReplayFingerprint {
 mod tests {
     use std::{collections::BTreeSet, num::NonZeroU32};
 
+    use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
@@ -572,7 +573,7 @@ mod tests {
             ingest::DaStripeLayout,
             types::{BlobDigest, DaRentQuote, StorageTicketId},
         },
-        nexus::{LaneCatalog, LaneId, LaneMetadata},
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
         sorafs::pin_registry::ManifestDigest,
     };
     use norito::to_bytes;
@@ -622,16 +623,16 @@ mod tests {
         map
     }
 
-    fn lane_config_for(lane: LaneId) -> LaneConfig {
+    fn lane_config_for(lane: LaneId) -> ConfigLaneConfig {
         let lane_count =
             NonZeroU32::new(lane.as_u32().saturating_add(1)).expect("lane count is non-zero");
-        let metadata = LaneMetadata {
+        let metadata = ModelLaneConfig {
             id: lane,
             alias: format!("lane-{}", lane.as_u32()),
-            ..LaneMetadata::default()
+            ..ModelLaneConfig::default()
         };
         let catalog = LaneCatalog::new(lane_count, vec![metadata]).expect("lane catalog");
-        LaneConfig::from_catalog(&catalog)
+        ConfigLaneConfig::from_catalog(&catalog)
     }
 
     #[test]

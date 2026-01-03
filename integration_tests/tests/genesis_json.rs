@@ -76,8 +76,7 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
         NetworkBuilder::new().with_min_peers(4),
         stringify!(genesis_asset_minted_across_peers),
-    )
-    else {
+    ) else {
         return Ok(());
     };
     let builder = load_raw_genesis_transaction()
@@ -156,22 +155,20 @@ fn missing_genesis_file_fails() {
 fn genesis_norito_bytes_roundtrip_network() -> Result<()> {
     init_instruction_registry();
 
-    let builder =
-        NetworkBuilder::new()
-            .with_min_peers(4)
-            .with_genesis_block(|_topology, topology_entries| {
-                load_raw_genesis_transaction()
-                    .into_builder()
-                    .next_transaction()
-                    .set_topology(topology_entries)
-                    .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-                    .expect("build genesis block")
-            });
+    let builder = NetworkBuilder::new().with_min_peers(4).with_genesis_block(
+        |_topology, topology_entries| {
+            load_raw_genesis_transaction()
+                .into_builder()
+                .next_transaction()
+                .set_topology(topology_entries)
+                .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+                .expect("build genesis block")
+        },
+    );
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
         builder,
         stringify!(genesis_norito_bytes_roundtrip_network),
-    )
-    else {
+    ) else {
         return Ok(());
     };
 
@@ -209,7 +206,12 @@ fn genesis_norito_bytes_roundtrip_network() -> Result<()> {
 async fn tampered_genesis_block_is_rejected() -> Result<()> {
     init_instruction_registry();
 
-    let network = NetworkBuilder::new().with_min_peers(4).build();
+    let Some(network) = sandbox::build_network_or_skip(
+        NetworkBuilder::new(),
+        stringify!(tampered_genesis_block_is_rejected),
+    ) else {
+        return Ok(());
+    };
     let genesis = network.genesis();
 
     let mut framed = genesis.0.encode_wire().map_err(|err| eyre!(err))?;

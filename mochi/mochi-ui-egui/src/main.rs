@@ -53,7 +53,7 @@ use iroha_data_model::{
     },
     isi::{InstructionBox, Register},
     nexus::{
-        DataSpaceId, LaneId, LaneLifecyclePlan, LaneMetadata, LaneRelayEnvelope,
+        DataSpaceId, LaneConfig as LaneMetadata, LaneId, LaneLifecyclePlan, LaneRelayEnvelope,
         LaneStorageProfile, LaneVisibility,
     },
     parameter::system::SumeragiConsensusMode,

@@ -4,7 +4,7 @@
 //! embedding payload bytes in the public DA spool. We enforce that the lane
 //! declares a policy and that commitments carry non-zero digests/tickets.
 
-use iroha_config::parameters::actual::LaneConfig;
+use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
 use iroha_data_model::{
     da::{
         commitment::DaCommitmentRecord, confidential_compute::ConfidentialComputePolicy,
@@ -44,7 +44,7 @@ pub enum ConfidentialComputeError {
 /// Returns [`ConfidentialComputeError`] when the lane is marked confidential but
 /// fails policy, storage-profile, or digest validation.
 pub fn validate_confidential_compute_record(
-    lane_config: &LaneConfig,
+    lane_config: &ConfigLaneConfig,
     record: &DaCommitmentRecord,
 ) -> Result<Option<ConfidentialComputePolicy>, ConfidentialComputeError> {
     if !lane_config.is_confidential_compute(record.lane_id) {
@@ -89,20 +89,22 @@ fn is_zero_manifest(digest: &ManifestDigest) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use iroha_config::parameters::actual::LaneConfig;
+    use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
             commitment::{DaCommitmentRecord, DaProofScheme, KzgCommitment, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneId, LaneMetadata, LaneStorageProfile},
+        nexus::{
+            DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile,
+        },
         sorafs::pin_registry::ManifestDigest,
     };
 
     use super::*;
 
-    fn lane_config(confidential: bool, key_version: Option<u32>) -> LaneConfig {
+    fn lane_config(confidential: bool, key_version: Option<u32>) -> ConfigLaneConfig {
         let mut metadata = std::collections::BTreeMap::new();
         if confidential {
             metadata.insert("confidential_compute".to_string(), "true".to_string());
@@ -116,17 +118,17 @@ mod tests {
         );
         let catalog = LaneCatalog::new(
             nonzero_ext::nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![ModelLaneConfig {
                 id: LaneId::new(0),
                 dataspace_id: DataSpaceId::GLOBAL,
                 alias: "lane0".into(),
                 storage: LaneStorageProfile::SplitReplica,
                 metadata,
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             }],
         )
         .expect("catalog");
-        LaneConfig::from_catalog(&catalog)
+        ConfigLaneConfig::from_catalog(&catalog)
     }
 
     fn record_with_ticket(ticket: [u8; 32], blob: [u8; 32]) -> DaCommitmentRecord {

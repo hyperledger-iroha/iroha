@@ -51,8 +51,8 @@ def load_payload_fixtures(path: Path) -> Dict[str, str]:
         if isinstance(encoded, str):
             mapping[name] = encoded
             continue
-        # Some fixtures (e.g., legacy_alias_roundtrip) intentionally embed raw payload JSON for
-        # doc/test coverage. Skip them because they do not participate in the canonical manifest.
+        # Some fixtures intentionally embed raw payload JSON for doc/test coverage.
+        # Skip them because they do not participate in the canonical manifest.
         if "payload" in entry:
             continue
         raise ValueError(f"fixture entry in {path} missing encoded string: {entry!r}")

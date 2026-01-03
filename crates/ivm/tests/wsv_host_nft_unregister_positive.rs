@@ -22,7 +22,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn burn_nft_then_unregister_account_succeeds() {
+fn nft_burn_asset_then_unregister_account_succeeds() {
     // Caller starts as alice; later we switch caller to bob for the burn.
     let alice: AccountId =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"

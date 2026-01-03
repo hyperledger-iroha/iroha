@@ -118,10 +118,6 @@ const SENSITIVE_SYSCALLS: &[&str] = &[
     "nft_transfer_asset",
     "nft_set_metadata",
     "nft_burn_asset",
-    "create_nft",
-    "transfer_nft",
-    "set_nft_data",
-    "burn_nft",
     "register_domain",
     "unregister_domain",
     "transfer_domain",
@@ -2709,7 +2705,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
-                "nft_mint_asset" | "create_nft" => {
+                "nft_mint_asset" => {
                     if arg_typed.len() != 2
                         || !(arg_typed[0].ty == Type::NftId && arg_typed[1].ty == Type::AccountId)
                     {
@@ -2725,7 +2721,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
-                "nft_set_metadata" | "set_nft_data" => {
+                "nft_set_metadata" => {
                     if arg_typed.len() != 2
                         || !(arg_typed[0].ty == Type::NftId && arg_typed[1].ty == Type::Json)
                     {
@@ -2741,7 +2737,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
-                "nft_burn_asset" | "burn_nft" => {
+                "nft_burn_asset" => {
                     if arg_typed.len() != 1 || arg_typed[0].ty != Type::NftId {
                         return Err(SemanticError {
                             message: "nft_burn_asset expects (NftId)".into(),
@@ -2755,7 +2751,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
-                "nft_transfer_asset" | "transfer_nft" => {
+                "nft_transfer_asset" => {
                     if arg_typed.len() != 3
                         || !(arg_typed[0].ty == Type::AccountId
                             && arg_typed[1].ty == Type::NftId

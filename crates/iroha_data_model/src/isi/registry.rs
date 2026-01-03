@@ -218,9 +218,8 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     );
     registry = registry
         .register_with_id::<consensus_keys::RotateConsensusKey>("consensus::RotateConsensusKey");
-    registry = registry.register_with_id::<consensus_keys::DisableConsensusKey>(
-        "consensus::DisableConsensusKey",
-    );
+    registry = registry
+        .register_with_id::<consensus_keys::DisableConsensusKey>("consensus::DisableConsensusKey");
     registry = registry
         .register_with_id::<endorsement::RegisterDomainCommittee>("nexus::RegisterDomainCommittee");
     registry = registry.register_with_id::<endorsement::SetDomainEndorsementPolicy>(

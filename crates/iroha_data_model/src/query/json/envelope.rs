@@ -42,13 +42,13 @@ where
 {
     #[cfg(not(feature = "fast_dsl"))]
     {
-        let qwf = QueryWithFilter::new_compat(builder(), predicate, selector);
+        let qwf = QueryWithFilter::new_with_query(builder(), predicate, selector);
         QueryBox::from(qwf)
     }
     #[cfg(feature = "fast_dsl")]
     {
         let _ = builder;
-        let qwf = QueryWithFilter::new_compat((), predicate, selector);
+        let qwf = QueryWithFilter::new_with_query((), predicate, selector);
         QueryBox::from(qwf)
     }
 }

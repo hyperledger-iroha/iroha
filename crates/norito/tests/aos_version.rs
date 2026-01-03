@@ -111,28 +111,8 @@ fn aos_opt_u32_bool_roundtrip_and_bad_version() {
     matches_unsupported_version(err);
 }
 
-#[test]
-fn compat_str_bool_body_decodes() {
-    let hex = "000301010000000000000005616c69636501020000000000000003626f6200030000000000000007636861726c696501";
-    let bytes = hex_to_bytes(hex);
-    match decode_rows_u64_str_bool_adaptive(&bytes) {
-        Ok(decoded) => {
-            let expected = vec![
-                (1, String::from("alice"), true),
-                (2, String::from("bob"), false),
-                (3, String::from("charlie"), true),
-            ];
-            assert_eq!(decoded, expected);
-        }
-        Err(Error::UnsupportedVersion { .. }) => {
-            // Skip: build does not support compat version nibble.
-        }
-        Err(other) => panic!("unexpected error: {other:?}"),
-    }
-}
-
 fn matches_unsupported_version(err: Error) {
-    // Error::UnsupportedVersion is ideal; allow Message for older enums.
+    // Error::UnsupportedVersion is ideal; allow Message for generic mapping.
     match err {
         Error::UnsupportedVersion { .. } => {}
         Error::Message(_) => {}

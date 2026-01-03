@@ -98,7 +98,7 @@ impl ProgramMetadata {
         // - Accept version 1.x and 2.x headers (cache tests rely on versioned keys).
         // - Mode must not contain unknown bits (only ZK, VECTOR, HTM).
         // - `vector_length` is advisory and may be set regardless of the VECTOR bit.
-        // - ABI version is carried as-is (unknown versions are permitted for forward-compat tests).
+        // - ABI version is carried as-is; admission enforces allowed values.
         const KNOWN_MODE_BITS: u8 = mode::ZK | mode::VECTOR | mode::HTM;
         if version_major != 1 && version_major != 2 {
             return Err(VMError::InvalidMetadata);
@@ -108,7 +108,7 @@ impl ProgramMetadata {
         }
         // Note: vector_length may be non-zero even if VECTOR flag is off; the
         // host/runtime may clamp or ignore it depending on policy.
-        // ABI version is not validated here to allow forward-compatibility.
+        // ABI version is validated by admission, not by the header parser.
         let mut code_offset = header_len;
         // Optional literal section begins with `LTLB` magic shortly after the
         // header. Scan a small window after the header for the marker to remain

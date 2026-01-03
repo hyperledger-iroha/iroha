@@ -129,7 +129,7 @@ impl QueueLimits {
 
     /// Derive lane-specific limits from metadata overrides or fall back to the global defaults.
     pub(crate) fn lane_limits_from_metadata(
-        lane: &iroha_data_model::nexus::LaneMetadata,
+        lane: &iroha_data_model::nexus::LaneConfig,
         fallback: LaneSchedulingLimits,
     ) -> LaneSchedulingLimits {
         let mut limits = fallback;
@@ -2488,8 +2488,8 @@ pub mod tests {
         name::Name,
         nexus::{
             AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceId, JurisdictionSet,
-            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule, LaneId,
-            LaneLifecyclePlan, LaneMetadata, LanePrivacyMerkleWitness, LanePrivacyProof,
+            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
+            LaneConfig, LaneId, LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof,
             LanePrivacyWitness, ManifestVersion, ParticipantSelector,
         },
         parameter::TransactionParameters,
@@ -2631,7 +2631,7 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
         let lane_catalog =
-            LaneCatalog::new(nonzero!(1_u32), vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         let nexus = Nexus {
             enabled: true,
             lane_catalog: lane_catalog.clone(),
@@ -2671,11 +2671,11 @@ pub mod tests {
 
         let mut metadata = BTreeMap::new();
         metadata.insert("scheduler.teu_capacity".to_string(), "123".to_string());
-        let lane_b = LaneMetadata {
+        let lane_b = LaneConfig {
             id: LaneId::new(1),
             alias: "beta".to_string(),
             metadata,
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
         let plan = LaneLifecyclePlan {
             additions: vec![lane_b.clone()],
@@ -4487,7 +4487,7 @@ pub mod tests {
 
         let test_lane = LaneId::new(11);
         let test_dataspace = DataSpaceId::new(3);
-        let lane_metadata = LaneMetadata {
+        let lane_metadata = LaneConfig {
             id: test_lane,
             dataspace_id: test_dataspace,
             alias: "lane11".to_string(),
@@ -4495,7 +4495,7 @@ pub mod tests {
                 "scheduler.teu_capacity".to_string(),
                 lane_capacity.to_string(),
             )]),
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
         let dataspace_metadata = DataSpaceMetadata {
             id: test_dataspace,
@@ -4596,7 +4596,7 @@ pub mod tests {
 
         let test_lane = LaneId::new(13);
         let test_dataspace = DataSpaceId::new(9);
-        let lane_metadata = LaneMetadata {
+        let lane_metadata = LaneConfig {
             id: test_lane,
             dataspace_id: test_dataspace,
             alias: "lane13".to_string(),
@@ -4604,7 +4604,7 @@ pub mod tests {
                 "scheduler.teu_capacity".to_string(),
                 lane_capacity.to_string(),
             )]),
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
         let dataspace_metadata = DataSpaceMetadata {
             id: test_dataspace,
@@ -4939,7 +4939,7 @@ pub mod tests {
     #[test]
     fn lane_limits_respect_metadata_overrides() {
         let fallback = LaneSchedulingLimits::new(6_000, 120);
-        let mut lane = LaneMetadata {
+        let mut lane = LaneConfig {
             id: LaneId::new(3),
             alias: "custom".to_string(),
             metadata: BTreeMap::from([
@@ -4949,7 +4949,7 @@ pub mod tests {
                     "42".to_string(),
                 ),
             ]),
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
         let limits = QueueLimits::lane_limits_from_metadata(&lane, fallback);
         assert_eq!(limits.teu_capacity, 8_192);

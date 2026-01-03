@@ -64,10 +64,16 @@ pub fn minimal_manifest_with_topology(
         .iter()
         .map(|peer| norito::json::value::to_value(peer).expect("serialize peer id"))
         .collect();
-    tx_map.insert("topology".to_string(), norito::json::Value::Array(topo_entries));
+    tx_map.insert(
+        "topology".to_string(),
+        norito::json::Value::Array(topo_entries),
+    );
 
     let mut root = norito::json::Map::new();
-    root.insert("chain".to_string(), norito::json::Value::String(chain.to_owned()));
+    root.insert(
+        "chain".to_string(),
+        norito::json::Value::String(chain.to_owned()),
+    );
     root.insert("executor".to_string(), norito::json::Value::Null);
     root.insert(
         "ivm_dir".to_string(),
