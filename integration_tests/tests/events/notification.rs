@@ -48,6 +48,7 @@ async fn trigger_completion_success_should_produce_event() -> Result<()> {
             .for_trigger(trigger_id.clone())
             .for_outcome(TriggerCompletedOutcomeType::Success)])
         .await?;
+    let event_timeout = network.sync_timeout();
 
     let call_trigger = ExecuteTrigger::new(trigger_id);
     let client = network.client();
@@ -55,22 +56,29 @@ async fn trigger_completion_success_should_produce_event() -> Result<()> {
         [Instruction::into_instruction_box(Box::new(call_trigger))],
         <_>::default(),
     );
-    spawn_blocking(move || client.submit_transaction_blocking(&trigger_tx)).await??;
-
-    let event_timeout = network.sync_timeout();
-    match timeout(event_timeout, events.next()).await {
-        Ok(Some(_)) => {}
-        Ok(None) => eyre::bail!("event stream ended unexpectedly"),
-        Err(err) => {
-            if let Some(reason) = sandbox::sandbox_reason(&eyre::eyre!(err.to_string())) {
-                return Err(eyre::eyre!(
-                    "sandboxed network restriction detected during {}: {reason}",
-                    stringify!(trigger_completion_success_should_produce_event)
-                ));
+    let submit_trigger = async {
+        spawn_blocking(move || client.submit_transaction_blocking(&trigger_tx)).await??;
+        Ok::<(), eyre::Report>(())
+    };
+    let wait_event = async {
+        match timeout(event_timeout, events.next()).await {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(eyre::eyre!("event stream ended unexpectedly")),
+            Err(err) => {
+                if let Some(reason) = sandbox::sandbox_reason(&eyre::eyre!(err.to_string())) {
+                    Err(eyre::eyre!(
+                        "sandboxed network restriction detected during {}: {reason}",
+                        stringify!(trigger_completion_success_should_produce_event)
+                    ))
+                } else {
+                    Err(err.into())
+                }
             }
-            return Err(err.into());
         }
-    }
+    };
+    let event_result = tokio::try_join!(submit_trigger, wait_event);
+    events.close().await;
+    event_result?;
 
     Ok(())
 }

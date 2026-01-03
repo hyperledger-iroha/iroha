@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Wait for trigger-completion events while submitting the trigger in the integration notification test and close the WS stream after receipt to avoid missed events and shutdown lag.
+- Tests: `cargo test -p integration_tests trigger_completion_success_should_produce_event --test mod -- --nocapture` (failed: `integration_tests/tests/debug_genesis.rs` and `integration_tests/tests/extra_functional/offline_peers.rs` use `?` on `Option`).
 - Wait for tx confirmation event-stream setup (bounded connect timeout) before submitting, and continue status polling when the stream can't be established; added connect-timeout unit coverage.
 - Tests: not run (not requested).
 - Format: not run (not requested).
