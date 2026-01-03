@@ -51,8 +51,7 @@ fn adaptive_difficulty_escalates_after_repeated_failures() {
         pow_cfg.difficulty.min(u8::MAX as u32) as u8,
         Duration::from_secs(pow_cfg.max_future_skew_secs),
         Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
-    )
-    .with_binding_version(pow_cfg.binding_version());
+    );
     let controls = DoSControls::new(
         base,
         &pow_cfg,
@@ -136,8 +135,7 @@ fn puzzle_failures_surface_and_sync_policies() {
         pow_cfg.difficulty.min(u8::MAX as u32) as u8,
         Duration::from_secs(pow_cfg.max_future_skew_secs),
         Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
-    )
-    .with_binding_version(pow_cfg.binding_version());
+    );
     let controls = DoSControls::new(
         base,
         &pow_cfg,
@@ -263,8 +261,7 @@ fn adaptive_difficulty_replay_is_deterministic() {
         pow_cfg.difficulty.min(u8::MAX as u32) as u8,
         Duration::from_secs(pow_cfg.max_future_skew_secs),
         Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
-    )
-    .with_binding_version(pow_cfg.binding_version());
+    );
     let puzzle_params = pow_cfg
         .puzzle_parameters(&base_params)
         .expect("puzzle defaults valid")
@@ -405,8 +402,7 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         pow_cfg.difficulty.min(u8::MAX as u32) as u8,
         Duration::from_secs(pow_cfg.max_future_skew_secs),
         Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
-    )
-    .with_binding_version(pow_cfg.binding_version());
+    );
     let puzzle_params = pow_cfg
         .puzzle_parameters(&base_params)
         .expect("puzzle parameters")

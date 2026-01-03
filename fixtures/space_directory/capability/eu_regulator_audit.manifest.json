@@ -1,77 +1,49 @@
 {
-  "activation_epoch": 5120,
+  "version": 1,
+  "uaid": "uaid:86e8ee39a3908460a0f4ee257bb25f340cd5b5de72735e9adefe07d5ef4bb0df",
   "dataspace": 31,
+  "issued_ms": 1765238400000,
+  "activation_epoch": 5120,
+  "expiry_epoch": 5900,
   "entries": [
     {
+      "scope": {
+        "dataspace": 31,
+        "program": "compliance.audit",
+        "method": "stream_reports"
+      },
       "effect": {
-        "decision": "Allow",
-        "details": {
-          "max_amount": null,
-          "window": {
-            "details": null,
-            "window": "PerDay"
-          }
+        "Allow": {
+          "window": "PerDay"
         }
       },
-      "notes": "Read-only stream for ESMA/ESRB MiCA evidence pulls.",
-      "scope": {
-        "asset": null,
-        "dataspace": 31,
-        "method": "stream_reports",
-        "program": [
-          "compliance.audit"
-        ],
-        "role": null
-      }
+      "notes": "Read-only stream for ESMA/ESRB MiCA evidence pulls."
     },
     {
+      "scope": {
+        "dataspace": 31,
+        "program": "compliance.audit",
+        "method": "request_snapshot"
+      },
       "effect": {
-        "decision": "Allow",
-        "details": {
-          "max_amount": null,
-          "window": {
-            "details": null,
-            "window": "PerMinute"
-          }
+        "Allow": {
+          "window": "PerMinute"
         }
       },
-      "notes": "Allows hourly signed snapshots for EU investigations.",
-      "scope": {
-        "asset": null,
-        "dataspace": 31,
-        "method": "request_snapshot",
-        "program": [
-          "compliance.audit"
-        ],
-        "role": null
-      }
+      "notes": "Allows hourly signed snapshots for EU investigations."
     },
     {
+      "scope": {
+        "dataspace": 31,
+        "program": "retail.payments",
+        "method": "transfer"
+      },
       "effect": {
-        "decision": "Deny",
-        "details": {
+        "Deny": {
           "reason": "Regulator UAIDs remain read-only."
         }
       },
-      "notes": "Deny-wins guard to prevent inadvertent customer transfers.",
-      "scope": {
-        "asset": null,
-        "dataspace": 31,
-        "method": "transfer",
-        "program": [
-          "retail.payments"
-        ],
-        "role": null
-      }
+      "notes": "Deny-wins guard to prevent inadvertent customer transfers."
     }
-  ],
-  "expiry_epoch": 5900,
-  "issued_ms": 1765238400000,
-  "uaid": [
-    "hash:86E8EE39A3908460A0F4EE257BB25F340CD5B5DE72735E9ADEFE07D5EF4BB0DF#E2C5"
-  ],
-  "version": {
-    "state": null,
-    "version": "V1"
-  }
+  ]
 }

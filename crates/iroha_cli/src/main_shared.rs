@@ -2802,7 +2802,6 @@ mod multisig {
                     .and_then(NonZeroU64::new)
                     .expect("ttl should be between 1 ms and 584942417 years"),
             );
-            ensure_non_legacy_controller(&account, &domain, &spec)?;
             if !context.output_instructions() {
                 context.println(format!("multisig account id: {account}"))?;
             }
@@ -2814,27 +2813,6 @@ mod multisig {
         }
     }
 
-    #[allow(clippy::redundant_pub_crate)]
-    pub(super) fn ensure_non_legacy_controller(
-        account: &AccountId,
-        domain: &DomainId,
-        spec: &MultisigSpec,
-    ) -> Result<()> {
-        let legacy_id = legacy_derived_controller_id(domain, spec);
-        if account == &legacy_id {
-            return Err(eyre!(
-                "multisig account `{account}` must not use the legacy deterministic controller id; omit --account to generate a fresh controller or provide a random/non-derivable id"
-            ));
-        }
-        Ok(())
-    }
-
-    #[allow(clippy::redundant_pub_crate)]
-    pub(super) fn legacy_derived_controller_id(domain_id: &DomainId, spec: &MultisigSpec) -> AccountId {
-        let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain_id.clone(), spec.clone()));
-        let key_pair = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
-        AccountId::new(domain_id.clone(), key_pair.public_key().clone())
-    }
 
     #[derive(clap::Args, Debug)]
     pub struct Propose {
@@ -6481,28 +6459,6 @@ mod multisig_json_tests {
         );
     }
 
-    #[test]
-    fn register_rejects_legacy_derived_controller_id() {
-        let domain: DomainId = "legacy".parse().expect("valid domain");
-        let signer = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
-        let signer_id = AccountId::new(domain.clone(), signer.public_key().clone());
-        let mut signatories = BTreeMap::new();
-        signatories.insert(signer_id, 1);
-        let spec = MultisigSpec::new(
-            signatories,
-            NonZeroU16::new(1).expect("nonzero quorum"),
-            NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
-        );
-        let legacy_account = super::multisig::legacy_derived_controller_id(&domain, &spec);
-
-        let err = super::multisig::ensure_non_legacy_controller(&legacy_account, &domain, &spec)
-            .expect_err("legacy derived controller id must be rejected");
-        let msg = format!("{err:?}");
-        assert!(
-            msg.contains("legacy deterministic"),
-            "error should mention legacy deterministic controller: {msg}"
-        );
-    }
 }
 
 #[cfg(all(test, feature = "cli_integration_harness"))]

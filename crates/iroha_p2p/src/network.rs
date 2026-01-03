@@ -25,7 +25,7 @@ use iroha_crypto::{
     KeyPair,
     soranet::{
         pow::{
-            ChallengeBindingVersion, Parameters as PowParameters, TicketRevocationStore,
+            Parameters as PowParameters, TicketRevocationStore,
             TicketRevocationStoreLimits,
         },
         puzzle,
@@ -173,22 +173,11 @@ fn runtime_from_handshake(
         revocation_store_capacity,
         revocation_max_ttl,
         revocation_store_path,
-        binding_version,
         puzzle,
         signed_ticket_public_key,
     } = pow;
 
-    let pow_binding_version = match binding_version {
-        iroha_config::parameters::actual::PowBindingVersion::RelayBoundV1 => {
-            ChallengeBindingVersion::RelayBoundV1
-        }
-        iroha_config::parameters::actual::PowBindingVersion::LegacyDescriptorOnly => {
-            ChallengeBindingVersion::LegacyDescriptorOnly
-        }
-    };
-
-    let pow_params = PowParameters::new(difficulty, max_future_skew, min_ticket_ttl)
-        .with_binding_version(pow_binding_version);
+    let pow_params = PowParameters::new(difficulty, max_future_skew, min_ticket_ttl);
     let puzzle_params = puzzle.map(|cfg| {
         puzzle::Parameters::new(
             cfg.memory_kib,
@@ -198,7 +187,6 @@ fn runtime_from_handshake(
             max_future_skew,
             min_ticket_ttl,
         )
-        .with_binding_version(pow_binding_version)
     });
 
     let signed_ticket_public_key = signed_ticket_public_key
@@ -236,7 +224,7 @@ fn runtime_from_handshake(
     });
     let revocation_store = Some(Arc::new(Mutex::new(revocation_store)));
 
-    let mut config = SoranetHandshakeConfig::new(
+    let config = SoranetHandshakeConfig::new(
         descriptor_commit.into_value(),
         client_capabilities.into_value(),
         relay_capabilities.into_value(),
@@ -252,7 +240,6 @@ fn runtime_from_handshake(
         revocation_store,
         None,
     );
-    config.set_pow_binding_version(pow_binding_version);
     Ok(Arc::new(config))
 }
 

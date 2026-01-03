@@ -800,92 +800,6 @@ pub const fn vpn_runtime_available() -> bool {
     true
 }
 
-/// Challenge layout used when deriving PoW puzzles/tickets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PowBindingVersion {
-    #[default]
-    RelayBoundV1,
-    LegacyDescriptorOnly,
-}
-
-impl PowBindingVersion {
-    fn sanitize(&mut self) {
-        if !matches!(self, Self::LegacyDescriptorOnly) {
-            *self = Self::RelayBoundV1;
-        }
-    }
-}
-
-impl json::JsonSerialize for PowBindingVersion {
-    fn json_serialize(&self, out: &mut String) {
-        let label = match self {
-            Self::RelayBoundV1 => "relay_bound_v1",
-            Self::LegacyDescriptorOnly => "legacy_descriptor_only",
-        };
-        json::JsonSerialize::json_serialize(&label, out);
-    }
-}
-
-impl json::JsonDeserialize for PowBindingVersion {
-    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
-        let label = String::json_deserialize(parser)?;
-        match label.as_str() {
-            "relay_bound_v1" => Ok(Self::RelayBoundV1),
-            "legacy_descriptor_only" => Ok(Self::LegacyDescriptorOnly),
-            other => Err(json::Error::Message(format!(
-                "invalid pow binding version: {other}"
-            ))),
-        }
-    }
-}
-
-#[cfg(test)]
-mod pow_binding_tests {
-    use norito::json;
-
-    use super::*;
-
-    #[test]
-    fn pow_binding_version_json_roundtrip() {
-        let version = PowBindingVersion::LegacyDescriptorOnly;
-        let bytes = json::to_vec(&version).expect("serialize pow binding version");
-        assert_eq!(b"\"legacy_descriptor_only\"", bytes.as_slice());
-        let decoded: PowBindingVersion =
-            json::from_slice(&bytes).expect("decode pow binding version");
-        assert_eq!(version, decoded);
-    }
-
-    #[test]
-    fn pow_config_preserves_binding_version_label() {
-        let cfg = PowConfig {
-            binding_version: PowBindingVersion::LegacyDescriptorOnly,
-            ..PowConfig::default()
-        };
-        let bytes = json::to_vec(&cfg).expect("serialize pow config");
-        assert!(
-            std::str::from_utf8(&bytes)
-                .expect("pow config json utf8")
-                .contains("\"binding_version\":\"legacy_descriptor_only\""),
-            "binding_version label should survive serialization"
-        );
-        let decoded: PowConfig = json::from_slice(&bytes).expect("deserialize pow config");
-        assert_eq!(
-            PowBindingVersion::LegacyDescriptorOnly,
-            decoded.binding_version
-        );
-    }
-
-    #[test]
-    fn pow_binding_version_rejects_unknown_label() {
-        let err = json::from_slice::<PowBindingVersion>(br#""unknown""#)
-            .expect_err("invalid label should fail");
-        assert!(
-            err.to_string().contains("invalid pow binding version"),
-            "error should mention invalid pow binding version; got {err}"
-        );
-    }
-}
-
 /// Proof-of-work policy.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct PowConfig {
@@ -911,9 +825,6 @@ pub struct PowConfig {
     /// Optional verifying key used for signed PoW tickets.
     #[norito(default)]
     pub signed_ticket_public_key_hex: Option<String>,
-    /// Binding scheme used when hashing puzzle descriptors.
-    #[norito(default)]
-    pub binding_version: PowBindingVersion,
     /// Adaptive difficulty tuning parameters.
     #[norito(default)]
     pub adaptive: AdaptiveDifficultyConfig,
@@ -951,7 +862,6 @@ impl Default for PowConfig {
             revocation_store_ttl_secs: Self::default_revocation_store_ttl(),
             revocation_store_path: Self::default_revocation_store_path(),
             signed_ticket_public_key_hex: None,
-            binding_version: PowBindingVersion::RelayBoundV1,
             adaptive: AdaptiveDifficultyConfig::default(),
             quotas: QuotaConfig::default(),
             quotas_per_mode: None,
@@ -998,7 +908,6 @@ impl PowConfig {
         if self.revocation_store_path.as_os_str().is_empty() {
             self.revocation_store_path = Self::default_revocation_store_path();
         }
-        self.binding_version.sanitize();
         self.adaptive.apply_defaults();
         self.quotas.apply_defaults();
         if let Some(overrides) = self.quotas_per_mode.as_mut() {
@@ -1045,19 +954,8 @@ impl PowConfig {
         base: &pow::Parameters,
     ) -> Result<Option<puzzle::Parameters>, ConfigError> {
         match &self.puzzle {
-            Some(cfg) => cfg
-                .parameters(base)
-                .map(|params| params.map(|p| p.with_binding_version(base.binding_version()))),
+            Some(cfg) => cfg.parameters(base),
             None => Ok(None),
-        }
-    }
-
-    pub fn binding_version(&self) -> pow::ChallengeBindingVersion {
-        match self.binding_version {
-            PowBindingVersion::RelayBoundV1 => pow::ChallengeBindingVersion::RelayBoundV1,
-            PowBindingVersion::LegacyDescriptorOnly => {
-                pow::ChallengeBindingVersion::LegacyDescriptorOnly
-            }
         }
     }
 

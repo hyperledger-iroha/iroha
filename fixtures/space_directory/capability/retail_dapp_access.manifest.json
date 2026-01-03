@@ -1,80 +1,50 @@
 {
-  "activation_epoch": 4099,
+  "version": 1,
+  "uaid": "uaid:62af083a61d42ca6c269585b9a33c563f4e0a5c0726614f7a98b6aab6b98f70b",
   "dataspace": 12,
+  "issued_ms": 1762723200000,
+  "activation_epoch": 4099,
+  "expiry_epoch": 4500,
   "entries": [
     {
-      "effect": {
-        "decision": "Allow",
-        "details": {
-          "max_amount": "2500000",
-          "window": {
-            "details": null,
-            "window": "PerMinute"
-          }
-        }
-      },
-      "notes": "Retail dApp atomic payment handle limit.",
       "scope": {
-        "asset": null,
         "dataspace": 12,
+        "program": "retail.payments",
         "method": "request_handle",
-        "program": [
-          "retail.payments"
-        ],
-        "role": {
-          "details": null,
-          "role": "Initiator"
-        }
-      }
-    },
-    {
+        "role": "Initiator"
+      },
       "effect": {
-        "decision": "Allow",
-        "details": {
-          "max_amount": "100000000",
-          "window": {
-            "details": null,
-            "window": "PerDay"
-          }
+        "Allow": {
+          "max_amount": "2500000",
+          "window": "PerMinute"
         }
       },
-      "notes": null,
+      "notes": "Retail dApp atomic payment handle limit."
+    },
+    {
       "scope": {
-        "asset": null,
         "dataspace": 12,
-        "method": "settle_handle",
-        "program": [
-          "retail.payments"
-        ],
-        "role": null
+        "program": "retail.payments",
+        "method": "settle_handle"
+      },
+      "effect": {
+        "Allow": {
+          "max_amount": "100000000",
+          "window": "PerDay"
+        }
       }
     },
     {
+      "scope": {
+        "dataspace": 12,
+        "program": "retail.payments",
+        "method": "withdraw"
+      },
       "effect": {
-        "decision": "Deny",
-        "details": {
+        "Deny": {
           "reason": "Withdrawals require CBDC lane approval."
         }
-      },
-      "notes": null,
-      "scope": {
-        "asset": null,
-        "dataspace": 12,
-        "method": "withdraw",
-        "program": [
-          "retail.payments"
-        ],
-        "role": null
       }
     }
-  ],
-  "expiry_epoch": 4500,
-  "issued_ms": 1762723200000,
-  "uaid": [
-    "hash:62AF083A61D42CA6C269585B9A33C563F4E0A5C0726614F7A98B6AAB6B98F70B#6EDD"
-  ],
-  "version": {
-    "state": null,
-    "version": "V1"
-  }
+  ]
 }

@@ -3,8 +3,8 @@
 //! The puzzle format intentionally mirrors the existing hashcash-style `PoW`
 //! tickets so clients can attach a single frame regardless of which policy a
 //! relay enforces. Difficulty adjustments and TTL validation follow the same
-//! rules as the legacy `PoW` implementation, while the work predicate is backed
-//! by Argon2id to raise the cost of GPU/ASIC optimisations.
+//! rules as the `PoW` implementation, while the work predicate is backed by
+//! Argon2id to raise the cost of GPU/ASIC optimisations.
 
 use std::{
     fmt,
@@ -16,7 +16,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
-use crate::soranet::pow::{CHALLENGE_DOMAIN, ChallengeBindingVersion, SOLUTION_DOMAIN, Ticket};
+use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket};
 
 const OUTPUT_LEN: usize = 32;
 const TTL_GRACE: Duration = Duration::from_secs(1);
@@ -33,8 +33,6 @@ pub struct ChallengeBinding<'a> {
     /// Present when the client resumes a circuit and both parties agree on the
     /// previously negotiated transcript hash.
     pub transcript_hash: Option<&'a [u8]>,
-    /// Challenge layout version for fixture compatibility.
-    version: ChallengeBindingVersion,
 }
 
 impl<'a> ChallengeBinding<'a> {
@@ -45,34 +43,11 @@ impl<'a> ChallengeBinding<'a> {
         relay_id: &'a [u8],
         transcript_hash: Option<&'a [u8]>,
     ) -> Self {
-        Self::with_version(
-            descriptor_commit,
-            relay_id,
-            transcript_hash,
-            ChallengeBindingVersion::default(),
-        )
-    }
-
-    /// Construct a binding descriptor with an explicit challenge layout.
-    #[must_use]
-    pub fn with_version(
-        descriptor_commit: &'a [u8],
-        relay_id: &'a [u8],
-        transcript_hash: Option<&'a [u8]>,
-        version: ChallengeBindingVersion,
-    ) -> Self {
         Self {
             descriptor_commit,
             relay_id,
             transcript_hash,
-            version,
         }
-    }
-
-    /// Return the configured challenge layout version.
-    #[must_use]
-    pub const fn version(&self) -> ChallengeBindingVersion {
-        self.version
     }
 }
 
@@ -85,7 +60,6 @@ pub struct Parameters {
     difficulty: u8,
     max_future_skew: Duration,
     min_ticket_ttl: Duration,
-    binding_version: ChallengeBindingVersion,
 }
 
 impl Parameters {
@@ -117,7 +91,6 @@ impl Parameters {
             difficulty,
             max_future_skew,
             min_ticket_ttl,
-            binding_version: ChallengeBindingVersion::RelayBoundV1,
         }
     }
 
@@ -163,20 +136,6 @@ impl Parameters {
         Self { difficulty, ..self }
     }
 
-    /// Returns the challenge layout version enforced by this policy.
-    #[must_use]
-    pub const fn binding_version(&self) -> ChallengeBindingVersion {
-        self.binding_version
-    }
-
-    /// Clone the parameter set with a different challenge layout.
-    #[must_use]
-    pub const fn with_binding_version(self, version: ChallengeBindingVersion) -> Self {
-        Self {
-            binding_version: version,
-            ..self
-        }
-    }
 }
 
 /// Errors surfaced while verifying puzzle tickets.
@@ -368,10 +327,7 @@ fn derive_challenge(
     client_nonce: [u8; 32],
     expires_at: u64,
 ) -> blake3::Hash {
-    let relay_len = match binding.version {
-        ChallengeBindingVersion::LegacyDescriptorOnly => 0,
-        ChallengeBindingVersion::RelayBoundV1 => binding.relay_id.len(),
-    };
+    let relay_len = binding.relay_id.len();
     let mut input = Vec::with_capacity(
         CHALLENGE_DOMAIN.len()
             + binding.descriptor_commit.len()
@@ -382,11 +338,9 @@ fn derive_challenge(
     );
     input.extend_from_slice(CHALLENGE_DOMAIN);
     input.extend_from_slice(binding.descriptor_commit);
-    if matches!(binding.version, ChallengeBindingVersion::RelayBoundV1) {
-        input.extend_from_slice(binding.relay_id);
-        if let Some(transcript) = binding.transcript_hash {
-            input.extend_from_slice(transcript);
-        }
+    input.extend_from_slice(binding.relay_id);
+    if let Some(transcript) = binding.transcript_hash {
+        input.extend_from_slice(transcript);
     }
     input.extend_from_slice(&client_nonce);
     input.extend_from_slice(&expires_at.to_be_bytes());
@@ -542,26 +496,6 @@ mod tests {
         let mismatched = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&transcript_b));
         let err = verify(&ticket, &mismatched, &params)
             .expect_err("transcript mismatch should reject ticket");
-        assert!(matches!(err, Error::InvalidSolution));
-    }
-
-    #[test]
-    fn legacy_binding_layout_skips_relay_and_transcript() {
-        let params = test_parameters();
-        let mut rng = ChaCha20Rng::from_seed([0xBB; 32]);
-        let legacy_binding = ChallengeBinding::with_version(
-            &DESCRIPTOR,
-            &RELAY,
-            None,
-            ChallengeBindingVersion::LegacyDescriptorOnly,
-        );
-        let ticket =
-            mint_ticket(&params, &legacy_binding, Duration::from_secs(10), &mut rng).expect("mint");
-        verify(&ticket, &legacy_binding, &params).expect("legacy binding should verify");
-
-        let relay_binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, None);
-        let err = verify(&ticket, &relay_binding, &params)
-            .expect_err("relay-bound layout should reject legacy ticket");
         assert!(matches!(err, Error::InvalidSolution));
     }
 

@@ -2011,13 +2011,9 @@ impl CoreHost {
     fn compute_envelope_hash(payload: &[u8]) -> Result<[u8; 32], ivm::VMError> {
         #[cfg(feature = "zk-halo2-ipa")]
         {
-            // Try Norito-based OpenVerifyEnvelope first
-            if norito::decode_from_bytes::<iroha_zkp_halo2::OpenVerifyEnvelope>(payload).is_ok() {
-                return Ok(iroha_crypto::Hash::new(payload).into());
+            if norito::decode_from_bytes::<iroha_zkp_halo2::OpenVerifyEnvelope>(payload).is_err() {
+                return Err(ivm::VMError::NoritoInvalid);
             }
-            // Fallback to legacy binary envelope
-            iroha_zkp_halo2::Halo2ProofEnvelope::from_bytes(payload)
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
         }
         Ok(iroha_crypto::Hash::new(payload).into())
     }

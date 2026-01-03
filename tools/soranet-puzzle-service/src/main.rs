@@ -160,8 +160,7 @@ impl PuzzleService {
             pow_cfg.difficulty.min(u8::MAX as u32) as u8,
             Duration::from_secs(pow_cfg.max_future_skew_secs),
             Duration::from_secs(pow_cfg.min_ticket_ttl_secs),
-        )
-        .with_binding_version(pow_cfg.binding_version());
+        );
         let puzzle_params = pow_cfg
             .puzzle_parameters(&base_params)
             .wrap_err("invalid puzzle configuration")?;
@@ -278,19 +277,17 @@ impl PuzzleService {
         rng: &mut R,
     ) -> Result<PowTicket, ChallengeMintError> {
         if let Some(params) = &self.puzzle_params {
-            let binding = PuzzleBinding::with_version(
+            let binding = PuzzleBinding::new(
                 &self.descriptor_commit,
                 &self.relay_id,
                 transcript_hash.as_ref().map(|hash| hash.as_slice()),
-                params.binding_version(),
             );
             puzzle::mint_ticket(params, &binding, ttl, rng).map_err(ChallengeMintError::Puzzle)
         } else {
-            let binding = pow::ChallengeBinding::with_version(
+            let binding = pow::ChallengeBinding::new(
                 &self.descriptor_commit,
                 &self.relay_id,
                 transcript_hash.as_ref().map(|hash| hash.as_slice()),
-                self.pow_params.binding_version(),
             );
             pow::mint_ticket(&self.pow_params, &binding, ttl, rng).map_err(ChallengeMintError::Pow)
         }
@@ -1607,11 +1604,10 @@ mod tests {
         )
         .expect("sign ticket");
 
-        let binding = ChallengeBinding::with_version(
+        let binding = ChallengeBinding::new(
             &service.descriptor_commit,
             &service.relay_id,
             Some(&transcript_hash),
-            service.pow_params.binding_version(),
         );
         pow::verify_signed_ticket(&signed, &public, &binding, &service.pow_params, None)
             .expect("signed ticket should verify");
@@ -1646,11 +1642,10 @@ mod tests {
             .clone();
         let signed_bytes = STANDARD.decode(signed_b64).expect("decode signed ticket");
         let signed = SignedTicket::decode(&signed_bytes).expect("decode signed ticket");
-        let binding = ChallengeBinding::with_version(
+        let binding = ChallengeBinding::new(
             &state.descriptor_commit,
             &state.relay_id,
             Some(&[0x11; 32]),
-            state.pow_params.binding_version(),
         );
         pow::verify_signed_ticket(&signed, &public, &binding, &state.pow_params, None)
             .expect("signed ticket verifies");

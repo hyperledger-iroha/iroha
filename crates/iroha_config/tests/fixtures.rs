@@ -215,7 +215,7 @@ fn minimal_config_snapshot() {
                     kem_id: 1,
                     sig_id: 1,
                     resume_hash: None,
-                    pow: SoranetPow { required: false, difficulty: 0, binding_version: relay_bound_v1, max_future_skew_secs: 300, min_ticket_ttl_secs: 30, ticket_ttl_secs: 60, revocation_store_capacity: 8192, revocation_max_ttl_secs: 900, revocation_store_path: ./storage/soranet/ticket_revocations.norito, puzzle: Some { memory_kib: 65536, time_cost: 2, lanes: 1 }, signed_ticket_public_key: None },
+                    pow: SoranetPow { required: false, difficulty: 0, max_future_skew_secs: 300, min_ticket_ttl_secs: 30, ticket_ttl_secs: 60, revocation_store_capacity: 8192, revocation_max_ttl_secs: 900, revocation_store_path: ./storage/soranet/ticket_revocations.norito, puzzle: Some { memory_kib: 65536, time_cost: 2, lanes: 1 }, signed_ticket_public_key: None },
                 },
                 soranet_privacy: SoranetPrivacy {
                     bucket_secs: 60,

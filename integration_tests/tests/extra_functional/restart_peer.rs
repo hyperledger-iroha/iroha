@@ -1,5 +1,5 @@
 //! Tests that a restarted peer restores its state.
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
@@ -18,7 +18,13 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let quantity = numeric!(200);
 
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_peers(4),
+        NetworkBuilder::new()
+            .with_peers(4)
+            .with_config_layer(|layer| {
+                layer
+                    .write(["snapshot", "mode"], "read_write")
+                    .write(["snapshot", "create_every_ms"], 200_i64);
+            }),
         stringify!(restarted_peer_should_restore_its_state),
     )
     .await?
@@ -29,6 +35,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
 
     // create state on the first peer
     let peer_a = &peers[0];
+    let peer_b = &peers[1];
     let client = peer_a.client();
     let client_for_submit = client.clone();
     let asset_definition_clone = asset_definition_id.clone();
@@ -96,11 +103,41 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     };
     assert!(minted, "minted asset not observed before restart");
 
+    // Ensure a post-mint snapshot persists before shutdown so restart can rebuild from disk.
+    let snapshot_dir = peer_b.kura_store_dir().join("snapshot");
+    let snapshot_min_time = SystemTime::now();
+    let snapshot_deadline = Instant::now() + network.sync_timeout();
+    let snapshot_ready = loop {
+        let data = snapshot_dir.join("snapshot.data");
+        let digest = snapshot_dir.join("snapshot.sha256");
+        let sig = snapshot_dir.join("snapshot.sig");
+        let merkle = snapshot_dir.join("snapshot.merkle.json");
+        let ready = data
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok().map(|modified| (meta, modified)))
+            .is_some_and(|(meta, modified)| {
+                meta.len() > 0 && modified >= snapshot_min_time
+            })
+            && digest.exists()
+            && sig.exists()
+            && merkle.exists();
+        if ready {
+            break true;
+        }
+        if Instant::now() >= snapshot_deadline {
+            break false;
+        }
+        sleep(Duration::from_millis(200)).await;
+    };
+    if !snapshot_ready {
+        return Err(eyre!("snapshot not created before shutdown"));
+    }
+
     // shutdown all
     network.shutdown().await;
 
     // restart another one, **without a genesis** even
-    let peer_b = &peers[1];
     let config: Vec<_> = network.config_layers().collect();
     assert_ne!(peer_a, peer_b);
     let start_result = timeout(network.peer_startup_timeout(), async move {

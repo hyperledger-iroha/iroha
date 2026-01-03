@@ -131,13 +131,16 @@ impl PendingBlock {
             self.commit_vote_sent = false;
             self.commit_certificate_seen = false;
             self.commit_certificate_epoch = None;
+            self.last_gate = None;
             self.last_gate_satisfied = None;
+            self.availability_qc_view = None;
             self.reset_kura_retry();
             self.kura_persisted = false;
             self.validation_status = ValidationStatus::Pending;
             self.last_precommit_rebroadcast = None;
             self.availability_vote_sent = false;
             self.last_quorum_reschedule = None;
+            self.aborted = false;
         }
     }
 

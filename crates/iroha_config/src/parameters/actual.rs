@@ -649,27 +649,6 @@ impl Default for SoranetVpn {
     }
 }
 
-/// Challenge layout advertised for PoW admission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PowBindingVersion {
-    /// Current layout that binds relay identity and optional transcript.
-    #[default]
-    RelayBoundV1,
-    /// Legacy layout used for fixture compatibility (descriptor-only).
-    LegacyDescriptorOnly,
-}
-
-impl PowBindingVersion {
-    /// Human-readable label for diagnostics.
-    #[must_use]
-    pub const fn as_label(self) -> &'static str {
-        match self {
-            Self::RelayBoundV1 => "relay_bound_v1",
-            Self::LegacyDescriptorOnly => "legacy_descriptor_only",
-        }
-    }
-}
-
 /// PoW admission parameters shared with peers.
 #[derive(Debug, Clone)]
 pub struct SoranetPow {
@@ -691,8 +670,6 @@ pub struct SoranetPow {
     pub revocation_store_path: Cow<'static, str>,
     /// Optional puzzle parameters for Argon2-based challenges.
     pub puzzle: Option<SoranetPuzzle>,
-    /// Challenge layout version for compatibility with legacy fixtures.
-    pub binding_version: PowBindingVersion,
     /// ML-DSA-44 public key used to verify signed PoW tickets.
     pub signed_ticket_public_key: Option<Vec<u8>>,
 }
@@ -758,7 +735,6 @@ impl SoranetPow {
             revocation_max_ttl,
             revocation_store_path,
             puzzle,
-            binding_version: PowBindingVersion::RelayBoundV1,
             signed_ticket_public_key: None,
         }
     }
@@ -775,17 +751,7 @@ impl SoranetPow {
             revocation_max_ttl: Duration::from_secs(900),
             revocation_store_path: Cow::Borrowed("./storage/soranet/ticket_revocations.norito"),
             puzzle: Some(SoranetPuzzle::default_const()),
-            binding_version: PowBindingVersion::RelayBoundV1,
             signed_ticket_public_key: None,
-        }
-    }
-
-    /// Clone the PoW policy with a specific binding layout.
-    #[must_use]
-    pub fn with_binding_version(self, version: PowBindingVersion) -> Self {
-        Self {
-            binding_version: version,
-            ..self
         }
     }
 
@@ -837,11 +803,10 @@ impl fmt::Debug for SoranetHandshake {
             .field(
                 "pow",
                 &format_args!(
-                    "SoranetPow {{ required: {}, difficulty: {}, binding_version: {}, max_future_skew_secs: {}, min_ticket_ttl_secs: {}, ticket_ttl_secs: {}, revocation_store_capacity: {}, revocation_max_ttl_secs: {}, revocation_store_path: {}, puzzle: {}, signed_ticket_public_key: {} }}",
-                    self.pow.required,
-                    self.pow.difficulty,
-                    self.pow.binding_version.as_label(),
-                    self.pow.max_future_skew.as_secs(),
+                "SoranetPow {{ required: {}, difficulty: {}, max_future_skew_secs: {}, min_ticket_ttl_secs: {}, ticket_ttl_secs: {}, revocation_store_capacity: {}, revocation_max_ttl_secs: {}, revocation_store_path: {}, puzzle: {}, signed_ticket_public_key: {} }}",
+                self.pow.required,
+                self.pow.difficulty,
+                self.pow.max_future_skew.as_secs(),
                     self.pow.min_ticket_ttl.as_secs(),
                     self.pow.ticket_ttl.as_secs(),
                     self.pow.revocation_store_capacity,
