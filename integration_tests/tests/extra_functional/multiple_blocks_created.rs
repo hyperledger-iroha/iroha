@@ -66,10 +66,10 @@ async fn multiple_blocks_created() -> Result<()> {
             ],
             <_>::default(),
         );
-        let submit_res: eyre::Result<()> = spawn_blocking(move || client.submit_transaction(&tx))
-            .await
-            .map_err(eyre::Report::from)?
-            .map(|_| ());
+        let submit_res: eyre::Result<()> =
+            spawn_blocking(move || client.submit_transaction_blocking(&tx).map(|_| ()))
+                .await
+                .map_err(eyre::Report::from)?;
         if sandbox::handle_result(submit_res, stringify!(multiple_blocks_created))?.is_none() {
             return Ok(());
         }
@@ -94,6 +94,7 @@ async fn multiple_blocks_created() -> Result<()> {
             .choose(&mut rng)
             .expect("there is a room to choose from");
         println!("submitting {txs} transactions to random peers");
+        let mut submit_handles = Vec::new();
         for _ in 0..txs {
             let value = (0..999_999)
                 .choose(&mut rng)
@@ -108,11 +109,13 @@ async fn multiple_blocks_created() -> Result<()> {
                 )],
                 <_>::default(),
             );
-            let submit_res: eyre::Result<()> =
-                spawn_blocking(move || client.submit_transaction(&tx))
-                    .await
-                    .map_err(eyre::Report::from)?
-                    .map(|_| ());
+            submit_handles.push(spawn_blocking(move || {
+                client.submit_transaction_blocking(&tx).map(|_| ())
+            }));
+        }
+
+        for handle in submit_handles {
+            let submit_res: eyre::Result<()> = handle.await.map_err(eyre::Report::from)?;
             if sandbox::handle_result(submit_res, stringify!(multiple_blocks_created))?.is_none() {
                 return Ok(());
             }

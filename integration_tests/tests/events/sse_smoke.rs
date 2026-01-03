@@ -3,7 +3,12 @@
 use std::{
     io::{BufRead, BufReader, Write},
     net::{TcpStream, ToSocketAddrs},
-    sync::mpsc::{self, Receiver},
+    ops::Deref,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver},
+    },
     time::{Duration, Instant},
 };
 
@@ -16,6 +21,29 @@ use iroha_test_samples::ALICE_ID;
 use norito::json::{self, Value as JsonValue};
 
 const SSE_TIMEOUT: Duration = Duration::from_secs(45);
+
+struct SseReader {
+    rx: Receiver<String>,
+    shutdown: Arc<AtomicBool>,
+}
+
+impl Deref for SseReader {
+    type Target = Receiver<String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rx
+    }
+}
+
+impl Drop for SseReader {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+    }
+}
+
+fn sse_reader_should_stop(deadline: Instant, shutdown: &AtomicBool) -> bool {
+    shutdown.load(Ordering::Acquire) || Instant::now() >= deadline
+}
 
 /// Wait for the SSE reader to establish a connection (the reader emits a
 /// synthetic `{"connected":true}` payload when headers have been consumed).
@@ -170,8 +198,10 @@ fn sse_captures_time_trigger_and_metadata_events() -> Result<()> {
     Ok(())
 }
 
-fn spawn_sse_reader(addr: IrohaSocketAddr) -> Receiver<String> {
+fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
     let (tx, rx) = mpsc::channel::<String>();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_flag = shutdown.clone();
     std::thread::spawn(move || {
         let target = addr
             .to_socket_addrs()
@@ -183,7 +213,7 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> Receiver<String> {
         let mut backoff = Duration::from_millis(200);
 
         // Retry connecting until the server is ready or the overall SSE timeout elapses.
-        while Instant::now() < deadline {
+        while !sse_reader_should_stop(deadline, &shutdown_flag) {
             if let Ok(mut stream) = TcpStream::connect(target) {
                 stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
                 let req = format!(
@@ -199,10 +229,15 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> Receiver<String> {
                 let mut reader = BufReader::new(stream);
                 let mut line = String::new();
                 // Consume headers
-                while {
+                loop {
+                    if sse_reader_should_stop(deadline, &shutdown_flag) {
+                        return;
+                    }
                     line.clear();
-                    reader.read_line(&mut line).unwrap_or(0) != 0 && line != "\r\n"
-                } {}
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
                 // Signal readiness so the test can submit transactions only after the
                 // SSE connection is live.
                 if tx.send(r#"{"connected":true}"#.to_owned()).is_err() {
@@ -212,6 +247,9 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> Receiver<String> {
                 // Stream SSE payloads; if the server closes the connection unexpectedly,
                 // retry until the overall deadline.
                 loop {
+                    if sse_reader_should_stop(deadline, &shutdown_flag) {
+                        return;
+                    }
                     line.clear();
                     match reader.read_line(&mut line) {
                         Ok(0) | Err(_) => break,
@@ -230,7 +268,7 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> Receiver<String> {
             }
         }
     });
-    rx
+    SseReader { rx, shutdown }
 }
 
 fn wait_for_sse<F>(rx: &Receiver<String>, timeout: Duration, predicate: F) -> Result<JsonValue>
@@ -260,4 +298,17 @@ fn summary_contains(val: &JsonValue, needle: &str) -> bool {
     val.get("summary")
         .and_then(JsonValue::as_str)
         .is_some_and(|s| s.contains(needle))
+}
+
+#[test]
+fn sse_reader_should_stop_honors_deadline_and_shutdown() {
+    let shutdown = AtomicBool::new(false);
+    let expired = Instant::now() - Duration::from_millis(1);
+    assert!(sse_reader_should_stop(expired, &shutdown));
+
+    let future = Instant::now() + Duration::from_secs(1);
+    assert!(!sse_reader_should_stop(future, &shutdown));
+
+    shutdown.store(true, Ordering::Release);
+    assert!(sse_reader_should_stop(future, &shutdown));
 }

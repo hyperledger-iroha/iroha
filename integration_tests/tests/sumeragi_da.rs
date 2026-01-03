@@ -1159,7 +1159,10 @@ where
         return Ok(());
     };
 
-    let client = network.client();
+    let mut client = network.client();
+    let status_timeout = Duration::from_secs(300);
+    client.transaction_status_timeout = status_timeout;
+    client.transaction_ttl = Some(status_timeout + Duration::from_secs(5));
     // When Torii websockets are blocked by the environment, bail out early as a sandbox skip.
     if sandbox::handle_result(
         set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true)).await,

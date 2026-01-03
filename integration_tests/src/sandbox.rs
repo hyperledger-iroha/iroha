@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    env,
     ops::{Deref, DerefMut},
     panic::{self, AssertUnwindSafe},
     sync::{Arc, OnceLock},
@@ -14,13 +15,15 @@ use tokio::{
     sync::{Mutex, OwnedMutexGuard},
 };
 
-/// Serialize integration tests that spin up a network to reduce port contention and sandbox flakiness.
+/// Optional guard that serializes integration tests which spin up a network.
+///
+/// Set `IROHA_TEST_SERIALIZE_NETWORKS=1` to enable serialization.
 #[must_use]
 pub struct SerialGuard {
     _guard: Option<OwnedMutexGuard<()>>,
 }
 
-/// Network wrapper that keeps the serial guard alive for the entire test scope.
+/// Network wrapper that keeps the optional serial guard alive for the entire test scope.
 pub struct SerializedNetwork {
     network: Network,
     _guard: SerialGuard,
@@ -28,7 +31,7 @@ pub struct SerializedNetwork {
 }
 
 impl SerializedNetwork {
-    /// Wrap a network with a serial guard held for its full lifetime.
+    /// Wrap a network with an optional serial guard held for its full lifetime.
     pub fn new(network: Network, guard: SerialGuard) -> Self {
         Self {
             network,
@@ -37,7 +40,7 @@ impl SerializedNetwork {
         }
     }
 
-    /// Shut down running peers before releasing the serial guard.
+    /// Shut down running peers before releasing the optional serial guard.
     pub fn shutdown_blocking(mut self) {
         self.shutdown_done = true;
         self.shutdown_blocking_inner();
@@ -97,14 +100,28 @@ impl Drop for SerializedNetwork {
 const SERIAL_GUARD_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
+const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 
 fn serial_lock() -> &'static Arc<Mutex<()>> {
     static SERIAL_LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
     SERIAL_LOCK.get_or_init(|| Arc::new(Mutex::default()))
 }
 
-/// Acquire the global integration-test mutex to serialize network startup.
+fn serialize_networks_enabled() -> bool {
+    let Ok(raw) = env::var(SERIALIZE_NETWORKS_ENV) else {
+        return false;
+    };
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Acquire the global integration-test mutex to serialize network startup when enabled.
 pub fn serial_guard() -> SerialGuard {
+    if !serialize_networks_enabled() {
+        return SerialGuard { _guard: None };
+    }
     let lock = serial_lock();
     let mut waited = Duration::ZERO;
     let mut next_log = SERIAL_GUARD_LOG_INTERVAL;
@@ -328,8 +345,65 @@ fn is_sandbox_message(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        env,
+        sync::{Mutex, MutexGuard, OnceLock},
+    };
 
     use super::*;
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn lock_env_guard() -> MutexGuard<'static, ()> {
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = env::var_os(key);
+            set_env_var(key, value);
+            Self { key, original }
+        }
+
+        fn clear(key: &'static str) -> Self {
+            let original = env::var_os(key);
+            remove_env_var(key);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.original.as_ref() {
+                set_env_var(self.key, value);
+            } else {
+                remove_env_var(self.key);
+            }
+        }
+    }
+
+    fn set_env_var<K, V>(key: K, value: V)
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        unsafe { env::set_var(key, value) }
+    }
+
+    fn remove_env_var<K>(key: K)
+    where
+        K: AsRef<std::ffi::OsStr>,
+    {
+        unsafe { env::remove_var(key) }
+    }
 
     #[test]
     fn detects_sandbox_messages() {
@@ -364,6 +438,8 @@ mod tests {
 
     #[test]
     fn serialized_network_holds_serial_guard() {
+        let _env_guard = lock_env_guard();
+        let _serialize_guard = EnvVarGuard::set(SERIALIZE_NETWORKS_ENV, "1");
         let lock = serial_lock().clone();
         let guard = serial_guard();
         let network = NetworkBuilder::new().build();
@@ -384,6 +460,8 @@ mod tests {
 
     #[test]
     fn serialized_network_shutdown_blocking_releases_guard() {
+        let _env_guard = lock_env_guard();
+        let _serialize_guard = EnvVarGuard::set(SERIALIZE_NETWORKS_ENV, "1");
         let lock = serial_lock().clone();
         let guard = serial_guard();
         let network = NetworkBuilder::new().build();
@@ -400,6 +478,21 @@ mod tests {
             .try_lock_owned()
             .expect("serial guard should release after shutdown_blocking");
         drop(released);
+    }
+
+    #[test]
+    fn serial_guard_is_noop_by_default() {
+        let _env_guard = lock_env_guard();
+        let _clear_guard = EnvVarGuard::clear(SERIALIZE_NETWORKS_ENV);
+        let lock = serial_lock().clone();
+        let guard = serial_guard();
+        let probe = lock.clone().try_lock_owned();
+        assert!(
+            probe.is_ok(),
+            "serial guard should be disabled unless {SERIALIZE_NETWORKS_ENV} is set"
+        );
+        drop(probe);
+        drop(guard);
     }
 
     #[test]

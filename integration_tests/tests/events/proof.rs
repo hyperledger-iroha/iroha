@@ -1,8 +1,11 @@
 //! Integration tests for ZK proof events over the Torii event stream.
+use std::time::Duration;
+
 use assert_matches::assert_matches;
 use eyre::Result;
 use futures_util::StreamExt;
 use integration_tests::sandbox;
+use iroha::client::Client;
 use iroha::data_model::prelude::*;
 use iroha_core::zk::test_utils::halo2_fixture_envelope;
 use iroha_data_model::events::data::prelude::ProofEventFilter;
@@ -18,6 +21,18 @@ fn halo2_attachment() -> iroha::data_model::proof::ProofAttachment {
     iroha::data_model::proof::ProofAttachment::new_inline("halo2/ipa".into(), proof_box, vk_box)
 }
 
+fn client_with_timeout(network: &Network) -> Client {
+    let mut client = network.client();
+    let status_timeout = Duration::from_secs(300);
+    client.transaction_status_timeout = status_timeout;
+    client.transaction_ttl = Some(status_timeout + Duration::from_secs(5));
+    client
+}
+
+fn proof_event_timeout(network: &Network) -> Duration {
+    network.sync_timeout().max(Duration::from_secs(300))
+}
+
 #[tokio::test]
 async fn verify_proof_emits_verified_event() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -29,8 +44,8 @@ async fn verify_proof_emits_verified_event() -> Result<()> {
         return Ok(());
     };
     let result: Result<()> = async {
-        let mut events = network
-            .client()
+        let client = client_with_timeout(&network);
+        let mut events = client
             .listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())])
             .await?;
 
@@ -40,13 +55,13 @@ async fn verify_proof_emits_verified_event() -> Result<()> {
             iroha::data_model::isi::zk::VerifyProof::new(attachment).into();
 
         {
-            let client = network.client();
-            spawn_blocking(move || client.submit_all_blocking([verify])).await??;
+            let submit_client = client.clone();
+            spawn_blocking(move || submit_client.submit_all([verify])).await??;
         }
         network.ensure_blocks(2).await?;
 
         // Wait for the proof event and assert it is Verified
-        let proof_event = timeout(network.sync_timeout(), async {
+        let proof_event = timeout(proof_event_timeout(&network), async {
             loop {
                 let ev = events.next().await.expect("event stream open")?;
                 if let EventBox::Data(event) = ev
@@ -83,8 +98,8 @@ async fn verify_proof_emits_rejected_event() -> Result<()> {
         return Ok(());
     };
     let result: Result<()> = async {
-        let mut events = network
-            .client()
+        let client = client_with_timeout(&network);
+        let mut events = client
             .listen_for_events_async([DataEventFilter::Proof(ProofEventFilter::new())])
             .await?;
 
@@ -98,12 +113,12 @@ async fn verify_proof_emits_rejected_event() -> Result<()> {
             iroha::data_model::isi::zk::VerifyProof::new(attachment).into();
 
         {
-            let client = network.client();
-            spawn_blocking(move || client.submit_all_blocking([verify])).await??;
+            let submit_client = client.clone();
+            spawn_blocking(move || submit_client.submit_all([verify])).await??;
         }
         network.ensure_blocks(2).await?;
 
-        let proof_event = timeout(network.sync_timeout(), async {
+        let proof_event = timeout(proof_event_timeout(&network), async {
             loop {
                 let ev = events.next().await.expect("event stream open")?;
                 if let EventBox::Data(event) = ev

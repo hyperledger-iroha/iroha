@@ -32,6 +32,7 @@ use futures::{prelude::*, stream::FuturesUnordered};
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_config::{
     base::{
+        env::MockEnv,
         read::ConfigReader,
         toml::{TomlSource, WriteExt as _, Writer as TomlWriter},
     },
@@ -2478,28 +2479,42 @@ fn raw_nexus_overrides(table: &Table) -> bool {
 fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
     // Inject required fields so profile detection can parse without the base layer.
     let merged = merged_sora_profile_detection_config(config_layers);
-    match iroha_config::parameters::actual::Root::from_toml_source(TomlSource::inline(
-        merged.clone(),
-    )) {
-        Ok(config) => {
-            let sorafs_storage = config.torii.sorafs_storage.enabled;
-            let sorafs_discovery = config.torii.sorafs_discovery.discovery_enabled;
-            let nexus_requires_router = config.nexus.uses_multilane_catalogs();
-            let nexus_lane_overrides = config.nexus.has_lane_overrides();
-            sorafs_storage || sorafs_discovery || nexus_requires_router || nexus_lane_overrides
-        }
+    let config = match ConfigReader::new()
+        .with_env(MockEnv::default())
+        .with_toml_source(TomlSource::inline(merged.clone()))
+        .read_and_complete::<iroha_config::parameters::user::Root>()
+    {
+        Ok(user) => match user.parse() {
+            Ok(parsed) => Some(parsed),
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "failed to parse merged config for Sora profile detection; falling back to raw scan"
+                );
+                None
+            }
+        },
         Err(err) => {
             warn!(
                 ?err,
                 "failed to parse merged config for Sora profile detection; falling back to raw scan"
             );
-            let sorafs_storage =
-                read_bool(&merged, &["torii", "sorafs_storage", "enabled"]).unwrap_or(false);
-            let sorafs_discovery =
-                read_bool(&merged, &["torii", "sorafs_discovery", "discovery_enabled"])
-                    .unwrap_or(false);
-            sorafs_storage || sorafs_discovery || raw_nexus_overrides(&merged)
+            None
         }
+    };
+    if let Some(config) = config {
+        let sorafs_storage = config.torii.sorafs_storage.enabled;
+        let sorafs_discovery = config.torii.sorafs_discovery.discovery_enabled;
+        let nexus_requires_router = config.nexus.uses_multilane_catalogs();
+        let nexus_lane_overrides = config.nexus.has_lane_overrides();
+        sorafs_storage || sorafs_discovery || nexus_requires_router || nexus_lane_overrides
+    } else {
+        let sorafs_storage =
+            read_bool(&merged, &["torii", "sorafs_storage", "enabled"]).unwrap_or(false);
+        let sorafs_discovery =
+            read_bool(&merged, &["torii", "sorafs_discovery", "discovery_enabled"])
+                .unwrap_or(false);
+        sorafs_storage || sorafs_discovery || raw_nexus_overrides(&merged)
     }
 }
 
@@ -5367,6 +5382,8 @@ mod tests {
     static SUMERAGI_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
     /// Serializes mutations of client timeout overrides.
     static CLIENT_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
+    /// Serializes mutations of config env overrides so local parsing ignores host overrides.
+    static CONFIG_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
 
     fn lock_env_guard(mutex: &'static AsyncMutex<()>) -> AsyncMutexGuard<'static, ()> {
         mutex.blocking_lock()
@@ -5456,6 +5473,51 @@ mod tests {
         assert!(removed.contains("API_ADDRESS"));
         assert!(removed.contains("P2P_ADDRESS"));
         assert!(removed.contains("CHAIN"));
+    }
+
+    #[test]
+    fn config_requires_sora_profile_ignores_env_overrides() {
+        let _guard = lock_env_guard(&CONFIG_ENV_GUARD);
+        struct EnvRestore {
+            key: &'static str,
+            previous: Option<OsString>,
+        }
+
+        impl EnvRestore {
+            fn set(key: &'static str, value: OsString) -> Self {
+                let previous = env::var_os(key);
+                set_env_var(key, value);
+                Self { key, previous }
+            }
+
+            fn clear(key: &'static str) -> Self {
+                let previous = env::var_os(key);
+                remove_env_var(key);
+                Self { key, previous }
+            }
+        }
+
+        impl Drop for EnvRestore {
+            fn drop(&mut self) {
+                if let Some(value) = self.previous.take() {
+                    set_env_var(self.key, value);
+                } else {
+                    remove_env_var(self.key);
+                }
+            }
+        }
+
+        let _public_key_guard = EnvRestore::set(
+            "PUBLIC_KEY",
+            OsString::from(ALICE_KEYPAIR.public_key().to_string()),
+        );
+        let _private_key_guard = EnvRestore::clear("PRIVATE_KEY");
+
+        let layer = Table::new().write(["torii", "sorafs_storage", "enabled"], true);
+        assert!(
+            config_requires_sora_profile(&[layer]),
+            "profile detection should not be influenced by host env overrides"
+        );
     }
 
     #[tokio::test]

@@ -6,7 +6,7 @@
 
 - `/metrics`: Prometheus 書式のテキスト。テレメトリ無効化時やプロファイルで制限されている場合は非公開。
 - `/status`: JSON ステータス。`sumeragi`（リーダー、HighestQC/LockedQC、ビュー変更証明カウンタ（`view_change_proof_{accepted,stale,rejected}_total`）、ゴシップフォールバック、トランザクションキュー深さ、エポック情報 `epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }`、RBC ストア統計〔`sessions`, `bytes`, `pressure_level`, `evictions_total`, `recent_evictions`〕、PRF シード／高さ／ビュー など）や `governance` のスナップショットを含む。
-- `/v1/sumeragi/new_view` / `/v1/sumeragi/new_view/sse`: NEW_VIEW 受信数を JSON / SSE で取得。
+- `/v1/sumeragi/new_view` / `/v1/sumeragi/new_view/sse`: NEW_VIEW 受信数を JSON / SSE で取得（固定サイズのメモリ内ウィンドウで保持し、古い `(height, view)` は破棄）。
 - `/v1/sumeragi/status` / `/v1/sumeragi/status/sse`: コンセンサス状態を JSON または Norito で取得。JSON 版には `epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }` に加え、`da_reschedule_total`、`lane_governance_sealed_total` / `lane_governance_sealed_aliases`、`worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx } }` などの集約メトリクスが含まれる。
 - `/v1/sumeragi/rbc` / `/v1/sumeragi/rbc/sessions`: RBC セッションの統計と詳細（`lane_backlog` / `dataspace_backlog` を含む）。
 - `/v1/sumeragi/pacemaker`: ビュータイマー設定と現在値。

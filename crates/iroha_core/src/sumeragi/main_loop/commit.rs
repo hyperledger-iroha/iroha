@@ -3342,6 +3342,42 @@ impl Actor {
         &mut self,
         vote: crate::sumeragi::consensus::CommitVote,
     ) -> Result<()> {
+        let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        if vote.height <= committed_height {
+            debug!(
+                height = vote.height,
+                view = vote.view,
+                block = %vote.block_hash,
+                committed_height,
+                "dropping stale commit vote below committed height"
+            );
+            return Ok(());
+        }
+        if let Some(local_view) = self.stale_view(vote.height, vote.view) {
+            let missing_request = self
+                .pending
+                .missing_block_requests
+                .contains_key(&vote.block_hash);
+            if self.block_known_locally(vote.block_hash) || missing_request {
+                debug!(
+                    height = vote.height,
+                    view = vote.view,
+                    local_view,
+                    block = %vote.block_hash,
+                    missing_request,
+                    "accepting commit vote for stale view"
+                );
+            } else {
+                debug!(
+                    height = vote.height,
+                    view = vote.view,
+                    local_view,
+                    kind = "CommitVote",
+                    "dropping consensus message for stale view"
+                );
+                return Ok(());
+            }
+        }
         let commit_topology = self.effective_commit_topology();
         if commit_topology.is_empty() {
             warn!(
@@ -3952,7 +3988,7 @@ impl Actor {
             ConsensusMode::Npos => self.epoch_manager.as_ref().map_or(0, EpochManager::epoch),
         };
 
-        let topology_peers = self.effective_commit_topology();
+        let topology_peers = self.roster_for_vote_with_mode(block_hash, height, consensus_mode);
         if topology_peers.is_empty() {
             return;
         }
@@ -5077,11 +5113,25 @@ impl Actor {
     pub(super) fn on_block_commit(&mut self, height: u64) -> Result<()> {
         self.subsystems.propose.new_view_tracker.prune(height);
         self.subsystems.propose.broadcast_new_views.retain(|(h, _), _| *h > height);
+        self.subsystems
+            .propose
+            .proposals_seen
+            .retain(|(entry_height, _)| *entry_height > height);
         self.subsystems.propose.forced_view_after_timeout = self
             .subsystems
             .propose
             .forced_view_after_timeout
             .filter(|(forced_height, _)| *forced_height > height);
+        let retention_floor = height.saturating_sub(1);
+        self.exec_vote_log
+            .retain(|(vote_height, _, _, _), _| *vote_height >= retention_floor);
+        self.vote_log
+            .retain(|(_, vote_height, _, _, _), _| *vote_height > height);
+        self.commit_votes
+            .retain(|(_, vote_height, _, _, _), _| *vote_height > height);
+        self.pending
+            .missing_block_requests
+            .retain(|_, request| request.height > height);
         let latest_hash = {
             let view = self.state.view();
             view.latest_block_hash()
@@ -5100,6 +5150,7 @@ impl Actor {
                 "commit topology changed; cleared consensus caches"
             );
         }
+        self.update_missing_block_gauges();
         let committed_block = usize::try_from(height)
             .ok()
             .and_then(NonZeroUsize::new)
@@ -5504,6 +5555,7 @@ impl Actor {
         self.pending.pending_processing_parent.set(None);
         self.vote_log.clear();
         self.exec_vote_log.clear();
+        self.commit_votes.clear();
         self.qc_cache.clear();
         self.qc_signer_tally.clear();
         self.execution_qc_cache.clear();

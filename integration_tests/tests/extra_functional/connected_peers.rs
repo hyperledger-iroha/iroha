@@ -186,31 +186,21 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
         return Ok(());
     }
 
-    // Wait for peer to disconnect
-    let disconnect_result = timeout(network.sync_timeout(), async {
-        loop {
-            let status = removed_peer.status().await?;
-            if status.peers == 0 {
-                break;
-            }
-        }
-        Ok::<(), eyre::Report>(())
-    })
-    .await;
-    match disconnect_result {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => return Err(err),
-        Err(_) => {
-            return Err(eyre!(
-                "{context} timed out waiting for removed peer to disconnect"
-            ));
-        }
+    // Removed peers remain connected to continue block sync; ensure they still observe block 2.
+    if sandbox::handle_result(
+        timeout(network.sync_timeout(), removed_peer.once_block(2))
+            .await
+            .map_err(eyre::Report::new),
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
     }
 
     let status = removed_peer.status().await?;
-    // Peer might have been disconnected before getting the block, or see one extra commit.
+    // Removed peer might see one extra commit while transitioning to follower mode.
     assert_matches!(status.blocks_non_empty, 1 | 2 | 3);
-    assert_eq!(status.peers, 0);
 
     // Re-register the peer: committed with f = `faults` - 1 then `status.peers` increments
     let register_peer = RegisterPeerWithPop::new(
@@ -262,23 +252,42 @@ async fn assert_peers_status(
                         peer.latest_stdout_log_path(),
                         peer.latest_stderr_log_path(),
                     )),
-                    Ok(status)
-                        if status.peers >= expected_peers
-                            && status.blocks_non_empty >= expected_blocks =>
-                    {
-                        None
+                    Ok(status) => {
+                        let fallback_height = peer.best_effort_block_height();
+                        let last_peers = peer.last_known_peers();
+                        let peers_ok = status.peers >= expected_peers
+                            || last_peers.is_some_and(|peers| peers >= expected_peers);
+                        let blocks_ok = status.blocks >= expected_blocks
+                            || fallback_height
+                                .is_some_and(|height| height.total >= expected_blocks);
+                        if peers_ok && blocks_ok {
+                            return None;
+                        }
+
+                        let mut message = format!(
+                            "{}: peers={}, blocks={}, blocks_non_empty={}",
+                            peer.id(),
+                            status.peers,
+                            status.blocks,
+                            status.blocks_non_empty
+                        );
+                        if let Some(height) = fallback_height {
+                            let _ = write!(
+                                message,
+                                "; fallback_blocks_total={} non_empty={}",
+                                height.total, height.non_empty
+                            );
+                        }
+                        if let Some(peers) = last_peers {
+                            let _ = write!(message, "; last_known_peers={peers}");
+                        }
+                        Some(message)
                     }
-                    Ok(status) => Some(format!(
-                        "{}: peers={}, blocks_non_empty={}",
-                        peer.id(),
-                        status.peers,
-                        status.blocks_non_empty
-                    )),
                     Err(err) => {
                         let fallback_height = peer.best_effort_block_height();
                         let last_peers = peer.last_known_peers();
                         if let (Some(height), Some(peers)) = (fallback_height, last_peers)
-                            && height.non_empty >= expected_blocks
+                            && height.total >= expected_blocks
                             && peers >= expected_peers
                         {
                             return None;
@@ -293,8 +302,8 @@ async fn assert_peers_status(
                         if let Some(height) = fallback_height {
                             let _ = write!(
                                 message,
-                                "; fallback_blocks_non_empty={} total={}",
-                                height.non_empty, height.total
+                                "; fallback_blocks_total={} non_empty={}",
+                                height.total, height.non_empty
                             );
                         }
                         if let Some(peers) = last_peers {

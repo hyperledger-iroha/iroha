@@ -112,14 +112,35 @@ impl Actor {
         if let Err(err) =
             validate_new_view_signature(&self.chain_id, leader_mode_tag, &topology_peers, &frame)
         {
-            warn!(
-                ?err,
+            let prev_topology: Vec<_> = {
+                let view_snapshot = self.state.view();
+                view_snapshot.prev_commit_topology().iter().cloned().collect()
+            };
+            let fallback_ok = !prev_topology.is_empty()
+                && prev_topology != topology_peers
+                && validate_new_view_signature(
+                    &self.chain_id,
+                    leader_mode_tag,
+                    &prev_topology,
+                    &frame,
+                )
+                .is_ok();
+            if !fallback_ok {
+                warn!(
+                    ?err,
+                    height = frame.height,
+                    view = frame.view,
+                    sender = frame.sender,
+                    "rejecting NEW_VIEW frame due to failed signature validation"
+                );
+                return Ok(());
+            }
+            debug!(
                 height = frame.height,
                 view = frame.view,
                 sender = frame.sender,
-                "rejecting NEW_VIEW frame due to failed signature validation"
+                "accepting NEW_VIEW frame signed with previous commit topology"
             );
-            return Ok(());
         }
         let topology = super::network_topology::Topology::new(topology_peers.clone());
         let topology_len = topology.as_ref().len();

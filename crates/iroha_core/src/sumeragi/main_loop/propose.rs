@@ -54,6 +54,17 @@ fn precommit_qc_for_view_change(
     }
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum ViewConversionError {
+    U32Overflow,
+    USizeOverflow,
+}
+
+fn view_to_usize(view: u64) -> Result<usize, ViewConversionError> {
+    let view_u32 = u32::try_from(view).map_err(|_| ViewConversionError::U32Overflow)?;
+    usize::try_from(view_u32).map_err(|_| ViewConversionError::USizeOverflow)
+}
+
 impl Actor {
     pub(super) fn max_tx_budget(
         queue_len: usize,
@@ -160,8 +171,25 @@ impl Actor {
             "proposal topology snapshot"
         );
         let proposal_height = height;
-        let view_usize =
-            usize::try_from(view).map_err(|_| eyre!("view {view} exceeds platform limits"))?;
+        let view_usize = match view_to_usize(view) {
+            Ok(value) => value,
+            Err(ViewConversionError::U32Overflow) => {
+                warn!(
+                    height,
+                    view,
+                    "view exceeds u32::MAX; skipping proposal assembly"
+                );
+                return Ok(());
+            }
+            Err(ViewConversionError::USizeOverflow) => {
+                warn!(
+                    height,
+                    view,
+                    "view exceeds usize::MAX; skipping proposal assembly"
+                );
+                return Ok(());
+            }
+        };
         self.init_collector_plan(topology, proposal_height, view);
         let prev_block = resolve_prev_block_for_proposal(
             proposal_height,
@@ -1647,5 +1675,23 @@ impl Actor {
         self.subsystems.propose.new_view_tracker.remove(height, view_idx);
         self.subsystems.propose.last_successful_proposal = Some(now);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ViewConversionError, view_to_usize};
+
+    #[test]
+    fn view_to_usize_rejects_u32_overflow() {
+        let view = u64::from(u32::MAX) + 1;
+        assert_eq!(view_to_usize(view), Err(ViewConversionError::U32Overflow));
+    }
+
+    #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+    #[test]
+    fn view_to_usize_accepts_u32_max() {
+        let view = u64::from(u32::MAX);
+        assert_eq!(view_to_usize(view), Ok(u32::MAX as usize));
     }
 }

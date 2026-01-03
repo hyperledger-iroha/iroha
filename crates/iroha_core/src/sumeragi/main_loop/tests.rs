@@ -903,6 +903,17 @@ async fn apply_mode_flip_resets_state() {
             signature: Vec::new(),
         },
     );
+    let signature = SignatureOf::from_hash(harness.key_pairs[0].private_key(), hash);
+    actor.commit_votes.insert(
+        (hash, 1, 0, 0, 0),
+        crate::sumeragi::consensus::CommitVote {
+            block_hash: hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            signature: BlockSignature::new(0, signature),
+        },
+    );
     actor.qc_cache.insert(
         (crate::sumeragi::consensus::Phase::Prevote, hash, 1, 0, 0),
         crate::sumeragi::consensus::Qc {
@@ -926,6 +937,7 @@ async fn apply_mode_flip_resets_state() {
     assert!(actor.pending.pending_blocks.is_empty());
     assert!(actor.subsystems.propose.proposals_seen.is_empty());
     assert!(actor.vote_log.is_empty());
+    assert!(actor.commit_votes.is_empty());
     assert!(actor.qc_cache.is_empty());
 
     harness.shutdown.send();
@@ -3539,6 +3551,8 @@ async fn payload_rebroadcast_targets_only_highest_pending_block() {
             .expect("low rbc session");
     harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .sessions
         .insert(Actor::session_key(&low_hash, 2, 0), low_session);
@@ -3548,6 +3562,8 @@ async fn payload_rebroadcast_targets_only_highest_pending_block() {
             .expect("high rbc session");
     harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .sessions
         .insert(Actor::session_key(&high_hash, 3, 1), high_session);
@@ -4730,6 +4746,7 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
     actor.subsystems.propose.collector_plan_targets = planned_collectors.clone();
     actor.subsystems.propose.collectors_contacted.clear();
     actor
+        .subsystems
         .propose
         .collectors_contacted
         .extend(planned_collectors.drain(..));
@@ -6648,6 +6665,8 @@ async fn duplicate_rbc_ready_is_ignored() {
         .expect("first ready");
     let count_after_first = harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .sessions
         .get(&key)
@@ -6661,6 +6680,8 @@ async fn duplicate_rbc_ready_is_ignored() {
         .expect("duplicate ready");
     let count_after_second = harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .sessions
         .get(&key)
@@ -6724,7 +6745,7 @@ async fn handle_rbc_ready_uses_activation_height_mode_tag() {
         super::topology_for_view(&topology, height, view, super::NPOS_TAG, Some(prf_seed));
 
     assert!(
-        super::rbc_ready_signature_valid(
+        super::rbc::rbc_ready_signature_valid(
             &ready,
             &signature_topology,
             &actor.common_config.chain,
@@ -6733,7 +6754,7 @@ async fn handle_rbc_ready_uses_activation_height_mode_tag() {
         "ready signature should validate with activation height mode tag"
     );
     assert!(
-        !super::rbc_ready_signature_valid(
+        !super::rbc::rbc_ready_signature_valid(
             &ready,
             &signature_topology,
             &actor.common_config.chain,
@@ -6808,7 +6829,7 @@ async fn handle_rbc_deliver_uses_activation_height_mode_tag() {
         super::topology_for_view(&topology, height, view, super::NPOS_TAG, Some(prf_seed));
 
     assert!(
-        super::rbc_deliver_signature_valid(
+        super::rbc::rbc_deliver_signature_valid(
             &deliver,
             &signature_topology,
             &actor.common_config.chain,
@@ -6817,7 +6838,7 @@ async fn handle_rbc_deliver_uses_activation_height_mode_tag() {
         "deliver signature should validate with activation height mode tag"
     );
     assert!(
-        !super::rbc_deliver_signature_valid(
+        !super::rbc::rbc_deliver_signature_valid(
             &deliver,
             &signature_topology,
             &actor.common_config.chain,
@@ -6862,6 +6883,8 @@ async fn rbc_ready_gossips_to_sampled_peers() {
         .insert(key, session);
     harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .session_rosters
         .insert(key, harness.actor.effective_commit_topology());
@@ -6977,6 +7000,8 @@ async fn rbc_ready_uses_session_roster_after_topology_change() {
 
     harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .session_rosters
         .insert(key, roster_a.clone());
@@ -7069,6 +7094,8 @@ async fn rbc_session_roster_persists_across_restart_with_roster_change() {
     let mut harness = test_actor_harness_with_rbc_store(4, Some(rbc_cfg)).await;
     let persisted_roster = harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .session_rosters
         .get(&key)
@@ -7091,6 +7118,8 @@ async fn rbc_session_roster_persists_across_restart_with_roster_change() {
 
     let session_loaded = harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .sessions
         .get(&key)
@@ -7171,6 +7200,8 @@ async fn duplicate_rbc_deliver_is_ignored() {
         .expect("deliver");
     let signature_after_first = harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .sessions
         .get(&key)
@@ -7184,6 +7215,8 @@ async fn duplicate_rbc_deliver_is_ignored() {
         .expect("duplicate deliver");
     let signature_after_second = harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .sessions
         .get(&key)
@@ -7229,6 +7262,8 @@ async fn seed_rbc_session_flushes_pending_ready() {
         .expect("pending ready");
     let pending = harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .pending
         .get(&session_key)
@@ -9179,7 +9214,8 @@ fn block_sync_update_uses_activation_height_mode_tag() {
         .as_ref()
         .first()
         .expect("signature topology not empty");
-    let signer_kp = [kp_a, kp_b, kp_c]
+    let keypairs = [kp_a, kp_b, kp_c];
+    let signer_kp = keypairs
         .iter()
         .find(|kp| kp.public_key() == signer_peer.public_key())
         .expect("signer keypair exists");
@@ -10822,12 +10858,14 @@ fn record_da_gate_telemetry_clears_reason_without_recounting() {
 fn touch_missing_block_request_retries_after_window() {
     let mut requests = BTreeMap::new();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
+    let height = 7;
     let window = Duration::from_millis(50);
     let now = Instant::now();
 
     assert!(super::touch_missing_block_request(
         &mut requests,
         hash,
+        height,
         now,
         window
     ));
@@ -10835,6 +10873,7 @@ fn touch_missing_block_request_retries_after_window() {
     assert!(!super::touch_missing_block_request(
         &mut requests,
         hash,
+        height,
         now,
         window
     ));
@@ -10849,6 +10888,7 @@ fn touch_missing_block_request_retries_after_window() {
     assert!(super::touch_missing_block_request(
         &mut requests,
         hash,
+        height,
         later,
         window
     ));
@@ -10860,12 +10900,14 @@ fn touch_missing_block_request_retries_after_window() {
 fn touch_missing_block_request_preserves_first_seen_and_last_requested_on_backoff() {
     let mut requests = BTreeMap::new();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCD; 32]));
+    let height = 4;
     let window = Duration::from_millis(25);
     let start = Instant::now();
 
     assert!(super::touch_missing_block_request(
         &mut requests,
         hash,
+        height,
         start,
         window
     ));
@@ -10878,6 +10920,7 @@ fn touch_missing_block_request_preserves_first_seen_and_last_requested_on_backof
     assert!(!super::touch_missing_block_request(
         &mut requests,
         hash,
+        height,
         mid,
         window
     ));
@@ -10890,6 +10933,7 @@ fn touch_missing_block_request_preserves_first_seen_and_last_requested_on_backof
     assert!(super::touch_missing_block_request(
         &mut requests,
         hash,
+        height,
         retry,
         window
     ));
@@ -10899,21 +10943,51 @@ fn touch_missing_block_request_preserves_first_seen_and_last_requested_on_backof
 }
 
 #[test]
-fn clear_missing_block_request_resets_retry_window() {
+fn touch_missing_block_request_updates_height_to_max() {
     let mut requests = BTreeMap::new();
-    let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; 32]));
-    let window = Duration::from_millis(100);
+    let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCC; 32]));
+    let window = Duration::from_millis(30);
     let start = Instant::now();
 
     assert!(super::touch_missing_block_request(
         &mut requests,
         hash,
+        2,
         start,
         window
     ));
     assert!(!super::touch_missing_block_request(
         &mut requests,
         hash,
+        9,
+        start + Duration::from_millis(5),
+        window
+    ));
+    let stats = requests.get(&hash).expect("entry exists");
+    assert_eq!(stats.height, 9);
+    assert_eq!(stats.first_seen, start);
+    assert_eq!(stats.last_requested, start);
+}
+
+#[test]
+fn clear_missing_block_request_resets_retry_window() {
+    let mut requests = BTreeMap::new();
+    let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; 32]));
+    let height = 9;
+    let window = Duration::from_millis(100);
+    let start = Instant::now();
+
+    assert!(super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        height,
+        start,
+        window
+    ));
+    assert!(!super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        height,
         start + Duration::from_millis(10),
         window
     ));
@@ -10925,6 +10999,7 @@ fn clear_missing_block_request_resets_retry_window() {
     assert!(super::touch_missing_block_request(
         &mut requests,
         hash,
+        height,
         retry_instant,
         window
     ));
@@ -10957,6 +11032,7 @@ fn missing_block_clear_allowed_requires_payload_when_not_obsolete() {
 fn plan_missing_block_fetch_requests_targets_on_first_seen() {
     let mut requests = BTreeMap::new();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEF; 32]));
+    let height = 5;
     let window = Duration::from_millis(15);
     let now = Instant::now();
 
@@ -10969,6 +11045,7 @@ fn plan_missing_block_fetch_requests_targets_on_first_seen() {
     match super::plan_missing_block_fetch(
         &mut requests,
         hash,
+        height,
         &signers,
         &topology,
         now,
@@ -10997,12 +11074,14 @@ fn plan_missing_block_fetch_requests_targets_on_first_seen() {
 fn missing_block_view_change_triggers_once_after_dwell() {
     let mut requests = BTreeMap::new();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEE; 32]));
+    let height = 6;
     let window = Duration::from_millis(10);
     let start = Instant::now();
 
     assert!(super::touch_missing_block_request(
         &mut requests,
         hash,
+        height,
         start,
         window
     ));
@@ -11028,6 +11107,7 @@ fn missing_block_view_change_triggers_once_after_dwell() {
 fn plan_missing_block_fetch_respects_backoff_window() {
     let mut requests = BTreeMap::new();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF1; 32]));
+    let height = 8;
     let window = Duration::from_millis(20);
     let now = Instant::now();
 
@@ -11038,6 +11118,7 @@ fn plan_missing_block_fetch_respects_backoff_window() {
     let first = super::plan_missing_block_fetch(
         &mut requests,
         hash,
+        height,
         &signers,
         &topology,
         now,
@@ -11053,6 +11134,7 @@ fn plan_missing_block_fetch_respects_backoff_window() {
     let decision = super::plan_missing_block_fetch(
         &mut requests,
         hash,
+        height,
         &signers,
         &topology,
         now + Duration::from_millis(5),
@@ -11074,6 +11156,7 @@ fn plan_missing_block_fetch_respects_backoff_window() {
 fn plan_missing_block_fetch_falls_back_to_commit_topology() {
     let mut requests = BTreeMap::new();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF3; 32]));
+    let height = 4;
     let window = Duration::from_millis(10);
     let now = Instant::now();
 
@@ -11087,6 +11170,7 @@ fn plan_missing_block_fetch_falls_back_to_commit_topology() {
     match super::plan_missing_block_fetch(
         &mut requests,
         hash,
+        height,
         &signers,
         &topology,
         now,
@@ -11114,6 +11198,7 @@ fn plan_missing_block_fetch_falls_back_to_commit_topology() {
 fn plan_missing_block_fetch_falls_back_after_signer_attempts() {
     let mut requests = BTreeMap::new();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF4; 32]));
+    let height = 6;
     let window = Duration::from_millis(10);
     let now = Instant::now();
 
@@ -11129,6 +11214,7 @@ fn plan_missing_block_fetch_falls_back_after_signer_attempts() {
     requests.insert(
         hash,
         super::MissingBlockRequest {
+            height,
             first_seen: now - window,
             last_requested: now - window,
             view_change_triggered: false,
@@ -11139,6 +11225,7 @@ fn plan_missing_block_fetch_falls_back_after_signer_attempts() {
     match super::plan_missing_block_fetch(
         &mut requests,
         hash,
+        height,
         &signers,
         &topology,
         now,
@@ -11481,6 +11568,7 @@ fn defer_qc_for_missing_block_records_backoff_metrics() {
     super::status::reset_missing_block_fetch_counters_for_tests();
     let mut requests = BTreeMap::new();
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCE; 32]));
+    let height = 6;
     let window = Duration::from_millis(50);
     let start = Instant::now();
     let first_seen = start - Duration::from_millis(5);
@@ -11488,6 +11576,7 @@ fn defer_qc_for_missing_block_records_backoff_metrics() {
     requests.insert(
         block_hash,
         super::MissingBlockRequest {
+            height,
             first_seen,
             last_requested,
             view_change_triggered: false,
@@ -11513,7 +11602,7 @@ fn defer_qc_for_missing_block_records_backoff_metrics() {
         window,
         start,
         block_hash,
-        6,
+        height,
         2,
         crate::sumeragi::consensus::Phase::Prevote,
         &signers,
@@ -11725,6 +11814,7 @@ fn defer_qc_for_missing_block_requests_signer_targets() {
     let stats = requests
         .get(&block_hash)
         .expect("request entry recorded for missing block");
+    assert_eq!(stats.height, 4);
     assert_eq!(stats.first_seen, now);
     assert_eq!(stats.last_requested, now);
     assert_eq!(stats.attempts, 1);
@@ -12490,6 +12580,7 @@ async fn new_view_tracker_resets_on_commit_topology_change() {
 
     harness
         .actor
+        .subsystems
         .propose
         .new_view_tracker
         .record(height, view, 0, qc);
@@ -12519,6 +12610,8 @@ async fn new_view_tracker_resets_on_commit_topology_change() {
     assert!(
         harness
             .actor
+            .subsystems
+            .propose
             .broadcast_new_views
             .contains_key(&(height, view))
     );
@@ -12610,8 +12703,21 @@ async fn commit_topology_change_clears_pending_consensus_state() {
             bls_sig: Vec::new(),
         },
     );
+    let signature = SignatureOf::from_hash(harness.key_pairs[0].private_key(), block_hash);
+    harness.actor.commit_votes.insert(
+        (block_hash, 2, 0, 0, 0),
+        crate::sumeragi::consensus::CommitVote {
+            block_hash,
+            height: 2,
+            view: 0,
+            epoch: 0,
+            signature: BlockSignature::new(0, signature),
+        },
+    );
     harness
         .actor
+        .subsystems
+        .da_rbc
         .rbc
         .session_rosters
         .insert(session_key(), current_roster.clone());
@@ -12619,6 +12725,7 @@ async fn commit_topology_change_clears_pending_consensus_state() {
     assert!(!harness.actor.pending.pending_blocks.is_empty());
     assert!(!harness.actor.vote_log.is_empty());
     assert!(!harness.actor.exec_vote_log.is_empty());
+    assert!(!harness.actor.commit_votes.is_empty());
     assert!(
         !harness
             .actor
@@ -12643,6 +12750,7 @@ async fn commit_topology_change_clears_pending_consensus_state() {
     assert!(harness.actor.pending.pending_blocks.is_empty());
     assert!(harness.actor.vote_log.is_empty());
     assert!(harness.actor.exec_vote_log.is_empty());
+    assert!(harness.actor.commit_votes.is_empty());
     assert!(
         harness
             .actor
@@ -12652,6 +12760,218 @@ async fn commit_topology_change_clears_pending_consensus_state() {
             .session_rosters
             .is_empty()
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn on_block_commit_prunes_exec_vote_log() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let signer = 0u32;
+    let block_a = sample_block(1, 0, None);
+    let block_b = sample_block(2, 0, None);
+    let block_c = sample_block(3, 0, None);
+    let block_d = sample_block(4, 0, None);
+
+    actor.exec_vote_log.insert(
+        (1, 0, 0, signer),
+        crate::sumeragi::consensus::ExecVote {
+            block_hash: block_a.hash(),
+            parent_state_root: Hash::prehashed([0x10; 32]),
+            post_state_root: Hash::prehashed([0x11; 32]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            signer,
+            bls_sig: Vec::new(),
+        },
+    );
+    actor.exec_vote_log.insert(
+        (2, 0, 0, signer),
+        crate::sumeragi::consensus::ExecVote {
+            block_hash: block_b.hash(),
+            parent_state_root: Hash::prehashed([0x20; 32]),
+            post_state_root: Hash::prehashed([0x21; 32]),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            signer,
+            bls_sig: Vec::new(),
+        },
+    );
+    actor.exec_vote_log.insert(
+        (3, 0, 0, signer),
+        crate::sumeragi::consensus::ExecVote {
+            block_hash: block_c.hash(),
+            parent_state_root: Hash::prehashed([0x30; 32]),
+            post_state_root: Hash::prehashed([0x31; 32]),
+            height: 3,
+            view: 0,
+            epoch: 0,
+            signer,
+            bls_sig: Vec::new(),
+        },
+    );
+    actor.vote_log.insert(
+        (Phase::Prevote, 1, 0, 0, signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Prevote,
+            block_hash: block_a.hash(),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            signer,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        },
+    );
+    actor.vote_log.insert(
+        (Phase::Prevote, 3, 0, 0, signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Prevote,
+            block_hash: block_c.hash(),
+            height: 3,
+            view: 0,
+            epoch: 0,
+            signer,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        },
+    );
+    actor.vote_log.insert(
+        (Phase::Prevote, 4, 0, 0, signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Prevote,
+            block_hash: block_d.hash(),
+            height: 4,
+            view: 0,
+            epoch: 0,
+            signer,
+            bls_sig: Vec::new(),
+            signature: Vec::new(),
+        },
+    );
+    let signature_a = SignatureOf::from_hash(harness.key_pairs[0].private_key(), block_a.hash());
+    actor.commit_votes.insert(
+        (block_a.hash(), 1, 0, 0, signer),
+        crate::sumeragi::consensus::CommitVote {
+            block_hash: block_a.hash(),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            signature: BlockSignature::new(0, signature_a),
+        },
+    );
+    let signature_d = SignatureOf::from_hash(harness.key_pairs[0].private_key(), block_d.hash());
+    actor.commit_votes.insert(
+        (block_d.hash(), 4, 0, 0, signer),
+        crate::sumeragi::consensus::CommitVote {
+            block_hash: block_d.hash(),
+            height: 4,
+            view: 0,
+            epoch: 0,
+            signature: BlockSignature::new(0, signature_d),
+        },
+    );
+    let now = Instant::now();
+    actor.pending.missing_block_requests.insert(
+        block_b.hash(),
+        MissingBlockRequest {
+            height: 2,
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered: false,
+            attempts: 0,
+        },
+    );
+    actor.pending.missing_block_requests.insert(
+        block_d.hash(),
+        MissingBlockRequest {
+            height: 4,
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered: false,
+            attempts: 0,
+        },
+    );
+    actor.subsystems.propose.proposals_seen.insert((1, 0));
+    actor.subsystems.propose.proposals_seen.insert((3, 0));
+    actor.subsystems.propose.proposals_seen.insert((4, 0));
+
+    actor
+        .on_block_commit_for_tests(3)
+        .expect("commit hook should run");
+
+    assert!(
+        !actor.exec_vote_log.contains_key(&(1, 0, 0, signer)),
+        "votes below retention floor should be pruned"
+    );
+    assert!(
+        actor.exec_vote_log.contains_key(&(2, 0, 0, signer)),
+        "retention floor should preserve previous-height votes"
+    );
+    assert!(
+        actor.exec_vote_log.contains_key(&(3, 0, 0, signer)),
+        "retention floor should preserve current-height votes"
+    );
+    assert!(
+        !actor
+            .vote_log
+            .contains_key(&(Phase::Prevote, 1, 0, 0, signer)),
+        "votes at or below committed height should be pruned"
+    );
+    assert!(
+        !actor
+            .vote_log
+            .contains_key(&(Phase::Prevote, 3, 0, 0, signer)),
+        "votes at or below committed height should be pruned"
+    );
+    assert!(
+        actor
+            .vote_log
+            .contains_key(&(Phase::Prevote, 4, 0, 0, signer)),
+        "votes above committed height should be retained"
+    );
+    assert!(
+        !actor
+            .commit_votes
+            .contains_key(&(block_a.hash(), 1, 0, 0, signer)),
+        "commit votes at or below committed height should be pruned"
+    );
+    assert!(
+        actor
+            .commit_votes
+            .contains_key(&(block_d.hash(), 4, 0, 0, signer)),
+        "commit votes above committed height should be retained"
+    );
+    assert!(
+        !actor.subsystems.propose.proposals_seen.contains(&(1, 0)),
+        "proposals at or below committed height should be pruned"
+    );
+    assert!(
+        !actor.subsystems.propose.proposals_seen.contains(&(3, 0)),
+        "proposals at or below committed height should be pruned"
+    );
+    assert!(
+        actor.subsystems.propose.proposals_seen.contains(&(4, 0)),
+        "proposals above committed height should be retained"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_b.hash()),
+        "missing-block requests at or below committed height should be pruned"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_d.hash()),
+        "missing-block requests above committed height should be retained"
+    );
+
+    harness.shutdown.send();
 }
 
 #[test]
@@ -14041,6 +14361,139 @@ async fn exec_vote_emission_uses_view_aligned_signer() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn exec_vote_emission_uses_persisted_roster_after_topology_change() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let height = 2u64;
+    let view = 0u64;
+    let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
+    let block_hash = block.hash();
+    let witness = crate::sumeragi::consensus::ExecWitness::default();
+
+    let roster = actor.effective_commit_topology();
+    let local_peer_id = actor.common_config.peer.id();
+    let local_idx = roster
+        .iter()
+        .position(|peer| peer == local_peer_id)
+        .expect("local peer present");
+    let local_idx_u64 = u64::try_from(local_idx).expect("signer index fits u64");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == local_peer_id.public_key())
+        .expect("signer keypair");
+
+    let block_signature = BlockSignature::new(
+        local_idx_u64,
+        SignatureOf::from_hash(signer_kp.private_key(), block_hash),
+    );
+    let commit_certificate = CommitCertificate {
+        height,
+        block_hash,
+        view,
+        epoch: 0,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        signatures: vec![block_signature.clone()],
+    };
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        block_hash,
+        roster.clone(),
+        vec![block_signature],
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(commit_certificate, checkpoint);
+    }
+
+    let mut roster_new = roster.clone();
+    roster_new.rotate_left(1);
+    {
+        let mut prev_block = actor.state.prev_commit_topology.block();
+        prev_block.mutate_vec(|vec| *vec = roster.clone());
+        prev_block.commit();
+    }
+    {
+        let mut topo_block = actor.state.commit_topology.block();
+        {
+            let mut tx = topo_block.transaction();
+            *tx = roster_new.clone();
+            tx.apply();
+        }
+        topo_block.commit();
+    }
+    {
+        let mut hashes = actor.state.block_hashes.block();
+        hashes.push(HashOf::from_untyped_unchecked(Hash::prehashed(
+            [0xB1; Hash::LENGTH],
+        )));
+        hashes.push(block_hash);
+        hashes.commit_for_tests();
+    }
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signature_topology = super::topology_for_view(
+        &topology,
+        height,
+        view,
+        actor.mode_tag(),
+        actor.npos_prf_seed(),
+    );
+    let expected_signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local signer present");
+    let new_topology = super::network_topology::Topology::new(roster_new);
+    let new_signature_topology = super::topology_for_view(
+        &new_topology,
+        height,
+        view,
+        actor.mode_tag(),
+        actor.npos_prf_seed(),
+    );
+    let new_signer = actor
+        .local_validator_index_for_topology(&new_signature_topology)
+        .expect("local signer present");
+    assert_ne!(
+        expected_signer, new_signer,
+        "setup should shift the local signer index"
+    );
+
+    actor.emit_exec_artifacts(block_hash, height, view, witness);
+
+    let vote = actor
+        .exec_vote_log
+        .values()
+        .find(|vote| vote.block_hash == block_hash && vote.height == height && vote.view == view)
+        .expect("exec vote recorded");
+    assert_eq!(vote.signer, expected_signer);
+    assert!(
+        super::exec_vote_signature_check(
+            vote,
+            &signature_topology,
+            &actor.common_config.chain,
+            actor.mode_tag()
+        )
+        .is_ok()
+    );
+    assert!(
+        super::exec_vote_signature_check(
+            vote,
+            &new_signature_topology,
+            &actor.common_config.chain,
+            actor.mode_tag()
+        )
+        .is_err(),
+        "exec vote signature should reject the post-commit topology"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn exec_vote_targets_deterministic_collectors() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -14584,6 +15037,7 @@ async fn handle_new_view_accepts_qc_with_missing_votes() {
 
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(frame.height, frame.view),
@@ -14793,6 +15247,142 @@ async fn handle_new_view_uses_roster_snapshot_after_topology_change() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_new_view_accepts_signature_from_prev_commit_topology() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 2u64;
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA2; Hash::LENGTH]));
+
+    let roster = actor.effective_commit_topology();
+    let local_peer_id = actor.common_config.peer.id();
+    let removed_peer = roster
+        .iter()
+        .find(|peer| *peer != local_peer_id)
+        .cloned()
+        .expect("non-local roster entry");
+    let removed_idx = roster
+        .iter()
+        .position(|peer| peer == &removed_peer)
+        .expect("removed peer index");
+    let removed_idx_u64 = u64::try_from(removed_idx).expect("signer index fits u64");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == removed_peer.public_key())
+        .expect("signer keypair");
+
+    let block_signature = BlockSignature::new(
+        removed_idx_u64,
+        SignatureOf::from_hash(signer_kp.private_key(), block_hash),
+    );
+    let commit_certificate = CommitCertificate {
+        height,
+        block_hash,
+        view,
+        epoch: 0,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        signatures: vec![block_signature.clone()],
+    };
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        block_hash,
+        roster.clone(),
+        vec![block_signature],
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(commit_certificate, checkpoint);
+    }
+
+    let mut roster_new = roster.clone();
+    roster_new.rotate_left(1);
+    {
+        let mut prev_block = actor.state.prev_commit_topology.block();
+        prev_block.mutate_vec(|vec| *vec = roster.clone());
+        prev_block.commit();
+    }
+    {
+        let mut topo_block = actor.state.commit_topology.block();
+        {
+            let mut tx = topo_block.transaction();
+            *tx = roster_new.clone();
+            tx.apply();
+        }
+        topo_block.commit();
+    }
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit();
+    let mut signers = BTreeSet::new();
+    signers.insert(ValidatorIndex::try_from(removed_idx).expect("signer idx fits"));
+    for idx in 0..roster.len() {
+        if signers.len() == required {
+            break;
+        }
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer idx fits"));
+    }
+    assert_eq!(signers.len(), required, "expected quorum signers");
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let highest_qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        0,
+        signers_bitmap,
+        Phase::Precommit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let sender = roster
+        .iter()
+        .position(|peer| peer == local_peer_id)
+        .and_then(|idx| ValidatorIndex::try_from(idx).ok())
+        .expect("local peer in roster");
+    let mut frame = crate::sumeragi::consensus::NewView {
+        height: height.saturating_add(1),
+        view: 1,
+        sender,
+        highest_qc,
+        signature: Vec::new(),
+    };
+    let preimage = super::new_view_preimage(&actor.common_config.chain, actor.mode_tag(), &frame);
+    let signature = Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+    frame.signature = signature.payload().to_vec();
+
+    let new_roster = actor.effective_commit_topology();
+    let new_sender = new_roster
+        .iter()
+        .position(|peer| peer == local_peer_id)
+        .and_then(|idx| ValidatorIndex::try_from(idx).ok())
+        .expect("local peer in new roster");
+    assert_ne!(sender, new_sender, "setup should shift the sender index");
+    assert!(
+        super::validate_new_view_signature(
+            &actor.common_config.chain,
+            actor.mode_tag(),
+            &new_roster,
+            &frame
+        )
+        .is_err(),
+        "NEW_VIEW signature should not validate against current topology"
+    );
+
+    actor.handle_new_view(frame).expect("handle_new_view");
+    assert_eq!(actor.subsystems.propose.new_view_tracker.count(3, 1), 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn roster_for_vote_prefers_snapshot_for_committed_height() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -14985,6 +15575,7 @@ async fn handle_new_view_drops_stale_height_below_active_round() {
 
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(stale_height, frame.view),
@@ -15159,6 +15750,7 @@ async fn handle_new_view_uses_qc_height_prf_seed() {
 
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(frame.height, frame.view),
@@ -15167,6 +15759,7 @@ async fn handle_new_view_uses_qc_height_prf_seed() {
     actor.handle_new_view(frame).expect("handle_new_view");
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(qc_height + 1, qc_view + 1),
@@ -15255,6 +15848,7 @@ async fn handle_new_view_uses_activation_height_mode_tag() {
 
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(frame.height, frame.view),
@@ -15263,6 +15857,7 @@ async fn handle_new_view_uses_activation_height_mode_tag() {
     actor.handle_new_view(frame).expect("handle_new_view");
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(qc_height + 1, qc_view + 1),
@@ -15320,6 +15915,7 @@ async fn handle_new_view_accepts_genesis_qc_stub() {
 
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(frame.height, frame.view),
@@ -15521,6 +16117,7 @@ async fn censorship_evidence_triggers_view_change() {
     assert!(actor.subsystems.propose.forced_view_after_timeout.is_none());
     actor.handle_evidence(evidence).expect("handle_evidence");
     let forced = actor
+        .subsystems
         .propose
         .forced_view_after_timeout
         .expect("view change scheduled");
@@ -16458,6 +17055,63 @@ async fn load_npos_epoch_params_prefers_world_values() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_skips_view_overflow() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 1u64;
+    let view = u64::from(u32::MAX) + 1;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            /*leader_index*/ 0,
+            /*local_validator_index*/ 0,
+            Instant::now(),
+        )
+        .expect("proposal assembly should skip overflow view");
+
+    assert!(
+        actor.pending.pending_blocks.is_empty(),
+        "overflow view should not enqueue pending blocks"
+    );
+    assert!(
+        actor.subsystems.propose.proposals_seen.is_empty(),
+        "overflow view should not mark proposals as seen"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_hint(height, view)
+            .is_none(),
+        "overflow view should not cache proposal hints"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .is_none(),
+        "overflow view should not cache proposals"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view),
+        "phase tracker should reflect the overflow view"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn refresh_npos_seed_updates_collector_params_from_world() {
     use iroha_data_model::parameter::system::SumeragiNposParameters;
 
@@ -17011,10 +17665,12 @@ async fn maybe_regossip_new_view_when_quorum_missing() {
     let local_idx = actor.local_validator_index(&view_snapshot);
     drop(view_snapshot);
 
-    actor
-        .propose
-        .new_view_tracker
-        .record(target_height, target_view, sender, highest_qc_ref);
+    actor.subsystems.propose.new_view_tracker.record(
+        target_height,
+        target_view,
+        sender,
+        highest_qc_ref,
+    );
 
     actor.maybe_regossip_new_view(required, local_idx);
 
@@ -17079,10 +17735,12 @@ async fn pacemaker_regossips_new_view_when_queue_empty() {
         .expect("remote peer in topology");
     let sender = ValidatorIndex::try_from(sender_idx).expect("validator index fits");
 
-    actor
-        .propose
-        .new_view_tracker
-        .record(target_height, target_view, sender, highest_qc_ref);
+    actor.subsystems.propose.new_view_tracker.record(
+        target_height,
+        target_view,
+        sender,
+        highest_qc_ref,
+    );
 
     let _ = actor.on_pacemaker_propose_ready(Instant::now());
 
@@ -17140,6 +17798,7 @@ async fn pacemaker_single_validator_seeds_new_view_from_precommit_qc() {
     let _ = actor.on_pacemaker_propose_ready(Instant::now());
 
     let entry = actor
+        .subsystems
         .propose
         .new_view_tracker
         .entries
@@ -17151,6 +17810,7 @@ async fn pacemaker_single_validator_seeds_new_view_from_precommit_qc() {
 
     assert!(
         !actor
+            .subsystems
             .propose
             .new_view_tracker
             .entries
@@ -17258,11 +17918,11 @@ async fn handle_new_view_catches_up_and_tracks_quorum() {
             actor.subsystems.propose.forced_view_after_timeout,
             Some((height, view))
         );
-        let count_with_local =
-            actor
-                .propose
-                .new_view_tracker
-                .count_with_local(height, view, Some(local_idx));
+        let count_with_local = actor.subsystems.propose.new_view_tracker.count_with_local(
+            height,
+            view,
+            Some(local_idx),
+        );
         assert!(
             count_with_local < required,
             "NEW_VIEW quorum should remain unmet before final sender"
@@ -17283,6 +17943,7 @@ async fn handle_new_view_catches_up_and_tracks_quorum() {
     actor.handle_new_view(frame).expect("handle_new_view");
     let count_with_local =
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count_with_local(height, view, Some(local_idx));
@@ -17538,10 +18199,12 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
         ValidatorIndex::try_from((local_pos + 2) % topology_peers.len()).expect("sender index");
 
     actor
+        .subsystems
         .propose
         .new_view_tracker
         .record(tracked_height, view, sender_a, highest_qc);
     actor
+        .subsystems
         .propose
         .new_view_tracker
         .record(tracked_height, view, sender_b, highest_qc);
@@ -17588,6 +18251,7 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
     );
     assert!(
         actor
+            .subsystems
             .propose
             .proposal_cache
             .get_proposal(tracked_height, view)
@@ -17632,10 +18296,12 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
     let sender_b = ValidatorIndex::try_from((local_idx + 2) % topology_len).expect("sender index");
 
     actor
+        .subsystems
         .propose
         .new_view_tracker
         .record(tracked_height, view, sender_a, highest_qc);
     actor
+        .subsystems
         .propose
         .new_view_tracker
         .record(tracked_height, view, sender_b, highest_qc);
@@ -17680,6 +18346,7 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
     );
     assert!(
         actor
+            .subsystems
             .propose
             .proposal_cache
             .get_proposal(tracked_height, view)
@@ -17724,10 +18391,12 @@ async fn pacemaker_allows_proposal_with_stale_precommit_votes() {
     let sender_b = ValidatorIndex::try_from((local_idx + 2) % topology_len).expect("sender index");
 
     actor
+        .subsystems
         .propose
         .new_view_tracker
         .record(tracked_height, view, sender_a, highest_qc);
     actor
+        .subsystems
         .propose
         .new_view_tracker
         .record(tracked_height, view, sender_b, highest_qc);
@@ -17806,6 +18475,7 @@ async fn pacemaker_does_not_fallback_to_view_zero_after_view_change() {
 
     assert!(
         actor
+            .subsystems
             .propose
             .proposal_cache
             .get_proposal(tracked_height, 0)
@@ -17820,6 +18490,7 @@ async fn pacemaker_does_not_fallback_to_view_zero_after_view_change() {
     );
     assert!(
         actor
+            .subsystems
             .propose
             .proposal_cache
             .get_proposal(tracked_height, 0)
@@ -17854,6 +18525,7 @@ async fn pacemaker_prunes_new_view_entries_at_committed_height() {
 
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(committed_height, stale_view),
@@ -17861,6 +18533,7 @@ async fn pacemaker_prunes_new_view_entries_at_committed_height() {
     );
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(fresh_height, fresh_view),
@@ -17871,6 +18544,7 @@ async fn pacemaker_prunes_new_view_entries_at_committed_height() {
 
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(committed_height, stale_view),
@@ -17878,6 +18552,7 @@ async fn pacemaker_prunes_new_view_entries_at_committed_height() {
     );
     assert_eq!(
         actor
+            .subsystems
             .propose
             .new_view_tracker
             .count(fresh_height, fresh_view),
@@ -18171,6 +18846,7 @@ async fn block_created_accepts_payload_after_proposal_mismatch() {
     );
     assert!(
         actor
+            .subsystems
             .propose
             .proposal_cache
             .get_proposal(2, u64::from(view))
@@ -24317,6 +24993,7 @@ async fn stale_view_filters_consensus_messages_with_da() {
     actor.handle_proposal_hint(hint).expect("proposal hint");
     assert!(
         actor
+            .subsystems
             .propose
             .proposal_cache
             .get_hint(height, stale_view)
@@ -24336,6 +25013,7 @@ async fn stale_view_filters_consensus_messages_with_da() {
     actor.handle_proposal(proposal).expect("proposal");
     assert!(
         actor
+            .subsystems
             .propose
             .proposal_cache
             .get_proposal(height, stale_view)
@@ -24351,6 +25029,7 @@ async fn stale_view_filters_consensus_messages_with_da() {
     actor.pending.missing_block_requests.insert(
         block_hash,
         MissingBlockRequest {
+            height,
             first_seen: now,
             last_requested: now,
             view_change_triggered: false,
@@ -24521,6 +25200,7 @@ async fn stale_view_accepts_precommit_vote_when_missing_block_requested() {
     actor.pending.missing_block_requests.insert(
         block_hash,
         MissingBlockRequest {
+            height,
             first_seen: now,
             last_requested: now,
             view_change_triggered: false,
@@ -24576,6 +25256,7 @@ async fn stale_view_accepts_exec_vote_when_missing_block_requested() {
     actor.pending.missing_block_requests.insert(
         block_hash,
         MissingBlockRequest {
+            height,
             first_seen: now,
             last_requested: now,
             view_change_triggered: false,
@@ -24617,6 +25298,93 @@ async fn stale_view_accepts_exec_vote_when_missing_block_requested() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn stale_view_accepts_commit_vote_when_missing_block_requested() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = false;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = 5;
+    let local_view = 2;
+    let stale_view = 1;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+
+    let topology_peers = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(topology_peers);
+    let signature_topology =
+        super::topology_for_view(&topology, height, stale_view, super::PERMISSIONED_TAG, None);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAF; Hash::LENGTH]));
+
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        MissingBlockRequest {
+            height,
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered: false,
+            attempts: 0,
+        },
+    );
+
+    let signer_peer = signature_topology.as_ref().first().expect("signer present");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let signature = SignatureOf::from_hash(signer_kp.private_key(), block_hash);
+    let vote = crate::sumeragi::consensus::CommitVote {
+        block_hash,
+        height,
+        view: stale_view,
+        epoch: 0,
+        signature: BlockSignature::new(0, signature),
+    };
+    actor.handle_commit_vote(vote).expect("commit vote handled");
+    assert!(
+        actor
+            .commit_votes
+            .contains_key(&(block_hash, height, stale_view, 0, 0))
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_vote_drops_at_committed_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let block_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height()).unwrap_or(u64::MAX);
+
+    let topology_peers = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(topology_peers);
+    let signature_topology =
+        super::topology_for_view(&topology, height, 0, super::PERMISSIONED_TAG, None);
+    let signer_peer = signature_topology.as_ref().first().expect("signer present");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let signature = SignatureOf::from_hash(signer_kp.private_key(), block_hash);
+    let vote = crate::sumeragi::consensus::CommitVote {
+        block_hash,
+        height,
+        view: 0,
+        epoch: 0,
+        signature: BlockSignature::new(0, signature),
+    };
+    actor.handle_commit_vote(vote).expect("commit vote handled");
+    assert!(actor.commit_votes.is_empty());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stale_view_accepts_execution_qc_when_missing_block_requested() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -24638,6 +25406,7 @@ async fn stale_view_accepts_execution_qc_when_missing_block_requested() {
     actor.pending.missing_block_requests.insert(
         block_hash,
         MissingBlockRequest {
+            height,
             first_seen: now,
             last_requested: now,
             view_change_triggered: false,
@@ -24784,6 +25553,7 @@ async fn block_sync_update_accepts_stale_view_when_missing_block_requested() {
     actor.pending.missing_block_requests.insert(
         block_hash,
         MissingBlockRequest {
+            height,
             first_seen: now,
             last_requested: now,
             view_change_triggered: false,
@@ -25949,10 +26719,14 @@ async fn clean_rbc_sessions_for_block_clears_rebroadcast_and_persisted_state() {
         .sessions
         .insert(other_key, session.clone());
     actor
+        .subsystems
+        .da_rbc
         .rbc
         .pending
         .insert(key, PendingRbcMessages::new(Instant::now()));
     actor
+        .subsystems
+        .da_rbc
         .rbc
         .pending
         .insert(other_key, PendingRbcMessages::new(Instant::now()));
@@ -26004,18 +26778,26 @@ async fn clean_rbc_sessions_for_block_clears_rebroadcast_and_persisted_state() {
     );
 
     actor
+        .subsystems
+        .da_rbc
         .rbc
         .payload_rebroadcast_last_sent
         .insert(key, Instant::now());
     actor
+        .subsystems
+        .da_rbc
         .rbc
         .payload_rebroadcast_last_sent
         .insert(other_key, Instant::now());
     actor
+        .subsystems
+        .da_rbc
         .rbc
         .ready_rebroadcast_last_sent
         .insert(key, Instant::now());
     actor
+        .subsystems
+        .da_rbc
         .rbc
         .ready_rebroadcast_last_sent
         .insert(other_key, Instant::now());
@@ -26105,6 +26887,8 @@ async fn clean_rbc_sessions_for_block_clears_rebroadcast_and_persisted_state() {
     );
     assert!(
         actor
+            .subsystems
+            .da_rbc
             .rbc
             .payload_rebroadcast_last_sent
             .contains_key(&other_key)
@@ -26119,6 +26903,8 @@ async fn clean_rbc_sessions_for_block_clears_rebroadcast_and_persisted_state() {
     );
     assert!(
         actor
+            .subsystems
+            .da_rbc
             .rbc
             .ready_rebroadcast_last_sent
             .contains_key(&other_key)
@@ -27453,6 +28239,7 @@ async fn availability_vote_reinitializes_collectors_for_new_view() {
     actor.subsystems.propose.collector_plan_targets = vec![local_peer_id.clone()];
     actor.subsystems.propose.collectors_contacted.clear();
     actor
+        .subsystems
         .propose
         .collectors_contacted
         .insert(local_peer_id.clone());
@@ -27532,6 +28319,7 @@ async fn availability_vote_falls_back_to_topology_when_collectors_local_only() {
     actor.subsystems.propose.collector_plan_targets = vec![local_peer_id.clone()];
     actor.subsystems.propose.collectors_contacted.clear();
     actor
+        .subsystems
         .propose
         .collectors_contacted
         .insert(local_peer_id.clone());
@@ -27586,6 +28374,7 @@ async fn rebroadcast_availability_votes_fall_back_to_topology_when_collectors_lo
     actor.subsystems.propose.collector_plan_targets = vec![local_peer_id.clone()];
     actor.subsystems.propose.collectors_contacted.clear();
     actor
+        .subsystems
         .propose
         .collectors_contacted
         .insert(local_peer_id.clone());

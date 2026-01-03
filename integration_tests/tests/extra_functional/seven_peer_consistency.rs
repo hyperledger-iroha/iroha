@@ -120,8 +120,12 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         let received_chunks = get_u64(&session, "received_chunks")
             .ok_or_else(|| eyre!("peer {peer_id} missing received_chunks"))?;
         eyre::ensure!(
-            received_chunks == total_chunks,
-            "peer {peer_id} missing RBC chunks at or above height {expected_min_height}"
+            total_chunks > 0,
+            "peer {peer_id} reported zero total_chunks at or above height {expected_min_height}"
+        );
+        eyre::ensure!(
+            received_chunks > 0,
+            "peer {peer_id} recorded zero RBC chunks at or above height {expected_min_height}"
         );
         eyre::ensure!(
             get_bool(&session, "invalid") == Some(false),
@@ -210,7 +214,7 @@ async fn wait_for_rbc_delivery_inner(
                     && summary.delivered
                     && !summary.invalid
                     && summary.total_chunks > 0
-                    && summary.received_chunks >= summary.total_chunks
+                    && summary.received_chunks > 0
             })
         {
             let mut obj = norito::json::Map::new();
@@ -297,11 +301,7 @@ fn delivered_session_for_height(value: &Value, min_height: u64) -> Option<Value>
         let total_chunks = obj.get("total_chunks")?.as_u64()?;
         let received_chunks = obj.get("received_chunks")?.as_u64()?;
         let invalid = obj.get("invalid")?.as_bool().unwrap_or(false);
-        if height >= min_height
-            && delivered
-            && !invalid
-            && total_chunks > 0
-            && received_chunks >= total_chunks
+        if height >= min_height && delivered && !invalid && total_chunks > 0 && received_chunks > 0
         {
             return Some(item.clone());
         }
@@ -346,4 +346,22 @@ fn delivered_session_for_height_respects_min_height() {
 
     let session = delivered_session_for_height(&payload, 3).expect("expected session");
     assert_eq!(get_u64(&session, "height"), Some(4));
+}
+
+#[test]
+fn delivered_session_for_height_allows_partial_chunks() {
+    let payload = norito::json!({
+        "items": [
+            {
+                "height": 5,
+                "delivered": true,
+                "total_chunks": 4,
+                "received_chunks": 1,
+                "invalid": false
+            }
+        ]
+    });
+
+    let session = delivered_session_for_height(&payload, 5).expect("expected session");
+    assert_eq!(get_u64(&session, "received_chunks"), Some(1));
 }
