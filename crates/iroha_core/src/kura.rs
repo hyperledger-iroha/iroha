@@ -52,6 +52,7 @@ use parking_lot::Mutex;
 
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
+use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 use crate::{block::CommittedBlock, commit_roster_journal::CommitRosterJournal};
 
 impl From<CommittedBlock> for Arc<SignedBlock> {
@@ -1382,7 +1383,7 @@ impl Kura {
     fn enqueue_block(
         &self,
         block: &Arc<SignedBlock>,
-        merge_entry: Option<MergeLedgerEntry>,
+        merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<()> {
         #[cfg(test)]
         if merge_entry.is_none() {
@@ -1404,7 +1405,7 @@ impl Kura {
             "enqueued block for persistence"
         );
 
-        if let Some(entry) = merge_entry.as_ref()
+        if let Some(entry) = merge_entry
             && let Err(err) = self.merge_log.lock().append(entry)
         {
             block_data.pop();
@@ -1456,7 +1457,7 @@ impl Kura {
     pub fn store_block_with_merge_entry(
         &self,
         block: impl Into<Arc<SignedBlock>>,
-        merge_entry: MergeLedgerEntry,
+        merge_entry: &MergeLedgerEntry,
     ) -> Result<()> {
         let block = block.into();
         self.enqueue_block(&block, Some(merge_entry))
@@ -2013,6 +2014,9 @@ pub enum RosterSidecarFormat {
     #[codec(index = 1)]
     /// Initial wire format for roster snapshots.
     V1,
+    #[codec(index = 2)]
+    /// Roster snapshot format with stake metadata.
+    V2,
 }
 
 /// Persisted roster metadata enabling roster reconstruction during block sync.
@@ -2030,10 +2034,15 @@ pub struct RosterSidecar {
     /// Optional validator-set checkpoint capturing the validator set.
     #[norito(default)]
     pub validator_checkpoint: Option<ValidatorSetCheckpoint>,
+    /// Optional stake snapshot aligned to the validator set.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
 
 impl RosterSidecar {
     const FORMAT_V1_LABEL: &'static str = "roster.snapshot.v1";
+    const FORMAT_V2_LABEL: &'static str = "roster.snapshot.v2";
 
     /// Construct a new roster sidecar payload using the v1 schema.
     pub fn new_v1(
@@ -2048,6 +2057,25 @@ impl RosterSidecar {
             block_hash,
             commit_certificate,
             validator_checkpoint,
+            stake_snapshot: None,
+        }
+    }
+
+    /// Construct a new roster sidecar payload using the v2 schema.
+    pub fn new_v2(
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        commit_certificate: Option<CommitCertificate>,
+        validator_checkpoint: Option<ValidatorSetCheckpoint>,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> Self {
+        Self {
+            format: RosterSidecarFormat::V2,
+            height,
+            block_hash,
+            commit_certificate,
+            validator_checkpoint,
+            stake_snapshot,
         }
     }
 
@@ -2055,6 +2083,7 @@ impl RosterSidecar {
     pub fn format_label(&self) -> &'static str {
         match self.format {
             RosterSidecarFormat::V1 => Self::FORMAT_V1_LABEL,
+            RosterSidecarFormat::V2 => Self::FORMAT_V2_LABEL,
         }
     }
 
@@ -4309,9 +4338,11 @@ mod tests {
         let (kura, _) = Kura::new(&config, &LaneConfig::default()).expect("init kura");
         let block1: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
         let block2: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
-        kura.store_block_with_merge_entry(block1, sample_merge_entry(1))
+        let entry1 = sample_merge_entry(1);
+        kura.store_block_with_merge_entry(block1, &entry1)
             .expect("store block+entry1");
-        kura.store_block_with_merge_entry(block2, sample_merge_entry(2))
+        let entry2 = sample_merge_entry(2);
+        kura.store_block_with_merge_entry(block2, &entry2)
             .expect("store block+entry2");
         assert_eq!(kura.merge_ledger_snapshot().len(), 2);
 
@@ -4334,7 +4365,7 @@ mod tests {
         let entry = sample_merge_entry(7);
         let expected = entry.clone();
 
-        kura.store_block_with_merge_entry(block, entry)
+        kura.store_block_with_merge_entry(block, &entry)
             .expect("store block with merge entry");
 
         assert_eq!(kura.blocks_count(), 1);
@@ -4381,7 +4412,7 @@ mod tests {
         let entry = sample_merge_entry(11);
 
         let err = kura
-            .store_block_with_merge_entry(block, entry)
+            .store_block_with_merge_entry(block, &entry)
             .expect_err("merge log append should fail");
         assert!(matches!(err, Error::IO(_, _)));
         assert_eq!(kura.blocks_count(), 0);
@@ -4580,7 +4611,7 @@ mod tests {
         let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
         let entry = sample_merge_entry(7);
         let err = kura
-            .store_block_with_merge_entry(block, entry)
+            .store_block_with_merge_entry(block, &entry)
             .expect_err("writer channel closed");
         assert!(matches!(err, Error::BlockWriterUnavailable));
         assert_eq!(kura.blocks_count(), 0);

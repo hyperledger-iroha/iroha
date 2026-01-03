@@ -23,6 +23,8 @@ use norito::{
 };
 use thiserror::Error;
 
+use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
+
 /// Persisted commit-roster journal payload.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct PersistedCommitRosters {
@@ -43,6 +45,10 @@ struct CommitRosterRecord {
     commit_certificate: CommitCertificate,
     /// Validator set checkpoint for the block.
     validator_checkpoint: ValidatorSetCheckpoint,
+    /// Optional stake snapshot aligned to the validator set.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    stake_snapshot: Option<CommitStakeSnapshot>,
 }
 
 /// Errors returned when loading or persisting commit rosters.
@@ -95,6 +101,8 @@ pub struct CommitRosterSnapshot {
     pub commit_certificate: CommitCertificate,
     /// Validator set checkpoint for the block.
     pub validator_checkpoint: ValidatorSetCheckpoint,
+    /// Optional stake snapshot aligned to the validator set.
+    pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
 
 /// Journal that records commit rosters derived from committed blocks.
@@ -108,7 +116,7 @@ pub struct CommitRosterJournal {
 impl CommitRosterJournal {
     /// Filename used to persist commit roster journals next to the block store.
     pub const JOURNAL_FILE: &'static str = "commit-rosters.norito";
-    const JOURNAL_VERSION: u32 = 1;
+    const JOURNAL_VERSION: u32 = 2;
 
     /// Build the canonical journal path under the provided root.
     #[must_use]
@@ -155,7 +163,7 @@ impl CommitRosterJournal {
                 source,
             })?;
 
-        if persisted.version != Self::JOURNAL_VERSION {
+        if persisted.version != 1 && persisted.version != Self::JOURNAL_VERSION {
             return Err(CommitRosterJournalError::UnsupportedVersion {
                 path,
                 version: persisted.version,
@@ -187,7 +195,11 @@ impl CommitRosterJournal {
                 );
                 continue;
             }
-            journal.upsert(entry.commit_certificate, entry.validator_checkpoint);
+            journal.upsert(
+                entry.commit_certificate,
+                entry.validator_checkpoint,
+                entry.stake_snapshot,
+            );
         }
 
         journal.enforce_retention();
@@ -199,14 +211,18 @@ impl CommitRosterJournal {
         &mut self,
         commit_certificate: CommitCertificate,
         validator_checkpoint: ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
         let key = (commit_certificate.height, commit_certificate.block_hash);
         match self.entries.entry(key) {
             Entry::Occupied(mut entry) => {
                 if entry.get().commit_certificate.view <= commit_certificate.view {
+                    let stake_snapshot =
+                        stake_snapshot.or_else(|| entry.get().stake_snapshot.clone());
                     entry.insert(CommitRosterSnapshot {
                         commit_certificate,
                         validator_checkpoint,
+                        stake_snapshot,
                     });
                 }
             }
@@ -214,6 +230,7 @@ impl CommitRosterJournal {
                 entry.insert(CommitRosterSnapshot {
                     commit_certificate,
                     validator_checkpoint,
+                    stake_snapshot,
                 });
             }
         }
@@ -242,6 +259,7 @@ impl CommitRosterJournal {
                     block_hash: *block_hash,
                     commit_certificate: snapshot.commit_certificate.clone(),
                     validator_checkpoint: snapshot.validator_checkpoint.clone(),
+                    stake_snapshot: snapshot.stake_snapshot.clone(),
                 })
                 .collect(),
         };
@@ -351,7 +369,7 @@ mod tests {
         let path = CommitRosterJournal::journal_path(dir.path());
         let (cert, checkpoint) = sample_cert(1);
         let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
-        journal.upsert(cert.clone(), checkpoint.clone());
+        journal.upsert(cert.clone(), checkpoint.clone(), None);
         journal.persist().expect("persist");
 
         let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
@@ -362,6 +380,7 @@ mod tests {
             CommitRosterSnapshot {
                 commit_certificate: cert,
                 validator_checkpoint: checkpoint,
+                stake_snapshot: None,
             }
         );
     }
@@ -373,8 +392,8 @@ mod tests {
         let (low_view_cert, checkpoint) = sample_cert(1);
         let (high_view_cert, _) = sample_cert(3);
         let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
-        journal.upsert(low_view_cert, checkpoint.clone());
-        journal.upsert(high_view_cert.clone(), checkpoint);
+        journal.upsert(low_view_cert, checkpoint.clone(), None);
+        journal.upsert(high_view_cert.clone(), checkpoint, None);
         journal.persist().expect("persist");
 
         let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
@@ -387,7 +406,7 @@ mod tests {
     fn get_returns_matching_snapshot() {
         let (cert, checkpoint) = sample_cert(2);
         let mut journal = CommitRosterJournal::new(PathBuf::from("unused"), retention(4));
-        journal.upsert(cert.clone(), checkpoint.clone());
+        journal.upsert(cert.clone(), checkpoint.clone(), None);
 
         let found = journal
             .get(cert.height, cert.block_hash)
@@ -408,7 +427,7 @@ mod tests {
         let mut journal = CommitRosterJournal::new(path.clone(), retention(2));
         for height in 1..=3 {
             let (cert, checkpoint) = cert_with_height(height, 0);
-            journal.upsert(cert, checkpoint);
+            journal.upsert(cert, checkpoint, None);
         }
         let snapshots = journal.snapshots();
         let heights: Vec<_> = snapshots

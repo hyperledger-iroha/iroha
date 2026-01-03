@@ -105,40 +105,51 @@ fn load_account_admission_policy(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<AccountAdmissionPolicy, InstructionExecutionError> {
     let domain = state_transaction.world.domain(destination.domain())?;
-    if let Some(policy_json) = domain.metadata().get(&*POLICY_METADATA_KEY) {
-        policy_json
-            .try_into_any_norito::<AccountAdmissionPolicy>()
-            .map_err(|err| {
-                AccountAdmissionError::InvalidPolicy(AccountAdmissionInvalidPolicy {
-                    domain: destination.domain().clone(),
-                    reason: format!(
-                        "domain metadata key `{ACCOUNT_ADMISSION_POLICY_METADATA_KEY}` decode error: {err}"
-                    ),
-                })
-                .into()
-            })
-    } else if let Some(custom) = state_transaction
-        .world
-        .parameters()
-        .custom()
-        .get(&AccountAdmissionPolicy::parameter_id())
-    {
-        custom
-            .payload()
-            .try_into_any_norito::<AccountAdmissionPolicy>()
-            .map_err(|err| {
-                AccountAdmissionError::InvalidPolicy(AccountAdmissionInvalidPolicy {
-                    domain: destination.domain().clone(),
-                    reason: format!(
-                        "chain parameter `{}` decode error: {err}",
-                        AccountAdmissionPolicy::PARAMETER_ID_STR
-                    ),
-                })
-                .into()
-            })
-    } else {
-        Ok(AccountAdmissionPolicy::default())
-    }
+    domain
+        .metadata()
+        .get(&*POLICY_METADATA_KEY)
+        .map_or_else(
+            || {
+                state_transaction
+                    .world
+                    .parameters()
+                    .custom()
+                    .get(&AccountAdmissionPolicy::parameter_id())
+                    .map_or_else(
+                        || Ok(AccountAdmissionPolicy::default()),
+                        |custom| {
+                            custom
+                                .payload()
+                                .try_into_any_norito::<AccountAdmissionPolicy>()
+                                .map_err(|err| {
+                                    AccountAdmissionError::InvalidPolicy(
+                                        AccountAdmissionInvalidPolicy {
+                                            domain: destination.domain().clone(),
+                                            reason: format!(
+                                                "chain parameter `{}` decode error: {err}",
+                                                AccountAdmissionPolicy::PARAMETER_ID_STR
+                                            ),
+                                        },
+                                    )
+                                    .into()
+                                })
+                        },
+                    )
+            },
+            |policy_json| {
+                policy_json
+                    .try_into_any_norito::<AccountAdmissionPolicy>()
+                    .map_err(|err| {
+                        AccountAdmissionError::InvalidPolicy(AccountAdmissionInvalidPolicy {
+                            domain: destination.domain().clone(),
+                            reason: format!(
+                                "domain metadata key `{ACCOUNT_ADMISSION_POLICY_METADATA_KEY}` decode error: {err}"
+                            ),
+                        })
+                        .into()
+                    })
+            },
+        )
 }
 
 fn apply_implicit_creation_fee(

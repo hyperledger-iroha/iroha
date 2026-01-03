@@ -26,6 +26,7 @@ pub(super) fn allow_stale_block_created(da_enabled: bool, missing_request: bool)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub(super) struct MissingProposalContext {
     pub(super) hint_seen: bool,
     pub(super) proposal_cached: bool,
@@ -41,12 +42,27 @@ pub(super) struct MissingProposalContext {
 }
 
 impl Actor {
+    pub(crate) fn expected_collector_params_for_advert(
+        &self,
+        advert: &super::message::ConsensusParamsAdvert,
+    ) -> (u64, u64) {
+        let (expected_k, expected_r) = advert
+            .membership
+            .map_or_else(
+                || self.collector_plan_params(),
+                |membership| self.collector_plan_params_for_height(membership.height),
+            );
+        (
+            u64::try_from(expected_k).unwrap_or(u64::MAX),
+            u64::from(expected_r),
+        )
+    }
+
     pub(super) fn handle_consensus_params(
         &self,
         advert: super::message::ConsensusParamsAdvert,
     ) -> Result<()> {
-        let expected_k = u64::try_from(self.config.collectors_k).unwrap_or(u64::MAX);
-        let expected_r = u64::from(self.config.collectors_redundant_send_r);
+        let (expected_k, expected_r) = self.expected_collector_params_for_advert(&advert);
         if u64::from(advert.collectors_k) != expected_k {
             warn!(
                 advertised = advert.collectors_k,
@@ -446,6 +462,32 @@ impl Actor {
                 missing_request,
                 "accepting BlockCreated for stale view to recover missing payload"
             );
+        }
+        let expected_height = committed_height.saturating_add(1);
+        if height > expected_height {
+            let commit_topology = self.effective_commit_topology();
+            let expected_usize = usize::try_from(expected_height).ok();
+            let actual_usize = usize::try_from(height).ok();
+            if let Some(parent_hash) = block.header().prev_block_hash() {
+                self.request_missing_parent(
+                    block_hash,
+                    height,
+                    view,
+                    parent_hash,
+                    &commit_topology,
+                    None,
+                    expected_usize,
+                    actual_usize,
+                    "block_created",
+                );
+            }
+            if height > expected_height.saturating_add(1) {
+                self.request_missing_parents_for_gap(
+                    &commit_topology,
+                    None,
+                    "block_created_gap",
+                );
+            }
         }
         if self.pending.pending_blocks.contains_key(&block_hash) {
             if da_enabled {

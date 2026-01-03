@@ -247,16 +247,19 @@ pub mod test_utils {
     ) -> FixtureEnvelope {
         let circuit_id = circuit_id.into();
         let mut vk_bytes = None;
-        let (proof_payload, public_inputs) =
-            if let Some(fixture) = fixture_circuit_from_id(circuit_id.as_str()) {
-                let (proof_payload, public_inputs, vk) = fixture();
-                vk_bytes = Some(vk);
-                (proof_payload, public_inputs)
-            } else {
-                let public_inputs = fixture_public_inputs_bytes();
-                let proof_payload = halo2_proof_payload(&public_inputs);
-                (proof_payload, public_inputs)
-            };
+        let (proof_payload, public_inputs) = fixture_circuit_from_id(circuit_id.as_str())
+            .map_or_else(
+                || {
+                    let public_inputs = fixture_public_inputs_bytes();
+                    let proof_payload = halo2_proof_payload(&public_inputs);
+                    (proof_payload, public_inputs)
+                },
+                |fixture| {
+                    let (proof_payload, public_inputs, vk) = fixture();
+                    vk_bytes = Some(vk);
+                    (proof_payload, public_inputs)
+                },
+            );
         let schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
         let envelope = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
@@ -276,8 +279,10 @@ pub mod test_utils {
         }
     }
 
+    type FixtureBundle = fn() -> (Vec<u8>, Vec<u8>, Vec<u8>);
+
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-    fn fixture_circuit_from_id(circuit_id: &str) -> Option<fn() -> (Vec<u8>, Vec<u8>, Vec<u8>)> {
+    fn fixture_circuit_from_id(circuit_id: &str) -> Option<FixtureBundle> {
         let backend = super::halo2_ipa_backend_from_circuit_id(circuit_id)?;
         let name = backend.rsplit('/').next()?;
         match name {
@@ -289,7 +294,7 @@ pub mod test_utils {
     }
 
     #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-    fn fixture_circuit_from_id(_circuit_id: &str) -> Option<fn() -> (Vec<u8>, Vec<u8>, Vec<u8>)> {
+    fn fixture_circuit_from_id(_circuit_id: &str) -> Option<FixtureBundle> {
         None
     }
 
@@ -306,8 +311,8 @@ pub mod test_utils {
             // Simple LCG for deterministic, fast test entropy.
             self.0 = self
                 .0
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             self.0
         }
     }
@@ -315,7 +320,8 @@ pub mod test_utils {
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     impl RngCore for FixtureRng {
         fn next_u32(&mut self) -> u32 {
-            self.next_word() as u32
+            let word = self.next_word();
+            u32::try_from(word & u64::from(u32::MAX)).expect("word masked to u32")
         }
 
         fn next_u64(&mut self) -> u64 {
@@ -363,7 +369,7 @@ pub mod test_utils {
                 // Proof generation is expensive; cache the fixture and use a deterministic RNG.
                 let k = 5u32;
                 let params = pasta_params_new(k);
-                let circuit = super::pasta_tiny::Add::default();
+                let circuit = super::pasta_tiny::Add;
                 let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
                 let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
 
@@ -417,7 +423,7 @@ pub mod test_utils {
                 // Proof generation is expensive; cache the fixture and use a deterministic RNG.
                 let k = 5u32;
                 let params = pasta_params_new(k);
-                let circuit = super::pasta_tiny::AddPublic::default();
+                let circuit = super::pasta_tiny::AddPublic;
                 let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
                 let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
 
@@ -478,7 +484,7 @@ pub mod test_utils {
                 // Proof generation is expensive; cache the fixture and use a deterministic RNG.
                 let k = 5u32;
                 let params = pasta_params_new(k);
-                let circuit = super::pasta_tiny::AddTwoRows::default();
+                let circuit = super::pasta_tiny::AddTwoRows;
                 let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
                 let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
 

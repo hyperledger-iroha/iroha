@@ -82,7 +82,8 @@ impl Actor {
         Ok(())
     }
 
-    fn reset_mode_flip_state(&mut self) {
+    /// Clear cached consensus state when switching consensus mode.
+    pub(crate) fn reset_mode_flip_state(&mut self) {
         self.subsystems.propose.collector_plan = None;
         self.subsystems.propose.collector_plan_subject = None;
         self.subsystems.propose.collector_plan_targets.clear();
@@ -97,7 +98,8 @@ impl Actor {
         self.execution_qc_cache.clear();
         self.vote_log.clear();
         self.commit_votes.clear();
-        self.subsystems.propose.collector_redundant_limit = self.config.collectors_redundant_send_r;
+        let (_, redundant_r) = self.collector_plan_params();
+        self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
         self.pending.pending_replay_last_sent.clear();
         self.pending.missing_block_requests.clear();
         self.subsystems.da_rbc.da.da_bundles.clear();
@@ -108,7 +110,11 @@ impl Actor {
         self.block_sync_rebroadcast_log.clear();
         self.block_sync_fetch_log.clear();
         let now = Instant::now();
-        let base_pacemaker_interval = pacemaker_base_interval(&self.config);
+        let block_time = {
+            let view = self.state.view();
+            view.world.parameters().sumeragi().block_time()
+        };
+        let base_pacemaker_interval = pacemaker_base_interval(block_time, &self.config);
         reset_runtime_state_for_mode_flip(
             &mut self.subsystems.propose.pacemaker,
             &mut self.subsystems.propose.new_view_tracker,

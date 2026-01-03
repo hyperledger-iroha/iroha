@@ -341,8 +341,6 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
         params: &QueryParams,
     ) -> Result<QueryOutputBatchBox, Error> {
         use iroha_data_model as dm;
-        let limits = QueryLimits::from_defaults();
-
         fn decode_query<Q: norito::codec::Decode>(payload: &[u8]) -> Result<Q, Error> {
             let mut cursor = std::io::Cursor::new(payload);
             Q::decode(&mut cursor).map_err(|_| {
@@ -395,6 +393,7 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
             Some(Ok(batch))
         }
 
+        let limits = QueryLimits::from_defaults();
         macro_rules! dispatch {
             ($($item:ty => $query:ty),+ $(,)?) => {{
                 $(if let Some(out) = run_dispatch::<$item, $query>(&self, state, params, limits) {
@@ -833,6 +832,7 @@ impl ValidQueryRequest {
                     Q::decode(&mut cur).ok()
                 }
 
+                #[allow(clippy::too_many_arguments)]
                 fn run_dispatch<T, Q, F>(
                     qbox: &query::QueryBox<query::QueryOutputBatchBox>,
                     params: &query::parameters::QueryParams,
@@ -2155,6 +2155,7 @@ impl ValidQueryRequest {
                     Q::decode(&mut cur).ok()
                 }
 
+                #[allow(clippy::too_many_arguments)]
                 fn run_dispatch<T, Q, F>(
                     qbox: &query::QueryBox<query::QueryOutputBatchBox>,
                     params: &query::parameters::QueryParams,

@@ -3169,7 +3169,7 @@ pub(crate) mod valid {
         }
 
         /// Like [`Self::validate_keep_voting_block`], but emits a rejection block event on failure.
-        #[allow(clippy::too_many_arguments)]
+        #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
         pub fn validate_keep_voting_block_with_events<'state, F: FnMut(PipelineEventBox)>(
             mut block: SignedBlock,
             topology: &Topology,
@@ -4480,7 +4480,7 @@ pub(crate) mod valid {
                     if is_genesis_block {
                         return None;
                     }
-                    let is_heartbeat = crate::tx::is_heartbeat_transaction(*tx);
+                    let is_heartbeat = crate::tx::is_heartbeat_transaction(tx);
                     if !is_heartbeat {
                         let accepted =
                             crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));

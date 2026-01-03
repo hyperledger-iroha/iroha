@@ -31,6 +31,7 @@ use crate::{
             NPOS_TAG, PERMISSIONED_TAG, Phase, Qc, QcAggregate, ValidatorIndex, qc_signer_count,
         },
         network_topology::Topology,
+        stake_snapshot::CommitStakeSnapshot,
         status,
     },
 };
@@ -698,7 +699,7 @@ mod roster_metadata_tests {
         state
             .commit_roster_journal
             .write()
-            .upsert(commit_certificate.clone(), checkpoint.clone());
+            .upsert(commit_certificate.clone(), checkpoint.clone(), None);
 
         let metadata =
             super::message::roster_metadata_from_state(&state, kura.as_ref(), 1, block_hash)
@@ -714,10 +715,12 @@ mod roster_metadata_tests {
         let incoming = RosterMetadata {
             commit_certificate: Some(commit_certificate.clone()),
             validator_checkpoint: None,
+            stake_snapshot: None,
         };
         let fallback = RosterMetadata {
             commit_certificate: None,
             validator_checkpoint: Some(checkpoint),
+            stake_snapshot: None,
         };
 
         let effective = super::message::effective_roster_metadata(Some(&incoming), Some(fallback));
@@ -730,10 +733,12 @@ mod roster_metadata_tests {
         let incoming = RosterMetadata {
             commit_certificate: None,
             validator_checkpoint: None,
+            stake_snapshot: None,
         };
         let fallback = RosterMetadata {
             commit_certificate: None,
             validator_checkpoint: Some(checkpoint.clone()),
+            stake_snapshot: None,
         };
 
         let effective =
@@ -746,6 +751,7 @@ mod roster_metadata_tests {
         let incoming = RosterMetadata {
             commit_certificate: None,
             validator_checkpoint: None,
+            stake_snapshot: None,
         };
         let effective = super::message::effective_roster_metadata(Some(&incoming), None);
         assert!(effective.is_none());
@@ -968,6 +974,10 @@ pub mod message {
         pub commit_certificate: Option<CommitCertificate>,
         /// Optional validator checkpoint for the block.
         pub validator_checkpoint: Option<ValidatorSetCheckpoint>,
+        /// Optional stake snapshot aligned to the validator set.
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        pub stake_snapshot: Option<CommitStakeSnapshot>,
     }
 
     impl RosterMetadata {
@@ -1080,6 +1090,7 @@ pub mod message {
             return Some(RosterMetadata {
                 commit_certificate: Some(snapshot.commit_certificate),
                 validator_checkpoint: Some(snapshot.validator_checkpoint),
+                stake_snapshot: snapshot.stake_snapshot,
             });
         }
 
@@ -1099,6 +1110,7 @@ pub mod message {
             return Some(RosterMetadata {
                 commit_certificate: meta.commit_certificate,
                 validator_checkpoint: meta.validator_checkpoint,
+                stake_snapshot: meta.stake_snapshot,
             });
         }
 
@@ -1106,6 +1118,7 @@ pub mod message {
             return Some(RosterMetadata {
                 commit_certificate: Some(snapshot.commit_certificate),
                 validator_checkpoint: Some(snapshot.validator_checkpoint),
+                stake_snapshot: snapshot.stake_snapshot,
             });
         }
 
@@ -1120,10 +1133,12 @@ pub mod message {
             (Some(cert), checkpoint) => Some(RosterMetadata {
                 commit_certificate: Some(cert),
                 validator_checkpoint: checkpoint,
+                stake_snapshot: None,
             }),
             (None, Some(checkpoint)) => Some(RosterMetadata {
                 commit_certificate: None,
                 validator_checkpoint: Some(checkpoint),
+                stake_snapshot: None,
             }),
             _ => None,
         }
@@ -1424,6 +1439,7 @@ pub mod message {
                                 .unwrap_or(RosterMetadata {
                                     commit_certificate: None,
                                     validator_checkpoint: None,
+                                    stake_snapshot: None,
                                 })
                             })
                             .collect();
@@ -1501,6 +1517,7 @@ pub mod message {
                                 .clone_from(&metadata.commit_certificate);
                             msg.validator_checkpoint
                                 .clone_from(&metadata.validator_checkpoint);
+                            msg.stake_snapshot.clone_from(&metadata.stake_snapshot);
                         }
                         msg.qc =
                             incoming_qc.or_else(|| BlockSynchronizer::block_sync_qc_for(&block));
@@ -1672,6 +1689,7 @@ pub mod message {
                         RosterMetadata {
                             commit_certificate: None,
                             validator_checkpoint: None,
+                            stake_snapshot: None,
                         };
                         2
                     ],
@@ -1703,6 +1721,7 @@ pub mod message {
                         RosterMetadata {
                             commit_certificate: None,
                             validator_checkpoint: None,
+                            stake_snapshot: None,
                         };
                         2
                     ],
@@ -1749,6 +1768,7 @@ pub mod message {
                         RosterMetadata {
                             commit_certificate: None,
                             validator_checkpoint: None,
+                            stake_snapshot: None,
                         };
                         2
                     ],
@@ -2220,6 +2240,7 @@ pub mod message {
                 RosterMetadata {
                     commit_certificate: None,
                     validator_checkpoint: Some(checkpoint),
+                    stake_snapshot: None,
                 },
             );
 

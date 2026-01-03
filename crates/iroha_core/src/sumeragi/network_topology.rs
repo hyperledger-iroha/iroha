@@ -327,6 +327,7 @@ impl Topology {
     }
 
     /// Re-arrange the set of peers after each successful block commit.
+    #[cfg(test)]
     fn rotate_set_a(&mut self) {
         let rotate_at = self.min_votes_for_commit();
         self.0[..rotate_at].rotate_left(1);

@@ -131,6 +131,7 @@ impl<'a> PenaltyApplier<'a> {
         outcome
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn apply_consensus_penalties(&self, current_height: u64) -> Result<PenaltyOutcome> {
         let mut outcome = PenaltyOutcome::default();
         let activation_lag = self.config.npos.reconfig.activation_lag_blocks;
@@ -152,11 +153,6 @@ impl<'a> PenaltyApplier<'a> {
             return Ok(outcome);
         }
 
-        let current_roster: Vec<PeerId> = {
-            let view = self.state.view();
-            view.commit_topology().iter().cloned().collect()
-        };
-        let current_roster_len = current_roster.len();
         let epoch_seeds = {
             let view = self.state.world.vrf_epochs.view();
             let mut map = BTreeMap::new();
@@ -192,19 +188,36 @@ impl<'a> PenaltyApplier<'a> {
             let evidence_roster =
                 roster_for_evidence(self.state, &record.evidence, &commit_certs, &checkpoints)
                     .filter(|roster| !roster.is_empty());
-            let (topology_len, roster) = match evidence_roster.as_ref() {
-                Some(roster) => (roster.len(), roster.as_slice()),
-                None => (current_roster_len, current_roster.as_slice()),
+            let Some(roster) = evidence_roster.as_ref() else {
+                outcome.pending = outcome.pending.saturating_add(1);
+                continue;
             };
+            if matches!(consensus_mode, ConsensusMode::Npos) && prf_seed.is_none() {
+                outcome.pending = outcome.pending.saturating_add(1);
+                continue;
+            }
+            let roster = roster.as_slice();
             let offenders =
-                offender_indices(&record.evidence, topology_len, consensus_mode, prf_seed);
+                offender_indices(&record.evidence, roster.len(), consensus_mode, prf_seed);
             let slash_id = Hash::new(key.clone());
             // Resolve validators before opening a write transaction to avoid re-entrant locks.
-            let mut applied_here = offenders.is_empty();
-            if is_censorship && offenders.is_empty() {
+            if offenders.is_empty() {
                 // TODO: attribute censorship evidence to responsible validators before slashing.
-                applied_here = false;
-                outcome.pending = outcome.pending.saturating_add(1);
+                if is_censorship || !evidence_has_legitimate_empty_offenders(&record.evidence) {
+                    outcome.pending = outcome.pending.saturating_add(1);
+                    continue;
+                }
+                let mut block = self.state.world.block();
+                #[cfg(feature = "telemetry")]
+                let mut tx = block.trasaction(self.telemetry, lane_config.clone(), current_height);
+                #[cfg(not(feature = "telemetry"))]
+                let mut tx = block.trasaction(lane_config.clone(), current_height);
+                record.penalty_applied = true;
+                record.penalty_applied_at_height = Some(current_height);
+                tx.consensus_evidence.insert(key, record);
+                tx.apply();
+                block.commit();
+                continue;
             }
             let mut locators = Vec::new();
             for signer in offenders {
@@ -212,11 +225,16 @@ impl<'a> PenaltyApplier<'a> {
                     locators.push(locator);
                 }
             }
+            if locators.is_empty() {
+                outcome.pending = outcome.pending.saturating_add(1);
+                continue;
+            }
             let mut block = self.state.world.block();
             #[cfg(feature = "telemetry")]
             let mut tx = block.trasaction(self.telemetry, lane_config.clone(), current_height);
             #[cfg(not(feature = "telemetry"))]
             let mut tx = block.trasaction(lane_config.clone(), current_height);
+            let mut applied_here = false;
             for locator in locators {
                 if let Some(amount) =
                     max_slash_amount_for_validator(&tx, &locator, staking_cfg.max_slash_bps)?
@@ -241,6 +259,8 @@ impl<'a> PenaltyApplier<'a> {
             if applied_here {
                 record.penalty_applied = true;
                 record.penalty_applied_at_height = Some(current_height);
+            } else {
+                outcome.pending = outcome.pending.saturating_add(1);
             }
             tx.consensus_evidence.insert(key, record);
             tx.apply();
@@ -390,12 +410,13 @@ fn canonicalize_index_for_view(
     if idx >= topology_len {
         return None;
     }
+    let topology_len_u64 = u64::try_from(topology_len).ok()?;
     let rotation = match consensus_mode {
         ConsensusMode::Permissioned => {
             if view == 0 {
                 return Some(signer);
             }
-            (view % topology_len as u64) as usize
+            usize::try_from(view % topology_len_u64).ok()?
         }
         ConsensusMode::Npos => {
             let seed = prf_seed?;
@@ -486,6 +507,18 @@ fn offender_indices(
             // TODO: map censorship evidence to responsible leaders once the attribution policy is defined.
             Vec::new()
         }
+    }
+}
+
+fn evidence_has_legitimate_empty_offenders(evidence: &Evidence) -> bool {
+    match &evidence.payload {
+        EvidencePayload::InvalidQc { qc, .. } => {
+            bitmap_indices(&qc.aggregate.signers_bitmap).is_empty()
+        }
+        EvidencePayload::Censorship { .. } => false,
+        EvidencePayload::DoubleVote { .. }
+        | EvidencePayload::DoubleExecVote { .. }
+        | EvidencePayload::InvalidProposal { .. } => false,
     }
 }
 

@@ -222,7 +222,7 @@ impl Actor {
                         }
                         self.schedule_background(BackgroundRequest::Post {
                             peer: peer.clone(),
-                            msg: BlockMessage::VrfCommit(commit_msg.clone()),
+                            msg: BlockMessage::VrfCommit(commit_msg),
                         });
                     }
                 }
@@ -313,7 +313,7 @@ impl Actor {
                         }
                         self.schedule_background(BackgroundRequest::Post {
                             peer: peer.clone(),
-                            msg: BlockMessage::VrfReveal(reveal_msg.clone()),
+                            msg: BlockMessage::VrfReveal(reveal_msg),
                         });
                     }
                 }
@@ -544,18 +544,20 @@ impl Actor {
         let (epoch_length, commit_deadline_offset, reveal_deadline_offset) = self
             .epoch_manager
             .as_ref()
-            .map(|manager| {
+            .map_or(
                 (
-                    manager.epoch_length_blocks(),
-                    manager.commit_window_end(),
-                    manager.reveal_window_end(),
-                )
-            })
-            .unwrap_or((
-                self.config.epoch_length_blocks,
-                self.config.vrf_commit_deadline_offset,
-                self.config.vrf_reveal_deadline_offset,
-            ));
+                    self.config.epoch_length_blocks,
+                    self.config.vrf_commit_deadline_offset,
+                    self.config.vrf_reveal_deadline_offset,
+                ),
+                |manager| {
+                    (
+                        manager.epoch_length_blocks(),
+                        manager.commit_window_end(),
+                        manager.reveal_window_end(),
+                    )
+                },
+            );
 
         VrfEpochRecord {
             epoch,
