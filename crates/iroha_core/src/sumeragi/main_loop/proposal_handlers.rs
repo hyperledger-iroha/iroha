@@ -465,10 +465,14 @@ impl Actor {
         }
         let expected_height = committed_height.saturating_add(1);
         if height > expected_height {
+            #[cfg(test)]
+            eprintln!("handle_block_created: height gap detected");
             let commit_topology = self.effective_commit_topology();
             let expected_usize = usize::try_from(expected_height).ok();
             let actual_usize = usize::try_from(height).ok();
             if let Some(parent_hash) = block.header().prev_block_hash() {
+                #[cfg(test)]
+                eprintln!("handle_block_created: requesting missing parent");
                 self.request_missing_parent(
                     block_hash,
                     height,
@@ -480,13 +484,19 @@ impl Actor {
                     actual_usize,
                     "block_created",
                 );
+                #[cfg(test)]
+                eprintln!("handle_block_created: requested missing parent");
             }
             if height > expected_height.saturating_add(1) {
+                #[cfg(test)]
+                eprintln!("handle_block_created: requesting missing parents for gap");
                 self.request_missing_parents_for_gap(
                     &commit_topology,
                     None,
                     "block_created_gap",
                 );
+                #[cfg(test)]
+                eprintln!("handle_block_created: requested missing parents for gap");
             }
         }
         if self.pending.pending_blocks.contains_key(&block_hash) {
@@ -649,6 +659,8 @@ impl Actor {
             );
             None
         };
+        #[cfg(test)]
+        eprintln!("handle_block_created: hint processed");
 
         let payload_bytes = block_payload_bytes(&block);
         let payload_hash = Hash::new(&payload_bytes);

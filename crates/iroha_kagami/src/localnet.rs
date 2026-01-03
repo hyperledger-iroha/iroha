@@ -4,6 +4,7 @@ use std::{
     env,
     fs::{self, File},
     io::{BufWriter, Write},
+    net::{Ipv4Addr, Ipv6Addr},
     num::NonZeroU16,
     path::{Path, PathBuf},
 };
@@ -17,9 +18,9 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_genesis::{GenesisBuilder, GenesisPeerPop, RawGenesisTransaction};
+use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
 use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
 use iroha_version::BuildLine;
-use norito::literal;
 
 use crate::{
     Outcome, RunArgs,
@@ -34,9 +35,9 @@ pub struct LocalnetOptions {
     pub peers: NonZeroU16,
     /// Optional seed to make key/port generation reproducible.
     pub seed: Option<String>,
-    /// Host interface to bind P2P and Torii listeners to.
+    /// Host interface to bind P2P and Torii listeners to (host/IP only, no port).
     pub bind_host: String,
-    /// Host peers should gossip to and clients should dial.
+    /// Host peers should gossip to and clients should dial (host/IP only, no port).
     pub public_host: String,
     /// Base Torii API port; each peer increments this by one.
     pub base_api_port: u16,
@@ -75,6 +76,84 @@ pub struct AssetSpec {
     pub mint_to: AccountId,
     /// Quantity to mint for this asset definition.
     pub quantity: u64,
+}
+
+#[derive(Debug, Clone)]
+enum HostKind {
+    Ipv4(Ipv4Addr),
+    Ipv6(Ipv6Addr),
+    Name(String),
+}
+
+#[derive(Debug, Clone)]
+struct CanonicalHost {
+    kind: HostKind,
+}
+
+impl CanonicalHost {
+    fn parse(raw: &str, field: &str) -> Result<Self> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(eyre!("`{field}` must not be empty"));
+        }
+        let has_prefix = trimmed.starts_with('[');
+        let has_suffix = trimmed.ends_with(']');
+        if has_prefix != has_suffix {
+            return Err(eyre!(
+                "`{field}` has unmatched '[' or ']': `{raw}`"
+            ));
+        }
+        let unbracketed = if has_prefix && trimmed.len() >= 2 {
+            &trimmed[1..trimmed.len() - 1]
+        } else {
+            trimmed
+        };
+        if unbracketed.is_empty() {
+            return Err(eyre!("`{field}` must not be empty"));
+        }
+        if let Ok(ipv4) = unbracketed.parse::<Ipv4Addr>() {
+            return Ok(Self {
+                kind: HostKind::Ipv4(ipv4),
+            });
+        }
+        if let Ok(ipv6) = unbracketed.parse::<Ipv6Addr>() {
+            return Ok(Self {
+                kind: HostKind::Ipv6(ipv6),
+            });
+        }
+        if unbracketed.contains(':') {
+            return Err(eyre!(
+                "`{field}` must be a host name or IP literal without a port: `{raw}`"
+            ));
+        }
+        Ok(Self {
+            kind: HostKind::Name(unbracketed.to_ascii_lowercase()),
+        })
+    }
+
+    fn addr_literal(&self, port: u16) -> String {
+        let addr = match &self.kind {
+            HostKind::Ipv4(ipv4) => SocketAddr::from((ipv4.octets(), port)),
+            HostKind::Ipv6(ipv6) => SocketAddr::from((ipv6.segments(), port)),
+            HostKind::Name(host) => SocketAddr::Host(SocketAddrHost {
+                host: host.clone().into(),
+                port,
+            }),
+        };
+        addr.to_literal()
+    }
+
+    fn url_host(&self) -> String {
+        match &self.kind {
+            HostKind::Ipv4(ipv4) => ipv4.to_string(),
+            HostKind::Ipv6(ipv6) => format!("[{ipv6}]"),
+            HostKind::Name(host) => host.clone(),
+        }
+    }
+
+    fn torii_url(&self, port: u16) -> String {
+        format!("http://{}:{port}/", self.url_host())
+    }
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +206,10 @@ const STREAM_ID_PUBLIC: &str =
     "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
 const STREAM_ID_PRIVATE: &str =
     "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
+const RANS_SEED0_TABLE: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../codec/rans/tables/rans_seed0.toml"
+));
 
 /// Generate a bare-metal local network (no Docker): genesis, per-peer configs, start/stop scripts.
 #[derive(ClapArgs, Debug, Clone)]
@@ -137,10 +220,10 @@ pub struct Args {
     /// Optional UTF-8 seed for deterministic keys.
     #[arg(long, short)]
     seed: Option<String>,
-    /// Host to bind P2P and Torii listeners to.
+    /// Host to bind P2P and Torii listeners to (host/IP only, no port).
     #[arg(long, default_value = DEFAULT_BIND_HOST, value_name = "HOST")]
     bind_host: String,
-    /// Host to advertise to peers and use for client Torii URL.
+    /// Host to advertise to peers and use for client Torii URL (host/IP only, no port).
     #[arg(long, default_value = DEFAULT_PUBLIC_HOST, value_name = "HOST")]
     public_host: String,
     /// Base Torii API port (per-peer increments by 1).
@@ -184,39 +267,6 @@ pub struct Args {
 
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        match (self.next_consensus_mode, self.mode_activation_height) {
-            (Some(_), None) => {
-                return Err(eyre!(
-                    "`--next-consensus-mode` requires `--mode-activation-height`"
-                ));
-            }
-            (None, Some(_)) if self.next_consensus_mode.is_none() => {
-                return Err(eyre!(
-                    "`--mode-activation-height` requires `--next-consensus-mode`"
-                ));
-            }
-            _ => {}
-        }
-        if let (Some(block_ms), Some(commit_ms)) = (self.block_time_ms, self.commit_time_ms)
-            && commit_ms < block_ms
-        {
-            return Err(eyre!(
-                "`--commit-time-ms` ({commit_ms}) must be greater than or equal to `--block-time-ms` ({block_ms})"
-            ));
-        }
-        if let Some(r) = self.redundant_send_r
-            && r == 0
-        {
-            return Err(eyre!("`--redundant-send-r` must be at least 1"));
-        }
-        if let Some(height) = self.mode_activation_height
-            && height == 0
-        {
-            return Err(eyre!(
-                "`--mode-activation-height` must be greater than zero"
-            ));
-        }
-
         let opts = LocalnetOptions {
             peers: self.peers,
             seed: self.seed,
@@ -256,6 +306,12 @@ struct Peer {
 }
 
 #[derive(Debug, Clone)]
+struct ResolvedHosts {
+    bind: CanonicalHost,
+    public: CanonicalHost,
+}
+
+#[derive(Debug, Clone)]
 struct BlsEntry {
     bls_pk: String,
     pop_hex: String,
@@ -270,12 +326,53 @@ pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWrite
     generate_localnet_with_line(opts, build_line, writer)
 }
 
+fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
+    match (opts.next_consensus_mode, opts.mode_activation_height) {
+        (Some(_), None) => {
+            return Err(eyre!(
+                "`--next-consensus-mode` requires `--mode-activation-height`"
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(eyre!(
+                "`--mode-activation-height` requires `--next-consensus-mode`"
+            ));
+        }
+        _ => {}
+    }
+    if let (Some(block_ms), Some(commit_ms)) = (opts.block_time_ms, opts.commit_time_ms)
+        && commit_ms < block_ms
+    {
+        return Err(eyre!(
+            "`--commit-time-ms` ({commit_ms}) must be greater than or equal to `--block-time-ms` ({block_ms})"
+        ));
+    }
+    if let Some(r) = opts.redundant_send_r
+        && r == 0
+    {
+        return Err(eyre!("`--redundant-send-r` must be at least 1"));
+    }
+    if let Some(height) = opts.mode_activation_height
+        && height == 0
+    {
+        return Err(eyre!(
+            "`--mode-activation-height` must be greater than zero"
+        ));
+    }
+
+    let bind = CanonicalHost::parse(&opts.bind_host, "--bind-host")?;
+    let public = CanonicalHost::parse(&opts.public_host, "--public-host")?;
+
+    Ok(ResolvedHosts { bind, public })
+}
+
 #[allow(clippy::too_many_lines)]
 fn generate_localnet_with_line<T: Write>(
     opts: &LocalnetOptions,
     build_line: BuildLine,
     writer: &mut BufWriter<T>,
 ) -> Outcome {
+    let hosts = validate_localnet_options(opts)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
     fs::create_dir_all(&opts.out_dir).wrap_err("failed to create output directory for localnet")?;
     let out_dir = fs::canonicalize(&opts.out_dir).wrap_err_with(|| {
@@ -328,17 +425,11 @@ fn generate_localnet_with_line<T: Write>(
     tui::status("Writing peer configs");
     let trusted = peers
         .iter()
-        .map(|p| {
-            format!(
-                "{}@{}",
-                p.public_key,
-                addr_literal(&opts.public_host, p.p2p_port)
-            )
-        })
+        .map(|p| format!("{}@{}", p.public_key, hosts.public.addr_literal(p.p2p_port)))
         .collect::<Vec<_>>();
     let peer_telemetry_urls = peers
         .iter()
-        .map(|p| format!("http://{}:{}/", opts.public_host, p.api_port))
+        .map(|p| hosts.public.torii_url(p.api_port))
         .collect::<Vec<_>>();
     let bls_entries = peers
         .iter()
@@ -359,7 +450,7 @@ fn generate_localnet_with_line<T: Write>(
             &genesis_signed_path,
             &bls_entries,
             &kura_dir,
-            (&opts.bind_host, &opts.public_host),
+            (&hosts.bind, &hosts.public),
             opts.consensus_mode,
             da_rbc_enabled,
             redundant_send_r,
@@ -378,7 +469,7 @@ fn generate_localnet_with_line<T: Write>(
     copy_rans_tables(&out_dir)?;
 
     tui::status("Writing client config");
-    write_client_config(&out_dir, opts.base_api_port, &opts.public_host)?;
+    write_client_config(&out_dir, opts.base_api_port, &hosts.public)?;
     tui::success("Localnet ready");
 
     writeln!(
@@ -514,7 +605,7 @@ fn render_peer_config(
     genesis_signed_path: &Path,
     bls_entries: &[BlsEntry],
     kura_store_dir: &Path,
-    hosts: (&str, &str),
+    hosts: (&CanonicalHost, &CanonicalHost),
     consensus_mode: SumeragiConsensusMode,
     da_rbc_enabled: bool,
     redundant_send_r: Option<u8>,
@@ -676,18 +767,18 @@ fn render_peer_config(
     let mut network = Table::new();
     network.insert(
         "address".into(),
-        Value::String(addr_literal(bind_host, peer.p2p_port)),
+        Value::String(bind_host.addr_literal(peer.p2p_port)),
     );
     network.insert(
         "public_address".into(),
-        Value::String(addr_literal(public_host, peer.p2p_port)),
+        Value::String(public_host.addr_literal(peer.p2p_port)),
     );
     root.insert("network".into(), Value::Table(network));
 
     let mut torii = Table::new();
     torii.insert(
         "address".into(),
-        Value::String(addr_literal(bind_host, peer.api_port)),
+        Value::String(bind_host.addr_literal(peer.api_port)),
     );
     torii.insert(
         "peer_telemetry_urls".into(),
@@ -901,13 +992,42 @@ fn generate_bls_key_pair(
     (public_key, ExposedPrivateKey(private_key), pop)
 }
 
+fn repo_root_path() -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    root.canonicalize().unwrap_or(root)
+}
+
+fn resolve_target_dir(repo_root: &Path, target_dir: Option<&str>) -> PathBuf {
+    match target_dir {
+        Some(path) => {
+            let target_dir = PathBuf::from(path);
+            if target_dir.is_absolute() {
+                target_dir
+            } else {
+                repo_root.join(target_dir)
+            }
+        }
+        None => repo_root.join("target"),
+    }
+}
+
+fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {
+    let repo_root = repo_root_path();
+    let target_dir = resolve_target_dir(&repo_root, env::var("CARGO_TARGET_DIR").ok().as_deref());
+    (
+        target_dir.join("debug").join("irohad"),
+        target_dir.join("release").join("irohad"),
+    )
+}
+
 fn write_scripts(out_dir: &Path, peers: u16) -> Result<()> {
     let start = out_dir.join("start.sh");
     let stop = out_dir.join("stop.sh");
-    let default_irohad_bin = env::current_dir().ok().map_or_else(
-        || PathBuf::from("target/debug/irohad"),
-        |cwd| cwd.join("target/debug/irohad"),
-    );
+    let (default_irohad_debug, default_irohad_release) = default_irohad_bin_paths();
     let mut start_file = BufWriter::new(File::create(&start)?);
     writeln!(start_file, "#!/usr/bin/env bash")?;
     writeln!(start_file, "set -euo pipefail")?;
@@ -915,15 +1035,22 @@ fn write_scripts(out_dir: &Path, peers: u16) -> Result<()> {
     writeln!(start_file, "cd \"$DIR\"")?;
     writeln!(
         start_file,
-        "DEFAULT_IROHAD_BIN=\"{}\"",
-        default_irohad_bin.display()
+        "DEFAULT_IROHAD_BIN_DEBUG=\"{}\"",
+        default_irohad_debug.display()
     )?;
-    writeln!(start_file, "if [ -z \"${{IROHAD_BIN:-}}\" ]; then")?;
-    writeln!(start_file, "  if [ -x \"$DEFAULT_IROHAD_BIN\" ]; then")?;
-    writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN\"")?;
     writeln!(
         start_file,
-        "  else\n    echo \"IROHAD_BIN not set and default ($DEFAULT_IROHAD_BIN) not found; build irohad or set IROHAD_BIN\" >&2\n    exit 1\n  fi"
+        "DEFAULT_IROHAD_BIN_RELEASE=\"{}\"",
+        default_irohad_release.display()
+    )?;
+    writeln!(start_file, "if [ -z \"${{IROHAD_BIN:-}}\" ]; then")?;
+    writeln!(start_file, "  if [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then")?;
+    writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_DEBUG\"")?;
+    writeln!(start_file, "  elif [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then")?;
+    writeln!(start_file, "    IROHAD_BIN=\"$DEFAULT_IROHAD_BIN_RELEASE\"")?;
+    writeln!(
+        start_file,
+        "  else\n    echo \"IROHAD_BIN not set and default ($DEFAULT_IROHAD_BIN_DEBUG or $DEFAULT_IROHAD_BIN_RELEASE) not found; build irohad or set IROHAD_BIN\" >&2\n    exit 1\n  fi"
     )?;
     writeln!(start_file, "fi")?;
     writeln!(
@@ -971,33 +1098,29 @@ fn write_scripts(out_dir: &Path, peers: u16) -> Result<()> {
     Ok(())
 }
 
-fn addr_literal(host: &str, port: u16) -> String {
-    literal::format("addr", &format!("{host}:{port}"))
-}
-
 fn copy_rans_tables(out_dir: &Path) -> Result<()> {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .ok_or_else(|| eyre!("failed to resolve repo root"))?
-        .parent()
-        .ok_or_else(|| eyre!("failed to resolve repo root"))?
-        .to_path_buf();
+    let repo_root = repo_root_path();
     let src = repo_root.join("codec/rans/tables");
-    if !src.exists() {
-        return Err(eyre!(
-            "rANS tables directory not found at {}; ensure repo checkout includes codec/rans/tables",
-            src.display()
-        ));
-    }
     let dest = out_dir.join("codec/rans/tables");
     fs::create_dir_all(&dest)
         .wrap_err_with(|| format!("failed to create rANS tables directory {}", dest.display()))?;
-    for entry in fs::read_dir(&src).wrap_err("read rANS tables dir")? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            let fname = entry.file_name();
-            fs::copy(entry.path(), dest.join(fname)).wrap_err("copy rANS table file")?;
+    let mut copied_seed = false;
+    if let Ok(entries) = fs::read_dir(&src) {
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                let fname = entry.file_name();
+                if fname == "rans_seed0.toml" {
+                    copied_seed = true;
+                }
+                fs::copy(entry.path(), dest.join(fname)).wrap_err("copy rANS table file")?;
+            }
         }
+    }
+    if !copied_seed {
+        let seed_path = dest.join("rans_seed0.toml");
+        fs::write(&seed_path, RANS_SEED0_TABLE)
+            .wrap_err("write embedded rANS table")?;
     }
     Ok(())
 }
@@ -1008,9 +1131,14 @@ const CLIENT_ACCOUNT_PUBLIC: &str =
 const CLIENT_ACCOUNT_PRIVATE: &str =
     "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
 
-fn write_client_config(out_dir: &Path, base_api_port: u16, torii_host: &str) -> Result<()> {
+fn write_client_config(
+    out_dir: &Path,
+    base_api_port: u16,
+    torii_host: &CanonicalHost,
+) -> Result<()> {
     let path = out_dir.join("client.toml");
     // Render explicitly to avoid pretty-printer wrapping the long keys.
+    let torii_host = torii_host.url_host();
     let rendered = format!(
         concat!(
             "chain = \"{chain}\"\n",
@@ -1582,7 +1710,9 @@ mod tests {
     #[test]
     fn client_config_is_written_and_parsable() {
         let tmp = tempfile::tempdir().expect("tmp dir");
-        write_client_config(tmp.path(), 8080, DEFAULT_PUBLIC_HOST).expect("write client config");
+        let host =
+            CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
+        write_client_config(tmp.path(), 8080, &host).expect("write client config");
         let contents =
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         assert!(contents.contains("private_key = \"802620"));
@@ -1602,6 +1732,51 @@ mod tests {
             account.get("domain").and_then(toml::Value::as_str),
             Some(ALICE_ID.domain().to_string().as_str())
         );
+    }
+
+    #[test]
+    fn canonical_host_formats_ipv6_literals_and_urls() {
+        let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
+        let literal = host.addr_literal(8080);
+        let body = literal::parse("addr", &literal).expect("parse addr literal");
+        assert_eq!(body, "[::1]:8080");
+        assert_eq!(host.url_host(), "[::1]");
+    }
+
+    #[test]
+    fn canonical_host_lowercases_names() {
+        let host = CanonicalHost::parse("LOCALHOST", "--public-host").expect("host");
+        let literal = host.addr_literal(1337);
+        let body = literal::parse("addr", &literal).expect("parse addr literal");
+        assert_eq!(body, "localhost:1337");
+        assert_eq!(host.url_host(), "localhost");
+    }
+
+    #[test]
+    fn canonical_host_rejects_host_with_port() {
+        let err = CanonicalHost::parse("127.0.0.1:8080", "--public-host")
+            .expect_err("host with port should fail");
+        assert!(err.to_string().contains("without a port"));
+    }
+
+    #[test]
+    fn canonical_host_rejects_unbalanced_brackets() {
+        let err = CanonicalHost::parse("[::1", "--public-host")
+            .expect_err("missing closing bracket should fail");
+        assert!(err.to_string().contains("unmatched"));
+        let err = CanonicalHost::parse("::1]", "--public-host")
+            .expect_err("missing opening bracket should fail");
+        assert!(err.to_string().contains("unmatched"));
+    }
+
+    #[test]
+    fn client_config_renders_ipv6_torii_url() {
+        let tmp = tempfile::tempdir().expect("tmp dir");
+        let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
+        write_client_config(tmp.path(), 8080, &host).expect("write client config");
+        let contents =
+            fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
+        assert!(contents.contains("torii_url = \"http://[::1]:8080/\""));
     }
 
     #[test]
@@ -1766,6 +1941,32 @@ mod tests {
     }
 
     #[test]
+    fn validate_localnet_options_rejects_missing_next_mode() {
+        let opts = LocalnetOptions {
+            peers: NonZeroU16::new(1).unwrap(),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: Some(1),
+        };
+        let err = validate_localnet_options(&opts).expect_err("missing next mode should fail");
+        assert!(
+            err.to_string().contains("--next-consensus-mode"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn relative_out_dir_paths_are_absolute_in_configs() {
         struct DirGuard {
             prev: PathBuf,
@@ -1834,11 +2035,13 @@ mod tests {
         let temp = tempfile::tempdir().expect("tmp dir");
         write_scripts(temp.path(), 1).expect("write scripts");
 
-        let start_mode = fs::metadata(temp.path().join("start.sh"))
+        let start_path = temp.path().join("start.sh");
+        let stop_path = temp.path().join("stop.sh");
+        let start_mode = fs::metadata(&start_path)
             .expect("start metadata")
             .permissions()
             .mode();
-        let stop_mode = fs::metadata(temp.path().join("stop.sh"))
+        let stop_mode = fs::metadata(&stop_path)
             .expect("stop metadata")
             .permissions()
             .mode();
@@ -1852,5 +2055,38 @@ mod tests {
             0,
             "stop script should be marked executable"
         );
+
+        let start_contents = fs::read_to_string(&start_path).expect("read start script");
+        let (debug_path, release_path) = default_irohad_bin_paths();
+        let expected_debug = format!(
+            "DEFAULT_IROHAD_BIN_DEBUG=\"{}\"",
+            debug_path.display()
+        );
+        let expected_release = format!(
+            "DEFAULT_IROHAD_BIN_RELEASE=\"{}\"",
+            release_path.display()
+        );
+        assert!(
+            start_contents.lines().any(|line| line == expected_debug),
+            "start script should set debug default"
+        );
+        assert!(
+            start_contents.lines().any(|line| line == expected_release),
+            "start script should set release default"
+        );
+    }
+
+    #[test]
+    fn copy_rans_tables_writes_seed_table() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        copy_rans_tables(temp.path()).expect("copy rANS tables");
+        let seed_path = temp
+            .path()
+            .join("codec")
+            .join("rans")
+            .join("tables")
+            .join("rans_seed0.toml");
+        let bytes = fs::read(seed_path).expect("read rANS seed table");
+        assert_eq!(bytes, RANS_SEED0_TABLE);
     }
 }

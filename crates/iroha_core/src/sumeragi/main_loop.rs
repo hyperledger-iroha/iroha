@@ -415,8 +415,8 @@ fn drop_pending_block_and_requeue(
 }
 
 #[inline]
-fn drop_pending_after_requeue(failures: usize, duplicate_failures: usize) -> bool {
-    failures > 0 && failures > duplicate_failures
+fn drop_pending_after_requeue(failures: usize, _duplicate_failures: usize) -> bool {
+    failures > 0
 }
 
 #[derive(Debug)]
@@ -3151,7 +3151,12 @@ fn stake_quorum_reached_for_peers(
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
 ) -> Result<bool, StakeQuorumError> {
-    let stake_map = stake_map_from_world(view.world());
+    let mut stake_map = stake_map_from_world(view.world());
+    if stake_map.is_empty() {
+        for peer in roster {
+            stake_map.insert(peer.clone(), Numeric::from(1_u64));
+        }
+    }
 
     let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
     let mut total = Numeric::from(0_u64);

@@ -36,6 +36,18 @@ impl CommitStakeSnapshot {
             return None;
         }
         let stake_map = stake_map_from_world(world);
+        if stake_map.is_empty() {
+            return Some(Self {
+                validator_set_hash: HashOf::new(&roster.to_vec()),
+                entries: roster
+                    .iter()
+                    .map(|peer| CommitStakeSnapshotEntry {
+                        peer_id: peer.clone(),
+                        stake: Numeric::from(1_u64),
+                    })
+                    .collect(),
+            });
+        }
         let mut entries = Vec::with_capacity(roster.len());
         for peer in roster {
             let stake = stake_map.get(peer)?.clone();
@@ -207,5 +219,27 @@ mod tests {
         let missing_peer = PeerId::new(KeyPair::random().public_key().clone());
         assert!(CommitStakeSnapshot::from_roster(view.world(), &[missing_peer]).is_none());
         assert!(CommitStakeSnapshot::from_roster(view.world(), &[peer]).is_some());
+    }
+
+    #[test]
+    fn stake_snapshot_from_roster_falls_back_to_equal_weights_without_stake_records() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+
+        let keypair_a = KeyPair::random();
+        let keypair_b = KeyPair::random();
+        let peer_a = PeerId::new(keypair_a.public_key().clone());
+        let peer_b = PeerId::new(keypair_b.public_key().clone());
+        let roster = vec![peer_a.clone(), peer_b.clone()];
+
+        let view = state.view();
+        let snapshot = CommitStakeSnapshot::from_roster(view.world(), &roster).expect("snapshot");
+        assert!(snapshot.matches_roster(&roster));
+        assert_eq!(snapshot.entries.len(), roster.len());
+        assert_eq!(snapshot.entries[0].peer_id, peer_a);
+        assert_eq!(snapshot.entries[1].peer_id, peer_b);
+        assert_eq!(snapshot.entries[0].stake, Numeric::from(1_u64));
+        assert_eq!(snapshot.entries[1].stake, Numeric::from(1_u64));
     }
 }

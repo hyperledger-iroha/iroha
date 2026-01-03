@@ -67,7 +67,8 @@ impl StreamingTestVector {
 
     /// Build a JSON snapshot describing the template vector contents.
     ///
-    /// The string is suitable for sharing with partner SDKs as a canonical reference.
+    /// The string is suitable for sharing with partner SDKs as a canonical reference, and it
+    /// encodes ticket-related fields as stable structured JSON with hex-encoded byte arrays.
     ///
     /// # Errors
     ///
@@ -97,16 +98,112 @@ impl StreamingTestVector {
             json::to_value(&storage_commitment_hex)?,
         );
         map.insert("da_root".into(), json::to_value(&da_root_hex)?);
-        map.insert(
-            "ticket".into(),
-            norito::json::Value::from(format!("{:?}", self.ticket)),
-        );
+        map.insert("ticket".into(), ticket_json_value(&self.ticket)?);
         map.insert(
             "ticket_revocation".into(),
-            norito::json::Value::from(format!("{:?}", self.ticket_revocation)),
+            ticket_revocation_json_value(&self.ticket_revocation),
         );
         let json_value = norito::json::Value::Object(map);
         json::to_string_pretty(&json_value).map_err(norito::Error::from)
+    }
+}
+
+fn ticket_json_value(ticket: &StreamingTicket) -> Result<norito::json::Value, norito::Error> {
+    let mut map = norito::json::Map::new();
+    map.insert(
+        "capabilities".into(),
+        norito::json::Value::from(ticket.capabilities.bits()),
+    );
+    map.insert(
+        "chunk_teu".into(),
+        norito::json::Value::from(ticket.chunk_teu),
+    );
+    map.insert("commitment".into(), hex_value(ticket.commitment));
+    map.insert("contract_sig".into(), hex_value(ticket.contract_sig));
+    map.insert("dsid".into(), norito::json::Value::from(ticket.dsid));
+    map.insert(
+        "expire_slot".into(),
+        norito::json::Value::from(ticket.expire_slot),
+    );
+    map.insert(
+        "expires_at".into(),
+        norito::json::Value::from(ticket.expires_at),
+    );
+    map.insert(
+        "fanout_quota".into(),
+        norito::json::Value::from(ticket.fanout_quota),
+    );
+    map.insert(
+        "issued_at".into(),
+        norito::json::Value::from(ticket.issued_at),
+    );
+    map.insert("key_commitment".into(), hex_value(ticket.key_commitment));
+    map.insert("lane_id".into(), norito::json::Value::from(ticket.lane_id));
+    map.insert("nonce".into(), norito::json::Value::from(ticket.nonce));
+    map.insert("nullifier".into(), hex_value(ticket.nullifier));
+    map.insert(
+        "owner".into(),
+        norito::json::Value::from(ticket.owner.as_str()),
+    );
+    map.insert("policy".into(), ticket_policy_json(ticket.policy.as_ref())?);
+    map.insert("prepaid_teu".into(), u128_json_value(ticket.prepaid_teu));
+    map.insert("proof_id".into(), hex_value(ticket.proof_id));
+    map.insert(
+        "settlement_bucket".into(),
+        norito::json::Value::from(ticket.settlement_bucket),
+    );
+    map.insert(
+        "start_slot".into(),
+        norito::json::Value::from(ticket.start_slot),
+    );
+    map.insert("ticket_id".into(), hex_value(ticket.ticket_id));
+    Ok(norito::json::Value::Object(map))
+}
+
+fn ticket_policy_json(policy: Option<&TicketPolicy>) -> Result<norito::json::Value, norito::Error> {
+    let Some(policy) = policy else {
+        return Ok(norito::json::Value::Null);
+    };
+    let mut map = norito::json::Map::new();
+    map.insert(
+        "allowed_regions".into(),
+        json::to_value(&policy.allowed_regions)?,
+    );
+    let max_bandwidth = match policy.max_bandwidth_kbps {
+        Some(value) => norito::json::Value::from(value),
+        None => norito::json::Value::Null,
+    };
+    map.insert("max_bandwidth_kbps".into(), max_bandwidth);
+    map.insert(
+        "max_relays".into(),
+        norito::json::Value::from(policy.max_relays),
+    );
+    Ok(norito::json::Value::Object(map))
+}
+
+fn ticket_revocation_json_value(revocation: &TicketRevocation) -> norito::json::Value {
+    let mut map = norito::json::Map::new();
+    map.insert("nullifier".into(), hex_value(revocation.nullifier));
+    map.insert(
+        "reason_code".into(),
+        norito::json::Value::from(revocation.reason_code),
+    );
+    map.insert(
+        "revocation_signature".into(),
+        hex_value(revocation.revocation_signature),
+    );
+    map.insert("ticket_id".into(), hex_value(revocation.ticket_id));
+    norito::json::Value::Object(map)
+}
+
+fn hex_value(bytes: impl AsRef<[u8]>) -> norito::json::Value {
+    norito::json::Value::from(hex_encode(bytes.as_ref()))
+}
+
+fn u128_json_value(value: u128) -> norito::json::Value {
+    match u64::try_from(value) {
+        Ok(value) => norito::json::Value::from(value),
+        Err(_) => norito::json::Value::from(value.to_string()),
     }
 }
 
@@ -205,8 +302,8 @@ fn vector_from_segment(segment: &EncodedSegment) -> StreamingTestVector {
     };
 
     let ticket_revocation = TicketRevocation {
-        ticket_id: fill_hash(0xAA),
-        nullifier: fill_hash(0xBB),
+        ticket_id: ticket.ticket_id,
+        nullifier: ticket.nullifier,
         reason_code: 17,
         revocation_signature: fill_signature(0xCC),
     };
@@ -511,6 +608,44 @@ mod tests {
                 expected_trimmed.len()
             );
         }
+    }
+
+    #[test]
+    fn snapshot_json_encodes_ticket_fields() {
+        let vector = baseline_test_vector();
+        let snapshot = vector.snapshot_json().expect("snapshot serializes");
+        let value: norito::json::Value =
+            norito::json::from_str(&snapshot).expect("snapshot parses");
+        let norito::json::Value::Object(root) = value else {
+            panic!("snapshot root must be an object");
+        };
+        let ticket = root.get("ticket").expect("ticket field present");
+        let norito::json::Value::Object(ticket_map) = ticket else {
+            panic!("ticket must be an object");
+        };
+        let ticket_id = match ticket_map.get("ticket_id") {
+            Some(norito::json::Value::String(value)) => value,
+            _ => panic!("ticket_id must be a string"),
+        };
+        let expected_ticket_id = hex_encode(vector.ticket.ticket_id);
+        assert_eq!(ticket_id, &expected_ticket_id);
+
+        let revocation = root
+            .get("ticket_revocation")
+            .expect("ticket_revocation field present");
+        let norito::json::Value::Object(revocation_map) = revocation else {
+            panic!("ticket_revocation must be an object");
+        };
+        let revocation_ticket_id = match revocation_map.get("ticket_id") {
+            Some(norito::json::Value::String(value)) => value,
+            _ => panic!("ticket_revocation.ticket_id must be a string"),
+        };
+        let revocation_nullifier = match revocation_map.get("nullifier") {
+            Some(norito::json::Value::String(value)) => value,
+            _ => panic!("ticket_revocation.nullifier must be a string"),
+        };
+        assert_eq!(revocation_ticket_id, &expected_ticket_id);
+        assert_eq!(revocation_nullifier, &hex_encode(vector.ticket.nullifier));
     }
 
     #[test]
@@ -957,9 +1092,12 @@ mod tests {
 
     #[test]
     fn bundled_telemetry_invariants_hold() {
-        let (_config, _segment, _frames, telemetry) = bundled_segment(2, 4);
+        let (config, _segment, _frames, telemetry) = bundled_segment(2, 4);
         let stats = &telemetry.stats;
-        assert_eq!(stats.bundle_width, 4, "bundle width must match config");
+        assert_eq!(
+            stats.bundle_width, config.bundle_width,
+            "bundle width must match config"
+        );
         assert_eq!(stats.blocks_encoded, 2, "two frames encoded");
         assert!(
             stats.flush_end_of_block >= stats.blocks_encoded,

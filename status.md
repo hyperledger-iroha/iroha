@@ -1,8 +1,24 @@
 # Status
 
 ## Latest Updates
+- Resolved merge conflicts in `integration_tests/tests/debug_genesis.rs`, `integration_tests/tests/extra_functional/offline_peers.rs`, and `status.md`.
+- Tests: not run (merge resolution only).
 - Wait for trigger-completion events while submitting the trigger in the integration notification test and close the WS stream after receipt to avoid missed events and shutdown lag.
 - Tests: `cargo test -p integration_tests trigger_completion_success_should_produce_event --test mod -- --nocapture` (failed: `integration_tests/tests/debug_genesis.rs` and `integration_tests/tests/extra_functional/offline_peers.rs` use `?` on `Option`).
+- Normalized Norito streaming integration-test snapshots to structured ticket JSON, aligned revocation fixtures with ticket identifiers, and validated bundle-width telemetry against the configured width.
+- Tests: not run (not requested).
+- Canonicalized Kagami localnet host handling (IPv6 + lowercase), centralized localnet validation, embedded rANS tables for repo-less runs, and fixed start.sh default irohad paths (debug + release); added host/script/rANS unit coverage and updated localnet docs.
+- Tests: not run (not requested).
+- Skip fetch-pending responses for aborted pending blocks (including inflight), with unit coverage ensuring aborted pending blocks are not served.
+- Tests: `cargo test -p iroha_core fetch_pending_block_ignores_aborted_pending -- --nocapture` (timed out after 120s during compile).
+- Added commit-roster journal and roster-sidecar compatibility tests (v1/v2, stake snapshot retention) and documented that NPoS block-sync commit certificates require matching stake snapshots in roster metadata.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core commit_roster_journal -- --nocapture` (passed).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core roster_sidecar_roundtrip_v2_with_stake_snapshot -- --nocapture` (passed).
+- Tests: `scripts/check_no_scale.sh` (passed).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test --workspace` (failed: no space left on device while compiling `iroha_config`/`iroha_telemetry`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Drop aborted pending blocks when any requeue failure occurs (even with duplicate txs), and added unit coverage for mixed duplicate/full requeue failures.
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
 - Wait for tx confirmation event-stream setup (bounded connect timeout) before submitting, and continue status polling when the stream can't be established; added connect-timeout unit coverage.
 - Tests: not run (not requested).
 - Format: not run (not requested).

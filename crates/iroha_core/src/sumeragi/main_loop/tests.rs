@@ -2703,6 +2703,36 @@ async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn fetch_pending_block_ignores_aborted_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(3, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::prehashed([0x44; 32]);
+    let mut pending = PendingBlock::new(block, payload_hash, 3, 0);
+    pending.mark_aborted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let request = super::message::FetchPendingBlock {
+        requester: actor.common_config.peer.id.clone(),
+        block_hash,
+    };
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .handle_fetch_pending_block(request)
+        .expect("fetch pending block");
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    assert!(
+        posts.is_empty(),
+        "aborted pending block should not be served"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_requests_pending_block_for_missing_qc() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -10542,6 +10572,41 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
             Err(super::StakeQuorumError::SnapshotMismatch)
         ),
         "snapshot mismatch should be rejected"
+    );
+}
+
+#[test]
+fn stake_quorum_reached_for_peers_falls_back_without_stake_records() {
+    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+
+    let keypairs = [
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+    ];
+    let roster: Vec<PeerId> = keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect();
+
+    let view = state.view();
+    let mut strong = BTreeSet::new();
+    strong.insert(roster[0].clone());
+    strong.insert(roster[1].clone());
+    assert!(
+        super::stake_quorum_reached_for_peers(&view, &roster, &strong)
+            .expect("stake quorum computed"),
+        "2/3 roster should satisfy quorum when no stake records exist"
+    );
+
+    let mut weak = BTreeSet::new();
+    weak.insert(roster[0].clone());
+    assert!(
+        !super::stake_quorum_reached_for_peers(&view, &roster, &weak)
+            .expect("stake quorum computed"),
+        "1/3 roster should not satisfy quorum when no stake records exist"
     );
 }
 
@@ -19722,9 +19787,11 @@ async fn block_created_skips_pending_insert_while_processing() {
         .pending_processing_parent
         .set(block.header().prev_block_hash());
 
+    eprintln!("block_created_requests_missing_parent_on_height_gap: before handle");
     actor
         .handle_block_created(super::message::BlockCreated { block })
         .expect("handle BlockCreated");
+    eprintln!("block_created_requests_missing_parent_on_height_gap: after handle");
 
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
@@ -24745,6 +24812,73 @@ fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails() {
     assert!(
         outcome.drop_pending,
         "pending block should be dropped when requeueing fails"
+    );
+    assert!(outcome.clean_block_hash);
+}
+
+#[test]
+fn qc_commit_failure_with_quorum_drops_pending_when_requeue_fails_with_duplicates() {
+    use std::{borrow::Cow, num::NonZeroUsize, time::Duration};
+
+    use iroha_config::parameters::actual::Queue as QueueConfig;
+    use iroha_primitives::time::TimeSource;
+
+    use crate::queue::Queue;
+
+    let queue_cfg = QueueConfig {
+        capacity: NonZeroUsize::new(1).expect("non-zero capacity"),
+        capacity_per_user: NonZeroUsize::new(1).expect("non-zero per-user capacity"),
+        transaction_time_to_live: Duration::from_secs(60),
+    };
+
+    let queue = Queue::test(queue_cfg, &TimeSource::new_system());
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_for_testing(
+        World::new(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+
+    let duplicate_tx = sample_transaction();
+    let _ = queue.push(
+        AcceptedTransaction::new_unchecked(Cow::Owned(duplicate_tx.clone())),
+        state.view(),
+    );
+
+    let other_tx = sample_transaction();
+    let block = block_with_txs(4, 2, None, vec![duplicate_tx.clone(), other_tx]);
+    let failed_block = block.clone();
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(block.encode());
+    let pending = PendingBlock::new(block, payload_hash, 4, 2);
+
+    let locked = crate::sumeragi::consensus::QcHeaderRef {
+        subject_block_hash: block_hash,
+        ..sample_qc_ref(4, 1)
+    };
+    let highest = crate::sumeragi::consensus::QcHeaderRef {
+        subject_block_hash: block_hash,
+        ..sample_qc_ref(5, 2)
+    };
+
+    let outcome = super::handle_commit_failure_with_qc_quorum(
+        pending,
+        failed_block,
+        block_hash,
+        4,
+        2,
+        &queue,
+        &state,
+        Some(locked),
+        Some(highest),
+        None,
+    );
+
+    assert_eq!(outcome.requeued, 0);
+    assert_eq!(outcome.failed_requeues, 1);
+    assert!(
+        outcome.drop_pending,
+        "pending block should be dropped when requeueing fails, even with duplicates"
     );
     assert!(outcome.clean_block_hash);
 }
