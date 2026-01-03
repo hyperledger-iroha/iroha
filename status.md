@@ -1,6 +1,9 @@
 # Status
 
 ## Latest Updates
+- Split static block validation into state-dependent snapshot + transaction-only pass so keep-voting validation drops `StateView` earlier; added unit coverage for the snapshot path.
+- Tests: `cargo test -p iroha_core validate_static_snapshot_accepts_valid_block -- --nocapture` (failed: `crates/iroha_core/src/sumeragi/main_loop/tests.rs` calls private `handle_rbc_store_evictions`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
 - Preserved persisted RBC invalid flags when rebuilding sessions from disk and added unit coverage for invalid-session roundtrips.
 - Tests: not run (not requested).
 - Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
