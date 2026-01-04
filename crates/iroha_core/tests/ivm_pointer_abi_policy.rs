@@ -20,7 +20,7 @@ fn tlv_envelope(type_id: u16, payload: &[u8]) -> Vec<u8> {
 fn domainid_allowed_under_abi_v1() {
     // Build minimal v1 header and load
     let meta = ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: 0,
         vector_length: 0,
@@ -46,7 +46,7 @@ fn domainid_allowed_under_abi_v1() {
 fn unknown_pointer_type_rejected_under_v1() {
     // Build minimal v1 header and load
     let meta = ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: 0,
         vector_length: 0,

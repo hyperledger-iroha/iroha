@@ -23,33 +23,35 @@ fn build_header(
 }
 
 #[test]
-fn parse_accepts_version_1_and_2_and_abi_v1() {
-    for major in [1u8, 2u8] {
-        let hdr = build_header(major, 0, 0, 0, 1);
-        let bytes = [hdr.as_slice(), &[1, 2, 3, 4]].concat();
-        let parsed = ProgramMetadata::parse(&bytes).expect("parse ok");
+fn parse_accepts_version_1_and_abi_v1() {
+    let hdr = build_header(1, 0, 0, 0, 1);
+    let bytes = [hdr.as_slice(), &[1, 2, 3, 4]].concat();
+    let parsed = ProgramMetadata::parse(&bytes).expect("parse ok");
 
-        let meta = parsed.metadata;
+    let meta = parsed.metadata;
 
-        let off = parsed.code_offset;
-        assert_eq!(meta.version_major, major);
-        assert_eq!(meta.version_minor, 0);
-        assert_eq!(meta.mode, 0);
-        assert_eq!(meta.vector_length, 0);
-        assert_eq!(meta.max_cycles, 0);
-        assert_eq!(meta.abi_version, 1);
-        assert_eq!(off, 17);
-    }
+    let off = parsed.code_offset;
+    assert_eq!(meta.version_major, 1);
+    assert_eq!(meta.version_minor, 0);
+    assert_eq!(meta.mode, 0);
+    assert_eq!(meta.vector_length, 0);
+    assert_eq!(meta.max_cycles, 0);
+    assert_eq!(meta.abi_version, 1);
+    assert_eq!(off, 17);
 }
 
 #[test]
 fn parse_rejects_unknown_major_and_mode_bits() {
+    // Unsupported majors
+    let mut hdr = build_header(0, 0, 0, 0, 1);
+    let bytes = [hdr.as_slice(), &[0u8; 4]].concat();
+    assert!(ProgramMetadata::parse(&bytes).is_err());
     // Unknown major
-    let mut hdr = build_header(3, 0, 0, 0, 1);
+    hdr = build_header(2, 0, 0, 0, 1);
     let bytes = [hdr.as_slice(), &[0u8; 4]].concat();
     assert!(ProgramMetadata::parse(&bytes).is_err());
     // Unknown mode bit (0x80) should be rejected
-    hdr = build_header(2, 0x80, 0, 0, 1);
+    hdr = build_header(1, 0x80, 0, 0, 1);
     let bytes2 = [hdr.as_slice(), &[0u8; 4]].concat();
     assert!(ProgramMetadata::parse(&bytes2).is_err());
 }
@@ -59,7 +61,7 @@ fn parse_rejects_short_or_bad_magic() {
     // Too short
     assert!(ProgramMetadata::parse(&[0u8; 8]).is_err());
     // Bad magic
-    let mut bad = build_header(2, 0, 0, 0, 1);
+    let mut bad = build_header(1, 0, 0, 0, 1);
     bad[0..4].copy_from_slice(b"BAD\0");
     let bytes = [bad.as_slice(), &[0u8; 4]].concat();
     assert!(ProgramMetadata::parse(&bytes).is_err());
@@ -67,7 +69,7 @@ fn parse_rejects_short_or_bad_magic() {
 
 #[test]
 fn parse_skips_literal_section_when_present() {
-    let mut bytes = build_header(2, 0, 0, 0, 1);
+    let mut bytes = build_header(1, 0, 0, 0, 1);
     // Literal table header: magic + count (2 entries)
     bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
     bytes.extend_from_slice(&(2u32).to_le_bytes());
@@ -84,14 +86,14 @@ fn parse_skips_literal_section_when_present() {
     let meta = parsed.metadata;
 
     let off = parsed.code_offset;
-    assert_eq!(meta.version_major, 2);
+    assert_eq!(meta.version_major, 1);
     assert_eq!(off, 17 + 16 + 16 + 1);
     assert!(off < bytes.len());
 }
 
 #[test]
 fn parse_rejects_literal_padding() {
-    let mut bytes = build_header(2, 0, 0, 0, 1);
+    let mut bytes = build_header(1, 0, 0, 0, 1);
     bytes.extend_from_slice(&[0u8; 4]);
     bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
     bytes.extend_from_slice(&(1u32).to_le_bytes());

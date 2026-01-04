@@ -2584,7 +2584,7 @@ mod tests {
         let chunk_count = data.len() / 8;
 
         let meta = ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,
@@ -3045,9 +3045,9 @@ mod tests {
     fn migrate_fails_on_invalid_bytecode() {
         // Construct an invalid program (oversized code section) to trigger a VM error
         let mut prog = Vec::new();
-        // Metadata header: IVM, version 2.0, mode 0, vector len 0, max_cycles 0, abi_version 0
+        // Metadata header: IVM, version 1.0, mode 0, vector len 0, max_cycles 0, abi_version 0
         prog.extend_from_slice(b"IVM\0");
-        prog.extend_from_slice(&[2, 0, 0, 0]);
+        prog.extend_from_slice(&[1, 0, 0, 0]);
         prog.extend_from_slice(&0u64.to_le_bytes());
         prog.push(0);
         // Oversized code

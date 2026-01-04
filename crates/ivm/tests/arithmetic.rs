@@ -1,3 +1,4 @@
+//! Arithmetic instruction coverage and regression checks.
 use ivm::{IVM, VMError, encoding, instruction};
 mod common;
 use common::assemble;
@@ -150,6 +151,17 @@ fn math_helpers_min_max_abs_divceil_gcd_mean() {
     vm.run().expect("div_ceil");
     assert_eq!(vm.register(3) as i64, -1);
 
+    // DIV_CEIL handles i64::MIN / -1 deterministically (matches DIV semantics).
+    vm.set_register(1, i64::MIN as u64);
+    vm.set_register(2, (-1i64) as u64);
+    let prog = assemble_words(&[
+        encoding::wide::encode_rr(instruction::wide::arithmetic::DIV_CEIL, 3, 1, 2),
+        HALT_WORD,
+    ]);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("div_ceil min/-1");
+    assert_eq!(vm.register(3) as i64, i64::MIN);
+
     // GCD(48, 18) = 6
     vm.set_register(1, 48);
     vm.set_register(2, 18);
@@ -160,6 +172,17 @@ fn math_helpers_min_max_abs_divceil_gcd_mean() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("gcd");
     assert_eq!(vm.register(3), 6);
+
+    // GCD(i64::MIN, 0) = 2^63 without overflow.
+    vm.set_register(1, i64::MIN as u64);
+    vm.set_register(2, 0);
+    let prog = assemble_words(&[
+        encoding::wide::encode_rr(instruction::wide::arithmetic::GCD, 3, 1, 2),
+        HALT_WORD,
+    ]);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("gcd min");
+    assert_eq!(vm.register(3), 1u64 << 63);
 
     // MEAN floor((5 + 6)/2) = 5
     vm.set_register(1, 5);

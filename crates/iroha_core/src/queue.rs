@@ -3939,7 +3939,7 @@ pub mod tests {
 
     fn minimal_contract_bytes() -> (iroha_crypto::Hash, Vec<u8>) {
         let mut program = ivm::ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,
@@ -4090,7 +4090,7 @@ pub mod tests {
     #[cfg(feature = "telemetry")]
     fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
         const IVM_MAGIC: [u8; 4] = *b"IVM\0";
-        const HEADER_SUFFIX: [u8; 4] = [2, 0, 0, 4];
+        const HEADER_SUFFIX: [u8; 4] = [1, 0, 0, 4];
 
         let mut program = Vec::new();
         program.extend_from_slice(&IVM_MAGIC);

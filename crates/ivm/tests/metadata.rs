@@ -13,7 +13,7 @@ fn parse_accepts_valid_default_header() {
     let bytes = meta.encode();
     let parsed = ProgramMetadata::parse(&bytes).expect("parse valid header");
     assert_eq!(parsed.code_offset, ivm::METADATA_MAGIC.len() + 13); // 17 total
-    assert_eq!(parsed.metadata.version_major, 2);
+    assert_eq!(parsed.metadata.version_major, 1);
     assert_eq!(parsed.metadata.version_minor, 0);
     assert_eq!(parsed.metadata.mode, 0);
     assert_eq!(parsed.metadata.vector_length, 0);
@@ -70,7 +70,13 @@ fn parse_accepts_future_abi_versions() {
 #[test]
 fn parse_rejects_wrong_major_version() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
-        m.version_major = 3;
+        m.version_major = 0;
+    });
+    let err = ProgramMetadata::parse(&bytes).unwrap_err();
+    assert_eq!(err, VMError::InvalidMetadata);
+
+    let bytes = encode_with(ProgramMetadata::default(), |m| {
+        m.version_major = 2;
     });
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
     assert_eq!(err, VMError::InvalidMetadata);

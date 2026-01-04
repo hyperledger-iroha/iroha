@@ -9,7 +9,7 @@ const HALT: u32 = encoding::wide::encode_halt();
 
 fn program_header() -> Vec<u8> {
     let meta = ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: ivm_mode::VECTOR,
         vector_length: 0,

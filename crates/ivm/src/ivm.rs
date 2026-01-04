@@ -83,6 +83,10 @@ fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
     if denom == 0 {
         return Err(VMError::AssertionFailed);
     }
+    // Avoid the i64::MIN / -1 overflow case to keep behavior deterministic.
+    if num == i64::MIN && denom == -1 {
+        return Ok(i64::MIN);
+    }
     let q = num / denom;
     let r = num % denom;
     if r == 0 {
@@ -94,15 +98,23 @@ fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
     }
 }
 
-fn gcd_i64(mut a: i64, mut b: i64) -> i64 {
+fn abs_i64_to_u64(value: i64) -> u64 {
+    if value == i64::MIN {
+        (i64::MAX as u64) + 1
+    } else {
+        value.abs() as u64
+    }
+}
+
+fn gcd_i64(a: i64, b: i64) -> u64 {
+    let mut a = abs_i64_to_u64(a);
+    let mut b = abs_i64_to_u64(b);
     if a == 0 {
-        return b.abs();
+        return b;
     }
     if b == 0 {
-        return a.abs();
+        return a;
     }
-    a = a.abs();
-    b = b.abs();
     while b != 0 {
         let r = a % b;
         a = b;
@@ -3171,7 +3183,7 @@ impl IVM {
                     let a = self.registers.get(rs1) as i64;
                     let b = self.registers.get(rs2) as i64;
                     let g = gcd_i64(a, b);
-                    self.registers.set(rd, g as u64);
+                    self.registers.set(rd, g);
                     self.pc = self.pc.wrapping_add(length as u64);
                     self.cycles += 12;
                     continue;

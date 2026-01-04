@@ -147,8 +147,9 @@ Unless stated otherwise, roadmap items call out which release line they affect.
     - [x] Drop query-lane and genesis-bootstrap compatibility shims; fail executor validation on undecodable verdicts.
     - [x] Remove Torii `/server_version` endpoint and legacy contract-registration `code_bytes` compatibility.
     - [x] Remove Torii filter-expression compatibility types and enforce strict JSON field shapes.
-    - [x] Drop IVM header legacy magic/padding parsing and require registration-height metadata for time triggers.
-    - [x] Remove legacy width inference in rANS table tooling (require explicit `width_bits`).
+   - [x] Drop IVM header legacy magic/padding parsing and require registration-height metadata for time triggers.
+   - [x] Standardize IVM header major to v1 across code, tests, fixtures, and docs.
+   - [x] Remove legacy width inference in rANS table tooling (require explicit `width_bits`).
     - [x] Clean Torii contract API and IVM alignment docs to remove legacy/deprecated alias notes.
     - [ ] Enforce ABI v1 only (remove Experimental policy paths) and update related tests/docs.
     - [ ] Remove Norito compatibility toggles and legacy length/offset decode paths (update `norito.md`).

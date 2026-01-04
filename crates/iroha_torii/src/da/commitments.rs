@@ -7,7 +7,7 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use axum::extract::State;
-use iroha_config::parameters::actual::LaneConfig;
+use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
 use iroha_core::{
     da::{
         build_da_commitment_proof, commitment_store::DaCommitmentStore, proof_policy_bundle,
@@ -231,7 +231,7 @@ fn build_proof_from_store(
 
 fn verify_against_store(
     store: &DaCommitmentStore,
-    lane_config: &LaneConfig,
+    lane_config: &ConfigLaneConfig,
     proof: &DaCommitmentProof,
     view: &impl StateReadOnly,
 ) -> DaCommitmentVerifyResponse {
@@ -294,7 +294,7 @@ mod tests {
             commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId},
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
     };
 
     use super::*;
@@ -317,25 +317,25 @@ mod tests {
         )
     }
 
-    fn lane_config_with_entries(entries: &[(LaneId, DaProofScheme)]) -> LaneConfig {
+    fn lane_config_with_entries(entries: &[(LaneId, DaProofScheme)]) -> ConfigLaneConfig {
         let max_lane = entries
             .iter()
             .map(|(lane, _)| lane.as_u32())
             .max()
             .unwrap_or(0);
         let lane_count = NonZeroU32::new(max_lane.saturating_add(1)).expect("lane count");
-        let lanes: Vec<LaneConfig> = entries
+        let lanes: Vec<ModelLaneConfig> = entries
             .iter()
-            .map(|(lane_id, scheme)| LaneConfig {
+            .map(|(lane_id, scheme)| ModelLaneConfig {
                 id: *lane_id,
                 dataspace_id: DataSpaceId::new(u64::from(lane_id.as_u32())),
                 alias: format!("lane-{}", lane_id.as_u32()),
                 proof_scheme: *scheme,
-                ..LaneConfig::default()
+                ..ModelLaneConfig::default()
             })
             .collect();
         let catalog = LaneCatalog::new(lane_count, lanes).expect("lane catalog");
-        LaneConfig::from_catalog(&catalog)
+        ConfigLaneConfig::from_catalog(&catalog)
     }
 
     fn store_with_records() -> DaCommitmentStore {

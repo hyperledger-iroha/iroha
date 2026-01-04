@@ -1514,8 +1514,8 @@ impl StateBlock<'_> {
         let meta = summary.metadata.clone();
         let offset = summary.code_offset;
 
-        // Version gate: accept known major versions only (2.x for now).
-        if meta.version_major != 2 {
+        // Version gate: accept known major versions only (1.x for now).
+        if meta.version_major != 1 {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
                     iroha_data_model::executor::IvmAdmissionError::UnsupportedVersion(
@@ -3740,13 +3740,13 @@ pub mod tests {
     const IVM_METADATA_HEADER_LEN: usize = 17;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 
-    /// Build a minimal valid IVM program: header (2.0, vector=4, `max_cycles=0`, abi=1) + HALT.
+    /// Build a minimal valid IVM program: header (1.0, vector=4, `max_cycles=0`, abi=1) + HALT.
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let mut code = Vec::new();
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut program = Vec::new();
         program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[2, 0, 0, 4]);
+        program.extend_from_slice(&[1, 0, 0, 4]);
         program.extend_from_slice(&1_000u64.to_le_bytes());
         program.push(abi_version);
         program.extend_from_slice(&code);
@@ -3775,7 +3775,7 @@ pub mod tests {
         }
         let mut program = Vec::new();
         program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[2, 0, 0, 4]);
+        program.extend_from_slice(&[1, 0, 0, 4]);
         program.extend_from_slice(&max_cycles.to_le_bytes());
         program.push(abi_version);
         program.extend_from_slice(&code);
@@ -3834,7 +3834,7 @@ pub mod tests {
 
         let mut program = Vec::new();
         program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[2, 0, 0, 4]);
+        program.extend_from_slice(&[1, 0, 0, 4]);
         program.extend_from_slice(&1_000u64.to_le_bytes());
         program.push(abi_version);
         program.extend_from_slice(&code);

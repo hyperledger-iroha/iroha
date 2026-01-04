@@ -1720,7 +1720,7 @@ mod tests {
         }
         let mut program = Vec::with_capacity(16 + code.len());
         program.extend_from_slice(b"IVM\0");
-        program.push(2); // version major
+        program.push(1); // version major
         program.push(0); // version minor
         program.push(0); // mode flags
         program.push(0); // vector length (unused when mode == 0)

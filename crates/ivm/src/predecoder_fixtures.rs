@@ -110,52 +110,28 @@ pub fn generate_predecoder_mixed_fixtures(root: &Path) -> Result<(), Box<dyn std
     // 4) Header variants and artifacts
     let variants: Vec<ProgramMetadata> = vec![
         ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0x00,
             vector_length: 0,
             max_cycles: 0,
-            abi_version: 0,
+            abi_version: 1,
         },
         ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 7,
             mode: 0x00,
             vector_length: 0,
             max_cycles: 0,
-            abi_version: 0,
+            abi_version: 1,
         },
         ProgramMetadata {
             version_major: 1,
-            version_minor: 3,
-            mode: 0x00,
-            vector_length: 0,
-            max_cycles: 0,
-            abi_version: 0,
-        },
-        ProgramMetadata {
-            version_major: 2,
             version_minor: 0,
             mode: 0x03,
             vector_length: 8,
             max_cycles: 1_000,
             abi_version: 1,
-        },
-        ProgramMetadata {
-            version_major: 2,
-            version_minor: 0,
-            mode: 0x04,
-            vector_length: 64,
-            max_cycles: 1,
-            abi_version: 2,
-        },
-        ProgramMetadata {
-            version_major: 2,
-            version_minor: 9,
-            mode: 0x07,
-            vector_length: 255,
-            max_cycles: u32::MAX as u64,
-            abi_version: 255,
         },
     ];
 

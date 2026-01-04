@@ -256,7 +256,7 @@ mod tests {
         fn assemble(code: &[u8]) -> Vec<u8> {
             let mut v = Vec::new();
             v.extend_from_slice(b"IVM\0");
-            v.push(2); // version major
+            v.push(1); // version major
             v.push(0); // version minor
             v.push(0); // mode flags
             v.push(4); // default vector length

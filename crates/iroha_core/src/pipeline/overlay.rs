@@ -1030,7 +1030,7 @@ mod tests_overlay_manifest {
 
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let meta = ivm::ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,
@@ -1119,8 +1119,8 @@ mod tests_overlay_manifest {
 
 /// Validate IVM header policy and return a structured admission error.
 fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmissionError> {
-    // Version: accept 2.x
-    if meta.version_major != 2 {
+    // Version: accept 1.x
+    if meta.version_major != 1 {
         return Err(IvmAdmissionError::UnsupportedVersion(
             iroha_data_model::executor::UnsupportedVersionInfo {
                 major: meta.version_major,

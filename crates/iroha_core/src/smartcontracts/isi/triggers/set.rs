@@ -1244,10 +1244,8 @@ mod tests {
         }
 
         let block_view = set.block();
-        let interval = TimeInterval::new_since_to(
-            Duration::from_millis(0),
-            Duration::from_millis(1_234),
-        );
+        let interval =
+            TimeInterval::new_since_to(Duration::from_millis(0), Duration::from_millis(1_234));
         let time_event = TimeEvent { interval };
 
         assert!(

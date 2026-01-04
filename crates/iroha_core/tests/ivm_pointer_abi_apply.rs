@@ -60,7 +60,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
 
     // Full program (metadata + code)
     let meta = ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: 0,
         vector_length: 0,

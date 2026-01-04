@@ -3488,7 +3488,7 @@ mod pointer_abi_tests {
     fn strict_policy_accepts_domain_in_abi_v1() {
         // Prepare VM with ABI v1 (baseline)
         let meta = ivm::ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,
@@ -4677,7 +4677,7 @@ mod pointer_abi_tests {
 fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
     let mut program = Vec::with_capacity(17 + code.len());
     program.extend_from_slice(b"IVM\0");
-    program.push(2); // version_major
+    program.push(1); // version_major
     program.push(0); // version_minor
     program.push(0); // mode
     program.push(vector_length);

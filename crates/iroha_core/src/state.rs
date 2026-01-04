@@ -15898,7 +15898,7 @@ mod permission_cache_tests {
                 let chunk_count = data.len() / 8;
 
                 let meta = ProgramMetadata {
-                    version_major: 2,
+                    version_major: 1,
                     version_minor: 0,
                     mode: 0,
                     vector_length: 0,
@@ -25617,7 +25617,7 @@ mod tests {
         let chunk_count = data.len() / 8;
 
         let meta = ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,
@@ -25991,7 +25991,7 @@ mod tests {
     fn assemble_ivm_header(code: &[u8]) -> Vec<u8> {
         let mut blob = Vec::with_capacity(16 + code.len());
         blob.extend_from_slice(b"IVM\0");
-        blob.push(2); // version major
+        blob.push(1); // version major
         blob.push(0); // version minor
         blob.push(0); // mode flags
         blob.push(0); // vector length

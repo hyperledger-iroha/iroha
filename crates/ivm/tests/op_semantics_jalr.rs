@@ -9,7 +9,7 @@ fn encode_li16(op: u8, rd: u8, imm8: i8) -> u16 {
 #[allow(dead_code)]
 fn program_with(instrs: &[u32]) -> Vec<u8> {
     let meta = ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: 0,
         vector_length: 0,

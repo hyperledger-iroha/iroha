@@ -544,13 +544,9 @@ impl Run for Version {
         let response = client.get_server_version()?;
         println!(
             "{}",
-            i18n.t_with("info.server_git_sha", &[("sha", response.git_sha.as_str())])
-        );
-        println!(
-            "{}",
             i18n.t_with(
                 "info.server_version",
-                &[("version", response.version.as_str())]
+                &[("version", response.as_str())]
             )
         );
         Ok(())

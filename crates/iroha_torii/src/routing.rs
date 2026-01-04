@@ -6979,7 +6979,7 @@ fn prepare_contract_call(
         ))
     })?;
     let meta = parsed.metadata;
-    if meta.version_major != 2 {
+    if meta.version_major != 1 {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             QueryExecutionFail::Conversion(format!(
                 "unsupported program version {}.{}",
@@ -9569,7 +9569,7 @@ mod deploy_tests {
         let mut code = Vec::new();
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let meta = ivm::ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,
