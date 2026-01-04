@@ -42,7 +42,7 @@ fast transaction validation.
 - Operational flow:
   1. Ensure the node identity key is available when `snapshot.mode = "read_write"`.
   2. On creation, the node writes `snapshot.data`, `snapshot.sha256`, and `snapshot.sig` atomically (temp files renamed in place).
-  3. On startup, restore loads `snapshot.data`, verifies the Merkle metadata (`snapshot.merkle.json`), recomputes the digest, verifies the signature, then checks block hashes against Kura.
+  3. On startup, restore loads `snapshot.data`, verifies the Merkle metadata (`snapshot.merkle.json`), recomputes the digest, verifies the signature, confirms the snapshot `chain_id` matches the configured chain, then checks block hashes against Kura.
   4. If any check fails, the node falls back to building state from genesis.
 
 ### Operator checklist

@@ -55,7 +55,6 @@ This note captures concrete requirements for closing the open residual risks cal
 - Run decompression/sanitization in a bounded worker with `torii.attachments_sanitize_timeout_ms`, deterministic byte limits, and a configurable execution mode (`torii.attachments_sanitizer_mode`, default `subprocess`).
 - Apply OS-level CPU/memory limits to the sanitizer subprocess (rlimits) to bound resource use.
 - Record provenance metadata (hashes, sniffed type, sanitizer verdict) alongside stored attachments.
-- Sanitize outbound exports by re‑validating legacy attachments (those without provenance) before serving bytes.
 
 **Observability**
 - Prometheus counters:
@@ -68,4 +67,3 @@ This note captures concrete requirements for closing the open residual risks cal
 - Fallback path must remain deterministic across nodes; attach sanitized output or reject uniformly.
 - Provide integration tests with representative fixture files.
 
-**Status:** Implemented with magic sniffing, bounded decompression, subprocess-capable sanitizer mode, OS-level rlimits, export re‑sanitization for legacy payloads, provenance metadata, and rejection telemetry.

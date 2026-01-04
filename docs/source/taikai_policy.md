@@ -39,7 +39,6 @@ land alongside fixtures/tests so CI can gate future changes.
 
 GAR remains a compact JWS with Ed25519 signatures; v2 adds schema fields and
 validation rules rather than inventing a new envelope. The payload extensions
-are backwards compatible, allowing Torii and gateways to accept v1 records
 until all issuers migrate.
 
 ### Payload extensions

@@ -6,7 +6,6 @@ description: Requirements and workflows for preserving the deterministic SF1 chu
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/chunker_conformance.md`. Keep both versions in sync until the legacy docs are retired.
 :::
 
 This guide codifies the requirements every implementation must follow to stay

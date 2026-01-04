@@ -214,9 +214,7 @@ cadenas comprimidas deben seguir el flujo CLI documentado en ADDR-5:
    `--fail-on-warning` cuando los operadores esten listos para bloquear
    selectores Local en CI.
 6. Cuando necesites una reescritura linea a linea, usa
-  `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`.
   Para hojas de calculo de remediacion de selectores Local, usa
-  `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
   para exportar un CSV `input,status,format,...` que resalta codificaciones
   canonicas, advertencias y fallos de parse en una sola pasada.
    El helper omite filas no Local por defecto, convierte cada entrada restante
@@ -246,7 +244,6 @@ cuando diagnostiques regresiones. Sigue reflejando
 (`dashboards/grafana/address_ingest.json`) para que el paquete de evidencia
 ADDR-7 demuestre que `domain_kind="local12"` permanecio en cero durante la
 ventana requerida de 30 dias antes de que mainnet deshabilite los selectores
-legacy. El paquete Alertmanager
 (`dashboards/alerts/address_ingest_rules.yml`) agrega tres guardrails:
 
 - `AddressLocal8Resurgence` pagina cuando un contexto reporta un incremento

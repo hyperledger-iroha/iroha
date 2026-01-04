@@ -115,7 +115,6 @@ During the runs above (especially the chaos suite), confirm:
 - `sumeragi_phase_latency_ms` and `sumeragi_qc_assembly_latency_ms` stay within
   the configured pacemaker budgets.
 - DA and RBC counters (`sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
-  legacy `sumeragi_rbc_da_reschedule_total`, `_backpressure_deferrals_total`,
   `_evictions_total`) match the fault you injected.
 - Alert rules from `prometheus.rules.sumeragi_vrf.yml` fire once when their
   respective conditions trigger (e.g., `VRFNoParticipation`, `SumeragiCommitStall`).

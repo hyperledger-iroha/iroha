@@ -10,7 +10,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canônica
-Espelha `docs/source/sorafs/developer/orchestrator_tuning.md`. Mantenha as duas cópias alinhadas até que a documentação legada seja aposentada.
+Espelha `docs/source/sorafs/developer/orchestrator_tuning.md`. Mantenha as duas cópias alinhadas até que a documentação alternativa seja aposentada.
 :::
 
 # Guia de rollout e ajuste do orquestrador
@@ -51,7 +51,7 @@ Antes de avançar:
 2. **Inspecione razões de elegibilidade.** Persista artefatos via
    `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Cada entrada
    traz um bloco `eligibility` com a causa exata da falha. Não sobrescreva
-   incompatibilidades de capacidade ou anúncios expirados; corrija o payload upstream.
+   desajustes de capacidade ou anúncios expirados; corrija o payload upstream.
 3. **Revise mudanças de peso.** Compare o campo `normalised_weight` com o release
    anterior. Mudanças >10 % devem correlacionar com alterações deliberadas em anúncios
    ou telemetria e precisam ser registradas no log de rollout.

@@ -8,7 +8,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 :::note Канонический источник
 Эта страница отражает `docs/source/da/ingest_plan.md`. Держите обе версии
-синхронизированными до ухода legacy-доков.
 :::
 
 # План ingest Data Availability Sora Nexus

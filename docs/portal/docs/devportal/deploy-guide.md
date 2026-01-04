@@ -465,7 +465,7 @@ gateway-content-binding requirement:
   scraping shell output.
 
 They are generated automatically via
-`cargo xtask soradns-binding-template` (which replaced the older Node helper)
+`cargo xtask soradns-binding-template`
 and capture the alias, manifest digest, and gateway hostname that were supplied
 to `sorafs-pin-release.sh`. To regenerate or customise the header block, run:
 
@@ -488,11 +488,9 @@ Attach the header snippet to the CDN change request and feed the JSON document
 into the gateway automation pipeline so the actual host promotion matches the
 release evidence.
 
-The release script still ships the Node script for backwards compatibility, but
-the xtask helper is the canonical path going forward. The release script runs the
-verification helper automatically so DG-3 tickets always
-include recent evidence. Re-run it manually whenever you tweak the binding JSON by
-hand:
+The release script runs the verification helper automatically so DG-3 tickets
+always include recent evidence. Re-run it manually whenever you tweak the
+binding JSON by hand:
 
 ```bash
 cargo xtask soradns-verify-binding \

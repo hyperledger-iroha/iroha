@@ -62,7 +62,6 @@ The release can be pushed earlier, to compensate for an earlier
 push-back, and/or to accelerate the availability of a crucial feature
 within reason.
 
-Pushing the release forwards or backwards to fit around deadlines of
 other projects is discouraged, but is left up to the technical lead's
 discretion.
 

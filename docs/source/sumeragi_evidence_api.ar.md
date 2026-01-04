@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-01-01
   التحقيق في الارسالات القديمة.
 - POST `/v1/sumeragi/evidence`
   - يرسل evidence من Norito مشفرة hex الى ممثل Sumeragi (`ControlFlow::Evidence`).
-  - جسم الطلب (JSON): `{ "evidence_hex": "<hex string>" }`؛ يتم تجاهل الفراغات في السلسلة hex.
+  - جسم الطلب (JSON): `{ "evidence_hex": "<hex string>" }`؛ سلسلة hex تمثل بايتات `ConsensusEvidence` المؤطرة بنوريتو ويتم تجاهل الفراغات.
   - الاستجابة (JSON): `{ "status": "accepted", "kind": "<variant>" }` عند النجاح.
   - التحقق يغطي تطابق signer/height/view/epoch لحمولات double-vote، ويتطلب حمولة غير فارغة لموقع واحد، ويفرض quorums لادلة `Censorship` (حمولات موقعة `TransactionSubmissionReceipt`)، ويرفض سجلات `InvalidProposal` التي لا تتقدم في height/view او التي يختلف hash الاب فيها عن QC المضمن.
   - مساعد CLI: `iroha sumeragi evidence submit --evidence-hex <hex>` او `--evidence-hex-file <path>`.

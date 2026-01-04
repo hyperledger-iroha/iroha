@@ -163,7 +163,6 @@ Governance עבור lanes admin-managed ורשומות staking של public lanes
   `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}` ו-
   `nexus_audit_outcome_total` קיימים כבר ב-`crates/iroha_telemetry/src/metrics.rs`. מפעילים צריכים
-  להתריע על קפיצות missing-availability (מוני reschedule הם legacy וחייבים להישאר אפס), ו-
   `lane_relay_invalid_total` צריך להישאר אפס מחוץ לתרגילי יריב.
 - **משטחי Torii:**  
   `/v1/sumeragi/status` כולל `lane_commitments`, `lane_settlement_commitments` וצילומי dataspace.

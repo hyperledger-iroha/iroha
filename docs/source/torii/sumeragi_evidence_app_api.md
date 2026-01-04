@@ -92,7 +92,7 @@ Submits slashing evidence to the running Sumeragi instance.
 
 ```json
 {
-  "evidence_hex": "0x010000000200…" // Norito-encoded `ConsensusEvidence`
+  "evidence_hex": "0x010000000200…" // hex of Norito-framed `ConsensusEvidence` bytes
 }
 ```
 

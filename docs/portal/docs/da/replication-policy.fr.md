@@ -11,7 +11,6 @@ translation_last_reviewed: 2026-01-01
 
 :::note Source canonique
 Reflete `docs/source/da/replication_policy.md`. Gardez les deux versions en
-sync tant que les docs legacy ne sont pas retires.
 :::
 
 # Politique de replication Data Availability (DA-4)

@@ -3139,7 +3139,7 @@ pub struct Kura {
     pub block_sync_roster_retention: NonZeroUsize,
     /// Number of recent roster sidecars retained alongside the block store.
     pub roster_sidecar_retention: NonZeroUsize,
-    /// Whether to print new blocks to logs for debugging.
+    /// Whether to append new blocks as JSONL to `blocks.jsonl` under the active Kura lane.
     pub debug_output_new_blocks: bool,
     /// Maximum merge-ledger entries cached in memory (0 = default).
     pub merge_ledger_cache_capacity: usize,

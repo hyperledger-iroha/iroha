@@ -22,7 +22,7 @@ use iroha_data_model::{
     nexus::UniversalAccountId,
 };
 use iroha_logger::{error, info};
-use norito::{codec::Encode, derive::JsonDeserialize};
+use norito::derive::JsonDeserialize;
 
 use crate::{NoritoQuery, SharedAppState, limits};
 
@@ -34,7 +34,7 @@ pub enum ContentError {
     NotFound,
     RateLimited,
     Internal(String),
-    RangeNotSatisfiable,
+    RangeNotSatisfiable { total_len: u64 },
 }
 
 const CONTENT_RECEIPT_HEADER: &str = "sora-content-receipt";
@@ -48,7 +48,15 @@ impl IntoResponse for ContentError {
             Self::NotFound => StatusCode::NOT_FOUND.into_response(),
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS.into_response(),
             Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-            Self::RangeNotSatisfiable => StatusCode::RANGE_NOT_SATISFIABLE.into_response(),
+            Self::RangeNotSatisfiable { total_len } => {
+                let mut response = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+                response.headers_mut().insert(
+                    header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes */{total_len}"))
+                        .unwrap_or_else(|_| HeaderValue::from_static("bytes */0")),
+                );
+                response
+            }
         }
     }
 }
@@ -242,7 +250,7 @@ pub async fn handle_get_content(
         Err(ContentError::Forbidden(_)) => "auth_forbidden",
         Err(ContentError::NotFound) => "not_found",
         Err(ContentError::RateLimited) => "rate_limited",
-        Err(ContentError::RangeNotSatisfiable) => "range_invalid",
+        Err(ContentError::RangeNotSatisfiable { .. }) => "range_invalid",
         Err(ContentError::BadRequest(_)) => "bad_request",
         Err(ContentError::Internal(_)) => "internal",
     });
@@ -450,6 +458,9 @@ fn apply_range(
 ) -> Result<RangeState, ContentError> {
     let total_len = body.len() as u64;
     if total_len == 0 {
+        if range_header.is_some() {
+            return Err(ContentError::RangeNotSatisfiable { total_len: 0 });
+        }
         return Ok(RangeState {
             body: body.to_vec(),
             status: StatusCode::OK,
@@ -489,7 +500,7 @@ fn apply_range(
         let start = total_len.saturating_sub(suffix);
         let end = total_len
             .checked_sub(1)
-            .ok_or(ContentError::RangeNotSatisfiable)?;
+            .ok_or(ContentError::RangeNotSatisfiable { total_len })?;
         (start, end)
     } else {
         let start: u64 = start_str
@@ -498,7 +509,7 @@ fn apply_range(
         let end: u64 = if end_str.is_empty() {
             total_len
                 .checked_sub(1)
-                .ok_or(ContentError::RangeNotSatisfiable)?
+                .ok_or(ContentError::RangeNotSatisfiable { total_len })?
         } else {
             end_str
                 .parse()
@@ -508,17 +519,17 @@ fn apply_range(
     };
 
     if start >= total_len {
-        return Err(ContentError::RangeNotSatisfiable);
+        return Err(ContentError::RangeNotSatisfiable { total_len });
     }
 
     if end >= total_len {
         end = total_len
             .checked_sub(1)
-            .ok_or(ContentError::RangeNotSatisfiable)?;
+            .ok_or(ContentError::RangeNotSatisfiable { total_len })?;
     }
 
     if start > end {
-        return Err(ContentError::RangeNotSatisfiable);
+        return Err(ContentError::RangeNotSatisfiable { total_len });
     }
 
     let slice = &body[start as usize..=end as usize];
@@ -555,7 +566,9 @@ fn encode_receipt_header(
             .unwrap_or_default()
             .as_secs(),
     };
-    let encoded = Encode::encode(&receipt);
+    let encoded = norito::to_bytes(&receipt).map_err(|_| {
+        ContentError::Internal("failed to encode content receipt header".to_string())
+    })?;
     STANDARD_NO_PAD
         .encode(encoded)
         .parse()
@@ -645,6 +658,28 @@ mod tests {
         assert_eq!(overshoot.status, StatusCode::PARTIAL_CONTENT);
         assert_eq!(overshoot.content_range.as_deref(), Some("bytes 0-10/11"));
         assert_eq!(overshoot.body, b"hello world");
+    }
+
+    #[test]
+    fn range_header_on_empty_body_is_unsatisfiable() {
+        let body = Vec::new();
+        let err = apply_range(&body, Some(&HeaderValue::from_static("bytes=0-0")))
+            .expect_err("range should be unsatisfiable");
+        assert!(matches!(
+            err,
+            ContentError::RangeNotSatisfiable { total_len: 0 }
+        ));
+    }
+
+    #[test]
+    fn range_not_satisfiable_sets_content_range_header() {
+        let response = ContentError::RangeNotSatisfiable { total_len: 12 }.into_response();
+        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        let header_value = response
+            .headers()
+            .get(header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok());
+        assert_eq!(header_value, Some("bytes */12"));
     }
 
     #[test]

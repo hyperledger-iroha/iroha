@@ -5026,7 +5026,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     };
 
     let request = ProofStreamRequest {
-        manifest_id_hex: manifest_id_hex.clone(),
+        manifest_digest_hex: manifest_id_hex.clone(),
         provider_id_hex: Some(provider_id_hex.clone()),
         proof_kind,
         sample_count,

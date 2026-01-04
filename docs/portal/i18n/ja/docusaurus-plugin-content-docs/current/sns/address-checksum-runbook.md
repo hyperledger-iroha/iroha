@@ -57,7 +57,6 @@ Local-8/Local-12 の衝突に特化した事象の場合は、`AddressLocal8Resu
 ### manifest またはレジストリの問題
 
 - `address_manifest_ops.md` に従って最新の manifest bundle を再検証し、Local-8 セレクタが再登場していないことを確認する。
-- Local legacy セレクタが payload に現れた場合は `scripts/address_local_toolkit.sh audit ...` を使う。
 
 ### 悪意または不正なトラフィック
 

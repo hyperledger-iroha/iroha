@@ -29,7 +29,6 @@ The command emits JSON capturing:
 - Direct-CAR endpoints (`https://{host}/direct/v1/car/{manifest_digest_hex}`) generated from the
   manifest digest.
 - Capability flags detected from manifest metadata and admission adverts (Torii gateway, QUIC/Noise,
-  SoraNet compatibility, range-fetch support, etc.) via
   `sorafs_manifest::manifest_capabilities::detect_manifest_capabilities`.
 
 Use `--admission-envelope` to supply a governance-signed admission bundle when you need canonical

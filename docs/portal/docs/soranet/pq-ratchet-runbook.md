@@ -6,7 +6,6 @@ description: On-call rehearsal steps for promoting or demoting the staged PQ ano
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/soranet/pq_ratchet_runbook.md`. Keep both copies aligned until the legacy documentation set is retired.
 :::
 
 ## Purpose

@@ -511,11 +511,9 @@ Torii رفض حلّ النطاقات المتأثرة.
    ذلك النطاق في الحقل `input_domain`، كما أن الخيار `--append-domain`
    يعيد تشغيل الترميز المحوَّل كـ `<ih58>@wonderland` لتحديث manifests.
    لعمليات التصدير الخطّية (سطر لكل عنوان) استخدم:
-   `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`
    لتحويل محددات Local جماعيًا إلى صيغ IH58 (أو صيغ مضغوطة/hex/JSON)
    مع تخطّي الصفوف غير المحلية. ولتوفير دليل قابل للاستهلاك في جداول
    البيانات، استخدم:
-   `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
    لإنتاج ملف CSV (`input,status,format,domain_kind,…`) يبرز محددات Local،
    والترميزات الكانونية، وإخفاقات التحليل في ملف واحد.
 3. **إضافة سجلات إلى manifest.** صِغ سجل `tombstone` (وسجل

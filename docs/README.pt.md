@@ -52,7 +52,7 @@ Neste repositório você encontra documentação para as ferramentas do Iroha 2:
 ## Referências do SDK Swift / iOS
 
 - [Visão geral do SDK Swift](./source/sdk/swift/index.md): auxiliares de pipeline, toggles de aceleração e APIs Connect/WebSocket.
-- [Guia rápido do Connect](./connect_swift_ios.md): passo a passo centrado no SDK, com a referência legada de CryptoKit.
+- [Guia rápido do Connect](./connect_swift_ios.md): passo a passo centrado no SDK, com a referência alternativa de CryptoKit.
 - [Guia de integração com o Xcode](./connect_swift_integration.md): integração de NoritoBridgeKit/Connect em um aplicativo, com ChaChaPoly e auxiliares de frames.
 - [Guia para contribuidores da demo em SwiftUI](./norito_demo_contributor.md): como executar a demo iOS contra um nó Torii local, com observações sobre aceleração.
 - Execute `make swift-ci` antes de publicar artefatos Swift ou alterações no Connect; isso verifica a paridade de fixtures, feeds de dashboards e metadados `ci/xcframework-smoke:<lane>:device_tag` no Buildkite.

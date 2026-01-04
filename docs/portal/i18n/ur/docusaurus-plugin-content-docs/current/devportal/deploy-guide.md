@@ -466,8 +466,7 @@ deploy helper `portal.gateway.headers.txt` اور `portal.gateway.binding.json` 
   ہے تاکہ change tickets اور automation host/cid bindings کو shell آؤٹ پٹ کریدے
   بغیر diff کر سکیں۔
 
-یہ خودکار طور پر `cargo xtask soradns-binding-template` کے ذریعے جنریٹ ہوتے ہیں
-(جو پرانے Node helper کی جگہ لے چکا ہے) اور alias، manifest digest، اور gateway
+یہ خودکار طور پر `cargo xtask soradns-binding-template` کے ذریعے جنریٹ ہوتے ہیں اور alias، manifest digest، اور gateway
 hostname کو محفوظ کرتے ہیں جو `sorafs-pin-release.sh` کو فراہم کیے گئے تھے۔
 header block دوبارہ بنانے یا customize کرنے کے لئے چلائیں:
 
@@ -489,7 +488,6 @@ header snippet کو CDN change request کے ساتھ منسلک کریں اور 
 gateway automation pipeline میں feed کریں تاکہ اصل host promotion ریلیز evidence
 سے میل کھائے۔
 
-ریلیز اسکرپٹ اب بھی backward compatibility کے لئے Node اسکرپٹ فراہم کرتا ہے، مگر
 xtask helper اب canonical راستہ ہے۔ ریلیز اسکرپٹ verification helper خودکار طور
 پر چلاتا ہے تاکہ DG-3 ٹکٹس میں ہمیشہ تازہ evidence شامل ہو۔ جب بھی آپ binding JSON
 دستی طور پر تبدیل کریں تو اسے دوبارہ چلائیں:

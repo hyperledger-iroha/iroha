@@ -337,7 +337,7 @@ Deploy helper также генерирует `portal.gateway.headers.txt` и `p
 - `portal.gateway.headers.txt` содержит полный блок HTTP headers (включая `Sora-Name`, `Sora-Content-CID`, `Sora-Proof`, CSP, HSTS и `Sora-Route-Binding`), который edge gateway должен приклеивать к каждому ответу.
 - `portal.gateway.binding.json` фиксирует ту же информацию в машиночитаемом виде, чтобы change tickets и автоматизация могли сравнивать host/cid bindings без парсинга shell вывода.
 
-Они генерируются через `cargo xtask soradns-binding-template` (заменил прежний Node helper) и фиксируют alias, manifest digest и gateway hostname, которые были переданы в `sorafs-pin-release.sh`. Для регенерации или кастомизации блока headers выполните:
+Они генерируются через `cargo xtask soradns-binding-template` и фиксируют alias, manifest digest и gateway hostname, которые были переданы в `sorafs-pin-release.sh`. Для регенерации или кастомизации блока headers выполните:
 
 ```bash
 cargo xtask soradns-binding-template \
@@ -353,7 +353,7 @@ cargo xtask soradns-binding-template \
 
 Прикладывайте snippet заголовков к CDN change request и передавайте JSON в gateway automation pipeline, чтобы реальное продвижение хоста соответствовало evidence.
 
-Release script по-прежнему содержит Node скрипт для обратной совместимости, но xtask helper - канонический путь. Release script автоматически запускает verification helper, чтобы DG-3 tickets всегда содержали свежую evidence. Перезапускайте вручную, если правите binding JSON вручную:
+Release script автоматически запускает verification helper, чтобы DG-3 tickets всегда содержали свежую evidence. Перезапускайте вручную, если правите binding JSON вручную:
 
 ```bash
 cargo xtask soradns-verify-binding \

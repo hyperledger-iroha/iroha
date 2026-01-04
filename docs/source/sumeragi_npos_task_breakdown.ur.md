@@ -29,7 +29,6 @@ translation_last_reviewed: 2026-01-01
 1. ✅ Telemetria اور CI harnesses دونوں پر 72 h کے multi-node soak tests چلائے گئے؛ Torii snapshots نے proposer throughput اور QC formation کو stable دکھایا اور کوئی regression نہ تھی۔
 2. ✅ Integration test coverage اب صرف Vote/QC path پر چلتی ہے (`sumeragi_vote_qc_commit.rs`)، جس سے mixed peers پرانے frames کے بغیر consensus تک پہنچتے ہیں۔
 3. ✅ Operator docs اور CLI help میں پرانے wire path کا ذکر نہیں رہا؛ troubleshooting guidance اب Vote/QC telemetria کی طرف اشارہ کرتی ہے۔
-4. ✅ سابقہ message variants، telemetria counters اور pending commit caches حذف کر دیے گئے؛ compatibility matrix اب Vote/QC-only surface دکھاتا ہے۔
 
 ### A3 - Engine اور pacemaker enforcement
 - ✅ `handle_message` میں Lock/HighestQC invariants نافذ کیے گئے (دیکھیں `block_created_header_sanity`).

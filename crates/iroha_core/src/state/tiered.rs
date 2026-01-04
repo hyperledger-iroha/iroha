@@ -40,6 +40,8 @@ pub struct TieredStateBackend {
     max_snapshots: usize,
     /// Monotonically increasing snapshot counter.
     snapshot_counter: u64,
+    /// Whether the snapshot counter has been seeded from disk.
+    snapshot_counter_seeded: bool,
     /// Per-entry metadata tracking heat and payload hashes.
     entries: BTreeMap<TieredEntryId, EntryMetadata>,
     /// Cached manifest of the latest snapshot for diagnostics.
@@ -76,17 +78,19 @@ impl TieredStateBackend {
         cold_store_root: Option<PathBuf>,
         max_snapshots: usize,
     ) -> Self {
-        let backend = Self {
+        let mut backend = Self {
             enabled,
             hot_retained_keys,
             cold_store_root,
             max_snapshots,
             snapshot_counter: 0,
+            snapshot_counter_seeded: false,
             entries: BTreeMap::new(),
             last_manifest: None,
         };
         if backend.enabled {
             backend.ensure_cold_root().ok();
+            let _ = backend.seed_snapshot_counter_if_needed();
         }
         backend
     }
@@ -96,6 +100,41 @@ impl TieredStateBackend {
         if let Some(plan) = self.plan_world_snapshot(world)? {
             self.execute_snapshot_plan(plan, world)?;
         }
+        Ok(())
+    }
+
+    fn seed_snapshot_counter_if_needed(&mut self) -> Result<()> {
+        if self.snapshot_counter_seeded {
+            return Ok(());
+        }
+
+        let Some(root) = self.cold_store_root.clone() else {
+            self.snapshot_counter_seeded = true;
+            return Ok(());
+        };
+
+        self.ensure_cold_root()
+            .wrap_err("failed to prepare cold tier root directory")?;
+
+        let mut max_idx = 0u64;
+        for entry in fs::read_dir(&root).wrap_err_with(|| {
+            format!(
+                "failed to read cold tier root {path}",
+                path = root.display()
+            )
+        })? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            if let Some(idx) = Self::parse_snapshot_dir_name(&entry.file_name()) {
+                max_idx = max_idx.max(idx);
+            }
+        }
+
+        self.snapshot_counter = max_idx;
+        self.snapshot_counter_seeded = true;
         Ok(())
     }
 
@@ -117,6 +156,7 @@ impl TieredStateBackend {
             return Ok(None);
         };
 
+        self.seed_snapshot_counter_if_needed()?;
         self.snapshot_counter = self.snapshot_counter.saturating_add(1);
         let snapshot_idx = self.snapshot_counter;
         let snapshot_dir = root.join(format!("{snapshot_idx:020}"));
@@ -375,6 +415,7 @@ impl TieredStateBackend {
         }
         if cold_root_changed {
             self.snapshot_counter = 0;
+            self.snapshot_counter_seeded = false;
             self.last_manifest = None;
             if let Err(err) = self.ensure_cold_root() {
                 iroha_logger::warn!(
@@ -807,13 +848,6 @@ impl TieredStateBackend {
         if self.max_snapshots == 0 {
             return Ok(());
         }
-        fn parse_snapshot_dir_name(name: &std::ffi::OsStr) -> Option<u64> {
-            let name = name.to_str()?;
-            if name.len() != 20 || !name.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            name.parse::<u64>().ok()
-        }
 
         let mut entries = fs::read_dir(root)
             .wrap_err_with(|| {
@@ -828,7 +862,7 @@ impl TieredStateBackend {
                     .file_type()
                     .ok()
                     .filter(|ft| ft.is_dir())
-                    .and_then(|_| parse_snapshot_dir_name(&entry.file_name()))
+                    .and_then(|_| Self::parse_snapshot_dir_name(&entry.file_name()))
                     .map(|idx| (idx, entry))
             })
             .collect::<Vec<_>>();
@@ -845,6 +879,14 @@ impl TieredStateBackend {
             entries.remove(0);
         }
         Ok(())
+    }
+
+    fn parse_snapshot_dir_name(name: &std::ffi::OsStr) -> Option<u64> {
+        let name = name.to_str()?;
+        if name.len() != 20 || !name.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        name.parse::<u64>().ok()
     }
 
     fn sync_dir(path: &Path) -> Result<()> {
@@ -1571,6 +1613,25 @@ mod tests {
             .count();
         assert_eq!(retained, 1);
         assert_eq!(manifest2.snapshot_index, 2);
+    }
+
+    #[test]
+    fn snapshot_counter_seeds_from_existing_dirs() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        let snapshot_dir = root.join(format!("{:020}", 7_u64));
+        fs::create_dir_all(&snapshot_dir).expect("seed snapshot");
+        fs::create_dir_all(root.join("lanes")).expect("lanes dir");
+        fs::create_dir_all(root.join("retired")).expect("retired dir");
+
+        let mut backend = TieredStateBackend::new(true, 0, Some(root.clone()), 0);
+        let world = World::default();
+
+        backend.record_world_snapshot(&world).expect("snapshot");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        assert_eq!(manifest.snapshot_index, 8);
+        let new_dir = root.join(format!("{:020}", manifest.snapshot_index));
+        assert!(new_dir.exists(), "expected seeded snapshot directory");
     }
 
     #[test]

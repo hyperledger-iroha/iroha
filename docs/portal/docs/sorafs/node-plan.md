@@ -6,7 +6,6 @@ description: Translate the SF-3 storage roadmap into actionable engineering work
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/sorafs_node_plan.md`. Keep both versions in sync until the legacy docs are retired.
 :::
 
 SF-3 delivers the first runnable `sorafs-node` crate that turns an Iroha/Torii process into a SoraFS storage provider. Use this plan alongside the [node storage guide](node-storage.md), [provider admission policy](provider-admission-policy.md), and [storage capacity marketplace roadmap](storage-capacity-marketplace.md) when sequencing deliverables.

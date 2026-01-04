@@ -38,7 +38,6 @@ To ensure first-class mobile and web experiences, the project publishes maintain
 - `iroha_python` for Python integrations, with HTTP, WebSocket, and telemetry support.
 - `iroha_cli` for terminal-driven administration and scripting.
 
-All SDKs consume the same Norito schemas produced by the workspace, ensuring payload compatibility across
 languages and platforms.
 
 ### 1.3 Design principles
@@ -120,7 +119,6 @@ The `iroha_data_model` crate defines all ledger objects, instructions, queries, 
 - **Repositories (`RepoInstruction`)** allow bundling deterministic upgrade plans (executors, manifests, and
   assets) so multi-step rollouts can be managed on-chain with governance approval.
 - **Consensus artifacts**—such as quorum certificates and witness lists—reside in the data model and
-  round-trip through golden tests to guarantee compatibility between `iroha_core`, Torii, and SDKs.
 - **Confidential registries and events** capture shielded asset descriptors, verifier keys, commitments,
   nullifiers, and event payloads (`ConfidentialEvent::{Shielded,Transferred,Unshielded}`) so confidential flows
   remain auditable without leaking plaintext data.

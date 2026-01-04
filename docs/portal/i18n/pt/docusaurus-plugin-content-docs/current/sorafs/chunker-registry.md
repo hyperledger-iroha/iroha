@@ -11,7 +11,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/chunker_registry.md`. Mantenha ambas as copias sincronizadas ate que o conjunto de documentacao Sphinx legado seja retirado.
+Esta pagina espelha `docs/source/sorafs/chunker_registry.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 ## Registro de perfis de chunker da SoraFS (SF-2a)
@@ -48,9 +48,9 @@ O manifest serializa perfis via `ChunkingProfileV1`. A estrutura registra os met
 e a lista de aliases mostrada acima. Consumidores devem primeiro tentar uma
 busca no registro por `profile_id` e recorrer aos parametros inline quando
 IDs desconhecidos aparecerem; a lista de aliases garante que clientes HTTP possam
-continuar enviando handles legados em `Accept-Chunker` sem adivinhar. As regras do
+continuar enviando handles alternativos em `Accept-Chunker` sem adivinhar. As regras do
 charter do registro exigem que o handle canonico (`namespace.name@semver`) seja a
-primeira entrada em `profile_aliases`, seguida por quaisquer aliases legados.
+primeira entrada em `profile_aliases`, seguida por quaisquer aliases alternativos.
 
 Para inspecionar o registro a partir do tooling, execute o CLI helper:
 
@@ -77,22 +77,21 @@ Todas as flags do CLI que escrevem JSON (`--json-out`, `--por-json-out`, `--por-
 criar um arquivo. Isso torna facil encadear os dados para tooling mantendo o
 comportamento padrao de imprimir o relatorio principal.
 
-### Matriz de compatibilidade e plano de rollout
+### Matriz de rollout e plano de implantacao
 
 
 A tabela abaixo captura o status atual de suporte para `sorafs.sf1@1.0.0` nos
-componentes principais. "Bridge" refere-se a faixa de compatibilidade CARv1 + SHA-256
+componentes principais. "Bridge" refere-se a faixa CARv1 + SHA-256
 que requer negociacao explicita do cliente (`Accept-Chunker` + `Accept-Digest`).
 
 | Componente | Status | Notas |
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ Suportado | Valida o handle canonico + aliases, faz stream de relatorios via `--json-out=-` e aplica o charter do registro via `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ Legado | Builder de manifest legado; use `iroha sorafs toolkit pack` para empacotamento CAR/manifest e mantenha `--plan=-` para revalidacao deterministica. |
-| `sorafs_provider_advert_stub` | ⚠️ Legado | Helper de validacao offline apenas; provider adverts devem ser produzidos pelo pipeline de publicacao e validados via `/v1/sorafs/providers`. |
+| `sorafs_manifest_stub` | ⚠️ Retirado | Builder de manifest fora de suporte; use `iroha sorafs toolkit pack` para empacotamento CAR/manifest e mantenha `--plan=-` para revalidacao deterministica. |
+| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validacao offline apenas; provider adverts devem ser produzidos pelo pipeline de publicacao e validados via `/v1/sorafs/providers`. |
 | `sorafs_fetch` (developer orchestrator) | ✅ Suportado | Le `chunk_fetch_specs`, entende payloads de capacidade `range` e monta saida CARv2. |
 | Fixtures de SDK (Rust/Go/TS) | ✅ Suportado | Regeneradas via `export_vectors`; o handle canonico aparece primeiro em cada lista de aliases e e assinado por envelopes do conselho. |
 | Negociacao de perfil no gateway Torii | ✅ Suportado | Implementa a gramatica completa de `Accept-Chunker`, inclui headers `Content-Chunker` e expoe o bridge CARv1 apenas em solicitacoes explicitas de downgrade. |
-| Bridge CARv1 (`sha2-256`) | ⚠️ Transicional | Disponivel para clientes legados quando a requisicao anuncia tanto o perfil canonico quanto `Accept-Digest: sha2-256`; as respostas incluem `Content-Chunker: ...;legacy=true`. |
 
 Rollout de telemetria:
 
@@ -101,7 +100,6 @@ Rollout de telemetria:
 - **Monitoramento de gateway** - operadores devem reportar os pareamentos `Content-Chunker`/`Content-Digest` para detectar downgrades inesperados; espera-se que o uso do bridge tenda a zero antes da deprecacao.
 
 Politica de deprecacao: uma vez que um perfil sucessor seja ratificado, agende uma janela de publicacao dupla
-(documentada na proposta) antes de marcar `sorafs.sf1@1.0.0` como deprecated no registro e remover o
 bridge CARv1 dos gateways em producao.
 
 Para inspecionar um testemunho PoR especifico, forneca indices de chunk/segmento/folha e opcionalmente
@@ -193,27 +191,22 @@ Ao solicitar dados CAR, clientes devem enviar um header `Accept-Chunker` listand
 `(namespace, name, semver)` em ordem de preferencia:
 
 ```
-Accept-Chunker: sorafs.sf1;version=1.0.0, legacy.fastcdc;version=0.9.0
-```
 
 Gateways selecionam um perfil suportado mutuamente (default `sorafs.sf1@1.0.0`)
 e refletem a decisao via o header de resposta `Content-Chunker`. Manifests
 embutem o perfil escolhido para que nos downstream possam validar o layout de chunks
 sem depender da negociacao HTTP.
 
-### Compatibilidade CAR
+### Suporte CAR
 
-O envelope canonico do manifest usa raizes CIDv1 com `dag-cbor` (`0x71`). Para compatibilidade legacy
 mantemos um caminho de exportacao CARv1+SHA-2:
 
 * **Caminho primario** - CARv2, digest de payload BLAKE3 (`0x1f` multihash),
   `MultihashIndexSorted`, perfil de chunk registrado como acima.
-* **Bridge legacy** - CARv1, digest de payload SHA-256 (`0x12` multihash). Servidores
   PODEM expor esta variante quando o cliente omite `Accept-Chunker` ou solicita
   `Accept-Digest: sha2-256`.
 
-Manifests sempre anunciam o commitment CARv2/BLAKE3. As faixas legacy fornecem headers
-adicionais para compatibilidade, mas nao devem substituir o digest canonico.
+adicionais para transicao, mas nao devem substituir o digest canonico.
 
 ### Conformidade
 

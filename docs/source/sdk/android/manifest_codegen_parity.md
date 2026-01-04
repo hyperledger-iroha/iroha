@@ -35,7 +35,6 @@ builders can stay aligned with the Rust data model.
 
 - 98 discriminants span 16 modules (`InstructionBox` families) sourced from
   `crates/iroha_data_model/src/isi/`. All modules have builder entries, and the
-  schema summaries now populate the documentation column. Four legacy discriminants (`iroha.grant`,
   `iroha.revoke`, `iroha.set_key_value`, `iroha.remove_key_value`) still rely on
   the boxed helper enums instead of the fully qualified module paths.
 - Every discriminant already has a Norito example file, so fixture generation is
@@ -143,19 +142,6 @@ builders can stay aligned with the Rust data model.
   `FinalizeReferendum`, and `PersistCouncilForEpoch`. The generated reference documents their
   schema hashes, while `java/iroha_android/src/test/java/org/hyperledger/iroha/android/governance/GovernanceInstructionBuilderTests.java`
   exercises round-trip coverage so SDK integrations stay aligned with the Rust data model.
-
-### 3.4 Legacy Grant/Revoke/KeyValue Aliases
-
-`GrantBox`, `RevokeBox`, `SetKeyValueBox`, and `RemoveKeyValueBox` still appear
-as standalone modules because their discriminants use the legacy `iroha.*`
-strings. Android must maintain alias tables so Kotlin builders map both the
-namespaced (`transparent::*`) and legacy discriminants to the same Norito wire
-ID. The notes column in `builder_index.json` already exposes the variant list;
-the generator should render that verbatim to avoid duplicate hand-written docs.
-⚙️ `InstructionKindAliasTests` and the
-`legacy_alias_roundtrip` fixture in
-`java/iroha_android/src/test/resources/transaction_payloads.json` now lock this
-behaviour down so CI fails if the alias coverage regresses.
 
 ## 4. Generator & Fixture Outputs
 

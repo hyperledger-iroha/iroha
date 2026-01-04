@@ -51,7 +51,6 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
   (Local‑12), IH58, and compressed encodings. Regenerate via
   `cargo xtask address-vectors` to prove encoder determinism.
 - `scripts/address_local_toolkit.sh` + `docs/source/sns/local_to_global_toolkit.md`
-  provide automation for auditing or converting any legacy Local-8 strings.
 
 ## 2. Telemetry & alerting
 
@@ -94,7 +93,6 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
 - All domain labels (for both Local selectors and Global registry entries) run
   through Norm v1 (NFC + strict UTS‑46 + ASCII policy)
   (`docs/source/references/address_norm_v1.md:1`), preventing spoofing via
-  compatibility or half-width transformations.
 - Wallet/explorer UX requirements in
   `docs/source/sns/address_display_guidelines.md:34` mandate the dual-format
   display (IH58 + compressed) plus localized copy helpers so operators can
@@ -117,7 +115,6 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
 ## 5. Operator checklist
 
 1. **Run the toolkit:** execute `scripts/address_local_toolkit.sh` (or the JS
-   `inspectAccountId` helper) on every legacy dump and archive the
    `audit.json`/`normalized.txt` pair referenced in the Local→Global runbook.
 2. **Run the gate check:** export a 30‑day Prometheus range query for both
    `torii_address_local8_total` and `torii_address_collision_total`

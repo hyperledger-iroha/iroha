@@ -4,10 +4,7 @@ use core::{result::Result, time::Duration};
 
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use futures::{SinkExt, StreamExt};
-use norito::{
-    codec::{DecodeAll as NoritoDecodeAll, Encode as NoritoEncode},
-    prelude::*,
-};
+use norito::prelude::*;
 
 #[cfg(test)]
 const TIMEOUT: Duration = Duration::from_millis(10_000);
@@ -26,6 +23,8 @@ pub enum Error {
     WebSocket(#[source] axum::Error),
     /// Error during Norito message decoding
     Decode(#[from] norito::Error),
+    /// Error during Norito message encoding
+    Encode(norito::Error),
     /// Connection is closed
     Closed,
 }
@@ -36,12 +35,9 @@ pub struct WebSocketNorito(pub(crate) WebSocket);
 
 impl WebSocketNorito {
     /// Send message encoded in Norito
-    pub async fn send<M: NoritoSerialize + NoritoEncode + Send>(
-        &mut self,
-        message: M,
-    ) -> Result<(), Error> {
-        // Use Norito codec framing (header + checksum) to align with client expectations.
-        let buf = <M as NoritoEncode>::encode(&message);
+    pub async fn send<M: NoritoSerialize + Send>(&mut self, message: M) -> Result<(), Error> {
+        // Use Norito framing (header + checksum) so clients can validate payloads.
+        let buf = norito::to_bytes(&message).map_err(Error::Encode)?;
         tokio::time::timeout(
             TIMEOUT,
             self.0.send(Message::Binary(axum::body::Bytes::from(buf))),
@@ -64,9 +60,7 @@ impl WebSocketNorito {
     }
 
     /// Recv message and try to decode it
-    pub async fn recv<M: for<'a> NoritoDeserialize<'a> + NoritoDecodeAll + Send>(
-        &mut self,
-    ) -> Result<M, Error> {
+    pub async fn recv<M: for<'a> NoritoDeserialize<'a> + Send>(&mut self) -> Result<M, Error> {
         // NOTE: ignore non binary messages
         loop {
             let message = tokio::time::timeout(TIMEOUT, self.0.next())
@@ -78,11 +72,8 @@ impl WebSocketNorito {
 
             match message {
                 Message::Binary(binary) => {
-                    // Decode using codec (expects Norito header + checksum)
-                    let mut slice: &[u8] = binary.as_ref();
-                    let value =
-                        <M as NoritoDecodeAll>::decode_all(&mut slice).map_err(Error::Decode)?;
-                    return Ok(value);
+                    // Decode using Norito framing (header + checksum).
+                    return norito::decode_from_bytes::<M>(binary.as_ref()).map_err(Error::Decode);
                 }
                 Message::Text(_) | Message::Ping(_) | Message::Pong(_) => {
                     iroha_logger::trace!(?message, "Unexpected message received");
@@ -95,7 +86,7 @@ impl WebSocketNorito {
     }
 
     /// Recv with a custom timeout duration, returning Err(ReadTimeout) on expiry.
-    pub async fn recv_with_timeout<M: for<'a> NoritoDeserialize<'a> + NoritoDecodeAll + Send>(
+    pub async fn recv_with_timeout<M: for<'a> NoritoDeserialize<'a> + Send>(
         &mut self,
         dur: Duration,
     ) -> Result<M, Error> {
@@ -107,10 +98,7 @@ impl WebSocketNorito {
                 .map_err(extract_ws_closed)?;
             match message {
                 Message::Binary(binary) => {
-                    let mut slice: &[u8] = binary.as_ref();
-                    let value =
-                        <M as NoritoDecodeAll>::decode_all(&mut slice).map_err(Error::Decode)?;
-                    return Ok(value);
+                    return norito::decode_from_bytes::<M>(binary.as_ref()).map_err(Error::Decode);
                 }
                 Message::Text(_) | Message::Ping(_) | Message::Pong(_) => {}
                 Message::Close(_) => return Err(Error::Closed),

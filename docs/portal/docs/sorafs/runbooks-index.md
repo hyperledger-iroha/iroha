@@ -10,7 +10,6 @@ sidebar_label: Runbook Index
 > the portal build.
 
 Use this page to verify which runbooks have completed the migration from the
-legacy docs tree into the portal. Each entry lists ownership, the canonical
 source path, and the portal copy so reviewers can jump straight to the desired
 guide during the beta preview.
 

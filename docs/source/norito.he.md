@@ -149,7 +149,6 @@ scripts/check_norito_features.sh # כיסוי דגלים
 ## מגבלות ו-Roadmap
 
 - Highlight: Packed Seq + GPU compression טרם בייצור.
-- אי/ADC: Still 64-bit length header legacy.
 - Strict-safe guard מאט ביצועים ~20%.
 - Columnar heuristics – זקוק לבנצ׳ים נוספים (see `norito_crc64_parity_bench.md`).
 - JSON adapters נמצאים בהרחבה אך נשארים `Value`.

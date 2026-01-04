@@ -117,7 +117,6 @@ merge ring کو lane commitment قبول کرنے سے پہلے یہ شرائط 
   `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`,
   `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, اور
-  `nexus_audit_outcome_total` پہلے سے `crates/iroha_telemetry/src/metrics.rs` میں موجود ہیں۔ operators کو missing-availability spikes پر alert کرنا چاہئے (reschedule counters legacy ہیں اور zero رہنے چاہئیں)، اور `lane_relay_invalid_total` adversarial drills کے باہر zero رہنا چاہئے۔
 - **Torii surfaces:**  
   `/v1/sumeragi/status` میں `lane_commitments`, `lane_settlement_commitments` اور dataspace snapshots شامل ہیں۔ `/v1/nexus/lane-config` (planned) `LaneConfig` geometry publish کرے گا تاکہ clients `lane_id` کو dataspace labels کے ساتھ map کر سکیں۔
 - **Dashboards:**  

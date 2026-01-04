@@ -19,7 +19,7 @@ description: Trechos por linguagem para integrar artefatos da SoraFS.
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/sdk/index.md`. Mantenha ambas as copias sincronizadas ate que o conjunto Sphinx legado seja retirado.
+Esta pagina espelha `docs/source/sorafs/developer/sdk/index.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 Use este hub para acompanhar os helpers por linguagem que acompanham a toolchain da SoraFS.

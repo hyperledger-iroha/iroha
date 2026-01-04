@@ -7139,7 +7139,9 @@ impl Run for GatewayDirectModePlanArgs {
             provider_id: &provider_id,
         };
         let host_summary = host_input.to_summary();
-        let direct_car = host_input.direct_car_locator(&self.scheme, &manifest_digest_hex);
+        let direct_car = host_input
+            .direct_car_locator(&self.scheme, &manifest_digest_hex)
+            .wrap_err("invalid URL scheme for direct CAR locator")?;
 
         let capability_summary = detect_manifest_capabilities(
             Some(&manifest),

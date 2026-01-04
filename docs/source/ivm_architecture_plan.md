@@ -52,7 +52,6 @@ validations for repeated syscalls.
 ### Phase 3 – Kotodama extraction
 - Split `crates/ivm/src/kotodama` into a new crate (e.g., `crates/kotodama_lang`).
 - Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
-- Keep compatibility shims in `ivm` while the move propagates through the repo.
 
 **Security / performance impact**: Decoupling lowers the attack surface of the VM
 core and allows language innovation without risking interpreter regressions.

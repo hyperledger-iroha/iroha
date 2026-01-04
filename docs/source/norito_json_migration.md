@@ -64,7 +64,6 @@ Serde derives, visitors, JSON DOM helpers, and config loaders.
 > **Status (Nov 7, 2025):** `IpfsPath` gained Norito `FastJsonWrite` and
 > `JsonDeserialize` impls backed by the existing parser, with regression tests
 > covering both valid round-trips and invalid path rejection. Existing Serde
-> impls remain for compatibility during the migration window.
 
 > **Status (Dec 6, 2026):** Builder JSON roundtrips now cover `NewAccount`,
 > `NewAssetDefinition`, and `NewNft`, ensuring registration payloads serialize

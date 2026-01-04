@@ -6,7 +6,6 @@ description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless 
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/developer/ci.md`. Keep both versions in sync until the legacy docs are retired.
 :::
 
 # CI Recipes

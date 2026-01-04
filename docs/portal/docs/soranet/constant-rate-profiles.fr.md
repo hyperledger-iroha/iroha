@@ -19,7 +19,6 @@ description: Catalogue de presets SNNet-17B1 pour relays core/home en production
 ---
 
 :::note Source canonique
-Cette page reflète `docs/source/soranet/constant_rate_profiles.md`. Gardez les deux copies alignees jusqu'a ce que l'ensemble legacy soit retire.
 :::
 
 SNNet-17B introduit des lanes de transport a taux fixe afin que les relays deplacent le trafic en cellules de 1,024 B quel que soit la taille du payload. Les operateurs choisissent parmi trois presets:

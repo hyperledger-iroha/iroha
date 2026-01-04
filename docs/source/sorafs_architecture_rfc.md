@@ -28,7 +28,6 @@ are covered in later tasks but inherit the data formats described here.
    alias hijack, stale/poisoned chunks) and assign clear responsibilities to
    manifests, gateways, and governance registries.
 5. **Migration-ready** – it must be possible to dual-publish docs/artifacts over
-   legacy hosting and SoraFS until Phase M2 completes, without forking pipelines.
 
 ## Non-goals
 
@@ -291,7 +290,6 @@ All manifests currently point at the `sorafs.sf1@1.0.0` descriptor (numeric
 
 1. A profile author drafts `ChunkerProfileProposalV1` specifying the new
    `(namespace, name, semver)` triple, CDC parameters, multihash code, and
-   compatibility window. The proposal bundles regenerated fixtures under
    `fixtures/sorafs_chunker/<namespace>.<name>@<semver>/`, Proof-of-Retrievability
    corpora, and cross-language diff reports. If aliases are defined, they MUST be
    listed alongside the canonical handle so provider adverts can propagate them
@@ -310,9 +308,7 @@ All manifests currently point at the `sorafs.sf1@1.0.0` descriptor (numeric
    valid and continue pointing at `sorafs.sf1@1.0.0` until they are rebuilt
    against the new profile.
 5. After two successful release trains, governance may mark the previous
-   profile as deprecated. Deprecation toggles the `status` field in the registry
    metadata; consumers must still accept historical manifests, but CI warns when
-   new pins target a deprecated profile.
 
 ### Hybrid Envelope Migration Plan
 
@@ -389,30 +385,9 @@ decryptors can round-trip without bespoke logic.
 
 ## Migration Roadmap
 
-The migration programme spans four milestones (M0–M3) and keeps legacy hosting,
 deterministic SoraFS pinning, and alias discovery in sync. Each subsection
 below details the expected owner actions and success criteria so downstream
 teams can execute in parallel without blocking the rollout.
-
-### Legacy Data Rewrap
-
-- **Inventory & tagging (M0).** Docs and artefact owners export SHA3-256 digests
-  of their legacy bundles and record them in `docs/source/sorafs/migration_ledger.md`
-  (append-only). The ledger tracks source location, original digest, and the
-  target SoraFS manifest CID once assigned.
-- **Deterministic rebuild (M0–M1).** Pipelines switch to
-  `sorafs_manifest_stub <dir> --car-out <file> --manifest-out <file> --manifest-signatures-out <file> --car-digest=<hex>`
-  (typically via `cargo run`) so the CDC chunker runs during every publication
-  and the emitted CAR digest is checked. Teams must store the emitted CAR,
-  manifest, and envelope under `artifacts/<team>/<alias>/<timestamp>/` while the
-  Pin Registry is still optional.
-- **Validation (M1).** Governance CI replays `sorafs_fetch --manifest <cid>`
-  against the staging gateway and confirms chunk boundaries match the reference
-  fixtures. Any drift is captured as an issue linked from the migration ledger.
-- **Cut-over (M2).** Once the Pin Registry goes live, the migration ledger entry
-  flips to `Pinned` and the legacy bundle is rewrapped with a manifest pointer
-  that references the registry slot. Legacy hosting remains in read-only mode
-  for 30 days before decommissioning.
 
 ### Deterministic Pinning Adoption
 
@@ -434,22 +409,15 @@ teams can execute in parallel without blocking the rollout.
 
 | Phase | Alias Source | Gateway Behaviour | Operator Action |
 |-------|--------------|-------------------|-----------------|
-| M0 | Legacy DNS + manual redirects | Gateways accept `Sora-Name` but treat envelopes as authoritative. | Maintain legacy CDN + update migration ledger entries. |
-| M1 | Dual DNS (legacy + Torii) | Gateways serve manifests from alias proofs when available; fall back to envelopes. | Register aliases in the Pin Registry and verify proofs during release testing. |
-| M2 | Torii + SoraDNS with registry proofs | Gateways require fresh alias proofs; legacy DNS is kept as a 30-day grace redirect. | Ensure CI fetches alias proofs (`sorafs alias verify`) and publish sunset notice for legacy URLs. |
-| M3 | Torii + SoraDNS only | Alias proofs must exist; envelopes are audit-only. | Decommission legacy DNS, rotate cached URLs, and update downstream SDK configs. |
 
 ### Downstream Change Log
 
 - **M0:** Teams consume new chunker fixtures; pipelines emit CAR + manifest
-  bundles alongside legacy artefacts; migration ledger entries created.
 - **M1:** CI enforces deterministic fixtures; alias proofs published in staging;
   docs tooling gains expectation flags on `sorafs_manifest_stub` (`--car-digest`,
   `--car-size`, `--root-cid`, etc.).
-- **M2:** Registry-backed pinning becomes the primary publication path; legacy
   assets switch to read-only; gateways prefer registry proofs over envelopes.
 - **M3:** Alias-only access enforced; observability alerts on registry parity;
-  legacy CDN shutdown window executed.
 
 The change log above is mirrored in `docs/source/sorafs/migration_ledger.md` so
 SDK and operator teams can subscribe to updates. Future adjustments MUST update
@@ -550,12 +518,8 @@ revealing sensitive data retroactively.
 - Manifest digests do not expose plaintext; sensitive blobs remain in chunk
   payloads. Even so, SF-4b introduces hybrid KEM/DEM (X25519 + ML-KEM-768 over
   ChaCha20-Poly1305) envelopes so that payloads remain confidential under PQ
-  threat models. This RFC mandates the migration path and compatibility shim.
 - Governance policy documents rotation intervals for hybrid envelopes; new
-  manifests MUST prefer the hybrid profile once SF-4b ships, and legacy
   manifests require explicit council waivers.
-- Gateways log whether a request was served via legacy or hybrid envelopes. Ops
-  teams can alert on legacy access to enforce prompt migration.
 - Manifests carry classification metadata (`sensitivity`, `retention_epoch`)
   so CLI and SDK tooling can warn when ciphertext sits beyond its approved
   cryptoperiod.
@@ -586,7 +550,6 @@ Operational expectations:
   - Land reference chunker crate + Norito manifest schema in workspace.
   - Ship `sorafs_manifest_stub` CLI plumbing that emits CAR + manifest + digest file.
   - Stand up a single-node gateway that serves from local disk; publish docs via
-    both legacy hosting and the gateway.
 - **M1 (Weeks 7–12):**
   - Deploy Pin Registry smart contract with manifest digest verification.
   - Finalise the pin registry Norito schemas in
@@ -599,7 +562,6 @@ Operational expectations:
     nodes and gateways.
   - Integrate preliminary deal engine skeleton so governance can schedule
     replicas per storage class.
-  - Enable dual-serve migration playbook (legacy + SoraFS) for docs.
 - **M3 (Week 21+):**
   - Roll out probabilistic payments and PoR automation (handoff to SF-8/SF-9).
   - Anycast the gateway fleet and finish rollout of alias-only access for docs.

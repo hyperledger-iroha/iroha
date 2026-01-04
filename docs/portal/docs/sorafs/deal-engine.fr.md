@@ -19,7 +19,6 @@ description: Vue d'ensemble du moteur d'accords SF-8, de l'intégration Torii et
 ---
 
 :::note Source canonique
-Cette page reflète `docs/source/sorafs/deal_engine.md`. Gardez les deux emplacements alignés tant que la documentation legacy reste active.
 :::
 
 # Moteur d'accords SoraFS

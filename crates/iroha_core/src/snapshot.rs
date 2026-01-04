@@ -13,7 +13,7 @@ use iroha_config::{
     snapshot::Mode,
 };
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature};
-use iroha_data_model::block::BlockHeader;
+use iroha_data_model::{ChainId, block::BlockHeader};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use norito::json::{self, JsonDeserialize, JsonSerialize, JsonSerialize as JsonSerializeTrait};
@@ -36,6 +36,10 @@ impl JsonSerializeTrait for State {
         let prev_commit_topology = view.prev_commit_topology.to_vec();
 
         out.push('{');
+        json::write_json_string("chain_id", out);
+        out.push(':');
+        json::JsonSerialize::json_serialize(&self.chain_id, out);
+        out.push(',');
         json::write_json_string("world", out);
         out.push(':');
         self.world.json_serialize(out);
@@ -431,6 +435,7 @@ pub fn try_read_snapshot(
     BlockCount(block_count): BlockCount,
     merkle_chunk_size: NonZeroUsize,
     verification_key: &PublicKey,
+    expected_chain_id: &ChainId,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
 ) -> Result<State, TryReadError> {
     let mut bytes = Vec::new();
@@ -513,6 +518,12 @@ pub fn try_read_snapshot(
     let state = seed
         .into_state_from_json(value)
         .map_err(TryReadError::Serialization)?;
+    if &state.chain_id != expected_chain_id {
+        return Err(TryReadError::ChainIdMismatch {
+            expected: expected_chain_id.clone(),
+            actual: state.chain_id.clone(),
+        });
+    }
     let (snapshot_height, snapshot_hashes) = {
         let state_view = state.view();
         let hashes = state_view.block_hashes.iter().copied().collect::<Vec<_>>();
@@ -528,7 +539,7 @@ pub fn try_read_snapshot(
         let height = idx + 1;
         let kura_block = kura
             .get_block(NonZeroUsize::new(height).expect("iterating from 1"))
-            .expect("Kura has height at least as large as state height");
+            .ok_or(TryReadError::MissingBlock { height })?;
         if kura_block.hash() != snapshot_block_hash {
             if height == snapshot_height {
                 iroha_logger::warn!(
@@ -690,6 +701,13 @@ pub enum TryReadError {
         /// Reason the Merkle verification failed.
         reason: String,
     },
+    /// Snapshot chain id mismatch (expected `{expected}`, got `{actual}`)
+    ChainIdMismatch {
+        /// Expected chain id from configuration.
+        expected: ChainId,
+        /// Chain id recorded in the snapshot payload.
+        actual: ChainId,
+    },
     /// Snapshot is in a non-consistent state. Snapshot has greater height (`snapshot_height`) than kura block store (`kura_height`)
     MismatchedHeight {
         /// The amount of block hashes stored by snapshot
@@ -705,6 +723,11 @@ pub enum TryReadError {
         snapshot_block_hash: HashOf<BlockHeader>,
         /// Hash of the block stored in kura
         kura_block_hash: HashOf<BlockHeader>,
+    },
+    /// Snapshot is in a non-consistent state. Kura is missing block `height`.
+    MissingBlock {
+        /// Height of the missing block in [`Kura`].
+        height: usize,
     },
     /// Failed to reconcile snapshot state with Kura while committing a block revert
     StateCommit(TransactionsBlockError),
@@ -762,8 +785,8 @@ enum TryWriteError {
 mod tests {
     use std::{fs::File, io::Write, num::NonZeroUsize};
 
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::peer::PeerId;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::{ChainId, peer::PeerId};
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
     use tokio::test;
@@ -774,15 +797,18 @@ mod tests {
     };
 
     const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
+    const TEST_CHAIN_ID: &str = "test-chain";
 
     fn state_factory() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        State::new(
+        let mut state = State::new(
             crate::queue::tests::world_with_test_domains(),
             kura,
             query_handle,
-        )
+        );
+        state.chain_id = ChainId::from(TEST_CHAIN_ID);
+        state
     }
 
     #[test]
@@ -812,6 +838,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -823,6 +850,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let key_pair = KeyPair::random();
+        let chain_id = ChainId::from(TEST_CHAIN_ID);
 
         let Err(error) = try_read_snapshot(
             store_dir,
@@ -831,6 +859,7 @@ mod tests {
             BlockCount(15),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -846,6 +875,7 @@ mod tests {
         let store_dir = tmp_root.path().join("snapshot");
         std::fs::create_dir(&store_dir).unwrap();
         let key_pair = KeyPair::random();
+        let chain_id = ChainId::from(TEST_CHAIN_ID);
         let corrupted = [1, 4, 1, 2, 3, 4, 1, 4];
         {
             let mut file = File::create(store_dir.join(SNAPSHOT_FILE_NAME)).unwrap();
@@ -872,6 +902,7 @@ mod tests {
             BlockCount(15),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -899,6 +930,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -906,6 +938,66 @@ mod tests {
         };
 
         assert!(matches!(error, TryReadError::ChecksumMismatch { .. }));
+    }
+
+    #[test]
+    async fn chain_id_mismatch_rejected() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+        let expected_chain_id = ChainId::from("other-chain");
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let Err(error) = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &expected_chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        ) else {
+            panic!("should not be ok")
+        };
+
+        assert!(matches!(error, TryReadError::ChainIdMismatch { .. }));
+    }
+
+    #[test]
+    async fn missing_kura_block_is_reported() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; 32]));
+
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push(hash);
+            block_hashes.commit_for_tests();
+        }
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let Err(error) = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(1),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        ) else {
+            panic!("missing Kura block should error");
+        };
+
+        assert!(matches!(error, TryReadError::MissingBlock { height: 1 }));
     }
 
     #[test]
@@ -925,6 +1017,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -951,6 +1044,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -983,6 +1077,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -1015,6 +1110,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -1115,6 +1211,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         )
@@ -1197,6 +1294,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             <_>::default(),
         )

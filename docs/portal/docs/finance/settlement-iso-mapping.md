@@ -6,7 +6,6 @@ description: Canonical mapping between Iroha settlement flows and the ISO 20022 
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/finance/settlement_iso_mapping.md`. Keep both versions in sync until the legacy docs retire.
 :::
 
 ## Settlement ↔ ISO 20022 Field Mapping

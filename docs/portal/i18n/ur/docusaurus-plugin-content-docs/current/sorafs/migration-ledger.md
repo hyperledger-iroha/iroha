@@ -22,11 +22,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 | سنگ میل | موثر مدت | تبدیلی کا خلاصہ | متاثرہ ٹیمیں | ایکشن آئٹمز | حیثیت |
 |---------|----------|-----------------|--------------|-------------|-------|
-| M0 | ہفتے 1–6 | Chunker fixtures شائع ہوئے؛ pipelines CAR + manifest bundles legacy artefacts کے ساتھ emit کرتے ہیں؛ مائیگریشن لیجر اندراجات بنائے گئے۔ | Docs, DevRel, SDKs | `sorafs_manifest_stub` کو expectation flags کے ساتھ اپنائیں، اس لیجر میں اندراجات ریکارڈ کریں، legacy CDN برقرار رکھیں۔ | ✅ فعال |
 | M1 | ہفتے 7–12 | CI deterministic fixtures نافذ کرتا ہے؛ alias proofs staging میں دستیاب ہیں؛ tooling explicit expectation flags دیتا ہے۔ | Docs, Storage, Governance | Fixtures کو signed رکھیں، staging registry میں aliases رجسٹر کریں، release checklists کو `--car-digest/--root-cid` enforcement کے ساتھ اپڈیٹ کریں۔ | ⏳ زیر التوا |
-| M2 | ہفتے 13–20 | Registry-backed pinning بنیادی راستہ بن جاتا ہے؛ legacy artefacts read-only ہو جاتے ہیں؛ gateways registry proofs کو ترجیح دیتے ہیں۔ | Storage, Ops, Governance | Pinning کو registry کے ذریعے چلائیں، legacy hosts freeze کریں، operators کے لیے migration notices شائع کریں۔ | ⏳ زیر التوا |
-| M3 | ہفتہ 21+ | صرف alias-based رسائی نافذ؛ observability registry parity پر الرٹ کرتی ہے؛ legacy CDN بند کیا جاتا ہے۔ | Ops, Networking, SDKs | legacy DNS ہٹائیں، cached URLs rotate کریں، parity dashboards مانیٹر کریں، SDK defaults اپڈیٹ کریں۔ | ⏳ زیر التوا |
-| R0–R3 | 2025-03-31 → 2025-07-01 | Provider advert enforcement phases: R0 observe, R1 warn, R2 canonical handles/capabilities نافذ، R3 legacy payloads purge۔ | Observability, Ops, SDKs, DevRel | `grafana_sorafs_admission.json` امپورٹ کریں، `provider_advert_rollout.md` کی operator checklist فالو کریں، R2 گیٹ سے 30+ دن پہلے advert renewals stage کریں۔ | ⏳ زیر التوا |
 
 گورننس control plane کی minutes جو ان milestones کو حوالہ دیتی ہیں `docs/source/sorafs/` کے تحت
 موجود ہیں۔ ٹیموں کو ہر قطار کے نیچے dated bullet points شامل کرنے چاہئیں جب نمایاں واقعات

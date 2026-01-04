@@ -1073,21 +1073,26 @@ NODE
 GATEWAY_BINDING_JSON="${SORA_DIR}/portal.gateway.binding.json"
 GATEWAY_HEADERS="${SORA_DIR}/portal.gateway.headers.txt"
 binding_args=(
-  "--manifest-json=${MANIFEST_JSON}"
-  "--json-out=${GATEWAY_BINDING_JSON}"
-  "--headers-out=${GATEWAY_HEADERS}"
+  "--manifest" "${MANIFEST_JSON}"
+  "--json-out" "${GATEWAY_BINDING_JSON}"
+  "--headers-out" "${GATEWAY_HEADERS}"
 )
 if [[ -n "${PRIMARY_ALIAS}" ]]; then
-  binding_args+=( "--alias=${PRIMARY_ALIAS}" )
+  binding_args+=( "--alias" "${PRIMARY_ALIAS}" )
 fi
 if [[ -n "${DNS_HOSTNAME}" ]]; then
-  binding_args+=( "--hostname=${DNS_HOSTNAME}" )
+  binding_args+=( "--hostname" "${DNS_HOSTNAME}" )
 fi
 if [[ -n "${PROPOSAL_ALIAS}" ]]; then
-  binding_args+=( "--route-label=${PROPOSAL_ALIAS}" )
+  binding_args+=( "--route-label" "${PROPOSAL_ALIAS}" )
+fi
+if [[ -n "${ROUTE_PROOF_STATUS}" ]]; then
+  binding_args+=( "--proof-status" "${ROUTE_PROOF_STATUS}" )
 fi
 log "Rendering gateway header template (${GATEWAY_HEADERS})"
-if ! node docs/portal/scripts/generate-gateway-binding.mjs "${binding_args[@]}"; then
+if [[ -z "${PRIMARY_ALIAS}" || -z "${DNS_HOSTNAME}" ]]; then
+  log "warning: skipped gateway binding headers (missing --alias or --dns-hostname)"
+elif ! cargo xtask soradns-binding-template "${binding_args[@]}"; then
   log "warning: failed to generate gateway binding headers"
 fi
 

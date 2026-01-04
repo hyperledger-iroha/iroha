@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Канонический источник
-Эта страница отражает `docs/source/sorafs/developer/sdk/index.md`. Держите обе копии синхронизированными, пока legacy набор Sphinx не будет выведен из эксплуатации.
 :::
 
 Используйте этот хаб, чтобы отслеживать language helpers, поставляемые с toolchain SoraFS.

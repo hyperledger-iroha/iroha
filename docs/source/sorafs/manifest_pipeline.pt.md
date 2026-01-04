@@ -76,8 +76,7 @@ Quando `--manifest-signatures-out` é fornecido (junto com pelo menos um flag
 `manifest_signatures.json` contendo o digest BLAKE3 do manifesto, o digest SHA3-256
 agregado do plano de chunks (offsets, comprimentos e digests BLAKE3 de chunks) e as
 assinaturas do conselho fornecidas. O envelope agora registra o perfil de chunker na
-forma canônica `namespace.name@semver`; envelopes antigos `namespace-name` continuam
-válidos por compatibilidade. A automação downstream pode publicar o envelope nos logs de
+forma canônica `namespace.name@semver`. A automação downstream pode publicar o envelope nos logs de
 governança ou distribuí-lo com os artefatos de manifesto e CAR. Quando você receber um
 envelope de um signatário externo, adicione `--manifest-signatures-in=<path>` para que a
 CLI confirme os digests e verifique cada assinatura Ed25519 contra o digest do manifesto
@@ -108,8 +107,7 @@ Use `--chunk-fetch-plan-out=path` para persistir a especificação ordenada de f
 manifesto. Clientes multi-origem podem alimentar o JSON resultante diretamente no
 orquestrador de fetch do SoraFS sem reler o payload de origem. O relatório JSON impresso
 pela CLI também inclui esse array em `chunk_fetch_specs`. Tanto a seção `chunking` quanto o
-objeto `manifest` expõem `profile_aliases` ao lado do handle `profile` canônico para que
-os SDKs migrem da forma legada `namespace-name` sem perder compatibilidade.
+objeto `manifest` expõem `profile_aliases` ao lado do handle `profile` canônico.
 
 Ao reexecutar o stub (por exemplo em CI ou em um pipeline de release) você pode
 passar `--plan=chunk_fetch_specs.json` ou `--plan=-` para importar a especificação
@@ -148,7 +146,7 @@ fluxo blue/green completo).
 Se você passar `--provider-advert=name=/path/to/advert.to`, a CLI agora decodifica o envelope
 Norito, verifica a assinatura Ed25519 e exige que o provedor anuncie a capacidade
 `chunk_range_fetch`. Isso mantém a simulação de fetch multi-origem alinhada com a política
-de admissão de governança e evita o uso acidental de provedores legados que não conseguem
+de admissão de governança e evita o uso acidental de provedores que não conseguem
 atender a requisições de chunk por intervalo.
 
 O sufixo `#N` aumenta o limite de concorrência do provedor, enquanto `@W` define o peso de

@@ -40,8 +40,8 @@ Cada perfil que entra en el registro debe:
   arquitecturas;
 - entregar fixtures reproducibles (JSON Rust/Go/TS + corpora fuzz + testigos PoR) que
   los SDKs downstream puedan verificar sin tooling a medida;
-- incluir metadatos listos para gobernanza (namespace, name, semver) junto con guía de migración
-  y ventanas de compatibilidad; y
+- incluir metadatos listos para gobernanza (namespace, name, semver) junto con guía de rollout
+  y ventanas operativas; y
 - pasar la suite de diff determinista antes de la revisión del consejo.
 
 Sigue el checklist de abajo para preparar una propuesta que cumpla esas reglas.
@@ -169,50 +169,6 @@ Las propuestas se envían como registros Norito `ChunkerProfileProposalV1` regis
 `docs/source/sorafs/proposals/`. La plantilla JSON de abajo ilustra la forma esperada
 (sustituye tus valores según sea necesario):
 
-```json
-{
-  "ChunkerProfileProposalV1": {
-    "namespace": "sorafs",
-    "name": "sf2",
-    "semver": "1.0.0",
-    "reserved_profile_id": 2,
-    "profile": {
-      "min_size": 65536,
-      "target_size": 262144,
-      "max_size": 524288,
-      "break_mask": "0x0000ffff",
-      "polynomial": "0x3da3358b4dc173",
-      "gear_seed": "sorafs-v2-gear"
-    },
-    "chunk_multihash": {
-      "code": 31,
-      "digest": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
-    },
-    "profile_aliases": ["sorafs.sf2", "sorafs-sf2"],
-    "fixtures_root": "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/",
-    "por_seed": "0xfeedbeefcafebabe",
-    "compatibility": {
-      "supersedes": ["sorafs.sf1@1.0.0"],
-      "grace_epochs": 2,
-      "notes": "Carry envelopes for sf1 during dual-publish window."
-    },
-    "artifacts": {
-      "chunk_boundaries": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.json",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.ts",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.go"
-      ],
-      "fuzz_corpora": [
-        "fuzz/sorafs_chunker/sf2_backpressure.json"
-      ],
-      "por_witnesses": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/por_samples.json"
-      ]
-    },
-    "determinism_report": "docs/source/sorafs/reports/sf2_determinism.md"
-  }
-}
-```
 
 Proporciona un reporte Markdown correspondiente (`determinism_report`) que capture la
 salida de comandos, los digests de chunk y cualquier desviación encontrada durante la validación.
@@ -231,14 +187,13 @@ salida de comandos, los digests de chunk y cualquier desviación encontrada dura
    CLI por defecto permanece en el perfil previo hasta que la gobernanza declare la migración
    lista.
 5. **Seguimiento de deprecación.** Después de la ventana de migración, actualiza el registro
-   para marcar los perfiles sustituidos como deprecated y notifica a los operadores vía el
    migration ledger.
 
 ## Consejos de autoría
 
 - Prefiere límites de potencia de dos pares para minimizar comportamiento de chunking en casos borde.
 - Evita cambiar el código multihash sin coordinar consumidores de manifest y gateway; incluye una
-  nota de compatibilidad cuando lo hagas.
+  nota operativa cuando lo hagas.
 - Mantén las seeds de la tabla gear legibles para humanos pero globalmente únicas para simplificar
   auditorías.
 - Guarda cualquier artefacto de benchmarking (p. ej., comparaciones de throughput) bajo

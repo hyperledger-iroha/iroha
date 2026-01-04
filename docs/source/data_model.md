@@ -156,7 +156,6 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 - Default executor behavior: the built-in executor in `iroha_core` does not execute `CustomInstruction` and will panic if encountered. A custom executor must downcast `InstructionBox` to `CustomInstruction` and deterministically interpret the payload on all validators.
 - Norito: encodes/decodes via `norito::codec::{Encode, Decode}` with schema included; the `Json` payload is serialized deterministically. Round-trips are stable so long as the instruction registry includes `CustomInstruction` (it is part of the default registry).
 - IVM: Kotodama compiles to IVM bytecode (`.to`) and is the recommended path for application logic. Only use `CustomInstruction` for executor-level extensions that cannot yet be expressed in Kotodama. Ensure determinism and identical executor binaries across peers.
-- Announcing support: populate `ExecutorDataModel::instructions` with your custom identifiers during migration so clients and peers can validate compatibility.
 - Not for public networks: do not use for public chains where heterogeneous executors risk consensus forks. Prefer proposing new built-in ISI upstream when you need platform features.
 
 ## Metadata
@@ -247,7 +246,6 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 - Multi-signatory accounts remain future work (tracked under the governance backlog). When the specification lands, update the `AccountId` documentation here to cover the new forms and verification logic.
 - Query DSL: consider documenting a stable user-facing subset and examples for common filters/selectors.
 - Instruction families: expand public docs listing the built-in ISI variants exposed by `mint_burn`, `register`, `transfer`.
-- Executor data model: we can add guidance on versioning and compatibility of custom parameters/permissions across executor upgrades.
 
 ---
 If any part needs more depth (e.g., full ISI catalog, complete query registry list, or block header fields), let me know and I’ll extend those sections accordingly.

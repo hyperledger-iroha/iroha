@@ -45,7 +45,6 @@ signals across SDKs without exposing raw identifiers.
   files (`dashboards/data/swift_salt_status.sample.json`), the override ledger, and (optionally)
   a `telemetry-schema-diff` JSON report so `schema_policy_violations` surface on the dashboard; run
   `python3 scripts/swift_status_export.py telemetry-override {list,create,revoke}` to manage overrides
-  (the legacy `scripts/swift_telemetry_override.py` wrapper remains available).
 - `docs/source/sdk/swift/telemetry_chaos_checklist.md` documents the override/salt drift rehearsal
   steps so IOS7 readiness evidence stays reproducible.
 
@@ -148,7 +147,6 @@ Any new Swift bucket must be added to the alignment document and schema samples
 3. **Override tooling:** ✅ Completed — `python3
    scripts/swift_status_export.py telemetry-override {list,create,revoke}`
    wraps the existing ledger helper so support engineers can raise temporary
-   overrides without manual Norito crafting (the legacy
    `scripts/swift_telemetry_override.py` entry remains available). Owner:
    Docs/Support.
 4. **CI adoption:** Update `ci/xcframework-smoke.yml` to assert the new metrics

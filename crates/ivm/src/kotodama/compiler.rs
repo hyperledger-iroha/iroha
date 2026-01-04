@@ -383,7 +383,7 @@ impl Default for CompilerOptions {
 #[cfg(test)]
 mod tests {
     use super::{Compiler, CompilerOptions, DEFAULT_MAX_CYCLES, pointer_type_for_kind};
-    use crate::{IVM, pointer_abi::PointerType};
+    use crate::{IVM, encoding, instruction, pointer_abi::PointerType};
 
     #[test]
     fn pointer_types_cover_all_data_ref_kinds() {
@@ -418,6 +418,40 @@ mod tests {
         let opts = CompilerOptions::default();
         assert_eq!(opts.max_cycles, DEFAULT_MAX_CYCLES);
         assert!(opts.max_cycles > 0);
+    }
+
+    #[test]
+    fn detect_vector_usage_includes_vector_gated_crypto_ops() {
+        let ops = [
+            instruction::wide::crypto::SHA256BLOCK,
+            instruction::wide::crypto::AESENC,
+            instruction::wide::crypto::AESDEC,
+        ];
+        for op in ops {
+            let word = encoding::wide::encode_rr(op, 0, 0, 0);
+            let code = word.to_le_bytes();
+            assert!(
+                super::detect_vector_usage(&code),
+                "expected vector usage for opcode {op:#04x}"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_zk_usage_includes_zk_ops() {
+        let ops = [
+            instruction::wide::zk::ASSERT,
+            instruction::wide::zk::ASSERT_EQ,
+            instruction::wide::zk::FADD,
+        ];
+        for op in ops {
+            let word = encoding::wide::encode_rr(op, 0, 0, 0);
+            let code = word.to_le_bytes();
+            assert!(
+                super::detect_zk_usage(&code),
+                "expected zk usage for opcode {op:#04x}"
+            );
+        }
     }
 
     #[test]
@@ -3846,6 +3880,7 @@ impl Compiler {
         }
 
         uses_vector_global |= detect_vector_usage(&code);
+        uses_zk_global |= detect_zk_usage(&code);
 
         // Build metadata and finalize program (with data appended).
         // Resolve mode bits: program usage OR forced by options OR contract meta
@@ -4602,13 +4637,16 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
 }
 
 fn detect_vector_usage(code: &[u8]) -> bool {
-    const VECTOR_OPS: [u8; 11] = [
+    const VECTOR_OPS: [u8; 14] = [
         instruction::wide::crypto::VADD32,
         instruction::wide::crypto::VADD64,
         instruction::wide::crypto::VAND,
         instruction::wide::crypto::VXOR,
         instruction::wide::crypto::VOR,
         instruction::wide::crypto::VROT32,
+        instruction::wide::crypto::SHA256BLOCK,
+        instruction::wide::crypto::AESENC,
+        instruction::wide::crypto::AESDEC,
         instruction::wide::crypto::SETVL,
         instruction::wide::crypto::PARBEGIN,
         instruction::wide::crypto::PAREND,
@@ -4619,6 +4657,23 @@ fn detect_vector_usage(code: &[u8]) -> bool {
         let word = u32::from_le_bytes(chunk.try_into().expect("word chunk"));
         let opcode = instruction::wide::opcode(word);
         VECTOR_OPS.contains(&opcode)
+    })
+}
+
+fn detect_zk_usage(code: &[u8]) -> bool {
+    const ZK_OPS: [u8; 7] = [
+        instruction::wide::zk::ASSERT,
+        instruction::wide::zk::ASSERT_EQ,
+        instruction::wide::zk::FADD,
+        instruction::wide::zk::FSUB,
+        instruction::wide::zk::FMUL,
+        instruction::wide::zk::FINV,
+        instruction::wide::zk::ASSERT_RANGE,
+    ];
+    code.chunks_exact(4).any(|chunk| {
+        let word = u32::from_le_bytes(chunk.try_into().expect("word chunk"));
+        let opcode = instruction::wide::opcode(word);
+        ZK_OPS.contains(&opcode)
     })
 }
 

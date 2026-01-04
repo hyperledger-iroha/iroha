@@ -98,7 +98,6 @@ SDKs). Impone las invariantes de alias y handle verificadas por
 5. **Deprecación / Retiro**
    - Las propuestas que sustituyen un perfil existente deben incluir una ventana de publicación
      dual (periodos de gracia) y un plan de actualización.
-   - Tras expirar la ventana de gracia, marca el perfil sustituido como deprecated
      en el registro y actualiza el ledger de migración.
 
 6. **Cambios de emergencia**

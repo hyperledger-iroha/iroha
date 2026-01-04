@@ -4457,13 +4457,11 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
 }
 
 fn decode_evidence_hex(value: &str) -> Result<ConsensusEvidence, Error> {
-    use norito::codec::DecodeAll as _;
-
-    let trimmed = value.trim();
-    let body = trimmed
+    let cleaned: String = value.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let body = cleaned
         .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .unwrap_or(trimmed);
+        .or_else(|| cleaned.strip_prefix("0X"))
+        .unwrap_or(cleaned.as_str());
     let bytes = hex::decode(body).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -4471,8 +4469,7 @@ fn decode_evidence_hex(value: &str) -> Result<ConsensusEvidence, Error> {
             )),
         ))
     })?;
-    let mut slice: &[u8] = &bytes;
-    ConsensusEvidence::decode_all(&mut slice).map_err(|err| {
+    norito::decode_from_bytes::<ConsensusEvidence>(&bytes).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
                 "evidence_hex decode: {err}"
@@ -4680,7 +4677,7 @@ mod evidence_submit_tests {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let ev = sample_evidence(&chain_id, &keypair);
-        let encoded = norito::codec::Encode::encode(&ev);
+        let encoded = norito::to_bytes(&ev).expect("encode evidence");
         let plain = hex::encode(&encoded);
         let prefixed = format!("0x{plain}");
 
@@ -4704,7 +4701,12 @@ mod evidence_submit_tests {
 
     #[test]
     fn decode_evidence_hex_rejects_truncated_payload() {
-        let truncated = hex::encode([0x01u8, 0x02u8]);
+        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let ev = sample_evidence(&chain_id, &keypair);
+        let mut encoded = norito::to_bytes(&ev).expect("encode evidence");
+        encoded.pop();
+        let truncated = hex::encode(&encoded);
         let err = decode_evidence_hex(&truncated).expect_err("expect decode failure");
         assert!(matches!(
             err,
@@ -4712,6 +4714,29 @@ mod evidence_submit_tests {
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
             ))
         ));
+    }
+
+    #[test]
+    fn decode_evidence_hex_ignores_whitespace() {
+        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let ev = sample_evidence(&chain_id, &keypair);
+        let encoded = norito::to_bytes(&ev).expect("encode evidence");
+        let hex = hex::encode(&encoded);
+        let mut spaced = String::from("0x");
+        for (idx, chunk) in hex.as_bytes().chunks(4).enumerate() {
+            if idx > 0 {
+                if idx % 2 == 0 {
+                    spaced.push('\n');
+                } else {
+                    spaced.push(' ');
+                }
+            }
+            spaced.push_str(std::str::from_utf8(chunk).expect("hex chunk"));
+        }
+
+        let decoded = decode_evidence_hex(&spaced).expect("decode spaced hex");
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
     }
 
     #[test]
@@ -35890,15 +35915,55 @@ pub mod event {
 
 /// Get running Iroha version (block header version).
 #[iroha_futures::telemetry_future]
-pub async fn handle_version(state: Arc<CoreState>) -> String {
+pub async fn handle_version(state: Arc<CoreState>) -> Response {
     use iroha_version::Version;
 
     let state_view = state.view();
-    state_view
-        .latest_block()
-        .expect("Genesis not applied. Nothing we can do. Solve the issue and rerun.")
-        .version()
-        .to_string()
+    let mut resp = match state_view.latest_block() {
+        Some(block) => Response::new(Body::from(block.version().to_string())),
+        None => {
+            let mut resp = Response::new(Body::from("genesis not applied"));
+            *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+            resp
+        }
+    };
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    resp
+}
+
+#[cfg(test)]
+mod version_tests {
+    use http_body_util::BodyExt as _;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn handle_version_reports_unavailable_without_genesis() {
+        let state = Arc::new(CoreState::new_for_testing(
+            World::default(),
+            Arc::new(Kura::blank_kura_for_testing()),
+            LiveQueryStore::start_test(),
+        ));
+        let response = handle_version(state).await;
+        let (parts, body) = response.into_parts();
+        assert_eq!(parts.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            parts
+                .headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/plain; charset=utf-8"),
+        );
+        let body_bytes = body.collect().await.expect("collect body").to_bytes();
+        assert_eq!(
+            std::str::from_utf8(&body_bytes).expect("utf8"),
+            "genesis not applied"
+        );
+    }
 }
 
 /// List supported Torii API versions and defaults.
@@ -36912,7 +36977,7 @@ mod event_stream_tests {
         nexus::{DataSpaceId, LaneId},
         transaction::SignedTransaction,
     };
-    use norito::codec::{DecodeAll as _, Encode as _};
+    use norito::{decode_from_bytes, to_bytes};
     use tokio::{net::TcpListener, sync::Mutex};
 
     use super::event::handle_events_stream_with_receiver;
@@ -36977,7 +37042,7 @@ mod event_stream_tests {
         let sub = EventSubscriptionRequest(vec![EventFilterBox::Pipeline(
             TransactionEventFilter::default().for_hash(hash).into(),
         )]);
-        let sub_bytes = sub.encode();
+        let sub_bytes = to_bytes(&sub).expect("encode subscription");
         ws_stream
             .send(tokio_tungstenite::tungstenite::Message::Binary(
                 sub_bytes.into(),
@@ -36989,8 +37054,8 @@ mod event_stream_tests {
         while let Some(msg) = ws_stream.next().await {
             let msg = msg.expect("ws message");
             if let tokio_tungstenite::tungstenite::Message::Binary(bytes) = msg {
-                let mut slice: &[u8] = bytes.as_ref();
-                let event_msg = EventMessage::decode_all(&mut slice).expect("decode event message");
+                let event_msg: EventMessage =
+                    decode_from_bytes(bytes.as_ref()).expect("decode event message");
                 let event_box: EventBox = event_msg.into();
                 if let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event_box {
                     got_event = Some(event);

@@ -1043,6 +1043,7 @@ impl CoreHost {
             UnknownSyscall(_) => "unknown_syscall",
             PrivacyViolation => "privacy_violation",
             VectorExtensionDisabled => "vector_disabled",
+            ZkExtensionDisabled => "zk_disabled",
             _ => "other",
         }
     }

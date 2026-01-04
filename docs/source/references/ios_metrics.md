@@ -111,7 +111,6 @@ highlight trend regressions.
 - Telemetry collector: `scripts/swift_collect_redaction_status.py --salt-config dashboards/data/swift_salt_status.sample.json --overrides-store artifacts/swift_telemetry_overrides.json`
   produces the telemetry JSON block automatically from salt/override sources. CI can point the `SWIFT_TELEMETRY_*`
   environment variables at live files and let the collector feed the enrichment step.
-- Override CLI: `python3 scripts/swift_status_export.py telemetry-override {list,create,revoke}` (or the legacy `scripts/swift_telemetry_override.py`)
   maintains the local override ledger (`artifacts/swift_telemetry_overrides.json`)
   so support engineers can track masked actor roles, reasons, and expirations that surface in the telemetry block.
 - Connect telemetry readiness: exporters should set `connect_metrics_present` in the telemetry block to reflect whether

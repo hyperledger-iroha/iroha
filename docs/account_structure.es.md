@@ -27,7 +27,7 @@ cuentas para proporcionar:
   ofrece formas textuales deterministas aptas para la interoperabilidad.
 - Identificadores de dominio globalmente únicos, respaldados por un registro
   que pueda consultarse a través de Nexus para enrutamiento entre cadenas.
-- Capas de compatibilidad que mantengan funcionando los alias de enrutamiento
+- Capas de transición que mantengan funcionando los alias de enrutamiento
   `alias@domain` mientras migramos wallets, APIs y contratos al nuevo formato.
 
 ## Motivación
@@ -38,7 +38,7 @@ enrutamiento en bruto `alias@domain`. Eso presenta dos problemas principales:
 1. **Sin anclaje de red.** La cadena de texto no incluye ni checksum ni
    prefijo de red, de modo que un usuario puede pegar una dirección de otra
    red sin recibir feedback inmediato. La transacción acabará siendo rechazada
-   (incompatibilidad de `chain_id`) o, peor aún, podría aplicarse sobre una
+   (desajuste de `chain_id`) o, peor aún, podría aplicarse sobre una
    cuenta diferente si el destino existe localmente.
 2. **Colisión de dominios.** Los dominios son solo namespaces y pueden
    reutilizarse en cada cadena. La federación de servicios (custodios, puentes,
@@ -57,7 +57,7 @@ la cadena autorizada.
   dirección y definir su proceso de gobernanza/registro.
 - Describir cómo introducir un registro de dominios global sin romper
   despliegues existentes y especificar reglas de normalización/anti‑spoofing.
-- Documentar expectativas de compatibilidad, pasos de migración y cuestiones
+- Documentar expectativas operativas, pasos de migración y cuestiones
   abiertas.
 
 ## No‑objetivos
@@ -516,11 +516,9 @@ reconstruirse la traza de auditoría offline.
    JSON expone el dominio vía `input_domain` y `--append-domain` reproduce la
    codificación convertida como `<ih58>@wonderland` para actualizar el
    manifiesto. Para exportaciones orientadas a líneas, use
-   `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`
    para convertir masivamente selectores Local en formas IH58 canónicas (o
    comprimidas/hex/JSON), omitiendo filas no locales. Para evidencia apta para
    hojas de cálculo, ejecute
-   `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
    y genere un CSV (`input,status,format,domain_kind,…`) que destaque
    selectores Local, codificaciones canónicas y fallos de parse en un único
    archivo.

@@ -18,7 +18,6 @@ translator: manual
 
 ### טיימאאוט DA והתראות
 
-כאשר `da_enabled=true`, צינור הקומיט רושם עדות זמינות (`AvailabilityQC` או קוורום RBC `READY`; לא `DELIVER` מקומי). הקונצנזוס לא ממתין לעדות הזמינות: הקומיט מתקדם לפי ה-QC הרגיל, וחוסר זמינות נרשם לצרכים תפעוליים. `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` גדל, ו-`status_snapshot().da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
 
 טיימאאוט הזמינות נגזר מזמני block/commit ומכווני ה-DA, ומשמש רק ללוגים ולהחלטות rebroadcast:
 - `sumeragi.da_quorum_timeout_multiplier` מקדם את `block_time + 4 * commit_time` כאשר DA פעיל (ברירת מחדל `3`).

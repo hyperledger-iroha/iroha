@@ -95,17 +95,16 @@ Notas:
   alineación:
   - Normalizar la serialización de la clave secreta a la salida canónica de
     32 bytes little‑endian que entienden tanto `w3f-bls` como `blstrs`
-    (`Scalar::to_bytes_le`), abandonando el helper legacy de endianness mixto.
   - Exponer un wrapper explícito para compresión de claves públicas reutilizando
     `blstrs::G1Affine::to_compressed` y añadiendo una comprobación de
-    compatibilidad frente a la codificación de w3f para garantizar bytes en
+    coherencia frente a la codificación de w3f para garantizar bytes en
     el wire idénticos.
   - Añadir fixtures de round‑trip en
     `crates/iroha_crypto/tests/bls_backend_compat.rs` que derivan claves una
     sola vez y aseguran la igualdad entre ambos backends, cubriendo
     `SecretKey`, `PublicKey` y agregación de firmas.
   - Proteger el nuevo backend detrás de `bls-backend-blstrs` en CI, pero
-    mantener las pruebas de compatibilidad ejecutándose también para el backend
+    mantener las pruebas de coherencia ejecutándose también para el backend
     por defecto, de modo que se detecten regresiones antes de cambiar de
     backend.
 

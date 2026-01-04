@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Source canonique
-Cette page reflète `docs/source/sorafs/chunker_conformance.md`. Gardez les deux versions synchronisées jusqu'à la retraite des docs legacy.
 :::
 
 Ce guide codifie les exigences que chaque implémentation doit suivre pour rester
@@ -21,7 +20,6 @@ les consommateurs de fixtures dans les SDKs restent synchronisés.
 
 ## Profil canonique
 
-- Handle de profil : `sorafs.sf1@1.0.0` (alias legacy `sorafs.sf1@1.0.0`)
 - Seed d'entrée (hex) : `0000000000dec0ded`
 - Taille cible : 262144 bytes (256 KiB)
 - Taille minimum : 65536 bytes (64 KiB)
@@ -40,7 +38,6 @@ fixtures et émet les fichiers suivants sous `fixtures/sorafs_chunker/` :
 
 - `sf1_profile_v1.{json,rs,ts,go}` — limites de chunks canoniques pour les
   consommateurs Rust, TypeScript et Go. Chaque fichier annonce le handle canonique
-  comme première entrée de `profile_aliases`, suivi des alias legacy (ex.,
   `sorafs.sf1@1.0.0`, puis `sorafs.sf1@1.0.0`). L'ordre est imposé par
   `ensure_charter_compliance` et NE DOIT PAS être modifié.
 - `manifest_blake3.json` — manifest vérifié BLAKE3 couvrant chaque fichier de fixtures.

@@ -97,7 +97,6 @@ follow the steps below.
   latest manifest bundle following the
   [`address_manifest_ops.md`](../runbooks/address_manifest_ops.md) runbook.
 - Use `scripts/address_local_toolkit.sh audit --input <file>` (doc:
-  `local_to_global_toolkit.md`) to ensure no legacy Local‑8 selectors or custom
   manifests reintroduced truncated digests.
 
 ### 4.4 Malicious or malformed traffic

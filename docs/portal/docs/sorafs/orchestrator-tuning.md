@@ -6,7 +6,6 @@ description: Practical defaults, tuning guidance, and audit checkpoints for taki
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/developer/orchestrator_tuning.md`. Keep both copies aligned until the legacy documentation set is retired.
 :::
 
 # Orchestrator Rollout & Tuning Guide

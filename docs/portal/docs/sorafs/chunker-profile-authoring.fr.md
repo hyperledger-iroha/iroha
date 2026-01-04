@@ -41,7 +41,7 @@ Chaque profil qui entre dans le registre doit :
 - fournir des fixtures rejouables (JSON Rust/Go/TS + corpora fuzz + témoins PoR) que
   les SDKs en aval peuvent vérifier sans tooling sur mesure ;
 - inclure des métadonnées prêtes pour la gouvernance (namespace, name, semver) ainsi que
-  des conseils de migration et des fenêtres de compatibilité ; et
+  des conseils de rollout et des fenêtres opérationnelles ; et
 - passer la suite de diff déterministe avant la revue du conseil.
 
 Suivez la checklist ci-dessous pour préparer une proposition qui respecte ces règles.
@@ -53,7 +53,6 @@ par `sorafs_manifest::chunker_registry::ensure_charter_compliance()` :
 
 - Les ID de profil sont des entiers positifs qui augmentent de façon monotone sans trous.
 - Le handle canonique (`namespace.name@semver`) doit apparaître dans la liste d'alias
-  et **doit** être la première entrée. Les alias legacy (ex., `sorafs.sf1@1.0.0`) suivent.
 - Aucun alias ne peut entrer en collision avec un autre handle canonique ni apparaître plus d'une fois.
 - Les alias doivent être non vides et trimés des espaces.
 
@@ -79,7 +78,6 @@ les métadonnées canoniques nécessaires aux discussions de gouvernance.
 | `name` | Libellé lisible. | `sf1` |
 | `semver` | Chaîne de version sémantique pour l'ensemble de paramètres. | `1.0.0` |
 | `profile_id` | Identifiant numérique monotone attribué une fois le profil intégré. Réservez l'id suivant mais ne réutilisez pas les numéros existants. | `1` |
-| `profile_aliases` | Handles supplémentaires optionnels (noms legacy, raccourcis) exposés aux clients lors de la négociation. Inclure toujours le handle canonique en première entrée. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | Longueur minimale de chunk en bytes. | `65536` |
 | `profile.target_size` | Longueur cible de chunk en bytes. | `262144` |
 | `profile.max_size` | Longueur maximale de chunk en bytes. | `524288` |
@@ -169,50 +167,6 @@ Les propositions sont soumises sous forme de records Norito `ChunkerProfilePropo
 `docs/source/sorafs/proposals/`. Le template JSON ci-dessous illustre la forme attendue
 (remplacez par vos valeurs si nécessaire) :
 
-```json
-{
-  "ChunkerProfileProposalV1": {
-    "namespace": "sorafs",
-    "name": "sf2",
-    "semver": "1.0.0",
-    "reserved_profile_id": 2,
-    "profile": {
-      "min_size": 65536,
-      "target_size": 262144,
-      "max_size": 524288,
-      "break_mask": "0x0000ffff",
-      "polynomial": "0x3da3358b4dc173",
-      "gear_seed": "sorafs-v2-gear"
-    },
-    "chunk_multihash": {
-      "code": 31,
-      "digest": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
-    },
-    "profile_aliases": ["sorafs.sf2", "sorafs-sf2"],
-    "fixtures_root": "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/",
-    "por_seed": "0xfeedbeefcafebabe",
-    "compatibility": {
-      "supersedes": ["sorafs.sf1@1.0.0"],
-      "grace_epochs": 2,
-      "notes": "Carry envelopes for sf1 during dual-publish window."
-    },
-    "artifacts": {
-      "chunk_boundaries": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.json",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.ts",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.go"
-      ],
-      "fuzz_corpora": [
-        "fuzz/sorafs_chunker/sf2_backpressure.json"
-      ],
-      "por_witnesses": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/por_samples.json"
-      ]
-    },
-    "determinism_report": "docs/source/sorafs/reports/sf2_determinism.md"
-  }
-}
-```
 
 Fournissez un rapport Markdown correspondant (`determinism_report`) qui capture la sortie des
 commandes, les digests de chunk et toute divergence rencontrée lors de la validation.
@@ -231,14 +185,13 @@ commandes, les digests de chunk et toute divergence rencontrée lors de la valid
    Le CLI par défaut reste sur le profil précédent jusqu'à ce que la gouvernance déclare la
    migration prête.
 5. **Suivi de dépréciation.** Après la fenêtre de migration, mettez à jour le registre pour
-   marquer les profils remplacés comme deprecated et notifier les opérateurs via le ledger
    de migration.
 
 ## Conseils de création
 
 - Préférez des bornes puissances de deux paires pour minimiser le comportement de chunking en bord.
 - Évitez de changer le code multihash sans coordonner les consommateurs manifest et gateway ;
-  incluez une note de compatibilité lorsque vous le faites.
+  incluez une note opérationnelle lorsque vous le faites.
 - Gardez les seeds de table gear lisibles mais globalement uniques pour simplifier les audits.
 - Stockez tout artefact de benchmarking (ex., comparaisons de débit) sous
   `docs/source/sorafs/reports/` pour référence future.

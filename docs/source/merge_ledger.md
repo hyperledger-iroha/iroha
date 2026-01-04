@@ -196,17 +196,3 @@ value; deterministic replay must reproduce the same reduction.
   tracked with the integration-test backlog to ensure future changes to
   `reduce_merge_hint_roots` keep the recorded roots stable.
 
-## 5. Compatibility & Migration
-
-- Existing single-lane deployments treat `K=1`. The merge ledger still records
-  entries, but `ReduceMergeHints` degenerates to identity. The non-empty policy
-  matches current behaviour (no empty blocks).
-- When additional lanes are enabled, older nodes that lack merge support must be
-  gated off the committee path; otherwise they cannot verify `MergeLedgerEntry`.
-- Persistence format is forward-compatible: future entries MAY carry aux fields
-  after the Norito header. Unknown fields are rejected until an ABI version bump
-  lands.
-
-This design completes the Milestone 5 "Merge-Ledger Design Notes" deliverable.
-Implementation owners should use the notes above when scheduling runtime and
-storage changes so the plan remains on track.

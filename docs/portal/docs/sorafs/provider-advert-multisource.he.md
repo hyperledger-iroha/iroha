@@ -74,7 +74,6 @@ translation_last_reviewed: 2025-12-30
   artefacts ה-JSON שלו כדי ש-dashboards יעקבו אחר אימוץ היכולת.
 - ה-fixtures תחת `fixtures/sorafs_manifest/provider_admission/` כוללים כעת:
   - adverts מרובי-מקורות קנוניים,
-  - גרסת legacy ללא טווח לבדיקות downgrade, ו-
   - `multi_fetch_plan.json` כדי שחבילות SDK יוכלו לשחזר תוכנית fetch רב-עמיתים דטרמיניסטית.
 
 ## אינטגרציה עם האורקסטרטור ו-Torii

@@ -25,7 +25,7 @@ Esta nota expande o roadmap da Fase A em tarefas pequenas de engenharia para pod
 1. DONE: Testes soak multi-no rodaram 72 h nos harnesses de telemetria e CI; os snapshots do Torii mostraram throughput estavel do proposer e formacao de QC sem regressao.
 2. DONE: A cobertura de testes de integracao agora roda apenas no caminho Vote/QC (`sumeragi_vote_qc_commit.rs`), garantindo que peers mistos alcancem consenso sem os frames antigos.
 3. DONE: A documentacao de operador e a ajuda do CLI nao mencionam mais o caminho wire anterior; a orientacao de troubleshooting agora aponta para a telemetria Vote/QC.
-4. DONE: Variantes de mensagens, contadores de telemetria e caches de commit pendentes foram removidos; a matriz de compatibilidade agora reflete a superficie somente Vote/QC.
+4. DONE: Variantes de mensagens, contadores de telemetria e caches de commit pendentes foram removidos; a matriz de superficie agora reflete a superficie somente Vote/QC.
 
 ### A3 - Aplicacao do motor e pacemaker
 - DONE: Invariantes Lock/HighestQC aplicadas em `handle_message` (ver `block_created_header_sanity`).

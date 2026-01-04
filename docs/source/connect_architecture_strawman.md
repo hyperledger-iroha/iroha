@@ -392,17 +392,6 @@ telemetry so the SDK team can reproduce and patch the exporter.
 - Ownership matrix above is referenced from SDK docs so CLI/web/automation
   clients follow the same contract and instrumentation defaults.
 
-## Compatibility & Feature Flags
-
-- Introduce `ConnectFeatureConfig` (shared Norito struct) carrying:
-  - `offline_queue_enabled` (default `true`).
-  - `max_queue_len`, `resume_timeout_ms`, `ping_interval_ms`.
-  - `telemetry_opt_in` (allows disabling exporters in regulated environments).
-- SDKs read the config from their host (`iroha_config` for native, JSON/bundle
-  for JS). Missing fields fall back to defaults.
-- Feature flags are versioned alongside the Norito ABI hash; incompatible flag
-  sets result in a `Control::Error` with code `FEATURE_NEGOTIATION_FAILED`.
-
 ## Open Questions
 
 1. **Session discovery**: Do we need QR codes / out-of-band handshake like WalletConnect? (Future work.)

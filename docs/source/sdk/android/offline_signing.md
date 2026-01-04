@@ -109,7 +109,6 @@ stores envelopes instead of ad-hoc CSV records:
   the Norito blob, and appends it to `queueFile`.
 - `drain()` decodes each envelope and rehydrates `SignedTransaction` instances
   (export bundles included) so callers can retry submissions deterministically.
-- Legacy CSV entries remain readable for backward compatibility.
 
 For CLI tooling or desktop workflows, reuse `OfflineSigningEnvelopeCodec` to
 persist envelopes in any medium (files, QR codes, BLE hand-offs). The codec is

@@ -109,7 +109,6 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 - Deterministic ID (Blake2b-32) and TTL-based GC for stored attachments.
 - Magic-byte sniffing with allowlisted MIME types; gzip/zstd expansion bounded by max bytes and archive depth.
 - Provenance metadata (hashes, sniffed type, sanitizer verdict) stored alongside attachments; content type recorded for auditing.
-- Sanitizer runs in a subprocess by default with timeout + byte caps + OS-level rlimits; legacy exports are re‑sanitized before serving.
 
 **Outstanding gaps**
 - External malware scanning remains a follow-up.

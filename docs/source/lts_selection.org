@@ -17,7 +17,6 @@ supporting the latest stable version.
 Specifically, we support the latest =stable= release. Often this
 release is either not as well-tested, well-documented, or
 well-supported by the SDKs, in addition to often changing in terms of
-its API and ABI, resulting in a moving target for compatibility.  We
 thus have a monthly release cadence and one release per year is chosen
 to be the target of long-term support and development.
 

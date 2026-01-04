@@ -6,7 +6,6 @@ The current FASTPQ planner records every primitive operation involved in a `Tran
 
 - **Scope**: single transfers and small batches emitted via the existing Kotodama/IVM `TransferAsset` syscall surface.
 - **Goal**: cut FFT/LDE column footprint for high-volume transfers by sharing lookup tables and collapsing per-transfer arithmetic into a compact constraint block.
-- **Compatibility**: no change to Norito payloads consumed by clients; transcripts are internal to the prover/host boundary.
 
 # Architecture
 
@@ -126,7 +125,6 @@ The emitted JSON mirrors the FASTPQ batch artifacts that `iroha_cli audit witnes
 2. **TF-2 (Gadget implementation)**: ✅ `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest), synthesises paired SMT proofs when hosts omit them, exposes structured witnesses via `TransferGadgetPlan`, and `trace::build_trace` threads those witnesses into `Trace::transfer_witnesses` while populating SMT columns from the proofs. `fastpq_row_bench` captures the 65 536-row regression harness so planners track row usage without replaying Norito payloads.【crates/fastpq_prover/src/gadgets/transfer.rs:1】【crates/fastpq_prover/src/trace.rs:1】【crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1】
 3. **TF-3 (Batch helper)**: Enable the batch syscall + Kotodama builder, including host-level sequential application and gadget loop.
 4. **TF-4 (Telemetry & docs)**: Update `fastpq_plan.md`, `fastpq_migration_guide.md`, and dashboard schemas to surface allocation of transfer rows vs other gadgets.
-5. **TF-5 (GA)**: Remove the feature flag once parity + determinism tests pass, run `cargo test --workspace`, record new benchmark artefacts (JSON + Metal trace), and gate every witness with `scripts/fastpq/check_row_usage.py` so transfer rows can’t regress relative to the legacy baseline.
 
 # Open Questions
 
@@ -134,6 +132,5 @@ The emitted JSON mirrors the FASTPQ batch artifacts that `iroha_cli audit witnes
 - **Multi-asset batches**: initial gadget assumes the same asset ID per delta. If we need heterogeneous batches, we must ensure the Poseidon witness includes the asset each time to prevent cross-asset replay.
 - **Authority digest reuse**: long term we can reuse the same digest for other permissioned operations to avoid recomputing signer lists per syscall.
 
-`iroha_cli audit witness --decode` now prints both the raw transcripts and the derived FASTPQ batches (annotated with the originating entry hash) so prover operators can fetch canonical inputs without reimplementing the mapping logic. Use `--no-fastpq-batches` only if you explicitly want to skip the batches to trim the JSON. Each batch also emits a `row_usage` object (`total_rows`, `transfer_rows`, per-selector counts, `transfer_ratio`) so dashboards can plot transfer-gadget savings versus legacy traces without replaying transcripts.【crates/iroha_cli/src/audit.rs:209】
 
 This document tracks design decisions; keep it in sync with roadmap entries when milestones land.

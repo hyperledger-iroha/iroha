@@ -515,17 +515,6 @@ iroha sorafs gateway merkle proof \
 Use `gateway update-denylist` to apply additions/removals and emit artefacts in
 one run:
 
-```bash
-iroha sorafs gateway update-denylist \
-  --base artifacts/ministry/denylist_registry/2026-05-20/denylist.json \
-  --add artifacts/ministry/denylist_registry/2026-05-20/additions.json \
-  --remove-descriptor account_alias:legacy@sora \
-  --out artifacts/ministry/denylist_registry/2026-05-20/denylist_updated.json \
-  --snapshot-out artifacts/ministry/denylist_registry/2026-05-20/denylist_merkle_snapshot.json \
-  --snapshot-norito-out artifacts/ministry/denylist_registry/2026-05-20/denylist_merkle_snapshot.to \
-  --evidence-out artifacts/ministry/denylist_registry/2026-05-20/denylist_evidence.json \
-  --label 2026-05-rollup
-```
 
 - Records are revalidated, descriptors are canonicalised (provider/manifest
   digests are upper-cased), duplicates are rejected unless

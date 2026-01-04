@@ -19,7 +19,6 @@ description: Exemples Rust minimaux pour consommer les proof streams et les mani
 ---
 
 :::note Source canonique
-Cette page reflète `docs/source/sorafs/developer/sdk/rust.md`. Gardez les deux copies synchronisées jusqu'à la retraite du set Sphinx legacy.
 :::
 
 Les crates Rust de ce dépôt alimentent le CLI et peuvent être embarqués dans des

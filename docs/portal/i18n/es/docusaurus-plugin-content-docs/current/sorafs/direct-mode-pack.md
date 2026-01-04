@@ -11,7 +11,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Fuente canónica
-Esta página refleja `docs/source/sorafs/direct_mode_pack.md`. Mantén ambas copias sincronizadas hasta que el conjunto Sphinx legado se retire.
+Esta página refleja `docs/source/sorafs/direct_mode_pack.md`. Mantén ambas copias sincronizadas.
 :::
 
 Los circuitos SoraNet siguen siendo el transporte predeterminado para SoraFS, pero el ítem del roadmap **SNNet-5a** requiere un fallback regulado para que los operadores mantengan un acceso de lectura determinista mientras se completa el despliegue de anonimato. Este paquete recoge los knobs de CLI / SDK, los perfiles de configuración, las pruebas de cumplimiento y la lista de despliegue necesarios para ejecutar SoraFS en modo directo Torii/QUIC sin tocar los transportes de privacidad.

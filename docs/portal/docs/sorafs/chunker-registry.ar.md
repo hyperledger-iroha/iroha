@@ -94,7 +94,6 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 | `sorafs_fetch` (developer orchestrator) | ✅ مدعوم | يقرأ `chunk_fetch_specs` ويفهم حمولة قدرة `range` ويجمع إخراج CARv2. |
 | Fixtures للـ SDK (Rust/Go/TS) | ✅ مدعوم | يُعاد توليدها عبر `export_vectors`؛ المقبض المعتمد يظهر أولاً في كل قائمة بدائل ويُوقَّع بواسطة أظرف المجلس. |
 | تفاوض ملفات gateway Torii | ✅ مدعوم | يطبق كامل قواعد `Accept-Chunker`، ويتضمن ترويسات `Content-Chunker`، ويعرض Bridge CARv1 فقط لطلبات downgrade الصريحة. |
-| Bridge CARv1 (`sha2-256`) | ⚠️ انتقالي | متاح للعملاء القدامى عندما يعلن الطلب كلاً من الملف المعتمد و`Accept-Digest: sha2-256`؛ تتضمن الردود `Content-Chunker: ...;legacy=true`. |
 
 طرح التليمترية:
 
@@ -192,8 +191,6 @@ ProviderAdvertBodyV1 {
 `(namespace, name, semver)` بحسب ترتيب التفضيل:
 
 ```
-Accept-Chunker: sorafs.sf1;version=1.0.0, legacy.fastcdc;version=0.9.0
-```
 
 تختار البوابات ملفًا مدعومًا من الطرفين (الافتراضي `sorafs.sf1@1.0.0`) وتعكس القرار عبر ترويسة
 الاستجابة `Content-Chunker`. تضمن manifests الملف المختار كي تتمكن العقد اللاحقة من التحقق
@@ -206,10 +203,8 @@ Accept-Chunker: sorafs.sf1;version=1.0.0, legacy.fastcdc;version=0.9.0
 
 * **المسار الأساسي** – CARv2، digest حمولة BLAKE3 (`0x1f` multihash)،
   `MultihashIndexSorted`، والملف مسجل كما سبق.
-* **Bridge legacy** – CARv1، digest حمولة SHA-256 (`0x12` multihash). قد تكشف الخوادم
   هذا الخيار عندما يهمل العميل `Accept-Chunker` أو يطلب `Accept-Digest: sha2-256`.
 
-تعلن manifests دائمًا التزام CARv2/BLAKE3. توفر مسارات legacy ترويسات إضافية للتوافق
 لكن يجب ألا تستبدل الـ digest المعتمد.
 
 ### المطابقة

@@ -11,7 +11,6 @@ translation_last_reviewed: 2026-01-01
 
 :::note Канонический источник
 Эта страница отражает `docs/source/da/threat_model.md`. Держите обе версии
-синхронизированными до ухода legacy-доков.
 :::
 
 # Модель угроз Data Availability Sora Nexus

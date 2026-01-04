@@ -19,7 +19,6 @@ description: SNNet-5a منتقلی کے دوران SoraFS کو Torii/QUIC direct
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/direct_mode_pack.md` کی عکاسی کرتا ہے۔ جب تک legacy Sphinx set ریٹائر نہ ہو دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
 SoraNet circuits SoraFS کے لیے default transport ہیں، مگر roadmap item **SNNet-5a** ایک regulated fallback کا تقاضا کرتا ہے تاکہ anonymity rollout مکمل ہونے تک operators deterministic read-access برقرار رکھ سکیں۔ یہ pack CLI/SDK knobs، config profiles، compliance tests اور deployment checklist کو اکٹھا کرتا ہے جو privacy transports کو چھیڑے بغیر SoraFS کو direct Torii/QUIC mode میں چلانے کے لیے درکار ہیں۔

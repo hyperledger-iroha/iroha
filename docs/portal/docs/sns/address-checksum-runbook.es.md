@@ -60,7 +60,6 @@ Si el incidente es especificamente sobre colisiones Local-8/Local-12, sigue los 
 ### Problemas de manifest o registro
 
 - Sigue `address_manifest_ops.md` para revalidar el ultimo manifest bundle y asegurar que no reaparecieron selectores Local-8.
-- Usa `scripts/address_local_toolkit.sh audit ...` cuando aparezcan selectores Local legacy en payloads.
 
 ### Trafico malicioso o malformado
 

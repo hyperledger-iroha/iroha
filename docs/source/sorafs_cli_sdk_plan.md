@@ -59,4 +59,3 @@ Features:
 
 - Packaging/distribution strategy (Homebrew, npm, crates.io, Go modules).
 - Versioning scheme (keep CLI + SDK in lockstep?).
-- Backwards compatibility policy for manifest schema changes.

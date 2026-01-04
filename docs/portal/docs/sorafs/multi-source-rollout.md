@@ -6,7 +6,6 @@ description: Operational checklist for staged multi-source rollouts and emergenc
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/runbooks/multi_source_rollout.md`. Keep both locations aligned while the legacy documentation remains active.
 :::
 
 ## Purpose

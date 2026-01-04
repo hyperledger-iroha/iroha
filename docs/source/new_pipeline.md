@@ -63,7 +63,6 @@ Harmonization constraints
   with identical permission checks, metering, and event semantics.
 - Acceleration (AOT_SIMD, CUDA/Metal) is feature‑gated and produces bit‑exact
   results with a canonical fallback path to preserve cross‑hardware determinism.
- - Norito serialization compatibility is preserved with round‑trip invariants
    for all public data structures and transactions.
 
 Implementation status (current node)
@@ -275,7 +274,6 @@ Phases (normative)
 
 ABI & Norito
 - ABI is a Norito schema over entrypoints and their types. `abi_hash` binds to the manifest; invocation envelopes carry canonical Norito‑encoded args/returns.
-- Backward compatibility: minor version may add optional fields; breaking changes bump major and require new `contract_id` or `version` + migration.
 
 Permissions & governance
 - Register/Upgrade require domain‑level permissions (e.g., `CanRegisterSmartContract`, `CanUpgradeSmartContract`); calls may require `CanCall<contract_id.entrypoint>` role tokens.
@@ -444,7 +442,6 @@ Kotodama integration
   uncertainty is detected (e.g., data‑dependent key construction). Supersets
   reduce parallelism but never break safety.
 
-4) Norito compatibility
 - Access‑set metadata included on‑wire is optional and advisory; the canonical
   state transition remains the executed semantics. Nodes must not rely on
   external hints for correctness.
@@ -458,7 +455,6 @@ Wire/advisory format (implemented)
   - Canonical bytes are the Norito encoding of the enum value; sorting and
     deduplication are provided via `canonicalize()` to keep envelopes compact.
 - Round‑trip tests are included in `crates/iroha_data_model` to preserve Norito
-  compatibility and ordering invariants.
 
 5) Enforcement (normative)
 - During stateful execution, the executor MUST assert that all state reads and
@@ -708,7 +704,6 @@ Host Syscalls
   with explicit capability descriptors. They are metered and logged for access
   set auditing in dry‑run mode.
 
-Compatibility notes
 - Kotodama/IVM ABI is stable across minor versions; deprecations follow a
   capability‑flag negotiation so old bytecode remains executable.
 
@@ -1715,7 +1710,6 @@ Phase 4: Triggers & Polishing
 - Tune epoch sizing/limits; expose observability (epoch counts, conflicts) via
   telemetry.
 
-Phase 5: Harmonization & Compatibility
 - Validate Kotodama metadata emission and IVM pre‑decode cache stability.
 - Add Norito round‑trip tests for any new/changed types and transaction forms.
 - Document mempool selection policies and ensure leader reproducibility.

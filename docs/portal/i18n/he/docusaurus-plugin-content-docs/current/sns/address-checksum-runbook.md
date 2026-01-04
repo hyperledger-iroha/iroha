@@ -57,7 +57,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ### בעיות manifest או registry
 
 - עקבו אחרי `address_manifest_ops.md` כדי לאמת מחדש את manifest bundle האחרון ולוודא שמסנני Local-8 לא חזרו.
-- השתמשו ב-`scripts/address_local_toolkit.sh audit ...` כאשר מסנני Local legacy מופיעים ב-payloads.
 
 ### תעבורה זדונית או פגומה
 

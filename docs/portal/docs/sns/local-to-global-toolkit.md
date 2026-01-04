@@ -1,6 +1,5 @@
 ---
 title: Local → Global Address Toolkit
-description: Operators can audit and convert legacy Local selectors to canonical IH58/compressed forms ahead of the strict-mode cutover.
 ---
 
 This page mirrors [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md)

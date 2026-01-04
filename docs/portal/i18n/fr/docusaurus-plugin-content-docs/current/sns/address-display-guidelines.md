@@ -215,9 +215,7 @@ ou en chaines compressees doivent suivre le workflow CLI documente sous ADDR-5:
    parasites, et bloquez l'automatisation via `--fail-on-warning` lorsque les
    operateurs sont prets a bloquer les selecteurs Local dans CI.
 6. Quand vous avez besoin d'une reecriture ligne a ligne, utilisez
-  `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`.
   Pour les feuilles de calcul de remediation des selecteurs Local, utilisez
-  `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
   pour exporter un CSV `input,status,format,...` qui met en avant les encodages
   canoniques, avertissements et echecs de parse en une seule passe.
    Le helper ignore les lignes non Local par defaut, convertit chaque entree
@@ -247,7 +245,6 @@ que sur des clusters dev/test lors du diagnostic de regressions. Continuez a
 miroiter `torii_address_domain_total{domain_kind}` dans Grafana
 (`dashboards/grafana/address_ingest.json`) pour que le pack de preuve ADDR-7
 puisse montrer que `domain_kind="local12"` est reste a zero pendant la fenetre
-requise de 30 jours avant que mainnet desactive les selecteurs legacy. Le pack
 Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) ajoute trois
 barrieres:
 

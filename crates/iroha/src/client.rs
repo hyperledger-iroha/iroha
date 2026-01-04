@@ -36,9 +36,9 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 use iroha_torii_shared::uri as torii_uri;
-use iroha_version::codec::EncodeVersioned;
+use iroha_version::{DecodeAll, codec::EncodeVersioned};
 use norito::{
-    codec::{Decode, DecodeAll, Encode},
+    codec::Decode,
     decode_from_bytes,
     derive::{JsonDeserialize, JsonSerialize},
     json::{Map as JsonMap, Value as JsonValue},
@@ -1401,8 +1401,7 @@ fn decode_status_response(resp: &Response<Vec<u8>>) -> Result<Status> {
     if is_json {
         norito::json::from_slice(body).map_err(Into::into)
     } else {
-        let mut slice = body.as_slice();
-        DecodeAll::decode_all(&mut slice)
+        decode_from_bytes::<Status>(body)
             .map_err(|err| eyre!("failed to decode status Norito payload: {err}"))
     }
 }
@@ -2851,14 +2850,14 @@ impl Client {
                 std::str::from_utf8(response.body()).unwrap_or("")
             ));
         }
-        let mut slice = response.body().as_slice();
-        let decoded: (u64, Vec<EvidenceRecord>) = Decode::decode(&mut slice).map_err(|err| {
-            eyre!("Failed to decode sumeragi evidence list Norito payload: {err}")
-        })?;
+        let decoded: (u64, Vec<EvidenceRecord>) =
+            decode_from_bytes(response.body()).map_err(|err| {
+                eyre!("Failed to decode sumeragi evidence list Norito payload: {err}")
+            })?;
         Ok(decoded)
     }
 
-    /// POST `/v1/sumeragi/evidence` — submit raw Norito-encoded evidence (hex string).
+    /// POST `/v1/sumeragi/evidence` — submit Norito-framed evidence (hex string).
     ///
     /// # Errors
     /// Returns an error if the request fails, the response is unexpected, or JSON parsing fails.
@@ -2925,8 +2924,7 @@ mod status_tests {
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
         };
-        // Encode as headerless Norito
-        let body = norito::codec::Encode::encode(&s);
+        let body = norito::to_bytes(&s).expect("encode status");
         let resp = mk_response(StatusCode::OK, body, Some("application/x-norito"));
         let got = decode_status_response(&resp).expect("decode");
         assert_eq!(got.peers, s.peers);
@@ -3132,7 +3130,7 @@ mod evidence_http_tests {
         Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, Phase, Vote,
     };
     use iroha_test_samples::gen_account_in;
-    use norito::{codec::Encode as NoritoEncode, json::Value};
+    use norito::json::Value;
     use sorafs_manifest::{
         alias_cache::unix_now_secs,
         pin_registry::{
@@ -3189,11 +3187,14 @@ mod evidence_http_tests {
             .expect("response build")
     }
 
-    fn norito_response<T: NoritoEncode>(status: StatusCode, value: &T) -> HttpResponse<Vec<u8>> {
+    fn norito_response<T: norito::core::NoritoSerialize>(
+        status: StatusCode,
+        value: &T,
+    ) -> HttpResponse<Vec<u8>> {
         HttpResponse::builder()
             .status(status)
             .header("content-type", APPLICATION_NORITO)
-            .body(NoritoEncode::encode(value))
+            .body(norito::to_bytes(value).expect("encode norito response"))
             .expect("response build")
     }
 

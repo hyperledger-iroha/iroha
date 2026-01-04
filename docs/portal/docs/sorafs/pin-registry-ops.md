@@ -6,7 +6,6 @@ description: Monitor and triage the SoraFS pin registry and replication SLA metr
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/pin_registry_ops.md`. Keep both versions in sync until the legacy Sphinx documentation is retired.
 :::
 
 ## Overview

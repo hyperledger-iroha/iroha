@@ -6,7 +6,6 @@ description: Required configuration, compliance checks, and rollout steps when o
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/direct_mode_pack.md`. Keep both copies in sync until the legacy Sphinx documentation is retired.
 :::
 
 SoraNet circuits remain the default transport for SoraFS, but roadmap item **SNNet-5a** requires a regulated fallback so operators can keep deterministic read-access while the anonymity rollout completes. This pack captures the CLI / SDK knobs, configuration profiles, compliance tests, and deployment checklist needed to run SoraFS in direct Torii/QUIC mode without touching the privacy transports.

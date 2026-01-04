@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/sorafs_node_plan.md` کی عکاسی کرتا ہے۔ جب تک legacy Sphinx docs ریٹائر نہ ہوں دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
 SF-3 پہلا runnable `sorafs-node` crate فراہم کرتا ہے جو Iroha/Torii process کو SoraFS storage provider میں بدلتا ہے۔ اس پلان کو [node storage guide](node-storage.md)، [provider admission policy](provider-admission-policy.md) اور [storage capacity marketplace roadmap](storage-capacity-marketplace.md) کے ساتھ استعمال کریں جب deliverables sequence کریں۔

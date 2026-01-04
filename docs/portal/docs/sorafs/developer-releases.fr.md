@@ -188,7 +188,6 @@ Après le passage des checks et la fin des hooks :
 - Assurez-vous que la documentation pointant vers la nouvelle version (quickstarts, templates CI)
   est à jour ou confirmez qu'aucun changement n'est requis.
 - Créez des entrées de roadmap si un travail de suivi est nécessaire (par ex. flags de migration,
-  dépréciation des manifests legacy).
 - Archivez les logs de sortie du gate de release pour les auditeurs : stockez-les à côté des
   artefacts signés.
 

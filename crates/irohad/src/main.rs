@@ -1019,6 +1019,7 @@ impl Iroha {
             block_count,
             config.snapshot.merkle_chunk_size_bytes,
             verification_key,
+            &config.common.chain,
             #[cfg(feature = "telemetry")]
             state_telemetry.clone(),
         ) {
@@ -1036,43 +1037,45 @@ impl Iroha {
                     [genesis_account(config.genesis.public_key.clone())],
                     [],
                 );
-
-                let mut state = State::new(
+                State::new(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
                     #[cfg(feature = "telemetry")]
                     state_telemetry,
-                );
-
-                if block_count.0 > 0 {
-                    iroha_logger::info!(
-                        block_count = block_count.0,
-                        "Replaying stored blocks to rebuild state without a snapshot"
-                    );
-                    let trusted = config.common.trusted_peers.value();
-                    let mut commit_topology = filter_validators_from_trusted(trusted);
-                    if commit_topology.is_empty() {
-                        commit_topology =
-                            trusted.clone().into_non_empty_vec().into_iter().collect();
-                    }
-                    let topology = Topology::new(commit_topology);
-                    iroha_core::state::replay_blocks_from_kura(
-                        &kura,
-                        &mut state,
-                        &topology,
-                        block_count.0,
-                        config.sumeragi.consensus_mode,
-                    )
-                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
-                }
-
-                state
+                )
             }
             Err(error) => {
                 return Err(Report::new(error).change_context(StartError::InitKura));
             }
         };
+        // Thread chain id into state for VRF prehash binding.
+        state.chain_id = config.common.chain.clone();
+
+        let state_height = state.view().height();
+        if block_count.0 > state_height {
+            let start_height = state_height.saturating_add(1);
+            iroha_logger::info!(
+                start_height,
+                block_count = block_count.0,
+                "Replaying stored blocks to catch up with Kura"
+            );
+            let trusted = config.common.trusted_peers.value();
+            let mut commit_topology = filter_validators_from_trusted(trusted);
+            if commit_topology.is_empty() {
+                commit_topology = trusted.clone().into_non_empty_vec().into_iter().collect();
+            }
+            let topology = Topology::new(commit_topology);
+            iroha_core::state::replay_blocks_from_kura_range(
+                &kura,
+                &mut state,
+                &topology,
+                start_height,
+                block_count.0,
+                config.sumeragi.consensus_mode,
+            )
+            .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+        }
         // Delay Arc wrapping until after we tweak state with config
 
         let (events_sender, _) = broadcast::channel(config.torii.events_buffer_capacity.get());
@@ -1739,8 +1742,6 @@ impl Iroha {
                 }
             }
         }
-        // Thread chain id into state for VRF prehash binding
-        state.chain_id = config.common.chain.clone();
         let state = Arc::new(state);
         #[cfg(feature = "telemetry")]
         if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =

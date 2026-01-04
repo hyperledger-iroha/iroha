@@ -17,7 +17,6 @@ Every profile that enters the registry must:
 - ship replayable fixtures (Rust/Go/TS JSON + fuzz corpora + PoR witnesses) that
   downstream SDKs can verify without bespoke tooling;
 - include governance-ready metadata (namespace, name, semver) plus migration
-  guidance and compatibility windows; and
 - pass the deterministic diff suite before council review.
 
 Follow the checklist below to prepare a proposal that satisfies those rules.
@@ -147,50 +146,6 @@ Proposals are submitted as `ChunkerProfileProposalV1` Norito records checked int
 `docs/source/sorafs/proposals/`. The JSON template below illustrates the expected
 shape (substitute your values as needed):
 
-```json
-{
-  "ChunkerProfileProposalV1": {
-    "namespace": "sorafs",
-    "name": "sf2",
-    "semver": "1.0.0",
-    "reserved_profile_id": 2,
-    "profile": {
-      "min_size": 65536,
-      "target_size": 262144,
-      "max_size": 524288,
-      "break_mask": "0x0000ffff",
-      "polynomial": "0x3da3358b4dc173",
-      "gear_seed": "sorafs-v2-gear"
-    },
-    "chunk_multihash": {
-      "code": 31,
-      "digest": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
-    },
-    "profile_aliases": ["sorafs.sf2", "sorafs-sf2"],
-    "fixtures_root": "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/",
-    "por_seed": "0xfeedbeefcafebabe",
-    "compatibility": {
-      "supersedes": ["sorafs.sf1@1.0.0"],
-      "grace_epochs": 2,
-      "notes": "Carry envelopes for sf1 during dual-publish window."
-    },
-    "artifacts": {
-      "chunk_boundaries": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.json",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.ts",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.go"
-      ],
-      "fuzz_corpora": [
-        "fuzz/sorafs_chunker/sf2_backpressure.json"
-      ],
-      "por_witnesses": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/por_samples.json"
-      ]
-    },
-    "determinism_report": "docs/source/sorafs/reports/sf2_determinism.md"
-  }
-}
-```
 
 Provide a matching Markdown report (`determinism_report`) that captures the
 command output, chunk digests, and any deviations encountered during validation.
@@ -208,14 +163,12 @@ command output, chunk digests, and any deviations encountered during validation.
    default CLI remains on the previous profile until governance declares the
    migration ready.
 5. **Deprecation tracking.** After the migration window, update the registry to
-   mark superseded profiles as deprecated and notify operators via the migration
    ledger.
 
 ## Authoring Tips
 
 - Prefer even power-of-two bounds to minimise edge-case chunking behaviour.
 - Avoid changing the multihash code without coordinating manifest and gateway
-  consumers; include a compatibility note when doing so.
 - Keep gear table seeds human-readable but globally unique to simplify audit
   trails.
 - Store any benchmarking artefacts (e.g., throughput comparisons) under

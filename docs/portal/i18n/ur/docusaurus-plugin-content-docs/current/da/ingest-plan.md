@@ -7,7 +7,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/da/ingest_plan.md` کی عکاسی کرتا ہے۔ legacy docs ریٹائر
 ہونے تک دونوں ورژنز کو sync رکھیں۔
 :::
 

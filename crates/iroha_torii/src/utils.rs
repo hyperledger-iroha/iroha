@@ -18,10 +18,7 @@ pub const NORITO_MIME_TYPE: &'_ str = "application/x-norito";
 const JSON_MIME_TYPE: &str = "application/json";
 
 fn base_media_type(raw: &str) -> &str {
-    raw.split(';')
-        .next()
-        .map(str::trim)
-        .unwrap_or_default()
+    raw.split(';').next().map(str::trim).unwrap_or_default()
 }
 
 fn is_norito_media_type(raw: &str) -> bool {
@@ -278,8 +275,7 @@ mod response_format_tests {
             .await
             .expect("collect Norito body")
             .to_bytes();
-        let decoded: DummyPayload =
-            norito::decode_from_bytes(&bytes).expect("decode Norito body");
+        let decoded: DummyPayload = norito::decode_from_bytes(&bytes).expect("decode Norito body");
         assert_eq!(decoded, payload);
     }
 
@@ -968,19 +964,19 @@ pub mod extractors {
             assert_eq!(format, super::super::ResponseFormat::Norito);
         }
 
-    #[test]
-    fn negotiate_accept_header_defaults_json() {
-        let header = HeaderValue::from_static("application/json");
-        let format = super::super::negotiate_response_format(Some(&header)).expect("format");
-        assert_eq!(format, super::super::ResponseFormat::Json);
-    }
+        #[test]
+        fn negotiate_accept_header_defaults_json() {
+            let header = HeaderValue::from_static("application/json");
+            let format = super::super::negotiate_response_format(Some(&header)).expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Json);
+        }
 
-    #[test]
-    fn negotiate_accept_header_accepts_vendor_json() {
-        let header = HeaderValue::from_static("application/vnd.api+json");
-        let format = super::super::negotiate_response_format(Some(&header)).expect("format");
-        assert_eq!(format, super::super::ResponseFormat::Json);
-    }
+        #[test]
+        fn negotiate_accept_header_accepts_vendor_json() {
+            let header = HeaderValue::from_static("application/vnd.api+json");
+            let format = super::super::negotiate_response_format(Some(&header)).expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Json);
+        }
 
         #[test]
         fn negotiate_rejects_unsupported_media_type() {

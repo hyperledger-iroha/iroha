@@ -24,7 +24,6 @@ translator: manual
 - crossbeam-channel — RUSTSEC-2025-0024
   - תוקן: שודרג ל־`0.5.15` בתוך `crates/ivm/Cargo.toml`.
 
-- pprof deprecated codec — RUSTSEC-2024-0437
   - תוקן: הוחלף ל־`prost-codec` תחת `crates/iroha_torii/Cargo.toml`.
 
 - ring — RUSTSEC-2025-0009

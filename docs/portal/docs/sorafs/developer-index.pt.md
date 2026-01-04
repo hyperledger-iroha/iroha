@@ -19,7 +19,7 @@ sidebar_label: Visao geral de desenvolvedores
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/index.md`. Mantenha ambas as versoes sincronizadas ate que os docs legados sejam retirados.
+Esta pagina espelha `docs/source/sorafs/developer/index.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 # Guias para desenvolvedores de SoraFS

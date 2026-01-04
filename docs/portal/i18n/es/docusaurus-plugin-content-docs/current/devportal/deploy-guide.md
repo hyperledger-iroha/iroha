@@ -452,7 +452,7 @@ gateway-content-binding:
   raspar la salida de shell.
 
 Se generan automaticamente via
-`cargo xtask soradns-binding-template` (que reemplazo al helper Node anterior)
+`cargo xtask soradns-binding-template`
 y capturan el alias, el digest del manifiesto y el hostname de gateway que se
 pasaron a `sorafs-pin-release.sh`. Para regenerar o personalizar el bloque de headers,
 ejecuta:
@@ -475,10 +475,9 @@ Adjunta el snippet de headers al request de cambio de CDN y alimenta el document
 al pipeline de automatizacion de gateway para que la promocion real de host coincida con la
 evidencia de release.
 
-El script de release aun incluye el script Node por compatibilidad, pero el helper xtask
-es la ruta canonica de ahora en adelante. El script de release ejecuta automaticamente el
-helper de verificacion para que los tickets DG-3 siempre incluyan evidencia reciente.
-Vuelve a ejecutarlo manualmente cuando edites el binding JSON a mano:
+El script de release ejecuta automaticamente el helper de verificacion para que los
+tickets DG-3 siempre incluyan evidencia reciente. Vuelve a ejecutarlo manualmente
+cuando edites el binding JSON a mano:
 
 ```bash
 cargo xtask soradns-verify-binding \

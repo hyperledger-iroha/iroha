@@ -29,7 +29,7 @@ interleave multiple providers without out-of-band trust.
 | `GET`  | `/car/{manifest_cid}`           | Range retrieval (byte ranges)              | `Accept: application/vnd.ipld.car; dag-scope=block`, `Range` |
 | `HEAD` | `/car/{manifest_cid}`           | Metadata probe                             | `Accept: application/vnd.ipld.car`           |
 | `GET`  | `/chunk/{chunk_digest}`         | Single chunk retrieval                     | `Accept: application/octet-stream`, `X-SoraFS-Chunk-Index` |
-| `GET`  | `/proof/{manifest_cid}`         | Proof bundle (PoR + BLAKE3 tree)           | `Accept: application/json`                   |
+| `GET`  | `/proof/{manifest_cid}`         | PoR proof payload (`PorProofV1`)           | `Accept: application/json`                   |
 
 ### 2.1. Required Request Headers
 
@@ -52,8 +52,8 @@ All successful responses (2xx) MUST include:
   for proof bundles, `application/octet-stream` for raw chunks.
 * `X-SoraFS-Nonce`: echo of the request nonce.
 * `X-SoraFS-Chunker`: canonical chunker handle (`sorafs.sf1@1.0.0`).
-* `X-SoraFS-Proof-Digest`: hex digest of the accompanying proof payload
-  (BLAKE3-256 of the Norito proof envelope).
+* `X-SoraFS-Proof-Digest`: hex digest of the accompanying PoR proof payload
+  (`PorProofV1.proof_digest`, BLAKE3-256 over the proof fields excluding the signature).
 * `X-SoraFS-PoR-Root`: hex digest of the PoR Merkle root for the requested scope.
 
 Gateways MUST fail requests with `428 Precondition Required` when the manifest
@@ -95,18 +95,16 @@ Clients MUST verify:
 
 ### 4.2. Proof-of-Retrievability (PoR)
 
-* Gateways must serve `POST /proof/{manifest_cid}` accepting a Norito challenge:
-  * `seed`: 64-bit sample seed.
-  * `leaf_count`: number of PoR samples requested (default 128).
-* Response payload: Norito `SorafsPorProofV1` containing:
-  * `manifest_digest`
-  * `samples[]`: each sample includes `chunk_index`, `leaf_offset`,
-    `chunk_digest`, `proof_nodes[]`.
-  * `response_signature`: Ed25519 signature covering the request nonce,
-    manifest digest, and sample list.
+* Gateways must serve `GET /proof/{manifest_cid}` returning a Norito JSON `PorProofV1` payload:
+  * `manifest_digest`, `provider_id`, `samples[]`, `auth_path`, `signature`, `submitted_at`.
+  * `auth_path` is the ordered list of chunk roots for the PoR tree.
+  * `signature` is Ed25519 over `proof_digest` (BLAKE3-256 of the proof fields excluding
+    the signature), and `signature.public_key` is the gateway's Ed25519 public key.
+* The signing key is configured at `torii.sorafs.storage.stream_tokens.signing_key_path`
+  and is shared with stream token issuance.
 
-Clients MUST verify the signature with the provider key published in the admission
-envelope and recompute the Merkle root declared in `X-SoraFS-PoR-Root`.
+Clients MUST verify the signature and ensure the public key matches the provider's
+admitted gateway key before trusting the `X-SoraFS-PoR-Root` header.
 
 ### 4.3. Streaming Receipts
 

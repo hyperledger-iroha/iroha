@@ -125,7 +125,6 @@ trigger, actions, and follow-ups).
 - `make android-lint` wraps `ci/check_android_javac_lint.sh`, compiling
   `java/iroha_android` and the shared `java/norito_java` sources with
   `javac --release 21 -Xlint:all -Werror` (with the flagged categories noted in
-  the script temporarily suppressed until the legacy warnings are fixed).
 - After compilation, the script enforces the AND6 dependency policy with
   `jdeps --summary`, failing if any module outside the approved allowlist
   (`java.base`, `java.net.http`, `jdk.httpserver`) appears. This keeps the

@@ -115,7 +115,6 @@ underlying identifiers. Unknown values (for example `address_format=base64`)
 return `HTTP 400` so misconfigured SDKs fail fast.
 
 Requests always accept IH58 and compressed selectors, and production clusters
-enable `torii.strict_addresses = true` so legacy alias/public-key strings are
 rejected unless the operator explicitly toggles dev-only overrides. Canonical
 IH58 strings remain the wire format for manifests, telemetry, and QR payloads,
 so only opt into `address_format=compressed` when rendering UX where the Sora
@@ -276,10 +275,8 @@ through the migration:
 5. For bulk data sets, run `iroha address audit --input addresses.txt --network-prefix 753`. The command
    reads newline-separated literals (comments starting with `#` are ignored, and `--input -` or no flag uses STDIN),
    emits a JSON report with canonical/IH58/compressed summaries for every entry, and counts both parse errors
-   and Local-domain warnings. Use `--allow-errors` when auditing legacy dumps that contain junk rows, and gate
    automation with `--fail-on-warning` once operators are ready to block Local selectors in CI.
 6. When you need a newline-to-newline rewrite, use
-   `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`.
    The helper skips non-Local rows by default, converts every remaining entry into the requested encoding
    (IH58/compressed/hex/JSON), and preserves the original domain when `--append-domain` is set. Pair it with
    `--allow-errors` to keep scanning even when a dump contains malformed literals.
@@ -322,4 +319,3 @@ fallback to the default IH58 responses.
 
 Include the following bullet in the wallet/explorer release notes when shipping the cutover:
 
-> **Addresses:** Added the `iroha address normalize --only-local --append-domain` helper and wired it into CI (`ci/check_address_normalize.sh`) so wallet/explorer pipelines can convert legacy Local selectors to canonical IH58/compressed forms before Local-8/Local-12 are blocked on mainnet. Update any custom exports to run the command and attach the normalized list to the release evidence bundle.

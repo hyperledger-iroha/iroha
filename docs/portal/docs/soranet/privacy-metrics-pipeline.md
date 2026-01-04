@@ -6,7 +6,6 @@ description: Privacy-preserving telemetry collection for SoraNet relays and orch
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/soranet/privacy_metrics_pipeline.md`. Keep both copies in sync until the legacy docs retire.
 :::
 
 # SoraNet Privacy Metrics Pipeline

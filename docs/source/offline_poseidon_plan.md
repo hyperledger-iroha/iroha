@@ -139,7 +139,6 @@ so builders can fetch the Norito payloads directly from a node, and Torii expose
 
 ### 5.3 Ledger & SDK Integration (OA14.3 / OA14.a)
 
-* **Ledger knobs:** add `offline.proofs.mode` (`legacy`, `optional`, `required`) with default
   `optional`. Failing proofs emit structured errors (reason + receipts root) and Prometheus counters.
 * **SDK builders:** Swift/Android maintain rolling Poseidon trees, call the FASTPQ APIs via FFI, and
   attach `AggregateProofEnvelope`. Builders expose telemetry hooks so apps can surface progress.

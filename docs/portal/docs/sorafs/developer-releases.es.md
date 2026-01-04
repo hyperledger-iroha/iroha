@@ -195,7 +195,6 @@ Después de que los checks pasen y los hooks se completen:
 - Asegura que la documentación que apunta a la nueva versión (quickstarts, plantillas de CI)
   esté actualizada o confirma que no se requieren cambios.
 - Registra entradas de roadmap si se requiere trabajo posterior (por ejemplo, flags de
-  migración, deprecación de manifests legacy).
 - Archiva los logs de salida del gate de release para auditoría: guárdalos junto a los
   artefactos firmados.
 

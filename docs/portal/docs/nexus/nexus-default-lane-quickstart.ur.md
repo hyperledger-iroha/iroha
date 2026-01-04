@@ -99,7 +99,6 @@ instruction = "smartcontract::deploy"
 description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
-جب آپ بعد میں نئے lanes شامل کریں تو پہلے catalog update کریں، پھر routing rules extend کریں۔ Fallback lane کو اسی public lane کی طرف اشارہ کرتے رہنا چاہیے جہاں زیادہ تر user traffic ہو تاکہ legacy SDKs compatible رہیں۔
 
 ## 3. پالیسی کے ساتھ node boot کریں
 
@@ -172,4 +171,3 @@ curl -s http://127.0.0.1:8080/status \
 - scheduler telemetry map اور lane governance dashboard (`dashboards/grafana/nexus_lanes.json`) catalog کے alias/slug fields expect کرتے ہیں۔ اگر آپ alias rename کریں تو متعلقہ Kura directories کو relabel کریں تاکہ auditors deterministic paths رکھ سکیں (NX-1 کے تحت track ہوتا ہے)۔
 - default lanes کے لئے parliament approvals میں rollback plan شامل ہونا چاہیے۔ manifest hash اور governance evidence کو اس quickstart کے ساتھ اپنے operator runbook میں record کریں تاکہ future rotations مطلوبہ state کا اندازہ نہ لگائیں۔
 
-جب یہ checks پاس ہو جائیں تو آپ `nexus.routing_policy.default_lane` کو SDK configuration کے لئے source of truth سمجھ سکتے ہیں اور network پر legacy single-lane code paths کو disable کرنا شروع کر سکتے ہیں۔

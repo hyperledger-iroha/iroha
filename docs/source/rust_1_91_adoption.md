@@ -49,7 +49,6 @@ entries.
 | APIs-in-const | Arrays/OsString/PathBuf constructors const-stable | Revisit `const fn` helpers that currently allocate at runtime | DONE | Handshake PoW defaults now expose const constructors so `SoranetPow`/`SoranetPuzzle` can be instantiated in static contexts (`crates/iroha_config/src/parameters/actual.rs`), unblocking const-initialized config snapshots without runtime allocs. |
 | Cargo | `build.build-dir` stabilized | Decide whether CI wants deterministic `target` relocation; document in `ci/README.md` | DONE | Default `target/` path retained; rationale + cache references captured in `ci/README.md`. |
 | Rustdoc | Raw-pointer search parity | Regenerate published docs once code changes land | DONE | Rustdoc output was rebuilt with 1.91 so the search index now includes raw-pointer items; the docs sync pipeline picked up the refreshed HTML bundle for the next publish cut. |
-| Compatibility | `target_env = "macabi" / "sim"` cfgs replace `target_abi` | Update cfg shims in Apple-specific modules | DONE | `vendor/icrate/src/AppKit/fixes/mod.rs` now uses the stable `target_env` gate for Mac Catalyst detection (tests cover the switch), closing the Apple-target cfg audit. |
 
 ## Next steps
 

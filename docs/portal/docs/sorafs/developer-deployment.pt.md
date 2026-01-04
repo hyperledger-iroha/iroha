@@ -19,7 +19,7 @@ description: Checklist para promover o pipeline da SoraFS de CI para producao.
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/deployment.md`. Mantenha ambas as versoes sincronizadas ate que os docs legados sejam retirados.
+Esta pagina espelha `docs/source/sorafs/developer/deployment.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 # Notas de deployment

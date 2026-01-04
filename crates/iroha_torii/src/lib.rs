@@ -14170,7 +14170,6 @@ pub(crate) mod tests_runtime_handlers {
         transaction::signed::{TransactionBuilder, TransactionResultInner},
         trigger::DataTriggerSequence,
     };
-    use norito::{codec::DecodeAll, core::NoritoDeserialize};
 
     use super::*;
     #[cfg(feature = "telemetry")]
@@ -16925,7 +16924,6 @@ mod tests {
         transaction::signed::{TransactionBuilder, TransactionResultInner},
     };
     use nonzero_ext::nonzero;
-    use norito::codec::DecodeAll;
 
     use super::*;
     #[cfg(feature = "telemetry")]

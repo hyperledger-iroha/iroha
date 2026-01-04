@@ -8,7 +8,6 @@ summary: Final specification for SNNet-1 covering handshake, salt rotation, capa
 ## Goals & Scope
 - Define the transport layer for the SoraNet anonymity overlay: handshake, key exchange, transcript binding, salt rotation, and capability negotiation.
 - Provide implementation guidance for relays, clients, gateways, and tooling to ensure deterministic, secure behaviour.
-- Integrate post-quantum (PQ) primitives and blinded CID handling while maintaining backward-compatible detection of unsupported features.
 
 This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) and its sub-items SNNet-1a (PQ transcript review) and SNNet-1b (salt rotation & recovery plan).
 

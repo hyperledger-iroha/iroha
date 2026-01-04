@@ -166,3 +166,27 @@ fn streaming_verifier_rejects_content_length_mismatch() {
         Err(CarVerifyError::ManifestContentLengthMismatch { .. })
     ));
 }
+
+#[test]
+fn streaming_verifier_enforces_chunk_size_limit() {
+    let payload = sample_payload();
+    let plan =
+        CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+    let mut car_bytes = Vec::new();
+    let stats = sorafs_car::CarWriter::new(&plan, &payload)
+        .expect("writer")
+        .write_to(&mut car_bytes)
+        .expect("write car");
+    let manifest = build_manifest(&plan, &stats);
+
+    let config = StreamingVerifierConfig {
+        max_chunk_size: 1,
+        ..StreamingVerifierConfig::default()
+    };
+    let mut verifier = StreamingCarVerifier::new(manifest, config);
+    let result = verifier.update(&car_bytes);
+    assert!(matches!(
+        result,
+        Err(CarVerifyError::ChunkSizeExceeded { .. })
+    ));
+}

@@ -4201,36 +4201,14 @@ public struct ToriiProofId: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case backend
-        case hashHex = "hash_hex"
         case proofHashHex = "proof_hash_hex"
-        case proofHash = "proof_hash"
     }
 
     public init(from decoder: Decoder) throws {
-        if let container = try? decoder.container(keyedBy: CodingKeys.self) {
-            let backend = try container.decode(String.self, forKey: .backend)
-            if let hashHex = try container.decodeIfPresent(String.self, forKey: .hashHex) ??
-                container.decodeIfPresent(String.self, forKey: .proofHashHex) {
-                self.init(backend: backend, proofHashHex: hashHex)
-                return
-            }
-            if let proofHashBytes = try container.decodeIfPresent([UInt8].self, forKey: .proofHash) {
-                self.init(backend: backend, proofHashHex: proofHashBytes.map { String(format: "%02x", $0) }.joined())
-                return
-            }
-            throw DecodingError.keyNotFound(CodingKeys.hashHex,
-                                            DecodingError.Context(codingPath: container.codingPath,
-                                                                  debugDescription: "Missing proof hash field"))
-        }
-
-        let single = try decoder.singleValueContainer()
-        let stringValue = try single.decode(String.self)
-        let parts = stringValue.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-        guard parts.count == 2 else {
-            throw DecodingError.dataCorruptedError(in: single,
-                                                   debugDescription: "Invalid proof id format")
-        }
-        self.init(backend: String(parts[0]), proofHashHex: String(parts[1]))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let backend = try container.decode(String.self, forKey: .backend)
+        let hashHex = try container.decode(String.self, forKey: .proofHashHex)
+        self.init(backend: backend, proofHashHex: hashHex)
     }
 }
 

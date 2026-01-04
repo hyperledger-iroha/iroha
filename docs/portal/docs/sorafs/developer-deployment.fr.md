@@ -19,7 +19,6 @@ description: Checklist pour promouvoir le pipeline SoraFS de la CI vers la produ
 ---
 
 :::note Source canonique
-Cette page reflète `docs/source/sorafs/developer/deployment.md`. Gardez les deux versions synchronisées jusqu'à la retraite des docs legacy.
 :::
 
 # Notes de déploiement

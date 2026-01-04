@@ -57,7 +57,6 @@ Si l'incident concerne specifiquement les collisions Local-8/Local-12, suivez pl
 ### Problemes de manifest ou de registre
 
 - Suivre `address_manifest_ops.md` pour revalider le dernier manifest bundle et s'assurer qu'aucun selecteur Local-8 n'est revenu.
-- Utiliser `scripts/address_local_toolkit.sh audit ...` quand des selecteurs Local legacy apparaissent dans les payloads.
 
 ### Trafic malveillant ou malforme
 

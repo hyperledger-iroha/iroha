@@ -11,7 +11,6 @@ translation_last_reviewed: 2026-01-01
 
 :::note Source canonique
 Reflete `docs/source/da/threat_model.md`. Gardez les deux versions en sync
-jusqu'a la retraite des docs legacy.
 :::
 
 # Modele de menaces Data Availability Sora Nexus

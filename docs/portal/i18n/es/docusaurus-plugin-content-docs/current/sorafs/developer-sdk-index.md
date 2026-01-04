@@ -11,7 +11,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Fuente canónica
-Esta página refleja `docs/source/sorafs/developer/sdk/index.md`. Mantén ambas copias sincronizadas hasta que el conjunto Sphinx legado se retire.
+Esta página refleja `docs/source/sorafs/developer/sdk/index.md`. Mantén ambas copias sincronizadas.
 :::
 
 Usa este hub para seguir los helpers por lenguaje que se envían con el toolchain de SoraFS.

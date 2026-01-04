@@ -26,7 +26,6 @@ Norito Streaming задает формат на проводе, управляю
 ## Конфигурация рантайма
 
 - **Ключевой материал.** Задайте выделенные ключи через `streaming.identity_public_key`/`streaming.identity_private_key` (Ed25519 multihash) и опциональный материал Kyber через `streaming.kyber_public_key`/`streaming.kyber_secret_key`. При переопределении дефолтов должны присутствовать все четыре; `streaming.kyber_suite` принимает `mlkem512|mlkem768|mlkem1024` (алиасы `kyber512/768/1024`, по умолчанию `mlkem768`).
-- **Ограничители кодека.** CABAC остается выключенным, пока сборка не включает его; bundled rANS требует `ENABLE_RANS_BUNDLES=1`. Контроль через `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` и опциональный `streaming.codec.rans_tables_path` при использовании пользовательских таблиц. Bundled `bundle_width` должен быть от 2 до 3 (включительно); ширина 1 - только для legacy.
 - **Маршруты SoraNet.** `streaming.soranet.*` управляет анонимным транспортом: `exit_multiaddr` (дефолт `/dns/torii/udp/9443/quic`), `padding_budget_ms` (дефолт 25 ms), `access_kind` (`authenticated` vs `read-only`), опциональный `channel_salt` и `provision_spool_dir` (дефолт `./storage/streaming/soranet_routes`).
 - **Sync gate.** `streaming.sync` включает контроль дрейфа для аудиовизуальных потоков: `enabled`, `observe_only`, `ewma_threshold_ms` и `hard_cap_ms` определяют, когда сегменты отклоняются из-за таймингового дрейфа.
 

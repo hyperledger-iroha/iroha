@@ -164,50 +164,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
 `docs/source/sorafs/proposals/`. يوضح قالب JSON أدناه الشكل المتوقع
 (استبدل القيم حسب الحاجة):
 
-```json
-{
-  "ChunkerProfileProposalV1": {
-    "namespace": "sorafs",
-    "name": "sf2",
-    "semver": "1.0.0",
-    "reserved_profile_id": 2,
-    "profile": {
-      "min_size": 65536,
-      "target_size": 262144,
-      "max_size": 524288,
-      "break_mask": "0x0000ffff",
-      "polynomial": "0x3da3358b4dc173",
-      "gear_seed": "sorafs-v2-gear"
-    },
-    "chunk_multihash": {
-      "code": 31,
-      "digest": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
-    },
-    "profile_aliases": ["sorafs.sf2", "sorafs-sf2"],
-    "fixtures_root": "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/",
-    "por_seed": "0xfeedbeefcafebabe",
-    "compatibility": {
-      "supersedes": ["sorafs.sf1@1.0.0"],
-      "grace_epochs": 2,
-      "notes": "Carry envelopes for sf1 during dual-publish window."
-    },
-    "artifacts": {
-      "chunk_boundaries": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.json",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.ts",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.go"
-      ],
-      "fuzz_corpora": [
-        "fuzz/sorafs_chunker/sf2_backpressure.json"
-      ],
-      "por_witnesses": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/por_samples.json"
-      ]
-    },
-    "determinism_report": "docs/source/sorafs/reports/sf2_determinism.md"
-  }
-}
-```
 
 قدّم تقرير Markdown مطابقاً (`determinism_report`) يسجل مخرجات الأوامر و digests للـ chunk وأي
 انحرافات تمت ملاحظتها أثناء التحقق.
@@ -223,7 +179,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
    ظرف الملف المخزن مع fixtures.
 4. **نشر السجل.** يؤدي الدمج إلى تحديث السجل والوثائق والـ fixtures. يظل CLI الافتراضي
    على الملف السابق حتى تعلن الحوكمة أن الهجرة جاهزة.
-5. **تتبع الإيقاف.** بعد نافذة الهجرة، حدّث السجل لتمييز الملفات المستبدلة كـ deprecated
    وأبلغ المشغلين عبر migration ledger.
 
 ## نصائح التأليف

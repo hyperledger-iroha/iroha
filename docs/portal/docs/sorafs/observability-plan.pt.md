@@ -19,7 +19,7 @@ description: Schema de telemetria, dashboards e politica de budget de erro para 
 ---
 
 :::note Fonte canonica
-Esta pagina espelha o plano mantido em `docs/source/sorafs_observability_plan.md`. Mantenha ambas as copias sincronizadas ate que o conjunto Sphinx legado seja totalmente migrado.
+Esta pagina espelha o plano mantido em `docs/source/sorafs_observability_plan.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 ## Objetivos
@@ -39,7 +39,7 @@ Esta pagina espelha o plano mantido em `docs/source/sorafs_observability_plan.md
 | `sorafs_gateway_proof_verifications_total` | Counter | `profile_version`, `result`, `error_code` | Resultados de verificacao de provas capturados no momento da solicitacao (`result` in {`success`,`failure`}). |
 | `sorafs_gateway_proof_duration_ms_bucket` | Histogram | `profile_version`, `result`, `error_code` | Distribuicao de latencia de verificacao para recibos PoR. |
 | `telemetry::sorafs.gateway.request` | Evento estruturado | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | Log estruturado emitido ao concluir cada solicitacao para correlacao em Loki/Tempo. |
-| `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_gateway_refusals_total` | Counter | Conjuntos de labels legados | Metricas Prometheus mantidas para dashboards historicos; emitidas junto com a nova serie OTLP. |
+| `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_gateway_refusals_total` | Counter | Conjuntos de labels alternativos | Metricas Prometheus mantidas para dashboards historicos; emitidas junto com a nova serie OTLP. |
 
 Eventos `telemetry::sorafs.gateway.request` espelham os contadores OTEL com payloads estruturados, expondo `endpoint`, `method`, `variant`, `status`, `error_code` e `duration_ms` para correlacao em Loki/Tempo, enquanto os dashboards consomem a serie OTLP para acompanhamento de SLO.
 

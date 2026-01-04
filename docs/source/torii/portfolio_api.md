@@ -226,7 +226,6 @@ Sample response:
 - `total` reports how many manifests matched before pagination; combine it with
   `limit`/`offset` to page through large UAID histories.
 - `status` filters help operators focus on active manifests. `inactive` returns
-  revoked, expired, or pending entries, while `all` mirrors the legacy behavior.
 
 The endpoint shares the same access controls as `/v1/accounts/{uaid}/portfolio`
 and `/v1/space-directory/uaids/{uaid}`. See `docs/space-directory.md` for the

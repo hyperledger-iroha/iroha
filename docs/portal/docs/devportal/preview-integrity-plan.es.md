@@ -56,7 +56,7 @@ Los ingenieros de CI y de release deben ejecutar el script siempre que descargue
    - Capture el digest del manifiesto devuelto y el CID de SoraFS.
    - Serialice `{ commit, branch, checksum_manifest, cid }` en JSON Norito (`docs/portal/preview/preview_descriptor.json`).
 2. Almacenar el descriptor junto al artefacto de build y exponer el CID en el comentario del pull request.
-3. Agregar pruebas de integracion que ejerzan `sorafs_cli` en modo dry-run para garantizar que cambios futuros mantengan la compatibilidad del esquema de metadatos.
+3. Agregar pruebas de integracion que ejerzan `sorafs_cli` en modo dry-run para garantizar que cambios futuros mantengan la coherencia del esquema de metadatos.
 
 ## Fase 3 - Gobernanza y auditoria
 

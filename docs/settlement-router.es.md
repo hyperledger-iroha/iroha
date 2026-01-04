@@ -26,7 +26,6 @@ deterministas para cada lane.
 
 ## Objetivos
 
-1. **Pila única de router:** Todos los lanes—legacy de un solo lane, lanes públicos de
    Nexus y flujos AMX cross-DS—usan el mismo pipeline de liquidación, de modo que los
    cierres nocturnos sólo necesitan un modelo.
 2. **Conversión determinista:** Las deudas en XOR se derivan de parámetros on‑chain
@@ -135,14 +134,12 @@ Dashboards y alertas:
 Se recomienda habilitar el router en fases:
 
 1. **Shadow mode:** habilitar cálculos del router + telemetría, pero dejando
-   `settlement_debit=false`; comparar contra los recibos legacy.
 2. **Activación de débitos:** activar `settlement_debit=true` para lanes de bajo riesgo
    (perfil C) y verificar conciliaciones.
 3. **Conversión on:** activar TWAMM slices + swaps AMM cuando la telemetría muestre
    estabilidad en los búferes; mantener el RFQ de respaldo preparado.
 4. **Integración con AMX:** garantizar que los lanes AMX propaguen recibos y expongan
    `SETTLEMENT_ROUTER_UNAVAILABLE` a los SDKs para reintentos.
-5. **GA:** retirar la ruta legacy, actualizar `status.md` y las notas de versión, y
    condicionar futuros merges a que la telemetría de liquidación permanezca dentro de los
    umbrales.
 

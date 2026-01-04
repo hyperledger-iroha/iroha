@@ -19,7 +19,7 @@ description: Operacao do daemon `soranet-puzzle-service` para admission tickets 
 ---
 
 :::note Fonte canonica
-Espelha `docs/source/soranet/puzzle_service_operations.md`. Mantenha as duas versoes alinhadas ate que os docs legados sejam retirados.
+Espelha `docs/source/soranet/puzzle_service_operations.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 # Guia de operacoes do Puzzle Service

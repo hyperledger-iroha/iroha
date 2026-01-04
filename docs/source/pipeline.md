@@ -4,7 +4,7 @@ This document describes the end‑to‑end path a transaction follows through an
 
 ## Components & Responsibilities
 
-- `iroha_torii` (Torii API): HTTP/WebSocket interface for clients to submit transactions, run queries, and subscribe to events and telemetry.
+- `iroha_torii` (Torii API): HTTP/WebSocket interface for clients to submit transactions, run queries, and subscribe to events and telemetry. WebSocket block/event streams send Norito-framed binary messages (header + checksum).
 - `iroha_core` (Core): Orchestrates consensus, validation, execution, and state transitions.
   - `sumeragi`: Consensus and leader/proposer selection, block propagation, commit protocol.
   - `state` (World/State, StateBlock): Authoritative state and transactional view used for validation and application.
@@ -176,7 +176,6 @@ Operator access (Torii)
   `PipelineEventBox::Transaction` carries the assigned `lane_id` (`LaneId`) and
   `dataspace_id` (`DataSpaceId`) alongside the existing `hash`, optional
   `block_height`, and `status`. Torii’s SSE/WS adapters surface the new fields
-  in their JSON payloads, so dashboards can distinguish between legacy
   single-lane traffic and Nexus multi-lane routing without extra lookups.
 - The event filter DSL gained matching helpers for the new metadata:
   `TransactionEventFilter::for_lane_id` and `TransactionEventFilter::for_dataspace_id`.
@@ -215,15 +214,12 @@ Operator access (Torii)
   `tx_served` field indicating how many transactions targeting each dataspace
   made it into the block, plus `fault_tolerance` (f) from the dataspace catalog
   to surface lane-relay committee sizing (`3f+1`) in the status payload.
-  Consumers should prefer these structured snapshots over the legacy single-lane
   gauges when building Nexus dashboards.
 - The same `/status` payload now includes `rbc_lane_backlog` and
   `rbc_dataspace_backlog` arrays that aggregate the RBC chunk backlog by lane
   and dataspace. Each entry reports the contributing transaction count, total
   and pending chunk estimates, and cumulative payload bytes so operators can
   pinpoint which lanes are throttled by data-availability retries.
-- Prometheus metrics still publish the aggregate single-lane gauges for backward
-  compatibility (`pipeline_dag_vertices`, `pipeline_overlay_count`, etc.), but
   operators should transition dashboards to the per-lane snapshots to capture
   multi-lane behaviour once Nexus routing is enabled.
 

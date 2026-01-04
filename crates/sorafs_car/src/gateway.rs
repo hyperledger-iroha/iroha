@@ -194,6 +194,15 @@ pub struct GatewayFetchContext {
     fetcher: GatewayFetcher,
 }
 
+impl std::fmt::Debug for GatewayFetchContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayFetchContext")
+            .field("providers_len", &self.providers.len())
+            .field("fetcher", &"<opaque>")
+            .finish()
+    }
+}
+
 impl GatewayFetchContext {
     /// Build a gateway fetch context from the supplied manifest and provider inputs.
     ///
@@ -945,8 +954,10 @@ impl ProviderDescriptor {
             });
         }
         let provider_id_hex = input.provider_id_hex.trim().to_ascii_lowercase();
-        decode_provider_id(&provider_id_hex).map_err(|_| GatewayBuildError::InvalidProviderId {
-            provider_id: provider_id_hex.clone(),
+        let provider_id = decode_provider_id(&provider_id_hex).map_err(|_| {
+            GatewayBuildError::InvalidProviderId {
+                provider_id: provider_id_hex.clone(),
+            }
         })?;
 
         let base_url = parse_base_url(&input.base_url).map_err(|source| {
@@ -979,6 +990,13 @@ impl ProviderDescriptor {
                 source,
             }
         })?;
+
+        if token.body.provider_id != provider_id {
+            return Err(GatewayBuildError::ProviderIdMismatch {
+                provider_id: provider_id_hex.clone(),
+                token_provider_id: hex::encode(token.body.provider_id),
+            });
+        }
 
         if token.body.profile_handle.trim() != config.chunker_handle {
             return Err(GatewayBuildError::ProfileMismatch {
@@ -1113,6 +1131,13 @@ pub enum GatewayBuildError {
     DuplicateProvider { provider_id: String },
     #[error("provider identifier `{provider_id}` must be 32-byte hex")]
     InvalidProviderId { provider_id: String },
+    #[error(
+        "stream token provider id `{token_provider_id}` does not match provider `{provider_id}`"
+    )]
+    ProviderIdMismatch {
+        provider_id: String,
+        token_provider_id: String,
+    },
     #[error("provider `{provider_id}` URL parse error: {source}")]
     InvalidBaseUrl {
         provider_id: String,
@@ -1528,6 +1553,48 @@ mod tests {
             GatewayBuildError::InvalidHeader { header, reason } => {
                 assert_eq!(header, HEADER_SORA_MANIFEST_ENVELOPE);
                 assert_eq!(reason, "manifest envelope must contain valid base64");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn provider_id_mismatch_is_rejected() {
+        let payload = sample_payload(1024);
+        let manifest_id_hex = manifest_id_from_payload(&payload);
+        let provider_id = provider_id_hex();
+        let token_provider_id = "cd".repeat(32);
+        let chunker = chunker_handle();
+        let token = sample_stream_token(&manifest_id_hex, &token_provider_id, &chunker, 2);
+        let token_b64 = encode_token_b64(&token);
+
+        let config = GatewayFetchConfig {
+            manifest_id_hex: manifest_id_hex.clone(),
+            chunker_handle: chunker,
+            manifest_envelope_b64: None,
+            client_id: None,
+            expected_manifest_cid_hex: None,
+            blinded_cid_b64: None,
+            salt_epoch: None,
+            expected_cache_version: None,
+            moderation_token_key_b64: None,
+        };
+        let input = GatewayProviderInput {
+            name: "provider-1".to_string(),
+            provider_id_hex: provider_id.clone(),
+            base_url: "https://example.invalid".to_string(),
+            stream_token_b64: token_b64,
+            privacy_events_url: None,
+        };
+
+        let err = GatewayFetchContext::new(config, vec![input]).expect_err("should fail");
+        match err {
+            GatewayBuildError::ProviderIdMismatch {
+                provider_id: found,
+                token_provider_id: token_id,
+            } => {
+                assert_eq!(found, provider_id);
+                assert_eq!(token_id, token_provider_id);
             }
             other => panic!("unexpected error: {other}"),
         }
