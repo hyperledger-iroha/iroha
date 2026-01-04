@@ -16070,13 +16070,13 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .unwrap()
             .to_bytes();
-        #[derive(norito::codec::Decode)]
+        #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
         struct ExecRootWire {
             block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
             exec_root: Option<iroha_crypto::Hash>,
         }
-        let mut slice: &[u8] = bytes.as_ref();
-        let wire = ExecRootWire::decode_all(&mut slice).expect("decode exec_root norito");
+        let wire: ExecRootWire =
+            norito::decode_from_bytes(&bytes).expect("decode exec_root norito");
         assert!(wire.exec_root.is_none());
 
         // exec_qc
@@ -16116,9 +16116,8 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .unwrap()
             .to_bytes();
-        let mut slice: &[u8] = bytes.as_ref();
-        let decoded_opt =
-            Option::<ExecutionQcRecord>::decode_all(&mut slice).expect("decode exec_qc norito");
+        let decoded_opt: Option<ExecutionQcRecord> =
+            norito::decode_from_bytes(&bytes).expect("decode exec_qc norito");
         assert!(decoded_opt.is_none());
     }
 

@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- Removed SDK legacy shims (Python Torii connect ping aliases + governance lock stats deprecated helpers, Swift ConnectKeyStore plaintext migration + OfflineVerdictStore shim) and updated the iOS demo docs to drop legacy pipeline guidance.
+- Tests: not run (not requested).
+- Cleared IVM OUTPUT region and reset the append-only cursor on program/code load; added commit_output coverage for output reset.
+- Tests: `cargo test --workspace` (failed: `connect_norito_bridge` accel/fixture tests failing with `InvalidMagic` and poisoned chain-discriminant lock; warnings about unused imports/assignments).
 - Fixed tiered WSV snapshot pruning to only remove canonical snapshot directories (preserving lanes/retired folders), documented snapshot directory naming, and added regression coverage; clarified Kura in-memory retention for genesis + last N blocks with a drop-old-block test.
 - Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused assignments/imports in several crates).
 - Removed Python SDK compatibility shims and migration docs; `iroha_python` now exposes only the first-release surface.

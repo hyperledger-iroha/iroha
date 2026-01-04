@@ -74,20 +74,13 @@ config file into the target, or point the environment variable at a manifest on 
 toggle Metal/NEON and Merkle thresholds. Devices without Metal automatically fall back
 to the scalar implementation even when acceleration is requested.
 
-### Legacy Torii deployments
-
-Torii nodes predating the `/v1/pipeline/*` routes still accept the legacy
-`/v1/transactions` surface. Flip the fallback at runtime by setting
-`IrohaSDK.shared.pipelineEndpointMode = .legacy` (for example from `App.swift`) when
-connecting to those environments. The default remains `.pipeline`.
-
 ### Pipeline submission walkthrough
 
 `TransfersViewModel` calls `IrohaSDK.shared.submitAndWait(envelope:)`, which posts the
 signed payload to `/v1/pipeline/transactions` and then polls
 `/v1/pipeline/transactions/status` until the transaction reaches a terminal state. The
 UI reflects intermediate states (`Queued`, `Approved`, etc.) so QA runs can confirm the
-pipeline path end-to-end without switching to the legacy endpoints.
+pipeline path end-to-end.
 
 ## CI verification
 

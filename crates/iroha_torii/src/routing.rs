@@ -36580,8 +36580,6 @@ mod tests {
 
     #[tokio::test]
     async fn status_accept_header_returns_codec_norito() {
-        use norito::codec::DecodeAll as _;
-
         let telemetry = MaybeTelemetry::for_tests();
         let expected = Status::from(telemetry.metrics().await);
         let response = super::handle_status(
@@ -36608,8 +36606,7 @@ mod tests {
             .await
             .expect("collect body")
             .to_bytes();
-        let mut cursor = Cursor::new(body.as_ref());
-        let decoded = Status::decode_all(&mut cursor).expect("decode Norito status");
+        let decoded: Status = norito::decode_from_bytes(&body).expect("decode Norito status");
         assert_eq!(decoded.blocks, expected.blocks);
         assert_eq!(decoded.blocks_non_empty, expected.blocks_non_empty);
     }
