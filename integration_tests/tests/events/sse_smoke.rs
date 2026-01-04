@@ -58,7 +58,7 @@ fn wait_for_sse_ready(rx: &Receiver<String>) -> Result<()> {
 #[test]
 fn sse_emits_execute_trigger_event() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
+        NetworkBuilder::new().with_min_peers(4),
         stringify!(sse_emits_execute_trigger_event),
     )?
     else {
@@ -130,7 +130,7 @@ fn sse_captures_time_trigger_and_metadata_events() -> Result<()> {
     use iroha::data_model::events::time::{ExecutionTime, TimeEventFilter};
 
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
+        NetworkBuilder::new().with_min_peers(4),
         stringify!(sse_captures_time_trigger_and_metadata_events),
     )?
     else {
