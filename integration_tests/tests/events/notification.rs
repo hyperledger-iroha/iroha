@@ -12,7 +12,7 @@ use tokio::{task::spawn_blocking, time::timeout};
 #[tokio::test]
 async fn trigger_completion_success_should_produce_event() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new(),
+        NetworkBuilder::new().with_min_peers(4),
         stringify!(trigger_completion_success_should_produce_event),
     )
     .await?
@@ -85,7 +85,7 @@ async fn trigger_completion_success_should_produce_event() -> Result<()> {
 #[tokio::test]
 async fn trigger_completion_failure_reports_error() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new(),
+        NetworkBuilder::new().with_min_peers(4),
         stringify!(trigger_completion_failure_reports_error),
     )
     .await?
