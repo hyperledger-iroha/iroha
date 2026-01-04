@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- Block sync now derives the consensus-mode tag per height (permissioned vs NPoS) instead of hardcoding permissioned, so signature validation aligns with on-chain mode; added unit coverage for NPoS rotation in block-sync filtering.
+- Tests: `cargo test -p iroha_core filter_blocks_rotates_topology_for_npos_view -- --nocapture` (timed out after 120s; build directory lock/compile delay).
+- Transaction confirmation now treats rejection/expiration/queued-too-long as final (skips fallback polling) to avoid 180s waits on expected failures; added unit coverage for final-error fallback gating.
+- Tests: `cargo test -p iroha tx_confirmation_stream_tests::final_confirmation_errors_skip_fallback -- --nocapture` (timed out after 120s while compiling `iroha`).
 - Resolved merge conflict markers in `status.md`.
 - Tests: not run (merge resolution only).
 - Standardized IVM header major to v1 across parser/admission paths, compiler outputs, fixtures, and shipped `.to` artifacts; refreshed header/docs references to drop v2.

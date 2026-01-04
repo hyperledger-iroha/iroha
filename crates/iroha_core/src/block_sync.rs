@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use iroha_config::parameters::actual::BlockSync as Config;
+use iroha_config::parameters::actual::{BlockSync as Config, ConsensusMode};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
@@ -164,7 +164,7 @@ pub struct BlockSynchronizer {
     state: Arc<State>,
     seen_blocks: BTreeSet<(NonZeroUsize, HashOf<BlockHeader>)>,
     latest_height: usize,
-    mode_tag: String,
+    fallback_consensus_mode: ConsensusMode,
 }
 
 pub use message::RosterMetadata;
@@ -306,7 +306,7 @@ impl BlockSynchronizer {
         peer: Peer,
         network: IrohaNetwork,
         state: Arc<State>,
-        mode_tag: String,
+        fallback_consensus_mode: ConsensusMode,
     ) -> Self {
         Self {
             peer,
@@ -318,7 +318,7 @@ impl BlockSynchronizer {
             state,
             seen_blocks: BTreeSet::new(),
             latest_height: 0,
-            mode_tag,
+            fallback_consensus_mode,
         }
     }
 
@@ -1300,6 +1300,22 @@ pub mod message {
             .then(|| crate::sumeragi::npos_seed_for_height(state_view, block_height))
     }
 
+    fn mode_tag_for_block_sync(
+        state_view: &StateView<'_>,
+        block_height: u64,
+        fallback_consensus_mode: ConsensusMode,
+    ) -> &'static str {
+        let consensus_mode = crate::sumeragi::effective_consensus_mode_for_height(
+            state_view,
+            block_height,
+            fallback_consensus_mode,
+        );
+        match consensus_mode {
+            ConsensusMode::Permissioned => PERMISSIONED_TAG,
+            ConsensusMode::Npos => NPOS_TAG,
+        }
+    }
+
     impl BlockSyncValidationContext {
         fn new(
             block: &SignedBlock,
@@ -1451,7 +1467,7 @@ pub mod message {
             rosters: &BTreeMap<HashOf<BlockHeader>, RosterMetadata>,
             fallback_topology: Option<&Topology>,
             state_view: &StateView<'_>,
-            mode_tag: &str,
+            fallback_consensus_mode: ConsensusMode,
         ) -> (Vec<(SignedBlock, Option<Qc>)>, usize) {
             let mut dropped = 0usize;
             let fallback_topology = fallback_topology.cloned();
@@ -1459,6 +1475,7 @@ pub mod message {
                 .into_iter()
                 .filter_map(|(block, qc)| {
                     let block_hash = block.hash();
+                    let block_height = block.header().height().get();
                     let roster_topology = rosters
                         .get(&block_hash)
                         .and_then(RosterMetadata::validator_set)
@@ -1468,6 +1485,11 @@ pub mod message {
                     let Some(topology) = topology else {
                         return Some((block, qc));
                     };
+                    let mode_tag = mode_tag_for_block_sync(
+                        state_view,
+                        block_height,
+                        fallback_consensus_mode,
+                    );
                     let context =
                         BlockSyncValidationContext::new(&block, &topology, state_view, mode_tag);
                     let sanitized_qc = sanitize_block_sync_qc(&block, qc, &context);
@@ -1624,7 +1646,7 @@ pub mod message {
                             &roster_by_hash,
                             fallback_topology.as_ref(),
                             &state_view,
-                            &block_sync.mode_tag,
+                            block_sync.fallback_consensus_mode,
                         )
                     };
                     if dropped > 0 {
@@ -1998,6 +2020,7 @@ pub mod message {
     mod filter_tests {
         use std::{
             collections::{BTreeMap, BTreeSet},
+            num::NonZeroU64,
             str::FromStr,
         };
 
@@ -2008,7 +2031,7 @@ pub mod message {
                 ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
                 VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
             },
-            parameter::Parameters,
+            parameter::{Parameter, Parameters, system::SumeragiNposParameters},
             peer::PeerId,
         };
         use iroha_schema::Ident;
@@ -2333,13 +2356,12 @@ pub mod message {
                 LiveQueryStore::start_test(),
             );
             let state_view = state.view();
-            let (_, mode_tag) = test_chain_config();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(insufficient_block, None), (valid_block.clone(), None)],
                 &BTreeMap::new(),
                 Some(&topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
 
             assert_eq!(dropped, 1);
@@ -2374,13 +2396,12 @@ pub mod message {
                 LiveQueryStore::start_test(),
             );
             let state_view = state.view();
-            let (_, mode_tag) = test_chain_config();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(invalid_block, None), (valid_block.clone(), None)],
                 &BTreeMap::new(),
                 Some(&topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
 
             assert_eq!(dropped, 1);
@@ -2411,13 +2432,93 @@ pub mod message {
                 LiveQueryStore::start_test(),
             );
             let state_view = state.view();
-            let mode_tag = PERMISSIONED_TAG.to_owned();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],
                 &BTreeMap::new(),
                 Some(&topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
+            );
+
+            assert_eq!(dropped, 0);
+            assert_eq!(filtered, vec![(block, None)]);
+        }
+
+        #[test]
+        fn filter_blocks_rotates_topology_for_npos_view() {
+            let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_a.public_key().clone()),
+                PeerId::new(kp_b.public_key().clone()),
+            ]);
+            let height = 2_u64;
+
+            let mut chosen = None;
+            for seed in [[0x5A; 32], [0xA5; 32], [0x3C; 32]] {
+                for view in 0_u64..=2 {
+                    let mut permissioned = topology.clone();
+                    if let Ok(view_usize) = usize::try_from(view) {
+                        permissioned.nth_rotation(view_usize);
+                    }
+                    let mut npos = topology.clone();
+                    let leader = npos.leader_index_prf(seed, height, view);
+                    npos.rotate_preserve_view_to_front(leader);
+                    if permissioned.as_ref() != npos.as_ref() {
+                        chosen = Some((seed, view, npos));
+                        break;
+                    }
+                }
+                if chosen.is_some() {
+                    break;
+                }
+            }
+            let (seed, view, rotated) =
+                chosen.expect("seed should yield distinct NPoS rotation");
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let mut world = state.world.block();
+            let params = SumeragiNposParameters::default().with_epoch_seed(seed);
+            world
+                .parameters
+                .set_parameter(Parameter::Custom(params.into_custom_parameter()));
+            world.commit();
+
+            let height_nz = NonZeroU64::new(height).expect("height must be non-zero");
+            let mut block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(kp_a.private_key(), |header| {
+                    header.set_height(height_nz);
+                    header.set_view_change_index(
+                        u32::try_from(view).expect("view fits u32"),
+                    );
+                })
+                .into();
+            let block_hash = block.hash();
+            let mut signatures = BTreeSet::new();
+            for kp in [&kp_a, &kp_b] {
+                let idx = rotated
+                    .position(kp.public_key())
+                    .expect("signer in rotated topology");
+                signatures.insert(BlockSignature::new(
+                    idx as u64,
+                    SignatureOf::from_hash(kp.private_key(), block_hash),
+                ));
+            }
+            block
+                .replace_signatures(signatures)
+                .expect("signature replacement succeeds");
+
+            let state_view = state.view();
+            let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), None)],
+                &BTreeMap::new(),
+                Some(&topology),
+                &state_view,
+                ConsensusMode::Npos,
             );
 
             assert_eq!(dropped, 0);
@@ -2466,14 +2567,12 @@ pub mod message {
                 LiveQueryStore::start_test(),
             );
             let state_view = state.view();
-            let (_, mode_tag) = test_chain_config();
-
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],
                 &BTreeMap::new(),
                 Some(&fallback_topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
             assert_eq!(dropped, 1);
             assert!(filtered.is_empty());
@@ -2483,7 +2582,7 @@ pub mod message {
                 &rosters,
                 Some(&fallback_topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
             assert_eq!(dropped, 0);
             assert_eq!(filtered, vec![(block, None)]);
@@ -2530,13 +2629,12 @@ pub mod message {
             let fresh_block: SignedBlock = fresh_block.into();
 
             let state_view = state.view();
-            let (_, mode_tag) = test_chain_config();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(expired_block, None), (fresh_block.clone(), None)],
                 &BTreeMap::new(),
                 Some(&topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
 
             assert_eq!(dropped, 1, "expired keys should be rejected");
@@ -2645,7 +2743,7 @@ pub mod message {
                 &BTreeMap::new(),
                 Some(&topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
 
             assert_eq!(dropped, 0);
@@ -2720,7 +2818,7 @@ pub mod message {
                 &BTreeMap::new(),
                 Some(&topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
 
             assert_eq!(dropped, 0);
@@ -2825,7 +2923,7 @@ pub mod message {
                 &BTreeMap::new(),
                 Some(&topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
 
             assert_eq!(dropped, 0);
@@ -2877,7 +2975,7 @@ pub mod message {
                 &BTreeMap::new(),
                 Some(&topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
 
             assert_eq!(dropped, 0);
@@ -2933,7 +3031,7 @@ pub mod message {
                 &BTreeMap::new(),
                 Some(&topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
 
             assert_eq!(dropped, 0);
@@ -3013,7 +3111,7 @@ pub mod message {
                 &BTreeMap::new(),
                 Some(&topology),
                 &state_view,
-                &mode_tag,
+                ConsensusMode::Permissioned,
             );
 
             assert_eq!(dropped, 0);
