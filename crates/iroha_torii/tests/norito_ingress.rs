@@ -79,7 +79,6 @@ async fn norito_transaction_returns_submission_receipt() {
     use iroha_data_model::transaction::{SignedTransaction, TransactionSubmissionReceipt};
     use iroha_torii_shared::uri;
     use iroha_version::codec::DecodeVersioned as _;
-    use norito::codec::DecodeAll as _;
     use tower::ServiceExt as _;
 
     let harness = NoritoRpcHarness::new(|cfg| {
@@ -109,8 +108,8 @@ async fn norito_transaction_returns_submission_receipt() {
         .await
         .expect("collect body")
         .to_bytes();
-    let mut slice: &[u8] = body.as_ref();
-    let receipt = TransactionSubmissionReceipt::decode_all(&mut slice).expect("decode receipt");
+    let receipt: TransactionSubmissionReceipt =
+        norito::decode_from_bytes(&body).expect("decode receipt");
     assert!(receipt.verify().is_ok());
     assert_eq!(receipt.payload.tx_hash, expected_hash);
     assert_eq!(

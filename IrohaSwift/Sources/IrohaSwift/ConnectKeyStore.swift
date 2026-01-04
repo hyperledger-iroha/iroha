@@ -472,9 +472,9 @@ private struct FileBacking: Backing {
         return root.appendingPathComponent("iroha_connect_keystore", isDirectory: true)
     }
 
-    func load(label: String, rawLabel: String) throws -> ConnectKeyStore.StoredKey? {
+    func load(label: String, rawLabel _: String) throws -> ConnectKeyStore.StoredKey? {
         try queue.sync {
-            let url = try canonicalPath(for: label, rawLabel: rawLabel)
+            let url = try canonicalPath(for: label)
             guard FileManager.default.fileExists(atPath: url.path) else {
                 return nil
             }
@@ -483,16 +483,9 @@ private struct FileBacking: Backing {
             decoder.dateDecodingStrategy = .iso8601
 
             do {
-                if let envelope = try? decoder.decode(StoredEnvelope.self, from: data) {
-                    try verifyEnvelope(envelope, label: label)
-                    return envelope.payload
-                }
-
-                let legacy = try decoder.decode(ConnectKeyStore.StoredKey.self, from: data)
-                try validateAttestation(for: legacy)
-                let envelope = try envelopeForSave(stored: legacy, label: label)
-                try writeProtected(data: try encoder().encode(envelope), to: url)
-                return legacy
+                let envelope = try decoder.decode(StoredEnvelope.self, from: data)
+                try verifyEnvelope(envelope, label: label)
+                return envelope.payload
             } catch let storeError as ConnectKeyStoreError {
                 throw storeError
             } catch {
@@ -501,9 +494,9 @@ private struct FileBacking: Backing {
         }
     }
 
-    func save(label: String, rawLabel: String, stored: ConnectKeyStore.StoredKey) throws {
+    func save(label: String, rawLabel _: String, stored: ConnectKeyStore.StoredKey) throws {
         try queue.sync {
-            let url = try canonicalPath(for: label, rawLabel: rawLabel)
+            let url = try canonicalPath(for: label)
             try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
             let envelope = try envelopeForSave(stored: stored, label: label)
             let encoded = try encoder().encode(envelope)
@@ -511,16 +504,11 @@ private struct FileBacking: Backing {
         }
     }
 
-    func delete(label: String, rawLabel: String) throws {
+    func delete(label: String, rawLabel _: String) throws {
         try queue.sync {
-            let url = try canonicalPath(for: label, rawLabel: rawLabel)
+            let url = try canonicalPath(for: label)
             if FileManager.default.fileExists(atPath: url.path) {
                 try FileManager.default.removeItem(at: url)
-            } else if label != rawLabel {
-                let legacy = legacyPath(for: rawLabel)
-                if FileManager.default.fileExists(atPath: legacy.path) {
-                    try FileManager.default.removeItem(at: legacy)
-                }
             }
         }
     }
@@ -559,24 +547,14 @@ private struct FileBacking: Backing {
         }
     }
 
-    private func canonicalPath(for label: String, rawLabel: String) throws -> URL {
+    private func canonicalPath(for label: String) throws -> URL {
         try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         let sanitized = path(for: label)
-        if !FileManager.default.fileExists(atPath: sanitized.path), label != rawLabel {
-            let legacy = legacyPath(for: rawLabel)
-            if FileManager.default.fileExists(atPath: legacy.path) {
-                try FileManager.default.moveItem(at: legacy, to: sanitized)
-            }
-        }
         return sanitized
     }
 
     private func path(for label: String) -> URL {
         baseDirectory.appendingPathComponent("\(label).json", isDirectory: false)
-    }
-
-    private func legacyPath(for rawLabel: String) -> URL {
-        baseDirectory.appendingPathComponent("\(rawLabel).json", isDirectory: false)
     }
 
     private func encoder() -> JSONEncoder {

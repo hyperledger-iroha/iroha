@@ -1621,47 +1621,7 @@ def test_get_connect_status_parses_payload() -> None:
     assert snapshot.policy is not None
     assert snapshot.policy.ws_max_sessions == 32
     assert snapshot.policy.heartbeat_interval_ms == 5000
-    assert snapshot.policy.ping_interval_ms == 5000  # legacy alias
     assert session.calls[0]["url"].endswith("/v1/connect/status")
-
-
-def test_connect_status_policy_accepts_legacy_ping_fields() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "enabled": True,
-                "sessions_total": 1,
-                "sessions_active": 1,
-                "per_ip_sessions": [],
-                "buffered_sessions": 0,
-                "total_buffer_bytes": 0,
-                "dedupe_size": 0,
-                "frames_in_total": 0,
-                "frames_out_total": 0,
-                "ciphertext_total": 0,
-                "dedupe_drops_total": 0,
-                "buffer_drops_total": 0,
-                "plaintext_control_drops_total": 0,
-                "monotonic_drops_total": 0,
-                "ping_miss_total": 0,
-                "policy": {
-                    "relay_enabled": False,
-                    "ping_interval_ms": 60000,
-                    "ping_miss_tolerance": 2,
-                    "ping_min_interval_ms": 5000,
-                },
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    snapshot = client.get_connect_status()
-
-    assert snapshot.policy is not None
-    assert snapshot.policy.heartbeat_interval_ms == 60000
-    assert snapshot.policy.ping_miss_tolerance == 2
-    assert snapshot.policy.heartbeat_min_interval_ms == 5000
 
 
 def test_create_and_delete_connect_session() -> None:
@@ -1743,7 +1703,6 @@ def test_connect_app_registry_and_policy_helpers() -> None:
     policy = client.get_connect_app_policy()
     assert policy.relay_enabled is False
     assert policy.heartbeat_interval_ms == 15000
-    assert policy.ping_interval_ms == 15000
 
     updated = client.update_connect_app_policy({"relay_enabled": True, "heartbeat_interval_ms": 12000})
     assert updated.relay_enabled is True

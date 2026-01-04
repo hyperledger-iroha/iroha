@@ -149,6 +149,8 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Drop IVM header legacy magic/padding parsing and require registration-height metadata for time triggers.
    - [x] Standardize IVM header major to v1 across code, tests, fixtures, and docs.
    - [x] Remove `iroha_python` compatibility shims and migration docs.
+   - [x] Remove Python SDK deprecated governance lock stats helpers and Torii connect ping alias parsing.
+   - [x] Remove Swift SDK legacy ConnectKeyStore plaintext migration + OfflineVerdictStore shim; update the iOS demo to drop legacy pipeline guidance.
    - [x] Remove legacy width inference in rANS table tooling (require explicit `width_bits`).
     - [x] Clean Torii contract API and IVM alignment docs to remove legacy/deprecated alias notes.
     - [ ] Enforce ABI v1 only (remove Experimental policy paths) and update related tests/docs.

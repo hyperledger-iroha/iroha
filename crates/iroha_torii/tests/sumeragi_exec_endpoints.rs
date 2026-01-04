@@ -13,7 +13,6 @@ use iroha_core::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{block::BlockHeader, consensus::ExecutionQcRecord};
 use nonzero_ext::nonzero;
-use norito::codec::DecodeAll as _;
 
 fn seed_exec_state() -> (
     Arc<CoreState>,
@@ -196,8 +195,7 @@ async fn sumeragi_exec_qc_endpoint_supports_norito_payload() {
         Some("application/x-norito")
     );
     let bytes = BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-    let mut slice: &[u8] = bytes.as_ref();
-    let decoded =
-        Option::<ExecutionQcRecord>::decode_all(&mut slice).expect("decode ExecutionQC Norito");
+    let decoded: Option<ExecutionQcRecord> =
+        norito::decode_from_bytes(&bytes).expect("decode ExecutionQC Norito");
     assert_eq!(decoded.as_ref(), Some(&qc));
 }
