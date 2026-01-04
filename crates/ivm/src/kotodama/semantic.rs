@@ -153,15 +153,23 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
             }
             Item::State(st) => {
                 let ty = convert_type_expr(&st.ty)?;
-                if let Type::Map(_k, v) = &ty
-                    && !is_supported_durable_value_type(v)
-                {
-                    return Err(SemanticError {
-                        message: format!(
-                            "state Map value type `{}` is not supported for durable storage; use int, bool, Json, Blob, or pointer types",
-                            type_name(v)
-                        ),
-                    });
+                if let Type::Map(k, v) = &ty {
+                    if !is_supported_durable_key_type(k) {
+                        return Err(SemanticError {
+                            message: format!(
+                                "state Map key type `{}` is not supported for durable storage; use int or pointer types",
+                                type_name(k)
+                            ),
+                        });
+                    }
+                    if !is_supported_durable_value_type(v) {
+                        return Err(SemanticError {
+                            message: format!(
+                                "state Map value type `{}` is not supported for durable storage; use int, bool, Json, Blob, or pointer types",
+                                type_name(v)
+                            ),
+                        });
+                    }
                 }
                 state.insert(st.name.clone(), ty);
             }
@@ -235,8 +243,72 @@ fn is_supported_durable_value_type(ty: &Type) -> bool {
     }
 }
 
+fn is_supported_durable_key_type(ty: &Type) -> bool {
+    match resolve_struct_type(ty) {
+        Type::Int => true,
+        other if is_pointer_type(&other) => true,
+        _ => false,
+    }
+}
+
+fn validate_state_type(ty: &Type) -> Result<(), SemanticError> {
+    match resolve_struct_type(ty) {
+        Type::Map(k, v) => {
+            if !is_supported_durable_key_type(&k) {
+                return Err(SemanticError {
+                    message: format!(
+                        "state Map key type `{}` is not supported for durable storage; use int or pointer types",
+                        type_name(&k)
+                    ),
+                });
+            }
+            if !is_supported_durable_value_type(&v) {
+                return Err(SemanticError {
+                    message: format!(
+                        "state Map value type `{}` is not supported for durable storage; use int, bool, Json, Blob, or pointer types",
+                        type_name(&v)
+                    ),
+                });
+            }
+            Ok(())
+        }
+        Type::Struct { fields, .. } => {
+            for (_, field_ty) in fields {
+                validate_state_type(&field_ty)?;
+            }
+            Ok(())
+        }
+        Type::Tuple(items) => {
+            for item in items {
+                validate_state_type(&item)?;
+            }
+            Ok(())
+        }
+        other => {
+            if is_supported_durable_value_type(&other) {
+                Ok(())
+            } else {
+                Err(SemanticError {
+                    message: format!(
+                        "state type `{}` is not supported for durable storage; use int, bool, Json, Blob, or pointer types",
+                        type_name(&other)
+                    ),
+                })
+            }
+        }
+    }
+}
+
 pub(crate) fn is_blob_like(ty: &Type) -> bool {
     matches!(resolve_struct_type(ty), Type::Blob | Type::Bytes)
+}
+
+fn is_eq_comparable_type(ty: &Type) -> bool {
+    match resolve_struct_type(ty) {
+        Type::Int | Type::Bool | Type::String | Type::Blob | Type::Bytes | Type::Json => true,
+        other if is_pointer_type(&other) => true,
+        _ => false,
+    }
 }
 
 pub fn is_pointer_type(ty: &Type) -> bool {
@@ -374,6 +446,7 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
         }
     });
     for param in &func.params {
+        ensure_not_state_shadow(&param.name)?;
         let ty = parse_declared_param_type(&param.ty, &param.name)?;
         vars.insert(param.name.clone(), ty);
         param_names.push(param.name.clone());
@@ -435,13 +508,20 @@ fn analyze_statement(
     let _ = loop_depth;
     match stmt {
         Statement::Let { pat, ty, value } => {
-            let expr = analyze_expr(value, vars)?;
+            let mut expr = analyze_expr(value, vars)?;
             if let Some(tann) = ty {
                 let dt = convert_type_expr(tann)?;
+                apply_map_new_type_hint(&mut expr, &dt);
                 ensure_assignable(&dt, &expr.ty)?;
+            }
+            if is_state_map_expr(&expr) {
+                return Err(SemanticError {
+                    message: "E_STATE_MAP_ALIAS: state maps are not first-class; use the state identifier directly.".into(),
+                });
             }
             match pat {
                 Pattern::Name(name) => {
+                    ensure_not_state_shadow(name)?;
                     // Bind the name and, if it's a tuple, also synthesize per-field bindings name#i.
                     let mut out = Vec::new();
                     vars.insert(name.clone(), expr.ty.clone());
@@ -488,76 +568,79 @@ fn analyze_statement(
                 }
                 Pattern::Tuple(names) => {
                     let mut out = Vec::new();
+                    for name in names.iter() {
+                        ensure_not_state_shadow(name)?;
+                    }
                     match &expr.ty {
                         Type::Tuple(ts) => {
+                            if names.len() != ts.len() {
+                                return Err(SemanticError {
+                                    message: format!(
+                                        "tuple destructuring expects {} bindings, got {}",
+                                        ts.len(),
+                                        names.len()
+                                    ),
+                                });
+                            }
                             // Destructure by emitting member-access typed expressions for each field.
                             for (i, name) in names.iter().enumerate() {
-                                if let Some(ti) = ts.get(i) {
-                                    let member = TypedExpr {
+                                let ti = ts.get(i).cloned().expect("tuple arity already validated");
+                                let member = TypedExpr {
+                                    expr: ExprKind::Member {
+                                        object: Box::new(expr.clone()),
+                                        field: i.to_string(),
+                                    },
+                                    ty: ti.clone(),
+                                };
+                                vars.insert(name.clone(), ti.clone());
+                                out.push(TypedStatement::Let {
+                                    name: name.clone(),
+                                    value: member,
+                                });
+                            }
+                        }
+                        Type::Struct { fields, .. } => {
+                            if names.len() != fields.len() {
+                                return Err(SemanticError {
+                                    message: format!(
+                                        "struct destructuring expects {} bindings, got {}",
+                                        fields.len(),
+                                        names.len()
+                                    ),
+                                });
+                            }
+                            for (i, name) in names.iter().enumerate() {
+                                let (_fname, ti) = fields
+                                    .get(i)
+                                    .cloned()
+                                    .expect("struct arity already validated");
+                                let val_expr = if let ExprKind::Tuple(ts) = &expr.expr {
+                                    ts.get(i).cloned().unwrap_or(TypedExpr {
+                                        expr: ExprKind::Number(0),
+                                        ty: resolve_struct_type(&ti),
+                                    })
+                                } else {
+                                    TypedExpr {
                                         expr: ExprKind::Member {
                                             object: Box::new(expr.clone()),
                                             field: i.to_string(),
                                         },
-                                        ty: ti.clone(),
-                                    };
-                                    vars.insert(name.clone(), ti.clone());
-                                    out.push(TypedStatement::Let {
-                                        name: name.clone(),
-                                        value: member,
-                                    });
-                                } else {
-                                    // Fallback: bind original expr if index out of bounds
-                                    vars.insert(name.clone(), expr.ty.clone());
-                                    out.push(TypedStatement::Let {
-                                        name: name.clone(),
-                                        value: expr.clone(),
-                                    });
-                                }
-                            }
-                        }
-                        Type::Struct { fields, .. } => {
-                            for (i, name) in names.iter().enumerate() {
-                                if let Some((_, ti)) = fields.get(i) {
-                                    let val_expr = if let ExprKind::Tuple(ts) = &expr.expr {
-                                        ts.get(i).cloned().unwrap_or(TypedExpr {
-                                            expr: ExprKind::Number(0),
-                                            ty: resolve_struct_type(ti),
-                                        })
-                                    } else {
-                                        TypedExpr {
-                                            expr: ExprKind::Member {
-                                                object: Box::new(expr.clone()),
-                                                field: i.to_string(),
-                                            },
-                                            ty: resolve_struct_type(ti),
-                                        }
-                                    };
-                                    let field_ty = resolve_struct_type(ti);
-                                    vars.insert(name.clone(), field_ty.clone());
-                                    out.push(TypedStatement::Let {
-                                        name: name.clone(),
-                                        value: val_expr.clone(),
-                                    });
-                                    bind_struct_fields_rec(
-                                        &mut out, vars, name, &val_expr, &field_ty,
-                                    );
-                                } else {
-                                    vars.insert(name.clone(), expr.ty.clone());
-                                    out.push(TypedStatement::Let {
-                                        name: name.clone(),
-                                        value: expr.clone(),
-                                    });
-                                }
+                                        ty: resolve_struct_type(&ti),
+                                    }
+                                };
+                                let field_ty = resolve_struct_type(&ti);
+                                vars.insert(name.clone(), field_ty.clone());
+                                out.push(TypedStatement::Let {
+                                    name: name.clone(),
+                                    value: val_expr.clone(),
+                                });
+                                bind_struct_fields_rec(&mut out, vars, name, &val_expr, &field_ty);
                             }
                         }
                         _ => {
-                            for name in names.iter() {
-                                vars.insert(name.clone(), expr.ty.clone());
-                                out.push(TypedStatement::Let {
-                                    name: name.clone(),
-                                    value: expr.clone(),
-                                });
-                            }
+                            return Err(SemanticError {
+                                message: "tuple destructuring expects a tuple or struct".into(),
+                            });
                         }
                     }
                     Ok(out)
@@ -569,12 +652,14 @@ fn analyze_statement(
             let expected = vars.get(name).cloned().ok_or_else(|| SemanticError {
                 message: format!("undefined variable {name}"),
             })?;
-            let expr = analyze_expr(value, vars)?;
-            if expr.ty != expected {
+            let mut expr = analyze_expr(value, vars)?;
+            if is_state_map_expr(&expr) {
                 return Err(SemanticError {
-                    message: "assignment type mismatch".into(),
+                    message: "E_STATE_MAP_ALIAS: state maps are not first-class; use the state identifier directly.".into(),
                 });
             }
+            apply_map_new_type_hint(&mut expr, &expected);
+            ensure_assignable(&expected, &expr.ty)?;
             // Rebind SSA name to new value
             vars.insert(name.clone(), expr.ty.clone());
             let mut out = Vec::new();
@@ -592,9 +677,19 @@ fn analyze_statement(
                     let map_t = analyze_expr(map, vars)?;
                     let key_t = analyze_expr(index, vars)?;
                     let val_t = analyze_expr(value, vars)?;
-                    if let Type::Map(k, v) = map_t.ty.clone() {
-                        ensure_assignable(&k, &key_t.ty)?;
-                        ensure_assignable(&v, &val_t.ty)?;
+                    match map_t.ty.clone() {
+                        Type::Map(k, v) => {
+                            ensure_assignable(&k, &key_t.ty)?;
+                            ensure_assignable(&v, &val_t.ty)?;
+                        }
+                        other => {
+                            return Err(SemanticError {
+                                message: format!(
+                                    "map assignment expects Map<K,V> target, got {}",
+                                    type_name(&other)
+                                ),
+                            });
+                        }
                     }
                     Ok(vec![TypedStatement::MapSet {
                         map: map_t,
@@ -607,7 +702,13 @@ fn analyze_statement(
                     let expected = vars.get(name).cloned().ok_or_else(|| SemanticError {
                         message: format!("undefined variable {name}"),
                     })?;
-                    let expr = analyze_expr(value, vars)?;
+                    let mut expr = analyze_expr(value, vars)?;
+                    if is_state_map_expr(&expr) {
+                        return Err(SemanticError {
+                            message: "E_STATE_MAP_ALIAS: state maps are not first-class; use the state identifier directly.".into(),
+                        });
+                    }
+                    apply_map_new_type_hint(&mut expr, &expected);
                     ensure_assignable(&expected, &expr.ty)?;
                     vars.insert(name.clone(), expr.ty.clone());
                     let mut out = Vec::new();
@@ -619,15 +720,15 @@ fn analyze_statement(
                     Ok(out)
                 }
                 _ => {
-                    // Fallback to expression evaluation to keep program compilable
-                    let expr = analyze_expr(value, vars)?;
-                    Ok(vec![TypedStatement::Expr(expr)])
+                    return Err(SemanticError {
+                        message: "assignment target must be a variable or map index".into(),
+                    });
                 }
             }
         }
         Statement::Expr(e) => Ok(vec![TypedStatement::Expr(analyze_expr(e, vars)?)]),
         Statement::Return(opt) => {
-            let tv = if let Some(e) = opt {
+            let mut tv = if let Some(e) = opt {
                 Some(analyze_expr(e, vars)?)
             } else {
                 None
@@ -639,6 +740,9 @@ fn analyze_statement(
                     });
                 }
             } else if let Some(exp) = expected_ret {
+                if let Some(expr) = tv.as_mut() {
+                    apply_map_new_type_hint(expr, exp);
+                }
                 match (&tv, exp) {
                     (None, Type::Unit) => {}
                     (None, _) => {
@@ -661,8 +765,22 @@ fn analyze_statement(
             }
             Ok(vec![TypedStatement::Return(tv)])
         }
-        Statement::Break => Ok(vec![TypedStatement::Break]),
-        Statement::Continue => Ok(vec![TypedStatement::Continue]),
+        Statement::Break => {
+            if loop_depth == 0 {
+                return Err(SemanticError {
+                    message: "E_BREAK_OUTSIDE_LOOP: `break` must appear inside a loop".into(),
+                });
+            }
+            Ok(vec![TypedStatement::Break])
+        }
+        Statement::Continue => {
+            if loop_depth == 0 {
+                return Err(SemanticError {
+                    message: "E_CONTINUE_OUTSIDE_LOOP: `continue` must appear inside a loop".into(),
+                });
+            }
+            Ok(vec![TypedStatement::Continue])
+        }
         Statement::If {
             cond,
             then_branch,
@@ -715,16 +833,20 @@ fn analyze_statement(
             let mut local = vars.clone();
             let init_t = if let Some(s) = init {
                 let mut v = analyze_statement(s, &mut local, expected_ret, loop_depth)?;
-                let last = v.pop().unwrap_or(TypedStatement::Expr(TypedExpr {
-                    expr: ExprKind::Number(0),
-                    ty: Type::Int,
-                }));
-                Some(Box::new(last))
+                if v.len() != 1 {
+                    return Err(SemanticError {
+                        message: "E0005: for-loop initializer must be a simple let or expression"
+                            .into(),
+                    });
+                }
+                Some(Box::new(v.remove(0)))
             } else {
                 None
             };
+            let loop_env = local.clone();
             let cond_t = if let Some(c) = cond {
-                let t = analyze_expr(c, &mut local)?;
+                let mut cond_vars = loop_env.clone();
+                let t = analyze_expr(c, &mut cond_vars)?;
                 if t.ty != Type::Bool {
                     return Err(SemanticError {
                         message: "for condition must be bool".into(),
@@ -735,17 +857,19 @@ fn analyze_statement(
                 None
             };
             let step_t = if let Some(s) = step {
-                let mut v = analyze_statement(s, &mut local, expected_ret, loop_depth + 1)?;
-                let last = v.pop().unwrap_or(TypedStatement::Expr(TypedExpr {
-                    expr: ExprKind::Number(0),
-                    ty: Type::Int,
-                }));
-                Some(Box::new(last))
+                let mut step_vars = loop_env.clone();
+                let mut v = analyze_statement(s, &mut step_vars, expected_ret, loop_depth + 1)?;
+                if v.len() != 1 {
+                    return Err(SemanticError {
+                        message: "E0006: for-loop step must be a simple let or expression".into(),
+                    });
+                }
+                Some(Box::new(v.remove(0)))
             } else {
                 None
             };
-            let body_t = analyze_block(body, &mut local, expected_ret, loop_depth + 1)?;
-            vars.extend(local);
+            let body_t = analyze_block(body, &mut loop_env.clone(), expected_ret, loop_depth + 1)?;
+            *vars = loop_env;
             Ok(vec![TypedStatement::For {
                 line: *line,
                 init: init_t,
@@ -776,8 +900,10 @@ fn analyze_statement(
                     Type::Map(k, v) => ((**k).clone(), (**v).clone()),
                     _ => (Type::Int, Type::Int),
                 };
+                ensure_not_state_shadow(key)?;
                 local_vars.insert(key.clone(), k_ty);
                 if let Some(val_name) = value {
+                    ensure_not_state_shadow(val_name)?;
                     local_vars.insert(val_name.clone(), v_ty);
                 }
                 let body_t = analyze_block(body, &mut local_vars, expected_ret, loop_depth + 1)?;
@@ -820,8 +946,10 @@ fn analyze_statement(
                         Type::Map(k, v) => ((**k).clone(), (**v).clone()),
                         _ => (Type::Int, Type::Int),
                     };
+                    ensure_not_state_shadow(key)?;
                     local_vars.insert(key.clone(), k_ty);
                     if let Some(val_name) = value {
+                        ensure_not_state_shadow(val_name)?;
                         local_vars.insert(val_name.clone(), v_ty);
                     }
                     let body_t =
@@ -873,8 +1001,10 @@ fn analyze_statement(
                         Type::Map(k, v) => ((**k).clone(), (**v).clone()),
                         _ => (Type::Int, Type::Int),
                     };
+                    ensure_not_state_shadow(key)?;
                     local_vars.insert(key.clone(), k_ty);
                     if let Some(val_name) = value {
+                        ensure_not_state_shadow(val_name)?;
                         local_vars.insert(val_name.clone(), v_ty);
                     }
                     let body_t =
@@ -944,8 +1074,10 @@ fn analyze_statement(
                         Type::Map(k, v) => ((**k).clone(), (**v).clone()),
                         _ => (Type::Int, Type::Int),
                     };
+                    ensure_not_state_shadow(key)?;
                     local_vars.insert(key.clone(), k_ty);
                     if let Some(val_name) = value {
+                        ensure_not_state_shadow(val_name)?;
                         local_vars.insert(val_name.clone(), v_ty);
                     }
                     let body_t =
@@ -1386,9 +1518,19 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 Eq | Ne => {
-                    if left_t.ty != right_t.ty {
+                    if left_t.ty != right_t.ty
+                        && !(is_blob_like(&left_t.ty) && is_blob_like(&right_t.ty))
+                    {
                         return Err(SemanticError {
                             message: "type mismatch in equality".into(),
+                        });
+                    }
+                    if !is_eq_comparable_type(&left_t.ty) {
+                        return Err(SemanticError {
+                            message: format!(
+                                "equality is not supported for type {}",
+                                type_name(&left_t.ty)
+                            ),
                         });
                     }
                     Ok(TypedExpr {
@@ -1509,6 +1651,15 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     // Fallback: user-defined calls use recorded return types when available.
                     other => {
+                        if is_user_defined_function(other)
+                            && arg_typed.iter().any(is_state_map_expr)
+                        {
+                            return Err(SemanticError {
+                                message:
+                                    "E_STATE_MAP_ALIAS: state maps cannot be passed to user-defined functions; use the state identifier directly."
+                                        .into(),
+                            });
+                        }
                         let ret_ty = FUNCTION_RETURNS
                             .with(|env| env.borrow().get(other).cloned())
                             .unwrap_or(Type::Int);
@@ -1910,6 +2061,15 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     let arg_ty = resolve_struct_type(&arg_typed[0].ty);
+                    if matches!(arg_ty, Type::String)
+                        && !matches!(arg_typed[0].expr, ExprKind::String(_))
+                    {
+                        return Err(SemanticError {
+                            message: format!(
+                                "{name} expects a string literal; pass a literal or Blob|bytes"
+                            ),
+                        });
+                    }
                     let (ty, allow_blob, allow_int) = match name.as_str() {
                         "account_id" => (Type::AccountId, true, false),
                         "asset_definition" => (Type::AssetDefinitionId, true, false),
@@ -1967,9 +2127,9 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "assert" => {
-                    if arg_typed.is_empty() || arg_typed[0].ty != Type::Bool {
+                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Bool {
                         return Err(SemanticError {
-                            message: "assert expects (bool[, string])".into(),
+                            message: "assert expects (bool)".into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -1981,9 +2141,11 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "info" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::String {
+                    if arg_typed.len() != 1
+                        || !(arg_typed[0].ty == Type::String || arg_typed[0].ty == Type::Int)
+                    {
                         return Err(SemanticError {
-                            message: "info expects one string arg".into(),
+                            message: "info expects (string|int)".into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -3062,6 +3224,13 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 _ => {
+                    if is_user_defined_function(&name) && arg_typed.iter().any(is_state_map_expr) {
+                        return Err(SemanticError {
+                            message:
+                                "E_STATE_MAP_ALIAS: state maps cannot be passed to user-defined functions; use the state identifier directly."
+                                    .into(),
+                        });
+                    }
                     let ret_ty = FUNCTION_RETURNS
                         .with(|env| env.borrow().get(&name).cloned())
                         .unwrap_or(Type::Int);
@@ -3136,6 +3305,18 @@ fn convert_type_expr(ty: &TypeExpr) -> Result<Type, SemanticError> {
             Type::Tuple(out)
         }
     })
+}
+
+fn apply_map_new_type_hint(expr: &mut TypedExpr, hint: &Type) {
+    let hint = resolve_struct_type(hint);
+    if !matches!(hint, Type::Map(_, _)) {
+        return;
+    }
+    if let ExprKind::Call { name, .. } = &expr.expr
+        && name == "Map::new"
+    {
+        expr.ty = hint;
+    }
 }
 
 fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError> {
@@ -3681,8 +3862,7 @@ fn collect_calls_in_expr(expr: &TypedExpr, calls: &mut IndexSet<String>) {
 }
 
 fn ensure_state_map_iter_supported(map_expr: &TypedExpr) -> Result<(), SemanticError> {
-    if let ExprKind::Ident(name) = &map_expr.expr
-        && is_state_identifier(name)
+    if typed_map_expr_is_state(map_expr)
         && matches!(
             resolve_struct_type(&map_expr.ty),
             Type::Map(k, _) if !matches!(resolve_struct_type(&k), Type::Int)
@@ -3693,6 +3873,27 @@ fn ensure_state_map_iter_supported(map_expr: &TypedExpr) -> Result<(), SemanticE
         });
     }
     Ok(())
+}
+
+fn ensure_not_state_shadow(name: &str) -> Result<(), SemanticError> {
+    if is_state_identifier(name) {
+        return Err(SemanticError {
+            message: format!("E_STATE_SHADOWED: `{name}` shadows a state declaration"),
+        });
+    }
+    Ok(())
+}
+
+fn is_state_map_expr(expr: &TypedExpr) -> bool {
+    matches!(resolve_struct_type(&expr.ty), Type::Map(_, _)) && typed_map_expr_is_state(expr)
+}
+
+fn typed_map_expr_is_state(expr: &TypedExpr) -> bool {
+    match &expr.expr {
+        ExprKind::Ident(name) => is_state_identifier(name),
+        ExprKind::Member { object, .. } => typed_map_expr_is_state(object),
+        _ => false,
+    }
 }
 
 fn map_expr_is_state(expr: &Expr) -> bool {
@@ -3908,5 +4109,260 @@ mod tests {
             .map(|name| name.rsplit("::").next().unwrap().to_string())
             .collect();
         assert_eq!(suffixes, vec!["pair", "pair#0", "pair#1"]);
+    }
+
+    #[test]
+    fn state_map_iteration_rejects_pointer_keys_in_nested_state() {
+        let program = parse(
+            "struct Holder { map: Map<Name, int>; } \
+             state Holder holder; \
+             fn main() { \
+                 for (k, v) in holder.map #[bounded(1)] { \
+                     let _x = v; \
+                 } \
+             }",
+        )
+        .expect("parse nested state map");
+        let err = analyze(&program).expect_err("non-int state map keys should error");
+        assert_eq!(
+            err.message,
+            "durable state map iteration supports Map<int, *> keys only"
+        );
+    }
+
+    #[test]
+    fn state_map_alias_is_rejected() {
+        let program = parse(
+            "state M: Map<int, int>; \
+             fn main() { \
+                 let m = M; \
+             }",
+        )
+        .expect("parse state map alias");
+        let err = analyze(&program).expect_err("aliasing a state map should error");
+        assert!(err.message.contains("E_STATE_MAP_ALIAS"));
+    }
+
+    #[test]
+    fn state_map_cannot_be_passed_to_user_fn() {
+        let program = parse(
+            "state M: Map<int, int>; \
+             fn f(m: Map<int, int>) { let _x = 0; } \
+             fn main() { f(M); }",
+        )
+        .expect("parse state map arg");
+        let err = analyze(&program).expect_err("passing state map to user fn should error");
+        assert!(err.message.contains("E_STATE_MAP_ALIAS"));
+    }
+
+    #[test]
+    fn map_assignment_requires_map_target() {
+        let program = parse("fn f() { let x = 1; x[0] = 2; }").expect("parse map assignment");
+        let err = analyze(&program).expect_err("non-map assignment should error");
+        assert!(err.message.contains("map assignment expects Map<K,V>"));
+    }
+
+    #[test]
+    fn assignment_allows_bool_to_int() {
+        let program =
+            parse("fn f() { let x: int = true; x = false; }").expect("parse bool assignment");
+        analyze(&program).expect("bool assignment should be allowed for int");
+    }
+
+    #[test]
+    fn break_requires_loop_context() {
+        let program = parse("fn f() { break; }").expect("parse break");
+        let err = analyze(&program).expect_err("break outside loop should error");
+        assert!(err.message.contains("E_BREAK_OUTSIDE_LOOP"));
+    }
+
+    #[test]
+    fn continue_requires_loop_context() {
+        let program = parse("fn f() { continue; }").expect("parse continue");
+        let err = analyze(&program).expect_err("continue outside loop should error");
+        assert!(err.message.contains("E_CONTINUE_OUTSIDE_LOOP"));
+    }
+
+    #[test]
+    fn state_shadowing_is_rejected_in_let() {
+        let program =
+            parse("state int counter; fn f() { let counter = 1; }").expect("parse shadowing let");
+        let err = analyze(&program).expect_err("state shadowing should error");
+        assert!(err.message.contains("E_STATE_SHADOWED"));
+    }
+
+    #[test]
+    fn state_shadowing_is_rejected_in_params() {
+        let program =
+            parse("state int counter; fn f(counter: int) {}").expect("parse shadowing param");
+        let err = analyze(&program).expect_err("state shadowing should error");
+        assert!(err.message.contains("E_STATE_SHADOWED"));
+    }
+
+    #[test]
+    fn state_shadowing_is_rejected_in_map_loop_vars() {
+        let program = parse(
+            "state int counter; state M: Map<int, int>; \
+             fn f() { for (counter, v) in M.take(1) { let _x = v; } }",
+        )
+        .expect("parse shadowing loop vars");
+        let err = analyze(&program).expect_err("state shadowing should error");
+        assert!(err.message.contains("E_STATE_SHADOWED"));
+    }
+
+    #[test]
+    fn for_init_requires_simple_statement() {
+        let program = parse(
+            "fn f() { \
+                for let pair = (1, 2); pair.0 < 3; { \
+                    let _x = pair.0; \
+                } \
+            }",
+        )
+        .expect("parse for init");
+        let err = analyze(&program).expect_err("complex for init should error");
+        assert!(err.message.contains("E0005"));
+    }
+
+    #[test]
+    fn for_step_requires_simple_statement() {
+        let program = parse(
+            "fn f() { \
+                for let i = 0; i < 1; let pair = (1, 2) { \
+                    let _x = i; \
+                } \
+            }",
+        )
+        .expect("parse for step");
+        let err = analyze(&program).expect_err("complex for step should error");
+        assert!(err.message.contains("E0006"));
+    }
+
+    #[test]
+    fn equality_rejects_tuple_types() {
+        let program = parse("fn f() { let a = (1, 2); let b = (1, 2); let _x = a == b; }")
+            .expect("parse tuple equality");
+        let err = analyze(&program).expect_err("tuple equality should error");
+        assert!(err.message.contains("equality is not supported"));
+    }
+
+    #[test]
+    fn pointer_constructor_requires_string_literal() {
+        let program = parse("fn f() { let s = \"wonderland\"; let _n = name(s); }")
+            .expect("parse pointer constructor");
+        let err = analyze(&program).expect_err("non-literal string should error");
+        assert!(err.message.contains("string literal"));
+    }
+
+    #[test]
+    fn for_step_bindings_do_not_leak_into_body() {
+        let program = parse(
+            "fn f() { \
+                for let i = 0; i < 1; let t = 1 { \
+                    let _x = t; \
+                } \
+            }",
+        )
+        .expect("parse for loop");
+        let err = analyze(&program).expect_err("step bindings should be out of scope");
+        assert!(err.message.contains("undefined variable"));
+    }
+
+    #[test]
+    fn for_body_bindings_do_not_escape_loop() {
+        let program = parse(
+            "fn f() { \
+                for let i = 0; i < 1; i = i + 1 { \
+                    let x = 1; \
+                } \
+                let _y = x; \
+            }",
+        )
+        .expect("parse for loop");
+        let err = analyze(&program).expect_err("body bindings should not escape");
+        assert!(err.message.contains("undefined variable"));
+    }
+
+    #[test]
+    fn tuple_pattern_requires_tuple_type() {
+        let program = parse("fn f() { let (a, b) = 1; }").expect("parse tuple pattern");
+        let err = analyze(&program).expect_err("non-tuple destructuring should error");
+        assert!(err.message.contains("tuple destructuring expects a tuple"));
+    }
+
+    #[test]
+    fn tuple_pattern_requires_arity_match() {
+        let program = parse("fn f() { let (a, b, c) = (1, 2); }").expect("parse tuple pattern");
+        let err = analyze(&program).expect_err("tuple arity mismatch should error");
+        assert!(
+            err.message
+                .contains("tuple destructuring expects 2 bindings")
+        );
+    }
+
+    #[test]
+    fn struct_pattern_requires_arity_match() {
+        let program = parse(
+            "struct Pair { a: int, b: int } \
+             fn f() { let (a) = Pair(1, 2); }",
+        )
+        .expect("parse struct pattern");
+        let err = analyze(&program).expect_err("struct arity mismatch should error");
+        assert!(
+            err.message
+                .contains("struct destructuring expects 2 bindings")
+        );
+    }
+
+    #[test]
+    fn assert_rejects_extra_args() {
+        let program = parse("fn f() { assert(true, \"oops\"); }").expect("parse assert");
+        let err = analyze(&program).expect_err("assert extra args should error");
+        assert!(err.message.contains("assert expects (bool)"));
+    }
+
+    #[test]
+    fn map_new_respects_type_annotation() {
+        let program = parse("fn f() { let m: Map<Name, int> = Map::new(); let _x = m; }")
+            .expect("parse Map::new");
+        analyze(&program).expect("Map::new should adopt annotated map type");
+    }
+
+    #[test]
+    fn map_new_respects_return_type() {
+        let program = parse("fn f() -> Map<Name, int> { return Map::new(); }")
+            .expect("parse Map::new return");
+        analyze(&program).expect("Map::new should adopt return map type");
+    }
+
+    #[test]
+    fn blob_bytes_equality_is_allowed() {
+        let program = parse(
+            "fn f() { let b: bytes = blob(\"hi\"); let c: Blob = blob(\"hi\"); let _x = b == c; }",
+        )
+        .expect("parse blob equality");
+        analyze(&program).expect("blob/bytes equality should be allowed");
+    }
+
+    #[test]
+    fn state_map_key_type_is_validated() {
+        let program = parse("state M: Map<string, int>; fn f() {}")
+            .expect("parse state map");
+        let err = analyze(&program).expect_err("state map key should be validated");
+        assert!(err.message.contains("state Map key type"));
+    }
+
+    #[test]
+    fn field_assignment_is_rejected() {
+        let program = parse("fn f() { let t = (1, 2); t.0 = 3; }")
+            .expect("parse field assignment");
+        let err = analyze(&program).expect_err("field assignment should error");
+        assert!(err.message.contains("assignment target must be"));
+    }
+
+    #[test]
+    fn info_accepts_int() {
+        let program = parse("fn f() { info(42); }").expect("parse info");
+        analyze(&program).expect("info should accept int");
     }
 }

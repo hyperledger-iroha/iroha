@@ -70,8 +70,8 @@ Tous les crates CLI/SDK SoraFS utilisent SemVer :
 
 - `MAJOR` : Introduit pour la première release 1.0. Avant 1.0, le bump mineur `0.y`
   **indique des changements cassants** dans la surface du CLI ou les schémas Norito.
-- `MINOR` : Fonctionnalités rétro-compatibles (nouveaux commandes/flags, nouveaux champs
-  Norito derrière une politique optionnelle, ajouts de télémétrie).
+- `MINOR` : Nouvelles fonctionnalités (nouveaux commandes/flags, nouveaux champs Norito
+  derrière une politique optionnelle, ajouts de télémétrie).
 - `PATCH` : Corrections de bugs, releases uniquement documentation et mises à jour de
   dépendances qui ne modifient pas le comportement observable.
 

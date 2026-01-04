@@ -10486,6 +10486,7 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
         block_hash,
         Some(commit_certificate.clone()),
         Some(checkpoint.clone()),
+        None,
     );
     kura.write_roster_metadata(&sidecar);
 
@@ -10581,6 +10582,7 @@ fn block_sync_update_includes_persisted_roster_artifacts() {
         block_hash,
         Some(commit_certificate.clone()),
         Some(checkpoint.clone()),
+        None,
     );
     kura.write_roster_metadata(&sidecar);
 

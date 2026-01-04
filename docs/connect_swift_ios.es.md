@@ -23,7 +23,7 @@ El SDK de Swift incluye una pila Connect respaldada por Norito:
 - `ConnectSession` orquesta el ciclo de vida (open → approve/reject → sign → close) y
   descifra los frames de ciphertext cuando las claves de dirección ya están instaladas.
 - `ConnectCrypto` expone generación de claves X25519 y derivación de claves de dirección
-  compatible con Norito, de modo que las apps no tengan que cablear HKDF/HMAC a mano.
+  según Norito, de modo que las apps no tengan que cablear HKDF/HMAC a mano.
 - `ConnectEnvelope`/`ConnectControl` representan los frames tipados de Norito emitidos por
   el bridge en Rust (`connect_norito_bridge`); los sobres cifrados se descifran con los
   mismos helpers FFI usados en Android/Rust, garantizando paridad.
@@ -242,8 +242,8 @@ Notas:
 
 ### Demo de framing Norito (solo ejemplo)
 
-Lo siguiente es un framing mínimo y no canónico suficiente para demos locales. NO es
-compatible con Norito y debe sustituirse por un encoder/decoder Norito real cuando esté
+Lo siguiente es un framing mínimo y no canónico suficiente para demos locales. NO está
+en formato Norito y debe sustituirse por un encoder/decoder Norito real cuando esté
 disponible. Simplemente concatena campos en orden little‑endian estable para que puedas
 probar transporte WS de extremo a extremo sin traer un codec completo a iOS.
 
@@ -360,4 +360,3 @@ encoding Norito real cuando integres.
 - Si la ejecución falla, sigue `docs/source/swift_parity_triage.md` e inspecciona la salida
   de `mobile_ci` para determinar qué lane necesita regeneración o más gestión de
   incidencias.
-

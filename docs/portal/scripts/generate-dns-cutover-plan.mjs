@@ -82,69 +82,34 @@ export function parseArgs(argv, env = process.env) {
   };
 }
 
-function parseRouteBindingHeader(value) {
-  if (typeof value !== 'string' || value.trim() === '') {
-    return null;
-  }
-  const pairs = value
-    .split(';')
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (pairs.length === 0) {
-    return null;
-  }
-  const result = {};
-  for (const entry of pairs) {
-    const [key, rawValue] = entry.split('=');
-    if (!key) continue;
-    result[key.trim()] = rawValue ? rawValue.trim() : '';
-  }
-  return result;
-}
-
 function buildRoutePromotion({
+  routePlan,
   gatewayBinding,
   aliasLiteral,
-  manifestDigest,
   manifestPath,
   dnsHostname,
 }) {
-  if (!gatewayBinding) {
+  if (!routePlan || typeof routePlan !== 'object') {
     return null;
   }
-  const headers = gatewayBinding.headers || {};
-  const routeHeader =
-    headers['Sora-Route-Binding'] ||
-    headers['sora-route-binding'] ||
-    null;
-  const parsed = parseRouteBindingHeader(routeHeader);
   const host =
-    parsed?.host ||
-    gatewayBinding.hostname ||
-    dnsHostname ||
-    null;
-  const cid = parsed?.cid || gatewayBinding.content_cid || null;
-  const generatedAt = parsed?.generated_at || null;
+    typeof routePlan.hostname === 'string' && routePlan.hostname.trim() !== ''
+      ? routePlan.hostname.trim()
+      : dnsHostname || null;
+  const cid =
+    typeof routePlan.content_cid === 'string' && routePlan.content_cid.trim() !== ''
+      ? routePlan.content_cid.trim()
+      : null;
+  const generatedAt =
+    typeof routePlan.generated_at === 'string' ? routePlan.generated_at : null;
 
   if (!host && !cid) {
     return null;
   }
 
   const commands = [];
-  const verifyUrl = host
-    ? `https://${host}/.well-known/sorafs/manifest`
-    : null;
-  if (verifyUrl) {
-    let verifyCmd = `node docs/portal/scripts/verify-sorafs-binding.mjs --url=${verifyUrl}`;
-    if (aliasLiteral) verifyCmd += ` --alias=${aliasLiteral}`;
-    if (manifestDigest) verifyCmd += ` --manifest=${manifestDigest}`;
-    if (cid) verifyCmd += ` --content-cid=${cid}`;
-    if (gatewayBinding.proof_status) {
-      verifyCmd += ` --status=${gatewayBinding.proof_status}`;
-    }
-    commands.push(verifyCmd);
-  }
-  if (gatewayBinding.json_path) {
+  const verifyUrl = host ? `https://${host}/.well-known/sorafs/manifest` : null;
+  if (gatewayBinding?.json_path) {
     let xtaskCmd = `cargo xtask soradns-verify-binding --binding ${gatewayBinding.json_path}`;
     if (aliasLiteral) xtaskCmd += ` --alias ${aliasLiteral}`;
     if (cid) xtaskCmd += ` --content-cid ${cid}`;
@@ -162,9 +127,9 @@ function buildRoutePromotion({
     host,
     content_cid: cid,
     generated_at: generatedAt,
-    headers_path: gatewayBinding.headers_path || null,
-    headers_template: gatewayBinding.headers_text || null,
-    binding_json_path: gatewayBinding.json_path || null,
+    headers_path: routePlan.headers_path || null,
+    headers_template: routePlan.headers_template || null,
+    binding_json_path: gatewayBinding?.json_path || null,
     verify_url: verifyUrl,
     commands,
   };
@@ -180,6 +145,7 @@ export function createDescriptor(pinReport, meta, previousPlan = null, now = new
     alias_binding: aliasBinding,
     submission,
     gateway_binding: gatewayBinding,
+    route_plan: routePlan,
   } = pinReport;
   if (!manifest || !manifest.blake3_hex) {
     throw new Error('pin report missing manifest metadata');
@@ -270,18 +236,23 @@ export function createDescriptor(pinReport, meta, previousPlan = null, now = new
       }
     : null;
   const routePromotion = buildRoutePromotion({
+    routePlan,
     gatewayBinding,
     aliasLiteral,
-    manifestDigest: submission.manifest_digest_hex || manifest.blake3_hex,
     manifestPath: manifest.path,
     dnsHostname: meta.dnsHostname,
   });
-  const routePlanDescriptor = pinReport.route_plan
+  const routePlanDescriptor = routePlan
     ? {
-        path: pinReport.route_plan.path || null,
-        headers_path: pinReport.route_plan.headers_path || null,
-        rollback_headers_path:
-          pinReport.route_plan.rollback_headers_path || null,
+        path: routePlan.path || null,
+        headers_path: routePlan.headers_path || null,
+        rollback_headers_path: routePlan.rollback_headers_path || null,
+        alias: routePlan.alias || null,
+        hostname: routePlan.hostname || null,
+        content_cid: routePlan.content_cid || null,
+        route_binding: routePlan.route_binding || null,
+        headers_template: routePlan.headers_template || null,
+        generated_at: routePlan.generated_at || null,
       }
     : null;
 

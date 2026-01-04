@@ -76,10 +76,10 @@ canonical Norito fixture set consumed by the other SDKs.
    # executes scripts/check_android_fixtures.py
    ```
 3. Run the full Android test harness (covers the Norito codec, keystore stubs,
-   and REST client) to ensure the regenerated payloads stay compatible:
+   and REST client) to ensure the regenerated payloads stay in sync:
    ```bash
    make android-tests
-   # calls java/iroha_android/run_tests.sh
+   # calls ci/run_android_tests.sh
    ```
 4. Record the rotation in `docs/source/android_fixture_changelog.md`
    (timestamp, owner, reference commit/PR, and notes).
@@ -130,8 +130,9 @@ require mirror edits under `java/norito_java` plus the Android library.
    The script re-compiles the codec and executes round-trip tests covering the
    new schema hash.
 3. If the change also touches the Android bindings, re-run
-   `make android-tests` after the fixture regeneration step above so `run_tests.sh`
-   exercises the keystore, HTTP client, and Norito serializer together.
+   `make android-tests` after the fixture regeneration step above so
+   `ci/run_android_tests.sh` exercises the keystore, HTTP client, and Norito
+   serializer together.
 4. Update `java/norito_java/CHANGELOG.md` with a short note describing the sync
    point so `scripts/check_norito_bindings_sync.py` records the refresh.
 

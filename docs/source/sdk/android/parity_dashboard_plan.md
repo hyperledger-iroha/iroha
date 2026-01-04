@@ -16,7 +16,7 @@ release candidates cannot merge when fixture drift or regen SLA breaches occur.
   `java/iroha_android/src/test/resources`.
 - Surface regeneration cadence and owning engineer for every rotation (bi-weekly
   Tue/Fri 09:00 UTC windows).
-- Track pipeline health for `java/iroha_android/run_tests.sh` and `make
+- Track pipeline health for `ci/run_android_tests.sh` and `make
   android-fixtures-check`.
 - Provide JSON artefacts that downstream systems (Grafana/Alertmanager and
   release gates) can consume without scraping console output.
@@ -37,7 +37,7 @@ release candidates cannot merge when fixture drift or regen SLA breaches occur.
 2. **Regen state:** `scripts/android_fixture_regen.sh` continues to track
    `generated_at`, `rotation_owner`, and cadence labels in
    `artifacts/android_fixture_regen_state.json`.
-3. **CI signals:** `java/iroha_android/run_tests.sh` plus
+3. **CI signals:** `ci/run_android_tests.sh` plus
    `ci/check_android_fixtures.sh` run on Buildkite. The Buildkite job now
    writes the parity summary to `artifacts/android/parity/<timestamp>/summary.json`,
    injects the pipeline metadata described above, exports a Prometheus

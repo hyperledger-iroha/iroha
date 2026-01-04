@@ -85,13 +85,11 @@ def test_list_accounts_sends_address_format_param() -> None:
     assert params["address_format"] == "compressed"
 
 
-def test_list_accounts_accepts_alias() -> None:
+def test_list_accounts_rejects_alias() -> None:
     client, session = _client_with_session()
 
-    client.list_accounts(address_format="IH-b32")
-
-    params = session.calls[0]["params"]
-    assert params["address_format"] == "ih58"
+    with pytest.raises(ValueError):
+        client.list_accounts(address_format="IH-b32")
 
 
 def test_list_accounts_rejects_invalid_address_format() -> None:
@@ -121,7 +119,14 @@ def test_list_asset_holders_sends_address_format() -> None:
 def test_query_asset_holders_includes_address_format() -> None:
     client, session = _client_with_session()
 
-    client.query_asset_holders("xor#wonderland", address_format="snx1")
+    client.query_asset_holders("xor#wonderland", address_format="compressed")
 
     body = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert body["address_format"] == "compressed"
+
+
+def test_query_asset_holders_rejects_alias() -> None:
+    client, _ = _client_with_session()
+
+    with pytest.raises(ValueError):
+        client.query_asset_holders("xor#wonderland", address_format="snx1")

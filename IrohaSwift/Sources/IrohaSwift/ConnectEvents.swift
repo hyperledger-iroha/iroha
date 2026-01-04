@@ -157,8 +157,7 @@ extension ConnectBalanceSnapshot {
         guard let accountID = json["account_id"] as? String else {
             throw ConnectEnvelopeError.invalidPayload
         }
-        let assetsValue = json["assets"] ?? json["balances"]
-        guard let assetsArray = assetsValue as? [[String: Any]] else {
+        guard let assetsArray = json["assets"] as? [[String: Any]] else {
             throw ConnectEnvelopeError.invalidPayload
         }
         let assets = try assetsArray.map { try ConnectBalanceAsset(json: $0) }

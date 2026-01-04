@@ -473,30 +473,47 @@ pub mod stream {
 
         /// Message sent by the stream consumer.
         /// Request sent by the client to subscribe to events.
-        #[derive(Debug, Clone, Constructor, Decode, Encode, IntoSchema)]
+        ///
+        /// Proof filters are bundled with the primary subscription message to keep
+        /// the WebSocket format single-shot and deterministic for the first release.
+        #[derive(Debug, Clone, Decode, Encode, IntoSchema)]
         #[cfg_attr(
             feature = "json",
             derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
         )]
-        #[repr(transparent)]
-        pub struct EventSubscriptionRequest(pub Vec<EventFilterBox>);
-
-        /// Optional proof-specific filters for WS subscriptions (sent after the subscription request).
-        /// When present, the producer will further filter Proof events by backend and/or call hash.
-        #[derive(Debug, Clone, Default, Decode, Encode, IntoSchema)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        pub struct EventSubscriptionProofFilter {
-            /// Accept only these backends (empty or None means no backend filtering).
+        pub struct EventSubscriptionRequest {
+            /// Event filters applied to the stream.
+            pub filters: Vec<EventFilterBox>,
+            /// Accept only these proof backends (empty or None disables backend filtering).
+            #[norito(default)]
             pub proof_backend: Option<Vec<String>>,
-            /// Accept only these call hashes (empty or None means no call hash filtering).
+            /// Accept only these call hashes (empty or None disables call hash filtering).
+            #[norito(default)]
             #[cfg_attr(
                 feature = "json",
                 norito(with = "crate::json_helpers::fixed_bytes::option_vec")
             )]
             pub proof_call_hash: Option<Vec<[u8; 32]>>,
+            /// Accept only these envelope hashes (empty or None disables envelope hash filtering).
+            #[norito(default)]
+            #[cfg_attr(
+                feature = "json",
+                norito(with = "crate::json_helpers::fixed_bytes::option_vec")
+            )]
+            pub proof_envelope_hash: Option<Vec<[u8; 32]>>,
+        }
+
+        impl EventSubscriptionRequest {
+            /// Create a subscription request without proof-specific filters.
+            #[must_use]
+            pub fn new(filters: Vec<EventFilterBox>) -> Self {
+                Self {
+                    filters,
+                    proof_backend: None,
+                    proof_call_hash: None,
+                    proof_envelope_hash: None,
+                }
+            }
         }
 
         // Provide slice decoding via Norito codec for HTTP payloads
@@ -508,15 +525,6 @@ pub mod stream {
             }
         }
         impl<'a> norito::core::DecodeFromSlice<'a> for EventSubscriptionRequest {
-            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-                let (filters, used) =
-                    <Vec<EventFilterBox> as norito::core::DecodeFromSlice>::decode_from_slice(
-                        bytes,
-                    )?;
-                Ok((EventSubscriptionRequest(filters), used))
-            }
-        }
-        impl<'a> norito::core::DecodeFromSlice<'a> for EventSubscriptionProofFilter {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let mut s: &'a [u8] = bytes;
                 let value =
@@ -534,6 +542,39 @@ pub mod stream {
             source.0
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::events::data::prelude::DataEventFilter;
+
+        #[test]
+        fn subscription_request_new_sets_defaults() {
+            let filters = vec![EventFilterBox::Data(DataEventFilter::Any)];
+            let request = EventSubscriptionRequest::new(filters.clone());
+            assert_eq!(request.filters, filters);
+            assert!(request.proof_backend.is_none());
+            assert!(request.proof_call_hash.is_none());
+            assert!(request.proof_envelope_hash.is_none());
+        }
+
+        #[test]
+        fn subscription_request_roundtrips_proof_filters() {
+            let request = EventSubscriptionRequest {
+                filters: vec![EventFilterBox::Data(DataEventFilter::Any)],
+                proof_backend: Some(vec!["halo2/ipa".to_string()]),
+                proof_call_hash: Some(vec![[0x11; 32]]),
+                proof_envelope_hash: Some(vec![[0x22; 32]]),
+            };
+            let bytes = norito::to_bytes(&request).expect("encode request");
+            let decoded: EventSubscriptionRequest =
+                norito::decode_from_bytes(&bytes).expect("decode request");
+            assert_eq!(decoded.filters, request.filters);
+            assert_eq!(decoded.proof_backend, request.proof_backend);
+            assert_eq!(decoded.proof_call_hash, request.proof_call_hash);
+            assert_eq!(decoded.proof_envelope_hash, request.proof_envelope_hash);
+        }
+    }
 }
 
 /// Exports common structs and enums from this module.
@@ -541,7 +582,7 @@ pub mod prelude {
     #[cfg(feature = "transparent_api")]
     pub use super::EventFilter;
     #[cfg(feature = "http")]
-    pub use super::stream::{EventMessage, EventSubscriptionProofFilter, EventSubscriptionRequest};
+    pub use super::stream::{EventMessage, EventSubscriptionRequest};
     pub use super::{
         EventBox, EventFilterBox, TriggeringEventType, data::prelude::*,
         execute_trigger::prelude::*, pipeline::prelude::*, time::prelude::*,

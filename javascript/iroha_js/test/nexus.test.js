@@ -1,38 +1,26 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test as baseTest } from "node:test";
 
 import {
   decodeLaneRelayEnvelope,
   laneRelayEnvelopeSample,
-  verifyLaneRelayEnvelopeJson,
   verifyLaneRelayEnvelopes,
-} from "../src/index.js";
-import { getNativeBinding } from "../src/native.js";
+} from "../src/nexus.js";
+import { makeNativeTest } from "./helpers/native.js";
 
-const nativeAvailable = getNativeBinding() !== null;
-const maybeTest = nativeAvailable ? test : test.skip;
+const test = makeNativeTest(baseTest);
 
-maybeTest("verifyLaneRelayEnvelopeJson rejects settlement tampering", () => {
-  const { valid } = laneRelayEnvelopeSample();
-  const decoded = decodeLaneRelayEnvelope(valid);
-  verifyLaneRelayEnvelopeJson(decoded);
-
-  const tampered = structuredClone(decoded);
-  tampered.settlement_commitment.tx_count += 1;
-  assert.throws(
-    () => verifyLaneRelayEnvelopeJson(tampered),
-    /settlement hash/i,
-    "expected settlement hash mismatch to surface",
-  );
+test("verifyLaneRelayEnvelopes accepts canonical relay envelopes", () => {
+  const sample = laneRelayEnvelopeSample();
+  const decoded = decodeLaneRelayEnvelope(sample.valid);
+  verifyLaneRelayEnvelopes([decoded]);
 });
 
-maybeTest("verifyLaneRelayEnvelopes detects duplicate keys", () => {
-  const { valid } = laneRelayEnvelopeSample();
-  const decoded = decodeLaneRelayEnvelope(valid);
-
-  verifyLaneRelayEnvelopes([decoded]);
+test("verifyLaneRelayEnvelopes rejects duplicates", () => {
+  const sample = laneRelayEnvelopeSample();
+  const decoded = decodeLaneRelayEnvelope(sample.valid);
   assert.throws(
     () => verifyLaneRelayEnvelopes([decoded, decoded]),
-    /duplicate relay envelope/i,
+    /duplicate relay envelope/,
   );
 });

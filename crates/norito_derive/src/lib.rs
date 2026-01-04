@@ -1389,10 +1389,6 @@ fn derive_struct_serialize(
         if bit != 0 {
             bytes.push(cur);
         }
-        #[cfg(debug_assertions)]
-        if ident == "DeployContractProposal" {
-            eprintln!("norito_derive::packed bitset bytes for {ident} -> {bytes:?}");
-        }
         let bitset_lit = quote! { [ #( #bytes ),* ] };
         // write sizes code: coalesce varint sizes into a single buffer
         let mut stmts: ::std::vec::Vec<TokenStream2> = ::std::vec::Vec::new();

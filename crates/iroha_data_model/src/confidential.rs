@@ -106,17 +106,6 @@ impl ConfidentialEncryptedPayload {
         }
     }
 
-    /// Construct an envelope when only ciphertext bytes are available.
-    ///
-    /// This helper preserves compatibility with existing flows that persisted
-    /// opaque payloads prior to the v1 layout. It zeros the ephemeral key/nonce
-    /// fields so the envelope remains well-formed. Callers should migrate to the
-    /// structured [`Self::new`] constructor once wallets expose the full metadata.
-    #[must_use]
-    pub fn from_ciphertext(ciphertext: Vec<u8>) -> Self {
-        Self::new([0; 32], [0; 24], ciphertext)
-    }
-
     /// Return the envelope version recorded on-wire.
     #[must_use]
     pub const fn version(&self) -> u8 {
@@ -156,7 +145,7 @@ impl ConfidentialEncryptedPayload {
 
 impl Default for ConfidentialEncryptedPayload {
     fn default() -> Self {
-        Self::from_ciphertext(Vec::new())
+        Self::new([0; 32], [0; 24], Vec::new())
     }
 }
 
@@ -228,18 +217,6 @@ impl<'a> norito_core::DecodeFromSlice<'a> for ConfidentialEncryptedPayload {
             ciphertext,
         };
         Ok((payload, cipher_end))
-    }
-}
-
-impl From<Vec<u8>> for ConfidentialEncryptedPayload {
-    fn from(value: Vec<u8>) -> Self {
-        Self::from_ciphertext(value)
-    }
-}
-
-impl From<&[u8]> for ConfidentialEncryptedPayload {
-    fn from(value: &[u8]) -> Self {
-        Self::from_ciphertext(value.to_vec())
     }
 }
 
@@ -593,11 +570,10 @@ mod tests {
     }
 
     #[test]
-    fn ciphertext_only_helper_zero_fills_metadata() {
-        let ciphertext = vec![42u8; 5];
-        let payload = ConfidentialEncryptedPayload::from_ciphertext(ciphertext.clone());
+    fn empty_payload_initializes_with_zeroed_metadata() {
+        let payload = ConfidentialEncryptedPayload::default();
         assert_eq!(payload.ephemeral_pubkey(), &[0u8; 32]);
         assert_eq!(payload.nonce(), &[0u8; 24]);
-        assert_eq!(payload.ciphertext(), ciphertext.as_slice());
+        assert!(payload.ciphertext().is_empty());
     }
 }

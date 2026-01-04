@@ -155,7 +155,7 @@ Requirements:
 - Python 3.11+ for fixture checks
 - Access to the Rust workspace when regenerating fixtures
 
-`java/iroha_android/run_tests.sh` mirrors CI: it compiles the Norito codec and
+`ci/run_android_tests.sh` mirrors CI: it compiles the Norito codec and
 SDK sources together, executes the test mains listed in the script, and finally
 invokes `scripts/check_android_fixtures.py` to guard parity.
 

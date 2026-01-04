@@ -4,7 +4,7 @@ These guidelines apply to the `crates/norito` crate (Iroha serialization codec).
 
 ## Overview
 - Norito defines canonical serialization for Iroha types.
-- Determinism and backward/forward compatibility are critical.
+- Determinism and stable wire layout are critical.
 
 ## Development workflow
 - Maintain canonical, deterministic encoding; avoid platform-dependent behavior (endianness, locale, float NaNs ordering, etc.).

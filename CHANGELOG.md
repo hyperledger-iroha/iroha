@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Drop SCALE compatibility shim; `norito::codec` is now implemented with native Norito serialization.
+- Drop the SCALE shim; `norito::codec` is now implemented with native Norito serialization.
 - Replace `parity_scale_codec` usages with `norito::codec` across crates.
 - Begin migrating tooling to native Norito serialization.
 - Remove remaining `parity-scale-codec` dependency from the workspace in favor of native Norito serialization.
@@ -1851,5 +1851,5 @@ All notable changes to this project will be documented in this file.
 
 - Update GHA docker tag.
 - Fix Iroha 1 compile errors when compiling with g++11.
-- Replace deprecated param `max_rounds_delay` with `proposal_creation_timeout`.
-- Update sample config file to have not deprecated DB connection params.
+- Replace `max_rounds_delay` with `proposal_creation_timeout`.
+- Update sample config file to remove old DB connection params.

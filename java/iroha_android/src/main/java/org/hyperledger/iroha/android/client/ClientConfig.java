@@ -42,7 +42,6 @@ public final class ClientConfig {
   private final PendingTransactionQueue pendingQueue;
   private final ExportOptions exportOptions;
   private final NoritoRpcFlowController noritoRpcFlowController;
-  private final NoritoRpcFallbackHandler noritoRpcFallbackHandler;
   private final TelemetryOptions telemetryOptions;
   private final TelemetrySink telemetrySink;
   private final NetworkContextProvider networkContextProvider;
@@ -81,7 +80,6 @@ public final class ClientConfig {
         builder.noritoRpcFlowController != null
             ? builder.noritoRpcFlowController
             : NoritoRpcFlowController.unlimited();
-    this.noritoRpcFallbackHandler = builder.noritoRpcFallbackHandler;
     this.telemetryOptions = builder.telemetryOptions;
     this.telemetrySink = instrumentedSink;
     this.telemetryExporterName = resolvedExporterName;
@@ -122,7 +120,6 @@ public final class ClientConfig {
         .setPendingQueue(pendingQueue)
         .setExportOptions(exportOptions)
         .setNoritoRpcFlowController(noritoRpcFlowController)
-        .setNoritoRpcFallbackHandler(noritoRpcFallbackHandler)
         .setTelemetryOptions(telemetryOptions)
         .setTelemetrySink(TelemetryExportStatusSink.unwrap(telemetrySink))
         .setTelemetryExporterName(telemetryExporterName)
@@ -162,10 +159,6 @@ public final class ClientConfig {
     return noritoRpcFlowController;
   }
 
-  public Optional<NoritoRpcFallbackHandler> noritoRpcFallbackHandler() {
-    return Optional.ofNullable(noritoRpcFallbackHandler);
-  }
-
   /**
    * Creates a {@link NoritoRpcClient} backed by the provided {@link HttpTransportExecutor}, ensuring
    * the RPC calls share the same telemetry/interceptor stack as {@link HttpClientTransport}.
@@ -195,7 +188,6 @@ public final class ClientConfig {
             .setNetworkContextProvider(networkContextProvider)
             .setDeviceProfileProvider(deviceProfileProvider)
             .setFlowController(noritoRpcFlowController);
-    noritoRpcFallbackHandler().ifPresent(builder::setFallbackHandler);
     return builder;
   }
 
@@ -278,7 +270,6 @@ public final class ClientConfig {
     private ExportOptions exportOptions;
     private NoritoRpcFlowController noritoRpcFlowController =
         NoritoRpcFlowController.unlimited();
-    private NoritoRpcFallbackHandler noritoRpcFallbackHandler;
     private TelemetryOptions telemetryOptions = TelemetryOptions.disabled();
     private TelemetrySink telemetrySink;
     private String telemetryExporterName;
@@ -418,11 +409,6 @@ public final class ClientConfig {
     public Builder setNoritoRpcMaxConcurrentRequests(final int maxConcurrentRequests) {
       this.noritoRpcFlowController =
           NoritoRpcFlowController.semaphore(maxConcurrentRequests);
-      return this;
-    }
-
-    public Builder setNoritoRpcFallbackHandler(final NoritoRpcFallbackHandler handler) {
-      this.noritoRpcFallbackHandler = handler;
       return this;
     }
 

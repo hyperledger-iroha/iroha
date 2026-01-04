@@ -53,12 +53,12 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Make sure that all logic added is done in such a way that it won't hurt the use of the IVM in a blockchain setting where different nodes on a P2P network have different hardware, but still the output should be the same given the same input block.
 - When answering questions about behaviour or implementation details, read the relevant code paths first and ensure you understand how they work before responding.
 - Configuration: Prefer `iroha_config` parameters over environment variables for all runtime behavior. Add new knobs to `crates/iroha_config` (user → actual → defaults) and thread values explicitly through constructors or dependency injection (e.g., host setters). Keep any environment-based toggles only for developer convenience in tests and do not rely on them in production paths. We do not support shipping features behind environment variables—production behavior must always be sourced from the configuration files, and those configs must expose sensible defaults so a newcomer can clone the repo, run the binaries, and have everything “just work” without editing values manually.
-  - For IVM/Kotodama v1, strict pointer‑ABI type policy is always enforced. There is no compatibility toggle; contracts and hosts must adhere to the ABI policy unconditionally.
-- Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to maintain compatibility.
+  - For IVM/Kotodama v1, strict pointer‑ABI type policy is always enforced. There is no ABI-policy toggle; contracts and hosts must adhere to the ABI policy unconditionally.
+- Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes.
 - Serialization: Use Norito everywhere instead of serde. For binary codecs use `norito::{Encode, Decode}`; for JSON use the `norito::json` helpers/macros (`norito::json::from_*`, `to_*`, `json!`, `Value`) and never fall back to `serde_json`. Do not add direct `serde`/`serde_json` dependencies to crates; if serde is required internally, rely on Norito’s wrappers.
 - CI guard: `scripts/check_no_scale.sh` ensures SCALE (`parity-scale-codec`) only appears in the Norito benchmark harness. Run it locally if you touch serialization code.
 - Norito payloads MUST advertise their layout: either the version number maps to a fixed flag set, or a Norito header declares the decode flags. Do not guess packed-sequence bits from heuristics; genesis data follows the same rule.
-- Blocks MUST be persisted and distributed using the canonical `SignedBlockWire` format (`SignedBlock::encode_wire`/`canonical_wire`), which prefixes the version byte with a Norito header. Previous bare payloads are supported only for backward-compatibility decoding paths.
+- Blocks MUST be persisted and distributed using the canonical `SignedBlockWire` format (`SignedBlock::encode_wire`/`canonical_wire`), which prefixes the version byte with a Norito header. Bare payloads are not supported.
 - Add a `TODO:` comment explaining any temporary or incomplete implementation.
 - Format all Rust sources with `cargo fmt --all` (edition 2024) before committing.
 - Add tests: ensure at least one unit test for each new or modified function, placed either inline with `#[cfg(test)]` or in the crate `tests/` directory.
@@ -117,7 +117,7 @@ Note: First release policy
 - Use feature flags to guard hardware-accelerated paths (e.g., `simd`, `cuda`) and always provide a deterministic fallback path.
 - Ensure outputs remain identical across hardware; avoid relying on non-deterministic parallel reductions.
 - Update documentation and examples when public APIs or behavior change.
-- Validate serialization changes in `iroha_data_model` with roundtrip tests to preserve Norito compatibility.
+- Validate serialization changes in `iroha_data_model` with roundtrip tests to preserve Norito layout guarantees.
 - Integration tests spin real multi-peer networks; use at least 4 peers when constructing test networks (single-peer configs are not representative and can deadlock in Sumeragi).
 - Do not attempt to disable DA/RBC in tests (e.g., via `DevBypassDaAndRbcForZeroChain`); DA is enforced and that bypass path currently deadlocks in `sumeragi` during consensus startup.
 - QC quorum must be satisfied by voting validators (`min_votes_for_commit`); observer padding does not count toward availability/prevote/precommit quorum checks, so aggregate QCs only after enough validator votes arrive.

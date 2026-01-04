@@ -220,7 +220,7 @@ sorafs_cli manifest verify-signature \
   [Publishing & Monitoring](./publishing-monitoring.md) para que la gate de observabilidad DOCS-3c
   se satisfaga junto a los pasos de publicacion. El helper ahora acepta multiples entradas
   `bindings` (sitio, OpenAPI, SBOM del portal, SBOM de OpenAPI) y aplica `Sora-Name`/`Sora-Proof`/`Sora-Content-CID`
-  en el host objetivo via el guard opcional `expectHost`. La invocacion de abajo escribe tanto un
+  en el host objetivo via el guard opcional `hostname`. La invocacion de abajo escribe tanto un
   resumen JSON unico como el bundle de evidencia (`portal.json`, `tryit.json`, `binding.json` y
   `checksums.sha256`) bajo el directorio de release:
 
@@ -485,9 +485,9 @@ cuando edites el binding JSON a mano:
 cargo xtask soradns-verify-binding \
   --binding artifacts/sorafs/portal.gateway.binding.json \
   --alias docs.sora.link \
-  --content-cid "$(jq -r '.contentCid' artifacts/sorafs/portal.gateway.binding.json)" \
   --hostname docs.sora.link \
-  --proof-status ok
+  --proof-status ok \
+  --manifest-json artifacts/sorafs/portal.manifest.json
 ```
 
 El comando decodifica el payload `Sora-Proof` engrapado, asegura que el metadata `Sora-Route-Binding`
@@ -522,7 +522,7 @@ npm run monitor:publishing -- \
   `docs/portal/docs/devportal/publishing-monitoring.md` para el esquema) y
   ejecuta tres checks: probes de paths del portal + validacion de CSP/Permissions-Policy,
   probes del proxy Try it (opcionalmente golpeando su endpoint `/metrics`), y el verificador
-  de binding de gateway (`scripts/verify-sorafs-binding.mjs`) que ahora exige la presencia y
+  de binding de gateway (`cargo xtask soradns-verify-binding`) que ahora exige la presencia y
   el valor esperado de Sora-Content-CID junto con las verificaciones de alias/manifiesto.
 - El comando termina con non-zero cuando falla algun probe para que CI, cron jobs, o operadores
   de runbook puedan detener un release antes de promocionar alias.
@@ -699,11 +699,10 @@ engrapan pruebas frescas:
    `docs/source/sorafs_alias_policy.md` y falla cuando el digest del manifiesto,
    los TTLs o los bindings GAR se desvian.
 
-   Para spot checks ligeros (por ejemplo, cuando solo cambiaste el tuple alias/manifiesto),
-   ejecuta `node scripts/verify-sorafs-binding.mjs --alias "<alias>" --manifest "<digest>" --url "<gateway-url>"`.
-   El helper obtiene el endpoint del gateway, decodifica el header `Sora-Proof` engrapado, y
-   opcionalmente escribe un blob JSON de evidencia via `--json-out`, lo cual es util para tickets
-   de release que solo necesitan confirmacion de binding en lugar de un drill completo.
+   For lightweight spot checks (for example, when only the binding bundle
+   changed), run `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
+   The helper validates the captured binding bundle and is handy for release
+   tickets that only need binding confirmation instead of a full probe drill.
 
 2. **Captura evidencia de drill.** Para drills de operador o simulacros de PagerDuty, envuelve
    el probe con `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario

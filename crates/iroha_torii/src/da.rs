@@ -8349,30 +8349,23 @@ mod tests {
             },
         );
 
-        let dump = metrics.try_to_string().expect("metrics text");
-        let stored_line = find_metric_line(&dump, "torii_da_receipts_total{outcome=\"stored\"");
-        assert!(stored_line.contains(r#"lane="7""#));
-        assert!(stored_line.contains(r#"epoch="3""#));
-        assert!(
-            (parse_metric_value(stored_line) - 1.0).abs() < METRIC_ASSERT_EPSILON,
-            "stored counter should increment"
-        );
+        let stored = metrics
+            .torii_da_receipts_total
+            .with_label_values(&["stored", "7", "3"])
+            .get();
+        assert_eq!(stored, 1, "stored counter should increment");
 
-        let duplicate_line =
-            find_metric_line(&dump, "torii_da_receipts_total{outcome=\"duplicate\"");
-        assert!(
-            (parse_metric_value(duplicate_line) - 1.0).abs() < METRIC_ASSERT_EPSILON,
-            "duplicate counter should increment"
-        );
+        let duplicate = metrics
+            .torii_da_receipts_total
+            .with_label_values(&["duplicate", "7", "3"])
+            .get();
+        assert_eq!(duplicate, 1, "duplicate counter should increment");
 
-        let cursor_line = find_metric_line(
-            &dump,
-            "torii_da_receipt_highest_sequence{lane=\"7\",epoch=\"3\"}",
-        );
-        assert!(
-            (parse_metric_value(cursor_line) - 5.0).abs() < METRIC_ASSERT_EPSILON,
-            "cursor gauge should reflect stored sequence"
-        );
+        let cursor = metrics
+            .torii_da_receipt_highest_sequence
+            .with_label_values(&["7", "3"])
+            .get();
+        assert_eq!(cursor, 5, "cursor gauge should reflect stored sequence");
     }
 
     fn telemetry_handle_for_tests_with_profile(

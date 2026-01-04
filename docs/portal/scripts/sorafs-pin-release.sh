@@ -975,9 +975,9 @@ const gatewayBinding = bindingJson
       headers_text: bindingHeaders,
       alias: bindingJson.alias || null,
       hostname: bindingJson.hostname || null,
-      content_cid: bindingJson.contentCid || null,
-      proof_status: bindingJson.proofStatus || null,
-      generated_at: bindingJson.generatedAt || null,
+      content_cid: bindingJson.content_cid || null,
+      proof_status: bindingJson.proof_status || null,
+      generated_at: bindingJson.generated_at || null,
       headers: bindingJson.headers || null
     }
   : null;
@@ -1171,12 +1171,20 @@ const [
 
 try {
   const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+  const routePlan = JSON.parse(fs.readFileSync(routePlanPath, 'utf8'));
   report.route_plan = {
     path: routePlanPath,
     headers_path: fs.existsSync(headersPath) ? headersPath : null,
     rollback_headers_path: fs.existsSync(rollbackHeadersPath)
       ? rollbackHeadersPath
-      : null
+      : null,
+    alias: routePlan.alias ?? null,
+    hostname: routePlan.hostname ?? null,
+    content_cid: routePlan.content_cid ?? null,
+    route_binding: routePlan.route_binding ?? null,
+    headers: routePlan.headers ?? null,
+    headers_template: routePlan.headers_template ?? null,
+    generated_at: routePlan.generated_at ?? null
   };
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
 } catch (error) {

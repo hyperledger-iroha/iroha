@@ -38,35 +38,9 @@ fn unknown_numbers_rejected() {
 }
 
 #[test]
-fn experimental_policy_disallows_known_surface_numbers() {
-    use ivm::syscalls::*;
-    let known = [
-        SYSCALL_ALLOC,
-        SYSCALL_GROW_HEAP,
-        SYSCALL_GET_PUBLIC_INPUT,
-        SYSCALL_GET_PRIVATE_INPUT,
-        SYSCALL_COMMIT_OUTPUT,
-        SYSCALL_PROVE_EXECUTION,
-        SYSCALL_VERIFY_PROOF,
-        SYSCALL_USE_NULLIFIER,
-        SYSCALL_GET_MERKLE_PATH,
-    ];
-    for &num in &known {
-        assert!(
-            !ivm::syscalls::is_syscall_allowed(SyscallPolicy::Experimental(1), num),
-            "experimental policy must not allow num=0x{num:x}"
-        );
-    }
-}
-
-#[test]
 fn abi_hash_is_stable_for_policy() {
     use ivm::syscalls::compute_abi_hash;
     let h1 = compute_abi_hash(SyscallPolicy::AbiV1);
     let h2 = compute_abi_hash(SyscallPolicy::AbiV1);
     assert_eq!(h1, h2, "hash must be stable across calls");
-
-    // Distinguish policies via policy tag; experimental should differ
-    let e1 = compute_abi_hash(SyscallPolicy::Experimental(1));
-    assert_ne!(h1, e1, "abi v1 vs experimental policy hash should differ");
 }

@@ -46,7 +46,7 @@ pub fn encode_add(rd: u8, rs1: u8, rs2: u8) -> u32 {
 /// Encode `rd = rs` using the wide opcode space.
 #[allow(dead_code)]
 pub fn encode_move(rd: u8, rs: u8) -> u32 {
-    encode_add(rd, rs, 0)
+    encode_addi(rd, rs, 0)
 }
 
 /// Encode `rd = rs1 - rs2` using the wide opcode space.
@@ -204,6 +204,15 @@ mod tests {
         mem.load_code(&word.to_le_bytes());
         let (decoded, _) = decode(&mem, 0).expect("decode");
         assert_eq!(decoded, word);
+    }
+
+    #[test]
+    fn move_uses_addi_encoding() {
+        let word = encode_move(5, 1);
+        assert_eq!(
+            crate::instruction::wide::opcode(word),
+            crate::instruction::wide::arithmetic::ADDI
+        );
     }
 
     #[test]

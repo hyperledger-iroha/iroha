@@ -9,6 +9,10 @@ under `snapshot.store_dir`:
 - `snapshot.sig` — signature of the digest using the node identity key
 - `snapshot.merkle.json` — Norito JSON metadata with `chunk_size_bytes`,
   `total_len_bytes`, `root_hex`, and per-chunk SHA-256 leaf hashes
+- Snapshot writers use temp files, fsync payloads, then rename and fsync the
+  snapshot directory so the bundle is crash-safe. Snapshot readers will accept
+  the `.tmp` bundle when the final files are missing and promote the temp files
+  after successful validation.
 
 ## Configuration
 
@@ -22,10 +26,10 @@ under `snapshot.store_dir`:
 
 - `irohad` now fails startup if any sidecar is missing or mismatched. Restore
   verifies the digest, the signature over the digest, the Merkle root over the
-  chunked payload, chunk size/length parity, and metadata self-consistency,
-  then confirms the snapshot `chain_id` matches the configured chain before
-  deserializing the world state. Only the `NotFound` case falls back to a fresh
-  genesis state.
+  chunked payload, chunk size/length parity, leaf counts, and metadata
+  self-consistency, then confirms the snapshot `chain_id` matches the
+  configured chain before deserializing the world state. Only the `NotFound`
+  case falls back to a fresh genesis state.
 - Error surfaces map to dedicated `TryReadError` variants (`ChecksumMissing`,
   `SignatureMissing`, `MerkleMissing`, `MerkleMismatch`,
   `MerkleChunkSizeMismatch`, `MerkleLengthMismatch`, `MerkleProofInvalid`,

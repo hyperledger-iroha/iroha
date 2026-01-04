@@ -164,7 +164,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
                 owner.clone(),
                 1u128,
                 note,
-                vec![],
+                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
             )
             .into();
             stx.world

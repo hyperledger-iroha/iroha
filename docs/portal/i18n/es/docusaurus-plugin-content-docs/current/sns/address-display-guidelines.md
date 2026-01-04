@@ -22,7 +22,7 @@ cuenta como payloads inmutables. El ejemplo de billetera retail de Android en
   defecto) y la forma comprimida solo Sora (`snx1...`). IH58 siempre es seguro
   para compartir externamente y alimenta el payload del QR. La variante
   comprimida debe incluir una advertencia en linea porque solo funciona dentro
-  de apps compatibles con Sora. El ejemplo de billetera retail de Android
+  de apps con soporte de Sora. El ejemplo de billetera retail de Android
   conecta ambos botones Material y sus tooltips en
   `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, y la
   demo iOS SwiftUI refleja el mismo UX via `AddressPreviewCard` dentro de

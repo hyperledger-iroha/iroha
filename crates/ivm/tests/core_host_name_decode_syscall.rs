@@ -77,6 +77,39 @@ fn name_decode_rejects_invalid_name_utf8_valid() {
 }
 
 #[test]
+fn name_decode_rejects_reserved_chars() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    // Valid UTF-8 but invalid Name (reserved delimiter)
+    let bad = b"alice@wonderland";
+    let p_nb = vm
+        .alloc_input_tlv(&tlv(PointerType::NoritoBytes, bad))
+        .unwrap();
+    let prog = common::assemble(
+        &[
+            encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+            )
+            .to_le_bytes(),
+            encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                syscalls::SYSCALL_NAME_DECODE as u8,
+            )
+            .to_le_bytes(),
+            encoding::wide::encode_halt().to_le_bytes(),
+        ]
+        .concat(),
+    );
+    vm.set_register(10, p_nb);
+    vm.load_program(&prog).unwrap();
+    let err = vm
+        .run()
+        .expect_err("expected reserved chars to be rejected");
+    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+}
+
+#[test]
 fn name_decode_accepts_valid_utf8() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());

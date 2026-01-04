@@ -2,7 +2,7 @@
 
 日本語の概要は [`telemetry.ja.md`](./telemetry.ja.md) を参照してください。
 
-Iroha exports Prometheus-compatible metrics and a JSON status summary. This page lists key metrics and example PromQL queries you can use to build dashboards.
+Iroha exports Prometheus-format metrics and a JSON status summary. This page lists key metrics and example PromQL queries you can use to build dashboards.
 
 Endpoints
 - `/metrics`: Prometheus exposition text. Hidden when telemetry is disabled or the profile does not allow expensive metrics.

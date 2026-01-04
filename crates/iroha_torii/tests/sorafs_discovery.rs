@@ -1827,6 +1827,8 @@ async fn sorafs_storage_endpoints_round_trip() {
         .pin_policy(PinPolicy::default())
         .build()
         .expect("manifest");
+    let manifest_digest = manifest.digest().expect("manifest digest");
+    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
 
     let manifest_b64 = base64::engine::general_purpose::STANDARD
         .encode(to_bytes(&manifest).expect("encode manifest"));
@@ -1985,8 +1987,8 @@ async fn sorafs_storage_endpoints_round_trip() {
     let proof_body = {
         let mut map = json::Map::new();
         map.insert(
-            "manifest_id_hex".to_owned(),
-            json::Value::from(manifest_id.clone()),
+            "manifest_digest_hex".to_owned(),
+            json::Value::from(manifest_digest_hex.clone()),
         );
         map.insert(
             "provider_id_hex".to_owned(),
@@ -2031,9 +2033,11 @@ async fn sorafs_storage_endpoints_round_trip() {
         proof_items += 1;
         let value: json::Value = json::from_str(line).expect("parse proof stream item");
         assert_eq!(
-            value.get("manifest_id_hex").and_then(json::Value::as_str),
-            Some(manifest_id.as_str()),
-            "manifest id echoed in stream item"
+            value
+                .get("manifest_digest_hex")
+                .and_then(json::Value::as_str),
+            Some(manifest_digest_hex.as_str()),
+            "manifest digest echoed in stream item"
         );
         assert_eq!(
             value.get("proof_kind").and_then(json::Value::as_str),

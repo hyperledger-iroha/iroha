@@ -24,8 +24,4 @@ fn pointer_type_policy_allows_asset_id_under_abi_v1() {
         SyscallPolicy::AbiV1,
         PointerType::AssetId
     ));
-    assert!(!ivm::is_type_allowed_for_policy(
-        SyscallPolicy::Experimental(1),
-        PointerType::AssetId
-    ));
 }

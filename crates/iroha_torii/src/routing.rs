@@ -5272,25 +5272,27 @@ pub async fn handle_queries_with_opts(
         LaneCursorMode::Stored => "stored",
     };
 
+    let request = query.request;
+
     // Optional gas gating for stored cursor mode (resource bound).
     // If configured (> 0) and the effective mode is Stored, enforce a minimum
-    // client-provided `gas_units` in the query string. This does not actually
-    // charge gas; it simply guards resource usage for server-side cursors.
+    // client-provided budget. For continuations, honor the cursor's gas budget.
+    // This does not actually charge gas; it simply guards resource usage for server-side cursors.
     {
         let v = state.view();
         let min_gas = v.pipeline().query_stored_min_gas_units;
-        if min_gas > 0 {
-            match mode {
-                LaneCursorMode::Stored => {
-                    let provided = opts.gas_units.unwrap_or(0);
-                    if provided < min_gas {
-                        return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                            "stored cursor requires at least {min_gas} gas units"
-                        ))
-                        .into());
-                    }
+        if min_gas > 0 && matches!(mode, LaneCursorMode::Stored) {
+            let provided = match &request {
+                iroha_data_model::query::QueryRequest::Continue(cursor) => {
+                    cursor.gas_budget.unwrap_or(0)
                 }
-                LaneCursorMode::Ephemeral => {}
+                _ => opts.gas_units.unwrap_or(0),
+            };
+            if provided < min_gas {
+                return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
+                    "stored cursor requires at least {min_gas} gas units"
+                ))
+                .into());
             }
         }
     }
@@ -5300,18 +5302,17 @@ pub async fn handle_queries_with_opts(
     let state_cloned = Arc::clone(&state);
     let store_cloned = live_query_store.clone();
     let authority_cloned = authority.clone();
-    let continue_budget = match &query.request {
+    let continue_budget = match &request {
         iroha_data_model::query::QueryRequest::Continue(cursor) => cursor.gas_budget,
         _ => None,
     };
-    let req_cloned = query.request;
     let limits = QueryLimits::new(app_query_limits().max_fetch_size);
     let resp = tokio::task::spawn_blocking(move || {
         run_on_snapshot_with_mode(
             &state_cloned,
             &store_cloned,
             &authority_cloned,
-            req_cloned,
+            request,
             mode,
             limits,
         )
@@ -18676,7 +18677,7 @@ mod query_endpoint_tests {
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
 pub struct EventsSseParams {
-    /// Optional JSON-encoded filter expression. Currently accepted but not yet applied.
+    /// Optional JSON-encoded filter expression.
     pub filter: Option<String>,
 }
 
@@ -18688,6 +18689,8 @@ pub struct EventsSseParams {
 ///   - `proof_backend == "<backend>"` or `proof_backend IN ["b1","b2",...]`
 ///   - `proof_call_hash == "<64-hex>"` or `proof_call_hash IN ["<64-hex>", ...]`
 ///   - `proof_envelope_hash == "<64-hex>"` or `proof_envelope_hash IN ["<64-hex>", ...]`
+/// - When only proof-specific filters are supplied, non-proof events are not emitted.
+/// - Invalid or unsupported filters are rejected with `400 Bad Request`.
 /// - Each SSE `data:` chunk is a single JSON-encoded event object.
 ///
 /// curl example:
@@ -18696,133 +18699,63 @@ pub struct EventsSseParams {
 pub fn handle_v1_events_sse(
     events: EventsSender,
     crate::NoritoQuery(params): crate::NoritoQuery<EventsSseParams>,
-) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    // Parse optional filter JSON; map to typed EventFilterBox list if possible.
-    let (filters, proof_backend, proof_call_hash, proof_envelope_hash) = params
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok())
-        .map(|expr| parse_sse_filters(&expr))
-        .unwrap_or_default();
-    let filters = if filters.is_empty() {
-        None
-    } else {
-        Some(Arc::new(filters))
-    };
-    let filters = filters.clone();
-    let proof_backend = proof_backend.clone();
-    let proof_call_hash = proof_call_hash.clone();
-    let proof_envelope_hash = proof_envelope_hash.clone();
+) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error> {
+    let SseFilterSpec {
+        filters,
+        proof_backend,
+        proof_call_hash,
+        proof_envelope_hash,
+    } = parse_sse_filter_params(params.filter.as_deref())?;
+    let proof_only = filters.is_none()
+        && crate::proof_filters::has_any_proof_filters(
+            &proof_backend,
+            &proof_call_hash,
+            &proof_envelope_hash,
+        );
     let rx = events.subscribe();
     let stream = stream::unfold(rx, move |mut rx| {
         let filters = filters.clone();
         let proof_backend = proof_backend.clone();
         let proof_call_hash = proof_call_hash.clone();
-        let value = proof_envelope_hash.clone();
+        let proof_envelope_hash = proof_envelope_hash.clone();
         async move {
             use tokio::sync::broadcast::error::RecvError;
-            match rx.recv().await {
-                Ok(event_box) => {
-                    if let Some(flt) = filters.as_ref() {
-                        // Drop events that don't match any filter
-                        if !flt.iter().any(|f| f.matches(&event_box)) {
-                            return Some((Ok(SseEvent::default().comment("filtered")), rx));
-                        }
-                    }
-                    // Optional additional proof filters (backend / call_hash)
-                    if proof_backend.is_some() || proof_call_hash.is_some() || value.is_some() {
-                        let mut drop = false;
-                        if let iroha_data_model::events::EventBox::Data(event) = &event_box {
-                            if let iroha_data_model::prelude::DataEvent::Proof(pe) = event.as_ref()
-                            {
-                                match pe {
-                                    iroha_data_model::events::data::proof::ProofEvent::Verified(
-                                        v,
-                                    ) => {
-                                        if let Some(ref bs) = proof_backend {
-                                            let backend = v.id.backend.clone();
-                                            if !bs.contains(&backend) {
-                                                drop = true;
-                                            }
-                                        }
-                                        if let Some(ref hs) = proof_call_hash {
-                                            if !v
-                                                .call_hash
-                                                .as_ref()
-                                                .is_some_and(|hash| hs.contains(hash))
-                                            {
-                                                drop = true;
-                                            }
-                                        }
-                                        if let Some(ref es) = value {
-                                            if !v
-                                                .envelope_hash
-                                                .as_ref()
-                                                .is_some_and(|hash| es.contains(hash))
-                                            {
-                                                drop = true;
-                                            }
-                                        }
-                                    }
-                                    iroha_data_model::events::data::proof::ProofEvent::Rejected(
-                                        r,
-                                    ) => {
-                                        if let Some(ref bs) = proof_backend {
-                                            let backend = r.id.backend.clone();
-                                            if !bs.contains(&backend) {
-                                                drop = true;
-                                            }
-                                        }
-                                        if let Some(ref hs) = proof_call_hash {
-                                            if !r
-                                                .call_hash
-                                                .as_ref()
-                                                .is_some_and(|hash| hs.contains(hash))
-                                            {
-                                                drop = true;
-                                            }
-                                        }
-                                        if let Some(ref es) = value {
-                                            if !es
-                                                .iter()
-                                                .any(|h| r.envelope_hash.as_ref() == Some(h))
-                                            {
-                                                drop = true;
-                                            }
-                                        }
-                                    }
-                                    iroha_data_model::events::data::proof::ProofEvent::Pruned(
-                                        pruned,
-                                    ) => {
-                                        if let Some(ref bs) = proof_backend {
-                                            if !bs.contains(&pruned.backend) {
-                                                drop = true;
-                                            }
-                                        }
-                                    }
-                                }
+            loop {
+                match rx.recv().await {
+                    Ok(event_box) => {
+                        if let Some(flt) = filters.as_ref() {
+                            // Drop events that don't match any filter.
+                            if !flt.iter().any(|f| f.matches(&event_box)) {
+                                continue;
                             }
                         }
-                        if drop {
-                            return Some((Ok(SseEvent::default().comment("filtered")), rx));
+                        if !crate::proof_filters::event_matches_proof_filters(
+                            &event_box,
+                            &proof_backend,
+                            &proof_call_hash,
+                            &proof_envelope_hash,
+                            proof_only,
+                        ) {
+                            continue;
                         }
+                        let json_val = event_to_json_value(&event_box);
+                        let json =
+                            norito::json::to_json(&json_val).unwrap_or_else(|_| "{}".to_owned());
+                        let ev = SseEvent::default().data(json);
+                        return Some((Ok(ev), rx));
                     }
-                    let json_val = event_to_json_value(&event_box);
-                    let json = norito::json::to_json(&json_val).unwrap_or_else(|_| "{}".to_owned());
-                    let ev = SseEvent::default().data(json);
-                    Some((Ok(ev), rx))
+                    Err(RecvError::Lagged(_)) => {
+                        // Skip lagged messages but keep the stream alive.
+                        let ev = SseEvent::default().comment("lagged");
+                        return Some((Ok(ev), rx));
+                    }
+                    Err(RecvError::Closed) => return None,
                 }
-                Err(RecvError::Lagged(_)) => {
-                    // Skip lagged messages but keep the stream alive
-                    let ev = SseEvent::default().comment("lagged");
-                    Some((Ok(ev), rx))
-                }
-                Err(RecvError::Closed) => None,
             }
         }
     });
 
-    Sse::new(stream)
+    Ok(Sse::new(stream))
 }
 
 #[derive(Clone, Copy)]
@@ -23722,122 +23655,310 @@ fn event_filters_from_expr(expr: &FilterExpr) -> Vec<EventFilterBox> {
 }
 
 #[cfg(feature = "app_api")]
-fn parse_sse_filters(
-    expr: &FilterExpr,
-) -> (
-    Vec<EventFilterBox>,
-    Option<Vec<String>>,   // proof_backend
-    Option<Vec<[u8; 32]>>, // proof_call_hash
-    Option<Vec<[u8; 32]>>, // proof_envelope_hash
-) {
-    use FilterExpr as F;
-    let mut boxes = event_filters_from_expr(expr);
-    let mut proof_backend: Option<Vec<String>> = None;
-    let mut proof_call_hash: Option<Vec<[u8; 32]>> = None;
-    let mut proof_envelope_hash: Option<Vec<[u8; 32]>> = None;
+#[derive(Debug, Default, Clone)]
+struct SseFilterSpec {
+    filters: Option<Arc<Vec<EventFilterBox>>>,
+    proof_backend: Option<Vec<String>>,
+    proof_call_hash: Option<Vec<[u8; 32]>>,
+    proof_envelope_hash: Option<Vec<[u8; 32]>>,
+}
 
-    fn walk(
-        e: &FilterExpr,
-        proof_backend: &mut Option<Vec<String>>,
-        proof_call_hash: &mut Option<Vec<[u8; 32]>>,
-        proof_envelope_hash: &mut Option<Vec<[u8; 32]>>,
-    ) {
-        match e {
-            F::And(list) | F::Or(list) => {
-                for sub in list {
-                    walk(sub, proof_backend, proof_call_hash, proof_envelope_hash);
-                }
-            }
-            F::Not(inner) => walk(inner, proof_backend, proof_call_hash, proof_envelope_hash),
-            F::Eq(field, val) => {
-                if field.0 == "proof_backend" {
-                    if let Some(s) = val.as_str() {
-                        let v = proof_backend.get_or_insert_with(Vec::new);
-                        v.push(s.to_string());
-                    }
-                } else if field.0 == "proof_call_hash" {
-                    if let Some(s) = val.as_str() {
-                        if s.len() == 64 {
-                            if let Ok(bytes) = hex::decode(s) {
-                                if bytes.len() == 32 {
-                                    let mut arr = [0u8; 32];
-                                    arr.copy_from_slice(&bytes);
-                                    let v = proof_call_hash.get_or_insert_with(Vec::new);
-                                    v.push(arr);
-                                }
-                            }
-                        }
-                    }
-                } else if field.0 == "proof_envelope_hash" {
-                    if let Some(s) = val.as_str() {
-                        if s.len() == 64 {
-                            if let Ok(bytes) = hex::decode(s) {
-                                if bytes.len() == 32 {
-                                    let mut arr = [0u8; 32];
-                                    arr.copy_from_slice(&bytes);
-                                    let v = proof_envelope_hash.get_or_insert_with(Vec::new);
-                                    v.push(arr);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            F::In(field, vals) => {
-                if field.0 == "proof_backend" {
-                    for val in vals {
-                        if let Some(s) = val.as_str() {
-                            let v = proof_backend.get_or_insert_with(Vec::new);
-                            v.push(s.to_string());
-                        }
-                    }
-                } else if field.0 == "proof_call_hash" {
-                    for val in vals {
-                        if let Some(s) = val.as_str() {
-                            if s.len() == 64 {
-                                if let Ok(bytes) = hex::decode(s) {
-                                    if bytes.len() == 32 {
-                                        let mut arr = [0u8; 32];
-                                        arr.copy_from_slice(&bytes);
-                                        let v = proof_call_hash.get_or_insert_with(Vec::new);
-                                        v.push(arr);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else if field.0 == "proof_envelope_hash" {
-                    for val in vals {
-                        if let Some(s) = val.as_str() {
-                            if s.len() == 64 {
-                                if let Ok(bytes) = hex::decode(s) {
-                                    if bytes.len() == 32 {
-                                        let mut arr = [0u8; 32];
-                                        arr.copy_from_slice(&bytes);
-                                        let v = proof_envelope_hash.get_or_insert_with(Vec::new);
-                                        v.push(arr);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
+#[cfg(feature = "app_api")]
+fn sse_filter_error(msg: impl Into<String>) -> crate::Error {
+    crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(msg.into()),
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn parse_sse_filter_params(raw: Option<&str>) -> Result<SseFilterSpec, crate::Error> {
+    let Some(raw) = raw else {
+        return Ok(SseFilterSpec::default());
+    };
+    let expr = norito::json::from_str::<FilterExpr>(raw)
+        .map_err(|_| sse_filter_error("invalid filter expression"))?;
+    parse_sse_filters(&expr).map_err(sse_filter_error)
+}
+
+#[cfg(feature = "app_api")]
+fn parse_sse_filters(expr: &FilterExpr) -> Result<SseFilterSpec, String> {
+    #[derive(Default)]
+    struct SseFilterUsage {
+        event_filter_seen: bool,
+        proof_backend: Vec<String>,
+        proof_call_hash: Vec<[u8; 32]>,
+        proof_envelope_hash: Vec<[u8; 32]>,
     }
-    walk(
-        expr,
-        &mut proof_backend,
-        &mut proof_call_hash,
-        &mut proof_envelope_hash,
-    );
-    (
-        boxes.drain(..).collect(),
+
+    fn parse_u64_value(value: &norito::json::Value) -> Option<u64> {
+        value
+            .as_u64()
+            .or_else(|| value.as_str().and_then(|s| s.parse::<u64>().ok()))
+    }
+
+    fn parse_hex_32(field: &str, value: &norito::json::Value) -> Result<[u8; 32], String> {
+        let s = value
+            .as_str()
+            .ok_or_else(|| format!("{field} must be a hex string"))?;
+        if s.len() != 64 {
+            return Err(format!("{field} must be 64 hex characters"));
+        }
+        let bytes = hex::decode(s).map_err(|_| format!("{field} must be valid hex"))?;
+        if bytes.len() != 32 {
+            return Err(format!("{field} must decode to 32 bytes"));
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        Ok(arr)
+    }
+
+    fn validate_eq(
+        field: &str,
+        value: &norito::json::Value,
+        usage: &mut SseFilterUsage,
+    ) -> Result<(), String> {
+        match field {
+            "tx_status" => {
+                let raw = value
+                    .as_str()
+                    .ok_or_else(|| "tx_status must be a string".to_string())?;
+                if parse_tx_status(raw).is_none() {
+                    return Err("tx_status is not a valid status".to_string());
+                }
+                usage.event_filter_seen = true;
+            }
+            "tx_hash" => {
+                let raw = value
+                    .as_str()
+                    .ok_or_else(|| "tx_hash must be a string".to_string())?;
+                let parsed =
+                    raw.parse::<iroha_crypto::HashOf<
+                        iroha_data_model::transaction::signed::SignedTransaction,
+                    >>();
+                if parsed.is_err() {
+                    return Err("tx_hash must be a valid hex hash".to_string());
+                }
+                usage.event_filter_seen = true;
+            }
+            "tx_block_height" => {
+                let raw = parse_u64_value(value)
+                    .ok_or_else(|| "tx_block_height must be an unsigned integer".to_string())?;
+                if NonZeroU64::new(raw).is_none() {
+                    return Err("tx_block_height must be > 0".to_string());
+                }
+                usage.event_filter_seen = true;
+            }
+            "tx_lane_id" => {
+                let raw = parse_u64_value(value)
+                    .ok_or_else(|| "tx_lane_id must be an unsigned integer".to_string())?;
+                u32::try_from(raw).map_err(|_| "tx_lane_id must fit in u32".to_string())?;
+                usage.event_filter_seen = true;
+            }
+            "tx_dataspace_id" => {
+                let raw = parse_u64_value(value)
+                    .ok_or_else(|| "tx_dataspace_id must be an unsigned integer".to_string())?;
+                let _ = raw;
+                usage.event_filter_seen = true;
+            }
+            "block_status" => {
+                let raw = value
+                    .as_str()
+                    .ok_or_else(|| "block_status must be a string".to_string())?;
+                if parse_block_status(raw).is_none() {
+                    return Err("block_status is not a valid status".to_string());
+                }
+                usage.event_filter_seen = true;
+            }
+            "block_height" => {
+                let raw = parse_u64_value(value)
+                    .ok_or_else(|| "block_height must be an unsigned integer".to_string())?;
+                if NonZeroU64::new(raw).is_none() {
+                    return Err("block_height must be > 0".to_string());
+                }
+                usage.event_filter_seen = true;
+            }
+            "platform_policy" => {
+                let raw = value
+                    .as_str()
+                    .ok_or_else(|| "platform_policy must be a string".to_string())?;
+                if parse_offline_platform_policy(raw).is_none() {
+                    return Err("platform_policy is not a valid policy".to_string());
+                }
+                usage.event_filter_seen = true;
+            }
+            "proof_backend" => {
+                let raw = value
+                    .as_str()
+                    .ok_or_else(|| "proof_backend must be a string".to_string())?;
+                if raw.trim().is_empty() {
+                    return Err("proof_backend must be non-empty".to_string());
+                }
+                usage.proof_backend.push(raw.to_string());
+            }
+            "proof_call_hash" => {
+                let arr = parse_hex_32("proof_call_hash", value)?;
+                usage.proof_call_hash.push(arr);
+            }
+            "proof_envelope_hash" => {
+                let arr = parse_hex_32("proof_envelope_hash", value)?;
+                usage.proof_envelope_hash.push(arr);
+            }
+            _ => return Err(format!("unsupported filter field: {field}")),
+        }
+        Ok(())
+    }
+
+    fn validate_in(
+        field: &str,
+        values: &[norito::json::Value],
+        usage: &mut SseFilterUsage,
+    ) -> Result<(), String> {
+        if values.is_empty() {
+            return Err(format!("{field} IN must not be empty"));
+        }
+        for value in values {
+            validate_eq(field, value, usage)?;
+        }
+        Ok(())
+    }
+
+    fn validate_expr(expr: &FilterExpr, usage: &mut SseFilterUsage) -> Result<(), String> {
+        match expr {
+            FilterExpr::And(list) | FilterExpr::Or(list) => {
+                if list.is_empty() {
+                    return Err("filter expression must not be empty".to_string());
+                }
+                for sub in list {
+                    validate_expr(sub, usage)?;
+                }
+            }
+            FilterExpr::Not(inner) => match inner.as_ref() {
+                FilterExpr::Eq(field, value)
+                    if field.0 == "tx_status" || field.0 == "block_status" =>
+                {
+                    validate_eq(&field.0, value, usage)?;
+                }
+                _ => {
+                    return Err("not only supports tx_status or block_status".to_string());
+                }
+            },
+            FilterExpr::Eq(field, value) => validate_eq(&field.0, value, usage)?,
+            FilterExpr::In(field, values) => validate_in(&field.0, values, usage)?,
+            FilterExpr::IsNull(field) => {
+                if field.0.as_str() != "tx_block_height" {
+                    return Err("isnull only supports tx_block_height".to_string());
+                }
+                usage.event_filter_seen = true;
+            }
+            _ => return Err("unsupported filter operator".to_string()),
+        }
+        Ok(())
+    }
+
+    let mut usage = SseFilterUsage::default();
+    validate_expr(expr, &mut usage)?;
+
+    let filters = event_filters_from_expr(expr);
+    if usage.event_filter_seen && filters.is_empty() {
+        return Err("filter does not match any SSE events".to_string());
+    }
+
+    let filters = if filters.is_empty() {
+        None
+    } else {
+        Some(Arc::new(filters))
+    };
+    let proof_backend = if usage.proof_backend.is_empty() {
+        None
+    } else {
+        Some(usage.proof_backend)
+    };
+    let proof_call_hash = if usage.proof_call_hash.is_empty() {
+        None
+    } else {
+        Some(usage.proof_call_hash)
+    };
+    let proof_envelope_hash = if usage.proof_envelope_hash.is_empty() {
+        None
+    } else {
+        Some(usage.proof_envelope_hash)
+    };
+
+    Ok(SseFilterSpec {
+        filters,
         proof_backend,
         proof_call_hash,
         proof_envelope_hash,
-    )
+    })
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod sse_filter_validation_tests {
+    use super::*;
+    use crate::filter::{FieldPath, FilterExpr};
+
+    #[test]
+    fn sse_filter_rejects_unknown_field() {
+        let expr = FilterExpr::Eq(
+            FieldPath("unknown_field".into()),
+            norito::json::Value::String("nope".into()),
+        );
+        let err = parse_sse_filters(&expr).expect_err("unknown field should be rejected");
+        assert!(err.contains("unsupported filter field"));
+    }
+
+    #[test]
+    fn sse_filter_rejects_invalid_proof_hash() {
+        let expr = FilterExpr::Eq(
+            FieldPath("proof_call_hash".into()),
+            norito::json::Value::String("deadbeef".into()),
+        );
+        let err = parse_sse_filters(&expr).expect_err("invalid proof hash should be rejected");
+        assert!(err.contains("proof_call_hash"));
+    }
+
+    #[test]
+    fn sse_filter_rejects_incompatible_and() {
+        let expr = FilterExpr::And(vec![
+            FilterExpr::Eq(
+                FieldPath("tx_status".into()),
+                norito::json::Value::String("Queued".into()),
+            ),
+            FilterExpr::Eq(
+                FieldPath("block_status".into()),
+                norito::json::Value::String("Committed".into()),
+            ),
+        ]);
+        let err = parse_sse_filters(&expr).expect_err("incompatible AND should be rejected");
+        assert_eq!(err, "filter does not match any SSE events");
+    }
+
+    #[test]
+    fn sse_filter_accepts_proof_only_filter() {
+        let expr = FilterExpr::Eq(
+            FieldPath("proof_backend".into()),
+            norito::json::Value::String("halo2/ipa".into()),
+        );
+        let spec = parse_sse_filters(&expr).expect("proof-only filter should parse");
+        assert!(spec.filters.is_none());
+        assert_eq!(spec.proof_backend.unwrap(), vec!["halo2/ipa".to_string()]);
+    }
+
+    #[test]
+    fn sse_filter_params_rejects_invalid_json() {
+        let err = parse_sse_filter_params(Some("not-json")).expect_err("invalid json rejected");
+        let _ = err;
+    }
+
+    #[test]
+    fn sse_handler_rejects_invalid_filter() {
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let params = EventsSseParams {
+            filter: Some("not-json".to_string()),
+        };
+        let res = handle_v1_events_sse(events, crate::NoritoQuery(params));
+        assert!(res.is_err());
+    }
 }
 
 #[cfg(test)]
@@ -23847,9 +23968,12 @@ mod cursor_mode_tests {
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
+        smartcontracts::isi::query::{QueryLimits, apply_query_postprocessing},
         state::{State, World},
     };
     use iroha_data_model::prelude::*;
+    use iroha_data_model::query::parameters::{FetchSize, QueryParams};
+    use nonzero_ext::nonzero;
 
     use super::*;
 
@@ -23857,6 +23981,37 @@ mod cursor_mode_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(World::new(), kura, query)
+    }
+
+    fn seed_stored_cursor(
+        live_query_store: &iroha_core::query::store::LiveQueryStoreHandle,
+        authority: &AccountId,
+        gas_budget: u64,
+    ) -> iroha_data_model::query::parameters::ForwardCursor {
+        let query_output = (0..3).map(|i| {
+            Permission::new(
+                format!("p{i}"),
+                iroha_data_model::prelude::Json::from(false),
+            )
+        });
+        let query_params = QueryParams {
+            fetch_size: FetchSize {
+                fetch_size: Some(nonzero!(1_u64)),
+            },
+            ..QueryParams::default()
+        };
+        let iter = apply_query_postprocessing(
+            query_output,
+            SelectorTuple::default(),
+            &query_params,
+            QueryLimits::default(),
+        )
+        .expect("build query output");
+        let response = live_query_store
+            .handle_iter_start(iter, authority, Some(gas_budget))
+            .expect("start query");
+        let (_batch, _remaining, cursor) = response.into_parts();
+        cursor.expect("cursor should be stored")
     }
 
     fn signed_singular_find_active_abi(
@@ -23927,6 +24082,43 @@ mod cursor_mode_tests {
         let opts = QueryOptions {
             cursor_mode: Some("stored".to_string()),
             gas_units: Some(250),
+        };
+        #[cfg(feature = "telemetry")]
+        let tel = MaybeTelemetry::for_tests();
+        #[cfg(not(feature = "telemetry"))]
+        let tel = MaybeTelemetry::disabled();
+        let live = state.query_handle.clone();
+        let res = handle_queries_with_opts(
+            live,
+            state,
+            signed,
+            tel,
+            crate::NoritoQuery(opts),
+            crate::utils::ResponseFormat::Json,
+        )
+        .await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn stored_mode_continue_uses_cursor_gas_budget() {
+        let mut s = make_minimal_state();
+        s.pipeline.query_default_cursor_mode =
+            iroha_config::parameters::actual::QueryCursorMode::Stored;
+        s.pipeline.query_stored_min_gas_units = 200;
+        let state = Arc::new(s);
+
+        let kp = iroha_crypto::KeyPair::random();
+        let domain: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let authority = AccountId::new(domain.clone(), kp.public_key().clone());
+        let cursor = seed_stored_cursor(&state.query_handle, &authority, 250);
+        let signed = iroha_data_model::query::QueryRequest::Continue(cursor)
+            .with_authority(authority)
+            .sign(&kp);
+
+        let opts = QueryOptions {
+            cursor_mode: Some("stored".to_string()),
+            gas_units: None,
         };
         #[cfg(feature = "telemetry")]
         let tel = MaybeTelemetry::for_tests();
@@ -35788,8 +35980,12 @@ pub mod block {
     type Result<T> = core::result::Result<T, Error>;
 
     #[iroha_futures::telemetry_future]
-    pub async fn handle_blocks_stream(kura: Arc<Kura>, stream: WebSocket) -> eyre::Result<()> {
-        let mut stream = WebSocketNorito(stream);
+    pub async fn handle_blocks_stream(
+        kura: Arc<Kura>,
+        stream: WebSocket,
+        ws_message_timeout: std::time::Duration,
+    ) -> eyre::Result<()> {
+        let mut stream = WebSocketNorito::new(stream, ws_message_timeout);
         let init_and_subscribe = async {
             let mut consumer = block::Consumer::new(&mut stream, kura).await?;
             subscribe_forever(&mut consumer).await
@@ -35859,7 +36055,12 @@ pub mod event {
     /// received through the `stream`
     #[iroha_futures::telemetry_future]
     pub async fn handle_events_stream(events: EventsSender, stream: WebSocket) -> eyre::Result<()> {
-        handle_events_stream_with_receiver(events.subscribe(), stream).await
+        handle_events_stream_with_receiver(
+            events.subscribe(),
+            stream,
+            std::time::Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
+        )
+        .await
     }
 
     /// Subscribe a pre-registered receiver to the event stream, ensuring buffered events
@@ -35868,8 +36069,9 @@ pub mod event {
     pub async fn handle_events_stream_with_receiver(
         mut events_rx: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
         stream: WebSocket,
+        ws_message_timeout: std::time::Duration,
     ) -> eyre::Result<()> {
-        let mut stream = WebSocketNorito(stream);
+        let mut stream = WebSocketNorito::new(stream, ws_message_timeout);
         let init_and_subscribe = async {
             let mut consumer = event::Consumer::new(&mut stream).await?;
             subscribe_forever(&mut events_rx, &mut consumer).await
@@ -35904,9 +36106,16 @@ pub mod event {
                 }
                 // This branch catches and sends events
                 event = events.recv() => {
-                    let event = event?;
-                    iroha_logger::trace!(?event);
-                    consumer.consume(event).await?;
+                    match event {
+                        Ok(event) => {
+                            iroha_logger::trace!(?event);
+                            consumer.consume(event).await?;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            iroha_logger::warn!("event stream lagged; skipping buffered events");
+                        }
+                        Err(err) => return Err(Error::Event(err)),
+                    }
                 }
             }
         }
@@ -35945,7 +36154,7 @@ mod version_tests {
     async fn handle_version_reports_unavailable_without_genesis() {
         let state = Arc::new(CoreState::new_for_testing(
             World::default(),
-            Arc::new(Kura::blank_kura_for_testing()),
+            Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
         let response = handle_version(state).await;
@@ -37011,7 +37220,14 @@ mod event_stream_tests {
                         ws.on_upgrade(move |ws| async move {
                             let mut guard = rx_holder.lock().await;
                             let rx = guard.take().expect("event receiver already used");
-                            let _ = handle_events_stream_with_receiver(rx, ws).await;
+                            let _ = handle_events_stream_with_receiver(
+                                rx,
+                                ws,
+                                std::time::Duration::from_millis(
+                                    iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+                                ),
+                            )
+                            .await;
                         })
                     }
                 }
@@ -37039,7 +37255,7 @@ mod event_stream_tests {
                 Err(err) => panic!("ws connect failed: {err}"),
             };
 
-        let sub = EventSubscriptionRequest(vec![EventFilterBox::Pipeline(
+        let sub = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
             TransactionEventFilter::default().for_hash(hash).into(),
         )]);
         let sub_bytes = to_bytes(&sub).expect("encode subscription");
@@ -37066,6 +37282,121 @@ mod event_stream_tests {
 
         let event = got_event.expect("transaction event");
         assert_eq!(event.hash(), &hash);
+        assert_eq!(event.status(), &TransactionStatus::Queued);
+    }
+
+    #[tokio::test]
+    async fn ws_stream_survives_lagged_receiver() {
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let lagged_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x11; Hash::LENGTH],
+        ));
+        let wanted_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x22; Hash::LENGTH],
+        ));
+        let lagged_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
+            hash: lagged_hash,
+            block_height: None,
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::new(0),
+            status: TransactionStatus::Queued,
+        }));
+        let wanted_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
+            hash: wanted_hash.clone(),
+            block_height: None,
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::new(0),
+            status: TransactionStatus::Queued,
+        }));
+
+        let rx_holder = Arc::new(Mutex::new(Some(events.subscribe())));
+        events
+            .send(lagged_event)
+            .expect("receiver should be subscribed");
+        events
+            .send(wanted_event)
+            .expect("receiver should be subscribed");
+
+        let app = Router::new().route(
+            "/ws",
+            get({
+                let rx_holder = Arc::clone(&rx_holder);
+                move |ws: WebSocketUpgrade| {
+                    let rx_holder = Arc::clone(&rx_holder);
+                    async move {
+                        ws.on_upgrade(move |ws| async move {
+                            let mut guard = rx_holder.lock().await;
+                            let rx = guard.take().expect("event receiver already used");
+                            let _ = handle_events_stream_with_receiver(
+                                rx,
+                                ws,
+                            std::time::Duration::from_millis(
+                                iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+                            ),
+                            )
+                            .await;
+                        })
+                    }
+                }
+            }),
+        );
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("tcp bind failed: {err}"),
+        };
+        let addr = listener.local_addr().expect("listener addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("axum server");
+        });
+
+        let (mut ws_stream, _resp) =
+            match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
+                Ok(pair) => pair,
+                Err(tokio_tungstenite::tungstenite::Error::Io(io_err))
+                    if io_err.kind() == ErrorKind::PermissionDenied =>
+                {
+                    return;
+                }
+                Err(err) => panic!("ws connect failed: {err}"),
+            };
+
+        let sub = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
+            TransactionEventFilter::default()
+                .for_hash(wanted_hash.clone())
+                .into(),
+        )]);
+        let sub_bytes = to_bytes(&sub).expect("encode subscription");
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                sub_bytes.into(),
+            ))
+            .await
+            .expect("send subscription");
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match ws_stream.next().await {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(bytes))) => {
+                        let event_msg: EventMessage =
+                            decode_from_bytes(bytes.as_ref()).expect("decode event message");
+                        let event_box: EventBox = event_msg.into();
+                        if let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event_box
+                        {
+                            break event;
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => panic!("ws message error: {err}"),
+                    None => panic!("ws stream closed before event received"),
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for event");
+
+        assert_eq!(event.hash(), &wanted_hash);
         assert_eq!(event.status(), &TransactionStatus::Queued);
     }
 }

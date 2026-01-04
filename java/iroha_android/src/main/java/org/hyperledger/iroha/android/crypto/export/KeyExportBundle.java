@@ -17,7 +17,7 @@ import java.util.Objects;
  *
  * <pre>
  * magic[5] = "IRKEY"
- * version[1] = 0x00 (legacy), 0x01, 0x02, or 0x03
+ * version[1] = 0x03
  * alias_len[2] (big-endian)
  * alias_bytes
  * public_key_len[2]
@@ -34,9 +34,6 @@ import java.util.Objects;
  */
 public final class KeyExportBundle {
   private static final byte[] MAGIC = "IRKEY".getBytes(StandardCharsets.UTF_8);
-  public static final byte VERSION_V0 = 0;
-  public static final byte VERSION_V1 = 1;
-  public static final byte VERSION_V2 = 2;
   public static final byte VERSION_V3 = 3;
   public static final int EXPECTED_NONCE_LENGTH_BYTES = 12;
   public static final int EXPECTED_SALT_LENGTH_BYTES = 16;
@@ -101,10 +98,6 @@ public final class KeyExportBundle {
     return version;
   }
 
-  public boolean isLegacyDeterministic() {
-    return version == VERSION_V0 || version == VERSION_V1;
-  }
-
   /** Serializes the bundle to a base64 string with the canonical layout. */
   public String encodeBase64() {
     final byte[] encoded = encode();
@@ -117,7 +110,7 @@ public final class KeyExportBundle {
     if (aliasBytes.length > 0xFFFF) {
       throw new IllegalArgumentException("alias is too long");
     }
-    if (version != VERSION_V0 && version != VERSION_V1 && version != VERSION_V2 && version != VERSION_V3) {
+    if (version != VERSION_V3) {
       throw new IllegalArgumentException("unsupported key export version: " + version);
     }
     if (publicKey.length > 0xFFFF) {
@@ -133,17 +126,15 @@ public final class KeyExportBundle {
               + " bytes, found "
               + nonce.length);
     }
-    if (version >= VERSION_V2) {
-      if (salt.length != EXPECTED_SALT_LENGTH_BYTES) {
-        throw new IllegalArgumentException(
-            "salt must be "
-                + EXPECTED_SALT_LENGTH_BYTES
-                + " bytes, found "
-                + salt.length);
-      }
-      if (kdfWorkFactor < 0) {
-        throw new IllegalArgumentException("kdfWorkFactor must be non-negative");
-      }
+    if (salt.length != EXPECTED_SALT_LENGTH_BYTES) {
+      throw new IllegalArgumentException(
+          "salt must be "
+              + EXPECTED_SALT_LENGTH_BYTES
+              + " bytes, found "
+              + salt.length);
+    }
+    if (kdfWorkFactor < 0) {
+      throw new IllegalArgumentException("kdfWorkFactor must be non-negative");
     }
 
     final ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -158,12 +149,10 @@ public final class KeyExportBundle {
       output.write(nonce);
       output.write(shortBytes(ciphertext.length));
       output.write(ciphertext);
-      if (version >= VERSION_V2) {
-        output.write(salt.length);
-        output.write(salt);
-        output.write(kdfKind & 0xFF);
-        output.write(intBytes(kdfWorkFactor));
-      }
+      output.write(salt.length);
+      output.write(salt);
+      output.write(kdfKind & 0xFF);
+      output.write(intBytes(kdfWorkFactor));
     } catch (final IOException ex) {
       throw new IllegalStateException("Unexpected I/O error writing bundle", ex);
     }
@@ -190,10 +179,7 @@ public final class KeyExportBundle {
         throw new KeyExportException("Key export bundle magic mismatch");
       }
       final int version = input.read();
-      if (version != VERSION_V0
-          && version != VERSION_V1
-          && version != VERSION_V2
-          && version != VERSION_V3) {
+      if (version != VERSION_V3) {
         throw new KeyExportException(
             "Unsupported key export version: " + (version < 0 ? "EOF" : version));
       }
@@ -227,35 +213,30 @@ public final class KeyExportBundle {
       if (cipher.length != cipherLength) {
         throw new KeyExportException("Unexpected end of stream while reading ciphertext");
       }
-      byte[] salt = new byte[0];
-      int kdfKind = 0;
-      int kdfWorkFactor = 0;
-      if (version >= VERSION_V2) {
-        final int saltLength = input.read();
-        if (saltLength < 0) {
-          throw new KeyExportException("Unexpected end of stream while reading salt length");
-        }
-        salt = input.readNBytes(saltLength);
-        if (salt.length != saltLength) {
-          throw new KeyExportException("Unexpected end of stream while reading salt");
-        }
-        if (saltLength != EXPECTED_SALT_LENGTH_BYTES) {
-          throw new KeyExportException(
-              "Salt length mismatch: expected "
-                  + EXPECTED_SALT_LENGTH_BYTES
-                  + " bytes, found "
-                  + saltLength);
-        }
-        kdfKind = input.read();
-        if (kdfKind < 0) {
-          throw new KeyExportException("Unexpected end of stream while reading kdf kind");
-        }
-        final byte[] workFactorBytes = input.readNBytes(4);
-        if (workFactorBytes.length != 4) {
-          throw new KeyExportException("Unexpected end of stream while reading kdf work factor");
-        }
-        kdfWorkFactor = ByteBuffer.wrap(workFactorBytes).getInt();
+      final int saltLength = input.read();
+      if (saltLength < 0) {
+        throw new KeyExportException("Unexpected end of stream while reading salt length");
       }
+      final byte[] salt = input.readNBytes(saltLength);
+      if (salt.length != saltLength) {
+        throw new KeyExportException("Unexpected end of stream while reading salt");
+      }
+      if (saltLength != EXPECTED_SALT_LENGTH_BYTES) {
+        throw new KeyExportException(
+            "Salt length mismatch: expected "
+                + EXPECTED_SALT_LENGTH_BYTES
+                + " bytes, found "
+                + saltLength);
+      }
+      final int kdfKind = input.read();
+      if (kdfKind < 0) {
+        throw new KeyExportException("Unexpected end of stream while reading kdf kind");
+      }
+      final byte[] workFactorBytes = input.readNBytes(4);
+      if (workFactorBytes.length != 4) {
+        throw new KeyExportException("Unexpected end of stream while reading kdf work factor");
+      }
+      final int kdfWorkFactor = ByteBuffer.wrap(workFactorBytes).getInt();
       if (input.read() != -1) {
         throw new KeyExportException("Trailing data found in key export bundle");
       }

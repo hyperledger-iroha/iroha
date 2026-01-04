@@ -2,7 +2,7 @@
 edition = "2024"
 rust-version = "1.92"
 version = "2.0.0-rc.2.0"
-# GitHub org teams pages are deprecated; point to project contributors instead.
+# GitHub org teams pages are no longer supported; point to project contributors instead.
 authors = ["Iroha 2 contributors <https://github.com/hyperledger-iroha/iroha/graphs/contributors>"]
 
 description = "Efficient, simple, Byzantine-fault-tolerant DLT inspired by the Kaizen principle"

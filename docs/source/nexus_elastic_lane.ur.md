@@ -214,7 +214,7 @@ scripts/nexus_lane_smoke.py \
 `fixtures/nexus/lanes/` کے fixtures bootstrap helper کے artefacts کو mirror کرتے ہیں تاکہ نئے manifests
 بغیر bespoke scripting کے lint ہو سکیں۔ CI `ci/check_nexus_lane_smoke.sh` اور
 `ci/check_nexus_lane_registry_bundle.sh` (alias: `make check-nexus-lanes`) کے ذریعے یہی flow چلاتی
-ہے تاکہ NX-7 smoke helper published payload format کے ساتھ compatible رہے اور bundle digests/overlays
+ہے تاکہ NX-7 smoke helper published payload format کے مطابق رہے اور bundle digests/overlays
 reproducible ہوں۔
 
 جب lane rename ہو تو `nexus.lane.topology` telemetry events capture کریں (مثلاً

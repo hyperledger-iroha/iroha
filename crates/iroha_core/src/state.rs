@@ -4462,6 +4462,14 @@ pub struct StateTransaction<'block, 'state> {
     pub chain_id: iroha_data_model::ChainId,
     /// Accumulator used to record settlement receipts for this block.
     settlement_accumulator: &'block mut crate::settlement::SettlementAccumulator,
+    /// Settlement receipts staged during this transaction execution.
+    pending_settlement_records:
+        BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingSettlement>,
+    /// Charged Nexus fee event staged until the transaction is committed.
+    pending_nexus_fee_event: Option<crate::sumeragi::status::NexusFeeEvent>,
+    /// Block fee units staged until the transaction is committed.
+    #[cfg(feature = "telemetry")]
+    pending_block_fee_units: u64,
     /// Confidential operations executed so far within this transaction.
     pub zk_confidential_ops_in_tx: u32,
     /// Confidential proof verifications executed so far within this transaction.
@@ -4610,15 +4618,40 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         tx_hash: HashOf<SignedTransaction>,
         record: crate::settlement::PendingSettlement,
     ) {
-        self.settlement_accumulator.record(tx_hash, record);
+        self.pending_settlement_records.insert(tx_hash, record);
     }
 
-    /// Drain settlement receipts recorded while executing this block.
+    /// Drain settlement receipts staged while executing this transaction.
     pub fn drain_settlement_records(
         &mut self,
     ) -> std::collections::BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingSettlement>
     {
-        self.settlement_accumulator.drain()
+        core::mem::take(&mut self.pending_settlement_records)
+    }
+
+    /// Stage a Nexus fee event so it is recorded only after the transaction commits.
+    pub(crate) fn stage_nexus_fee_event(&mut self, event: crate::sumeragi::status::NexusFeeEvent) {
+        debug_assert!(
+            matches!(
+                event,
+                crate::sumeragi::status::NexusFeeEvent::Charged { .. }
+            ),
+            "only charged fee events should be staged"
+        );
+        debug_assert!(
+            self.pending_nexus_fee_event.is_none(),
+            "each transaction should stage at most one Nexus fee event"
+        );
+        self.pending_nexus_fee_event = Some(event);
+    }
+
+    /// Stage block fee units so telemetry only reflects committed transactions.
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn stage_block_fee_units(&mut self, delta_units: u64) {
+        if delta_units == 0 {
+            return;
+        }
+        self.pending_block_fee_units = self.pending_block_fee_units.saturating_add(delta_units);
     }
 }
 
@@ -10254,22 +10287,13 @@ impl State {
         status::record_validator_checkpoint(checkpoint.clone());
         let sidecar_snapshot = stake_snapshot.clone();
         self.persist_commit_roster_journal(commit_certificate, checkpoint, stake_snapshot);
-        let sidecar = if sidecar_snapshot.is_some() {
-            crate::kura::RosterSidecar::new_v2(
-                commit_certificate.height,
-                commit_certificate.block_hash,
-                Some(commit_certificate.clone()),
-                Some(checkpoint.clone()),
-                sidecar_snapshot,
-            )
-        } else {
-            crate::kura::RosterSidecar::new_v1(
-                commit_certificate.height,
-                commit_certificate.block_hash,
-                Some(commit_certificate.clone()),
-                Some(checkpoint.clone()),
-            )
-        };
+        let sidecar = crate::kura::RosterSidecar::new_v1(
+            commit_certificate.height,
+            commit_certificate.block_hash,
+            Some(commit_certificate.clone()),
+            Some(checkpoint.clone()),
+            sidecar_snapshot,
+        );
         self.kura.write_roster_metadata(&sidecar);
     }
 
@@ -11566,6 +11590,11 @@ impl State {
             );
             (gas_limit_per_block, pre_block_npos_seed)
         };
+        #[cfg(feature = "telemetry")]
+        {
+            self.telemetry.set_block_gas_used(0);
+            self.telemetry.reset_block_fee_units();
+        }
         let mut sb = StateBlock {
             state_ref: self,
             world: self.world.block(),
@@ -14112,6 +14141,10 @@ impl<'state> StateBlock<'state> {
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             settlement_accumulator: &mut self.settlement_accumulator,
+            pending_settlement_records: BTreeMap::new(),
+            pending_nexus_fee_event: None,
+            #[cfg(feature = "telemetry")]
+            pending_block_fee_units: 0,
             zk_confidential_ops_in_tx: 0,
             zk_verify_calls_in_tx: 0,
             zk_proof_bytes_in_tx: 0,
@@ -17146,7 +17179,21 @@ impl StateTransaction<'_, '_> {
             block_hashes,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
+            nexus,
             tx_call_hash,
+            #[cfg(feature = "telemetry")]
+            gas_used_in_block_so_far,
+            #[cfg(not(feature = "telemetry"))]
+                gas_used_in_block_so_far: _,
+            #[cfg(feature = "telemetry")]
+            last_tx_gas_used,
+            #[cfg(not(feature = "telemetry"))]
+                last_tx_gas_used: _,
+            settlement_accumulator,
+            pending_settlement_records,
+            pending_nexus_fee_event,
+            #[cfg(feature = "telemetry")]
+            pending_block_fee_units,
             fastpq_transcripts,
             mut pending_transfer_transcripts,
             block_axt_envelopes,
@@ -17154,10 +17201,60 @@ impl StateTransaction<'_, '_> {
             implicit_account_creations_in_block,
             implicit_account_creations_in_tx,
             current_lane_id,
+            #[cfg(feature = "telemetry")]
+            telemetry,
             ..
         } = self;
         if let Some(lane_id) = current_lane_id {
             touched_lanes.insert(lane_id);
+        }
+        if !pending_settlement_records.is_empty() {
+            for (tx_hash, record) in pending_settlement_records {
+                settlement_accumulator.record(tx_hash, record);
+            }
+        }
+        if let Some(event) = pending_nexus_fee_event {
+            match event {
+                crate::sumeragi::status::NexusFeeEvent::Charged {
+                    payer_kind,
+                    payer_id,
+                    amount,
+                    asset_id,
+                } => {
+                    let payer_kind_label = match payer_kind {
+                        crate::sumeragi::status::NexusFeePayer::Payer => "payer",
+                        crate::sumeragi::status::NexusFeePayer::Sponsor => "sponsor",
+                    };
+                    info!(
+                        target: "economics",
+                        payer_kind = payer_kind_label,
+                        payer = %payer_id,
+                        fee_amount = amount,
+                        asset = %asset_id,
+                        sink = %nexus.fees.fee_sink_account_id,
+                        "nexus fee charged"
+                    );
+                    crate::sumeragi::status::record_nexus_fee_event(
+                        crate::sumeragi::status::NexusFeeEvent::Charged {
+                            payer_kind,
+                            payer_id,
+                            amount,
+                            asset_id,
+                        },
+                    );
+                }
+                other => {
+                    crate::sumeragi::status::record_nexus_fee_event(other);
+                }
+            }
+        }
+        #[cfg(feature = "telemetry")]
+        {
+            let cumulative = gas_used_in_block_so_far.saturating_add(last_tx_gas_used);
+            telemetry.set_block_gas_used(cumulative);
+            if pending_block_fee_units > 0 {
+                telemetry.add_block_fee_units(pending_block_fee_units);
+            }
         }
         if !pending_transfer_transcripts.is_empty() {
             if let Some(hash) = tx_call_hash {

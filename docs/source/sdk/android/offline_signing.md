@@ -199,7 +199,7 @@ apps do not have to duplicate parsing logic when staging OA10.3a allowances.
 
 | Scenario | Steps |
 |----------|-------|
-| CI regression | Run `make android-tests` and `java/iroha_android/run_tests.sh`; the suite exercises `OfflineSigningEnvelope` round trips and queue persistence. |
+| CI regression | Run `make android-tests` and `ci/run_android_tests.sh`; the suite exercises `OfflineSigningEnvelope` round trips and queue persistence. |
 | Wallet/console integration | Add instrumentation to the AND5 sample apps so Managed Device runs exercise both the envelope creation path and queued replay. |
 | Attestation validation | Use `scripts/android_keystore_attestation.sh` against bundles emitted during `encodeAndSignEnvelopeWithAttestation(...)` to ensure the StrongBox flow is wired end-to-end. |
 | Override rehearsal | Execute the telemetry chaos scenario #2

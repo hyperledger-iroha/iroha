@@ -1,6 +1,180 @@
 # Status
 
 ## Latest Updates
+- Docs: note Kotodama ternary expressions are supported (remove outdated “not implemented” note).
+- Tests: not run (doc-only update).
+- Kotodama: allow `info(int)` by encoding to NoritoBytes before debug logging; added semantic + IR regression coverage and updated docs.
+- Tests: not run (not requested).
+- IVM/Kotodama: fix missing pointer-literal stub helpers in compiler tests and update ZK confidential event tests to pass `ConfidentialEncryptedPayload`.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed in `connect_norito_bridge` with `InvalidMagic` leading to chain discriminant lock poison errors; warnings about unused imports/assignments across `vendor/document-features`, `iroha_crypto`, `norito`, `iroha_telemetry`, `iroha_core`, `iroha_torii`, `iroha_cli`, `xtask`, and `ivm` unexpected cfgs).
+- Kotodama: reject assignments to non-variable/map-index lvalues (e.g., tuple/struct fields) instead of silently ignoring them; added semantic regression coverage and documented assignment targets.
+- Tests: not run (not requested).
+- Kotodama: validate durable state map key types (int/pointer only) to avoid silent non-persistent map operations; added semantic regression coverage and documented the limitation.
+- Tests: not run (not requested).
+- Kura: avoid unused `truncated` assignment during merge-ledger load to clear warning.
+- Tests: not run (warning fix only).
+- Kotodama: allow `Blob`/`bytes` equality by treating them as compatible blob-like types; added semantic regression coverage.
+- Tests: not run (not requested).
+- Kotodama: allow `Map::new()` to adopt annotated/return map types instead of defaulting to `Map<int,int>`; added semantic regression coverage and documented the requirement for non-int maps.
+- Tests: not run (not requested).
+- Kotodama: `assert` now rejects extra arguments (previously ignored), matching available lowering; added semantic regression coverage and updated docs.
+- Tests: not run (not requested).
+- Kotodama: enforce tuple/struct destructuring arity and type checks (reject non-tuples and mismatched bindings); added semantic regression coverage and documented tuple destructuring rules.
+- Tests: not run (not requested).
+- Kotodama: fix `for` scoping so step/body bindings don’t leak and step bindings aren’t visible in the body; added semantic regression coverage and documented loop scoping.
+- Tests: not run (not requested).
+- Kotodama: pointer constructors now reject non-literal string arguments (runtime string-to-TLV conversion is unsupported); added semantic regression coverage and clarified docs.
+- Tests: not run (not requested).
+- Tests: `cargo test -p soranet-relay` (passed; initial wait on build directory lock).
+- Tests: `cargo test --workspace` (failed: missing `reserve_pointer_literal_stub`/`patch_pointer_literal_stub` in `crates/ivm/src/kotodama/compiler.rs`; warnings about unused imports in `vendor/document-features/lib.rs`, `crates/norito/src/lib.rs`, `crates/norito/tests/aos_version.rs`, `crates/iroha_crypto/src/soranet/handshake.rs`, `crates/iroha_telemetry/src/metrics.rs`).
+- Kotodama: reject equality on tuple/struct/map types, and lower Blob/bytes equality via TLV pointer equality; added semantic + IR regression coverage and documented the equality constraints.
+- Tests: not run (not requested).
+- SoraNet VPN: route control/keepalive adapter frames through control-plane metrics (no receipts/data/cover), and update control accounting coverage/docs.
+- Tests: `cargo test -p soranet-relay adapter_tracks_control_frames_separately -- --nocapture`.
+- Kotodama: reject complex for-loop init/step clauses so tuple/struct bindings fail fast with `E0005`/`E0006`; added semantic regression coverage and documented the restriction.
+- Tests: not run (not requested).
+- SDKs (JS/Python/Swift): enforce canonical-only response handling in JS ToriiClient list decoders and transaction status checks; reject camelCase alias config/input/address-format variants in Python/Swift and update SDK tests.
+- Docs: replace "compatible" phrasing across core docs, portal docs, and portal i18n translations, keeping literal identifiers/metric tags intact.
+- Tests: not run (not requested).
+- Kotodama: reject index assignments on non-map targets to prevent invalid MapSet lowering; added semantic regression coverage.
+- Tests: `cargo test -p ivm --lib` (timed out after 120s; build directory lock during compile).
+- SoraNet VPN: drop cover/control/keepalive cells when forwarding to the TUN interface and add coverage for cover-frame dropping.
+- Tests: `cargo test -p soranet-relay bridge_drops_cover_frames_on_tun_forward -- --nocapture`.
+- Kotodama: reject shadowing `state` identifiers in params/let/map-loop bindings to avoid state/local ambiguity; added semantic regression coverage and documented `E_STATE_SHADOWED`.
+- Tests: not run (not requested).
+- Kura/WSV: allow non-overlapping out-of-order pipeline sidecar offsets, validate snapshot Merkle leaf counts, and restore from temp snapshot bundles with best-effort promotion; snapshot integrity docs updated.
+- Build/tests: expose Nexus fee test helpers to integration tests and disambiguate executor test usage.
+- Tests: `cargo test -p iroha_core snapshot_read_promotes_tmp_bundle -- --nocapture` (timed out after running the unit test; test passed; integration tests continued; warning about unused import `info` in `crates/iroha_core/src/executor.rs`).
+- Tests: `cargo test -p iroha_core --lib merkle_leaf_count_mismatch_rejected -- --nocapture` (timed out waiting for build directory lock; warning about unused import `info` in `crates/iroha_core/src/executor.rs`).
+- Tests: `cargo test -p iroha_core --lib pipeline_sidecar_allows_out_of_order_offsets -- --nocapture` (timed out waiting for build directory lock; warning about unused import `info` in `crates/iroha_core/src/executor.rs`).
+- SoraNet VPN: fix cover egress accounting for adapter-encoded cells, enforce cover-flag/class consistency during padding, reject non-pinned VPN cell sizes in config parsing, and harden relay VPN metrics/puzzle tests (plus cover pacing buffer); add regression coverage.
+- Tests: `cargo test -p soranet-relay`; `cargo test -p iroha_config soranet_vpn -- --nocapture`.
+- Kotodama: reject `break`/`continue` outside loops via semantic checks; added regression coverage and documented new error codes.
+- Tests: not run (not requested).
+- Kotodama: assignment type checks now use assignability rules (e.g., bool→int), matching `let`/compound assignment; added semantic regression coverage.
+- Tests: not run (not requested).
+- Kotodama: reject aliasing/passing state maps to user-defined functions (state maps are not first-class); added semantic regression coverage and documented `E_STATE_MAP_ALIAS`.
+- Tests: not run (not requested).
+- SoraNet VPN: fix cover egress accounting for adapter-encoded cells, enforce cover-flag/class consistency during padding, and reject non-pinned VPN cell sizes in config parsing; add regression coverage.
+- Tests: not run (not requested).
+- Torii/Core/P2P: remove unused-assignment warnings by using error fields in Torii display strings, dropping unused hint updates in streaming manifest fallback, removing an unused mut in SSE filters, and including bind error details in P2P listener failures.
+- Tests: `cargo check -p iroha_torii` (passed).
+- IVM: ILP execution now charges gas and reports errors in instruction order; added regression coverage for out-of-gas prefix execution and deterministic error ordering.
+- Tests: `cargo test -p ivm --test ilp_gas_error -- --nocapture` (timed out after 120s; blocking on build directory lock while compiling).
+- Torii: full integration tests for connect gating and ZK roots now compile and pass with updated payload defaults/timeout config.
+- Tests: `cargo test -p iroha_torii --test zk_roots_handler_integration --test connect_gating -- --nocapture` (passed; warnings about unused assignments/mut in `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_p2p/src/lib.rs`, `crates/iroha_core/src/{block,kura,snapshot,streaming}.rs`, `crates/iroha_torii/src/{routing,lib}.rs`).
+- Tx fees: stage settlement receipts per transaction so rejected txs don't emit lane receipts; added block gas-limit regression coverage.
+- Tests: not run (not requested).
+- Tx fees: stage Nexus fee charged events until transaction commit so rejected txs don't update fee snapshots; added staging coverage.
+- Tests: not run (not requested).
+- Tx fees telemetry: stage block fee-unit metrics until commit, update block gas used on apply, and reset per-block fee units at block start; added telemetry coverage.
+- Tests: not run (not requested).
+- SDKs/Portal: remove Android `DeprecateVerifyingKey` instruction surface, enforce snake_case-only native response parsing in JS (`soradns`, `nexus`, SM2 fixtures), and drive cutover promotion from xtask route plans; added JS/Python tests for gateway hosts, relay envelopes, and verifying-key filters.
+- Docs: removed older-version references in bridge finality + SoraFS FR translations and aligned Norito streaming transport wording.
+- Tests: not run (not requested).
+- Kura/WSV: fsync pipeline/roster sidecar payloads and indices on append/update, fsync pruned sidecar temp files before rename, and add a zero-height append guard test; pipeline docs updated.
+- Tests: not run (not requested).
+- Torii: fix ZK roots integration payloads to use `ConfidentialEncryptedPayload`, and add Torii `ws_message_timeout` defaults in connect-gating test config.
+- Tests: `cargo test -p iroha_torii -- --nocapture` (timed out after 120s during compile; warnings about unused assignments/mut in `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_p2p/src/lib.rs`, `crates/iroha_core/src/{block,kura,snapshot,streaming}.rs`, `crates/iroha_torii/src/{routing,lib}.rs`).
+- IVM hosts: INPUT_PUBLISH_TLV now rejects invalid TLV envelopes and disallowed pointer types across DefaultHost and WsvHost; added regression coverage for unknown type ids.
+- Tests: not run (not requested).
+- WSV tiered snapshots: write `manifest.json` atomically with fsync and ensure temp files are removed; added manifest temp cleanup coverage.
+- Tests: not run (not requested).
+- Torii: fix build regressions in content chunk assembly lifetimes, Torii test config defaults, WS test constants, SSE filter debug derives, operator-auth token source, cursor-mode test JSON disambiguation, and version test Kura setup.
+- Tests: `cargo test -p iroha_torii --lib ws_stream_survives_lagged_receiver -- --nocapture` (passed; warnings about unused assignments/mut in `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_p2p/src/lib.rs`, `crates/iroha_core/src/{block,kura,snapshot,streaming}.rs`, `crates/iroha_torii/src/{routing,lib}.rs`).
+- IVM/CoreHost: INPUT_PUBLISH_TLV now rejects invalid TLV envelopes and disallowed pointer types instead of copying them; added regression coverage for unknown type ids.
+- Tests: not run (not requested).
+- SoraNet VPN: exclude handshake/control-plane bytes from VPN receipts/metrics, add control-plane route-open counters, validate cover-frame flags, and update docs/tests.
+- Tests: `cargo test --workspace` (timed out after 120s; build directory lock wait; warnings about unused imports/assignments in `vendor/document-features/lib.rs`, `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_crypto/src/soranet/handshake.rs`, `crates/iroha_telemetry/src/metrics.rs`, `crates/norito/src/lib.rs`, `crates/iroha_p2p/src/lib.rs`, `crates/iroha_core/src/{block.rs,kura.rs,snapshot.rs,streaming.rs}`, `crates/ivm/tests/wsv_host_decode_syscalls.rs`, `crates/iroha_torii/src/{content.rs,routing.rs,lib.rs}`; failed: `crates/ivm/src/kotodama/compiler.rs` missing `reserve_pointer_literal_stub`/`patch_pointer_literal_stub`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Build: fix `iroha_core` test config/gas fixture compile errors by wiring `ws_message_timeout` defaults and using `ConfidentialEncryptedPayload` for Shield gas tests; update pipeline warning tests to use block header hash.
+- Tests: `cargo test -p iroha_core journal_loads_from_temp_when_main_missing -- --nocapture` (passed; warnings about unused assignments in `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_p2p/src/lib.rs`, and several `iroha_core` modules).
+- Tx fees: record settlement receipts for IVM gas-fee transfers to keep settlement metadata consistent with ISI fees; added IVM gas-fee settlement coverage.
+- Tests: not run (not requested).
+- Kura/WSV: fix missing semicolon in commit-roster journal load path selection (restores build).
+- Tests: not run (not requested).
+- Torii: WebSocket event streams now skip lagged broadcast gaps instead of closing; added WS lagged-receiver regression coverage.
+- Tests: `cargo test -p iroha_torii ws_stream_survives_lagged_receiver -- --nocapture` (timed out after 120s during compile; pre-existing compile error in `crates/iroha_core/src/commit_roster_journal.rs:165` expected `;`; warnings about unused assignments in `crates/iroha_data_model/src/isi/mod.rs` and `crates/iroha_p2p/src/lib.rs`).
+- Kura/WSV: make commit-roster journal persistence atomic (temp + fsync + dir sync), promote temp journals on load, and add coverage for temp recovery/cleanup.
+- Tests: not run (not requested).
+- IVM/Kotodama: reject iteration over nested durable state maps with non-int keys so pointer-key maps fail fast instead of lowering to ephemeral map iteration; added semantic regression coverage.
+- Tests: not run (not requested).
+- SoraNet VPN: count cover payload bytes in session receipts for adapter/async-recorded frames; added unit coverage.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments in `vendor/document-features/lib.rs`, `crates/norito/src/lib.rs`, `crates/iroha_crypto/src/soranet/handshake.rs`, `crates/norito/tests/aos_version.rs`, `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_p2p/src/lib.rs`).
+- WSV snapshots: fsync digest/signature sidecars, sync the snapshot directory after atomic renames, and cover temp-file cleanup.
+- Tests: not run (not requested).
+- SoraNet relay handshake: inject the relay suite list from certificates/defaults into `snnet.suite_list`, and reject client `kem_id`/`sig_id` values that don’t match negotiated capabilities; docs updated.
+- Tests: not run (not requested).
+- IVM/Kotodama: standardized pointer-ABI syscalls to require explicit pointers (no implicit last-input fallback), enforced ABI pointer checks in JSON/Schema/Name decode across CoreHost/WsvHost, and added regression coverage for explicit-pointer and WsvHost decode paths.
+- Tests: not run (not requested).
+- Torii: WebSocket subscriptions now bundle proof filters, proof filtering is unified across WS/SSE/webhooks (including pruned handling), WS message timeouts are configurable, and content range responses assemble only the requested bytes; added unit coverage and updated config docs/templates.
+- Tests: not run (not requested).
+- Kura/WSV: reject roster sidecars whose embedded commit certificate or checkpoint metadata doesn't match the sidecar height/hash; added coverage for commit-certificate mismatches.
+- Tests: not run (not requested).
+- Kura/WSV: avoid persisting commit-roster journals to the working directory when the Kura root is empty; added coverage for the empty-root journal path.
+- Tests: not run (not requested).
+- SoraNet handshake: standardize capability required flags to TLV-specific semantics (suite_list MSB; PQ/constant-rate flags), refresh fixture vectors/hashes, and align TLV labels in docs.
+- Tests: not run (not requested).
+- Kura/WSV: normalize commit-roster journal format to v1-only and add hash-mismatch coverage for pipeline/roster sidecar reads.
+- Tests: not run (not requested).
+- IVM/Kotodama: move/copy codegen now uses ADDI (including pointer literal stubs and wide encode_move) to preserve ZK privacy tags; unary neg now emits the NEG opcode; added unit coverage for the new encodings.
+- Tests: not run (per request; full workspace tests skipped).
+- SoraNet tokens: validate ML-DSA signatures before replay-store insertion so invalid tokens can’t exhaust replay capacity; added regression coverage.
+- Tests: not run (not requested).
+- Kura/WSV: standardized pipeline/roster sidecars to v1-only (block-hash anchored), added read locking + height validation, and refreshed sidecar tests/docs.
+- Tests: not run (not requested).
+- IVM/Kotodama: JSON/SCHEMA decode syscalls now accept Blob payloads to match Kotodama `decode_*` typing; added CoreHost/WsvHost coverage and updated syscall docs.
+- Tests: not run (per request; full workspace tests skipped).
+- SoraNet guards: drop stale PQ keys when certificates expire, make PQ selection time-aware (including diversity checks), and avoid skipping viable candidates during diversity passes; added regression coverage.
+- SoraNet proxy: default cache-tagging now includes `tcp`, and cache-tag derivation tests expect TCP tags.
+- Tests: not run (not requested).
+- IVM/Kotodama: CoreHost `INPUT_PUBLISH_TLV` now treats null input as a no-op instead of reusing cached NoritoBytes; added regression coverage.
+- Tests: not run (per request; full workspace tests skipped).
+- IVM/Kotodama: `DECODE_INT` now accepts ASCII bytes from both NoritoBytes and Blob TLVs; added CoreHost coverage and updated syscall docs.
+- Tests: not run (per request; full workspace tests skipped).
+- Torii/content: bundle expiry now treats `expires_at_height` as exclusive (expired at or above); added unit coverage.
+- Tests: not run (not requested).
+- IVM: CoreHost `POINTER_TO_NORITO` now includes the inner TLV hash so `POINTER_FROM_NORITO` can roundtrip; added unit coverage.
+- Tests: not run (per request; full workspace tests skipped).
+- IVM: NAME_DECODE now validates and normalizes Name strings in CoreHost/WsvHost; added regression coverage.
+- Tests: not run (per request; full workspace tests skipped).
+- Torii/SoraFS: oversize range requests now return `416 Range Not Satisfiable` with a `Content-Range` header; added unit coverage.
+- Tests: not run (not requested).
+- Torii: attachments now normalize `+json` content types (e.g., `application/ld+json`) to JSON; added sanitizer unit coverage.
+- Tests: not run (not requested).
+- IVM/Kotodama: decode syscalls now treat null pointers as zero in CoreHost/WsvHost (JSON/Name/Pointer/Int), and WsvHost INPUT_PUBLISH_TLV accepts nulls; added unit coverage.
+- Tests: not run (per request; full workspace tests skipped).
+- Torii: API version parsing now rejects extra semantic segments (e.g., `1.2.3`) and non-UTF header values; added unit coverage.
+- Tests: not run (not requested).
+- WSV/Kura: reset tiered-state metadata on cold-root changes, serialize sidecar writes, and sync sidecar prune renames; added tiered reconfigure coverage and updated tiering docs.
+- Tests: not run (not requested).
+- Torii: stored-cursor gas gating now honors continuation cursor budgets; added regression coverage.
+- Tests: `cargo test -p iroha_torii cursor_mode_tests::stored_mode_continue_uses_cursor_gas_budget -- --nocapture` (timed out after 120s during compile; warnings about unused assignments in `crates/iroha_data_model/src/isi/mod.rs` and `crates/iroha_p2p/src/lib.rs`).
+- SoraNet privacy: ignore whitespace-only GAR categories so empty labels are not counted; added regression coverage.
+- SoraNet privacy: drain ready buckets across modes to avoid skipped flushes; added regression coverage.
+- SoraNet proxy: cap handshake/stream frame sizes, reject handshake/stream version mismatches, and document guardrails; added regression coverage.
+- Tests: not run (not requested).
+- Kotodama: load function parameters before emitting state allocations so entry state setup no longer clobbers argument registers; added regression test.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: not run (per request; full workspace tests skipped).
+- IVM: enforce ZK privacy tag checks/propagation for AESENC/AESDEC and add regression coverage.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: not run (per request; full workspace tests skipped).
+- Torii: prevent Connect sessions from being pruned while active, close stale/missing sessions reliably, normalize Connect WS roles, and enforce strict SSE filter parsing (invalid filters now 400); SSE no longer emits `filtered` comments; tests + docs updated.
+- Tests: not run (not requested).
+- SoraFS: proof stream fixtures now emit `manifest_digest_hex`, GAR JWS validation enforces record version bounds + validity windows, and host canonicalization rejects consecutive dots; added regression coverage.
+- Tests: not run (not requested).
+- Kura: defer block-cache eviction to already-persisted heights so unpersisted blocks remain available while the writer catches up; added unit coverage for persisted/unpersisted retention.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments).
+- IVM: propagate ZK privacy tags for simple ADDI/shift ops and enforce tag matching in simple/parallel execution paths; added regression coverage.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: not run (per request; full workspace tests skipped).
+- WSV/Kura: seed tiered snapshot counters from existing directories to avoid overwrites, include/enforce snapshot chain IDs on restore, and add regression coverage; docs updated.
+- SoraFS: fix proof stream request construction/tests to use `manifest_digest_hex` and silence debug output in norito_derive that broke JSON-formatted rustc output.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports).
 - Torii: `/api_version` now returns 503 (text/plain) until genesis is committed, avoiding panics; added coverage and updated API versioning docs/OpenAPI.
 - Tests: not run (not requested).
 - IVM/Kotodama: gate ZK opcodes behind the header `ZK` bit (trap with `ZkExtensionDisabled`), add Kotodama ZK opcode detection, and cover the gating in tests.

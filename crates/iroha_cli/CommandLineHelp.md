@@ -1895,7 +1895,7 @@ Register a trigger
   - `rejected`:
     Only Rejected events
 
-* `--data-vk-only <PRESET>` — Restrict verifying key events to a preset when using `--data-verifying-key`. Presets: `registered`, `updated`, `deprecated`, `updates-and-deprecations`, `all` (default)
+* `--data-vk-only <PRESET>` — Restrict verifying key events to a preset when using `--data-verifying-key`. Presets: `registered`, `updated`, `all` (default)
 
   Possible values:
   - `all`:
@@ -1904,11 +1904,6 @@ Register a trigger
     Only Registered events
   - `updated`:
     Only Updated events
-  - `deprecated`:
-    Only Deprecated events
-  - `updates-and-deprecations`:
-    Only Updated and Deprecated events
-
 * `--time-start <DURATION>` — Human-readable offset for time start (e.g., "5m", "1h"), added to current time
 * `--time-start-rfc3339 <RFC3339>` — RFC3339 timestamp for time filter start (e.g., 2025-01-01T00:00:00Z)
 

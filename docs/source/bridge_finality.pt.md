@@ -108,5 +108,5 @@ o hash do validator set e o epoch da primeira prova antes de continuar a impor e
   com `CommitCertificateHashMismatch`; clientes devem executar a mesma checagem de tupla antes de
   verificar assinaturas e descartar payloads em mismatch.
 - Trabalho futuro pode adicionar MMR/authority-set commitment chains para reduzir o tamanho das
-  provas para historicos muito longos. O formato permanece retrocompativel ao envolver o commit
-  certificate dentro de envelopes de commitment mais ricos.
+  provas para historicos muito longos. O commit certificate passa a ser encapsulado em envelopes
+  de commitment mais ricos.

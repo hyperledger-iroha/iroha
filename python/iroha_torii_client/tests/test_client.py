@@ -161,6 +161,32 @@ def test_list_telemetry_peers_info_rejects_non_list_payload() -> None:
         raise AssertionError("expected RuntimeError for invalid telemetry response")
 
 
+def test_list_telemetry_peers_info_rejects_camelcase_config_fields() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=[
+                {
+                    "url": "https://peer-2.example",
+                    "connected": True,
+                    "telemetry_unsupported": False,
+                    "config": {
+                        "publicKey": "ed011122",
+                    },
+                }
+            ]
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    try:
+        client.list_telemetry_peers_info()
+    except RuntimeError as exc:
+        assert "missing `public_key`" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for camelCase telemetry config")
+
+
 def test_get_health_status_returns_plain_text() -> None:
     session = RecordingSession()
     session.queue(StubResponse(text="Healthy"))
@@ -169,6 +195,25 @@ def test_get_health_status_returns_plain_text() -> None:
     assert client.get_health_status() == "Healthy"
     assert session.calls[0]["url"].endswith("/v1/health")
     assert session.calls[0]["method"] == "GET"
+
+
+def test_runtime_manifest_rejects_alias_fields() -> None:
+    try:
+        ToriiClient._normalize_runtime_manifest_payload(
+            {
+                "name": "upgrade-1",
+                "description": "First upgrade",
+                "abiVersion": 1,
+                "abi_hash": "0" * 64,
+                "start_height": 1,
+                "end_height": 2,
+            },
+            context="runtime upgrade manifest",
+        )
+    except RuntimeError as exc:
+        assert "abi_version is required" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for alias manifest fields")
 
 
 def test_get_node_version_returns_string() -> None:

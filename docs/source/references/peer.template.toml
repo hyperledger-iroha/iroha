@@ -101,6 +101,7 @@
 # query_idle_time_ms = 30_000
 # query_store_capacity = 128
 # query_store_capacity_per_user = 128
+# ws_message_timeout_ms = 10_000
 
 [torii.operator_auth]
 # enabled = false

@@ -106,7 +106,7 @@ translator: manual
 
 ## リカバリ／警告イベント
 
-- Core は各ブロックに対応するリカバリサイドカーを `kura` ディレクトリ下（`pipeline/block_<height>.json`）に記録し、トランザクション毎の読み書き集合や DAG フィンガープリントを保持します。
+- Core はリカバリサイドカーを `kura` ディレクトリ下の `pipeline/sidecars.norito`（`pipeline/sidecars.index`）に集約して記録し、トランザクション毎の読み書き集合や DAG フィンガープリントを保持します。
 - 起動時に直近 16 高さを再計算し、差異があれば警告ログと `PipelineEventBox::Warning { kind: "dag_fingerprint_mismatch" }` を発火します。
 - 提案検証中にサイドカーと再計算結果が一致しない場合も警告を発行しつつ再計算したスケジュールを採用します（フォークは発生しません）。
 - Torii の `GET /v1/pipeline/recovery/:height` でサイドカーを取得できます（存在しない場合は 404）。

@@ -190,7 +190,7 @@ impl SignedBlock {
             external_hashes.collect::<MerkleTree<_>>();
         let external_root = external_merkle.root();
         if self.payload.header.merkle_root.is_none() {
-            // Preserve compatibility with callers constructing raw headers in tests.
+            // Allow tests that construct raw headers without setting merkle roots.
             self.payload.header.merkle_root = external_root;
         } else {
             debug_assert_eq!(

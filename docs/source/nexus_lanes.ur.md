@@ -125,7 +125,7 @@ LaneConfigEntry {
 
 ## Configuration اور Norito types
 
-- `LaneCatalog`, `LaneConfig`, اور `DataSpaceCatalog` `iroha_data_model::nexus` میں رہتے ہیں اور manifests اور SDKs کے لئے Norito-compatible structures فراہم کرتے ہیں۔
+- `LaneCatalog`, `LaneConfig`, اور `DataSpaceCatalog` `iroha_data_model::nexus` میں رہتے ہیں اور manifests اور SDKs کے لئے Norito format structures فراہم کرتے ہیں۔
 - `LaneConfig` `iroha_config::parameters::actual::Nexus` میں رہتا ہے اور catalog سے خودکار طور پر derive ہوتا ہے؛ اسے Norito encoding کی ضرورت نہیں کیونکہ یہ اندرونی runtime helper ہے۔
 - User-facing configuration (`iroha_config::parameters::user::Nexus`) declarative lane اور dataspace descriptors کو قبول کرتی ہے؛ parsing اب geometry derive کرتا ہے اور invalid aliases یا duplicate lane ids کو reject کرتا ہے۔
 - `DataSpaceMetadata.fault_tolerance` lane-relay committee sizing کنٹرول کرتا ہے؛ committee membership ہر epoch میں dataspace validator pool سے deterministic طور پر sample ہوتا ہے، VRF epoch seed کو `(dataspace_id, lane_id)` کے ساتھ باندھ کر۔

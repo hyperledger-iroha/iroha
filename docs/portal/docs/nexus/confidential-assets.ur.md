@@ -52,7 +52,7 @@ Swift SDKs اب bespoke JSON glue کے بغیر shield instructions emit کر س
 - Block headers `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` expose کرتے ہیں؛ digest consensus hash میں حصہ لیتا ہے اور block acceptance کے لئے local registry view سے match ہونا چاہئے۔
 - Governance مستقبل کے `activation_height` کے ساتھ `next_conf_features` پروگرام کر کے upgrades stage کر سکتی ہے؛ اس height تک block producers پچھلا digest emit کرتے رہتے ہیں۔
 - Validator nodes کو `confidential.enabled = true` اور `assume_valid = false` کے ساتھ operate کرنا MUST ہے۔ Startup checks validator set join کرنے سے انکار کرتے ہیں اگر کوئی شرط fail ہو یا local `conf_features` diverge ہو۔
-- P2P handshake metadata اب `{ enabled, assume_valid, conf_features }` شامل کرتا ہے۔ Incompatible features advertise کرنے والے peers `HandshakeConfidentialMismatch` کے ساتھ reject ہوتے ہیں اور consensus rotation میں داخل نہیں ہوتے۔
+- P2P handshake metadata اب `{ enabled, assume_valid, conf_features }` شامل کرتا ہے۔ unsupported features advertise کرنے والے peers `HandshakeConfidentialMismatch` کے ساتھ reject ہوتے ہیں اور consensus rotation میں داخل نہیں ہوتے۔
 - Non-validator observers `assume_valid = true` سیٹ کر سکتے ہیں؛ وہ confidential deltas کو blindly apply کرتے ہیں مگر consensus safety پر اثر نہیں ڈالتے۔
 
 ## Asset Policies
@@ -199,7 +199,7 @@ Confidentiality enabled کے ساتھ شروع ہونے والی نئی networks
 ## Node Capability Negotiation
 - Handshake `feature_bits.confidential` کے ساتھ `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` advertise کرتا ہے۔ Validator participation کیلئے `confidential.enabled=true`, `assume_valid=false`, identical verifier backend identifiers اور matching digests ضروری ہیں؛ mismatches `HandshakeConfidentialMismatch` کے ساتھ handshake fail کرتے ہیں۔
 - Config صرف observer nodes کیلئے `assume_valid` support کرتا ہے: disabled ہونے پر confidential instructions پر deterministic `UnsupportedInstruction` آتا ہے بغیر panic؛ enabled ہونے پر observers proofs verify کئے بغیر state deltas apply کرتے ہیں۔
-- Mempool confidential transactions reject کرتا ہے اگر local capability disabled ہو۔ Gossip filters incompatible peers کو shielded transactions بھیجنے سے گریز کرتے ہیں جبکہ unknown verifier IDs کو size limits کے اندر blind-forward کرتے ہیں۔
+- Mempool confidential transactions reject کرتا ہے اگر local capability disabled ہو۔ Gossip filters peers without matching capabilities کو shielded transactions بھیجنے سے گریز کرتے ہیں جبکہ unknown verifier IDs کو size limits کے اندر blind-forward کرتے ہیں۔
 
 ### Reveal Pruning & Nullifier Retention Policy
 
@@ -334,7 +334,7 @@ Local overrides کو operations runbook میں document کریں؛ retention win
    - ✅ Nullifier derivation اب Poseidon PRF design (`nk`, `rho`, `asset_id`, `chain_id`) follow کرتا ہے اور ledger updates میں deterministic commitment ordering enforce ہوتی ہے۔
    - ✅ Execution proof size caps اور per-transaction/per-block confidential quotas enforce کرتا ہے، over-budget transactions کو deterministic errors کے ساتھ reject کرتا ہے۔
    - ✅ P2P handshake `ConfidentialFeatureDigest` (backend digest + registry fingerprints) advertise کرتا ہے اور mismatches کو `HandshakeConfidentialMismatch` کے ذریعے deterministic fail کرتا ہے۔
-   - ✅ Confidential execution paths میں panics remove کئے گئے اور incompatible nodes کیلئے role gating add کیا گیا۔
+   - ✅ Confidential execution paths میں panics remove کئے گئے اور unsupported nodes کیلئے role gating add کیا گیا۔
    - ⚪ Verifier timeout budgets اور frontier checkpoints کیلئے reorg depth bounds enforce کرنا۔
      - ✅ Verification timeout budgets enforce ہوئے؛ `verify_timeout_ms` سے تجاوز کرنے والی proofs اب deterministic fail ہوتی ہیں۔
      - ✅ Frontier checkpoints اب `reorg_depth_bound` respect کرتے ہیں، configured window سے پرانے checkpoints prune کرتے ہوئے deterministic snapshots برقرار رکھتے ہیں۔

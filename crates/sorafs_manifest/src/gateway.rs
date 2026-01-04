@@ -14,6 +14,7 @@ use crate::gar::{
 };
 
 const MAX_SAMPLING_BPS: u64 = 10_000;
+const GAR_RECORD_VERSION_V1: u16 = 1;
 
 /// Errors returned when decoding or verifying a gateway authorisation record.
 #[derive(Debug, Error)]
@@ -44,6 +45,12 @@ pub enum GatewayAuthorizationError {
     /// No matching key was registered for the supplied key identifier.
     #[error("unknown GAR key id `{0}`")]
     UnknownKeyId(String),
+    /// Record version not supported by this release.
+    #[error("unsupported GAR record version {found}")]
+    UnsupportedRecordVersion {
+        /// Version found in the payload.
+        found: u16,
+    },
     /// The registered key used an unexpected algorithm.
     #[error("gateway key `{key_id}` must use Ed25519, found {algorithm:?}")]
     InvalidKeyAlgorithm {
@@ -442,7 +449,18 @@ impl GatewayAuthorizationVerifier {
             }
         };
 
-        let record_version = take_required_u64(&mut payload_map, "version")? as u16;
+        let record_version_raw = take_required_u64(&mut payload_map, "version")?;
+        let record_version = u16::try_from(record_version_raw).map_err(|_| {
+            GatewayAuthorizationError::InvalidField {
+                field: "version",
+                reason: "must fit into u16",
+            }
+        })?;
+        if record_version != GAR_RECORD_VERSION_V1 {
+            return Err(GatewayAuthorizationError::UnsupportedRecordVersion {
+                found: record_version,
+            });
+        }
         let name = take_required_string(&mut payload_map, "name")?
             .trim()
             .to_string();
@@ -479,6 +497,14 @@ impl GatewayAuthorizationVerifier {
         let valid_from_epoch =
             take_optional_u64(&mut payload_map, "valid_from_epoch")?.unwrap_or(0);
         let valid_until_epoch = take_optional_u64(&mut payload_map, "valid_until_epoch")?;
+        if let Some(until) = valid_until_epoch
+            && until < valid_from_epoch
+        {
+            return Err(GatewayAuthorizationError::InvalidField {
+                field: "valid_until_epoch",
+                reason: "must be >= valid_from_epoch",
+            });
+        }
         let policy_payload = parse_policy_payload(&mut payload_map)?;
 
         let record = GatewayAuthorizationRecord {
@@ -515,6 +541,9 @@ impl std::iter::FromIterator<(String, PublicKey)> for GatewayAuthorizationVerifi
 fn canonicalise_host(host: &str) -> Option<String> {
     let trimmed = host.trim();
     if trimmed.is_empty() || trimmed.starts_with('.') || trimmed.ends_with('.') {
+        return None;
+    }
+    if trimmed.contains("..") {
         return None;
     }
     if trimmed
@@ -1010,6 +1039,43 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsupported_record_version() {
+        let (verifier, signing_key) = build_test_verifier();
+        let mut payload = base_payload();
+        if let Some(map) = payload.as_object_mut() {
+            map.insert("version".to_string(), Value::from(2u64));
+        }
+        let jws = build_jws(&signing_key, &payload);
+        let err = verifier
+            .verify(&jws)
+            .expect_err("unsupported version should fail");
+        assert!(matches!(
+            err,
+            GatewayAuthorizationError::UnsupportedRecordVersion { found: 2 }
+        ));
+    }
+
+    #[test]
+    fn rejects_record_version_overflow() {
+        let (verifier, signing_key) = build_test_verifier();
+        let mut payload = base_payload();
+        if let Some(map) = payload.as_object_mut() {
+            map.insert("version".to_string(), Value::from(70_000u64));
+        }
+        let jws = build_jws(&signing_key, &payload);
+        let err = verifier
+            .verify(&jws)
+            .expect_err("version overflow should fail");
+        assert!(matches!(
+            err,
+            GatewayAuthorizationError::InvalidField {
+                field: "version",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn verify_rejects_unknown_key() {
         let (_, signing_key) = build_test_verifier();
         let verifier = GatewayAuthorizationVerifier::default();
@@ -1041,6 +1107,33 @@ mod tests {
             err,
             GatewayAuthorizationError::Expired {
                 expires_at: 1_800_000_000,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_validity_window() {
+        let (verifier, signing_key) = build_test_verifier();
+        let mut payload = base_payload();
+        if let Some(map) = payload.as_object_mut() {
+            map.insert(
+                "valid_from_epoch".to_string(),
+                Value::from(1_800_000_000u64),
+            );
+            map.insert(
+                "valid_until_epoch".to_string(),
+                Value::from(1_700_000_000u64),
+            );
+        }
+        let jws = build_jws(&signing_key, &payload);
+        let err = verifier
+            .verify(&jws)
+            .expect_err("invalid validity window should fail");
+        assert!(matches!(
+            err,
+            GatewayAuthorizationError::InvalidField {
+                field: "valid_until_epoch",
                 ..
             }
         ));
@@ -1102,5 +1195,17 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn host_matching_rejects_consecutive_dots() {
+        let (verifier, signing_key) = build_test_verifier();
+        let payload = base_payload();
+        let jws = build_jws(&signing_key, &payload);
+        let record = verifier.verify(&jws).expect("record should verify");
+        assert!(
+            !record.matches_host("alpha..gw.sora.id"),
+            "consecutive dots should be rejected"
+        );
     }
 }

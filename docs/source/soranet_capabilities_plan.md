@@ -39,9 +39,9 @@ summary: Outline for SNNet-1c capability TLVs and downgrade detection.
   |---------|------------------------|---------------------------------------------------|----------|-------|
   | 0x0101  | `snnet.pqkem`          | sequence of KEM descriptors (`kem_id`, `kem_name`) | yes      | Must include ML-KEM-768. |
   | 0x0102  | `snnet.pqsig`          | list of signature algorithms (`sig_id`, `sig_name`) | yes    | Dilithium3 + Ed25519 witness. |
-  | 0x0103  | `snnet.descriptor_commit` | 32-byte hash                                     | yes      | Binds microdescriptor to transcript. |
+  | 0x0103  | `snnet.transcript_commit` | 32-byte hash                                     | yes      | Binds microdescriptor to transcript. |
   | 0x0201  | `snnet.role`           | bitfield (`entry=0x01`, `middle=0x02`, `exit=0x04`) | yes (relay) | Clients set `required=0`. |
-  | 0x0202  | `snnet.padding_profile`| 2-byte profile id                                 | yes      | `0x0400` = 1024-byte cells. |
+  | 0x0202  | `snnet.padding`| 2-byte profile id                                 | yes      | `0x0400` = 1024-byte cells. |
   | 0x0301  | `snnet.capability_epoch` | u32 epoch                                         | optional | Used for capability rotation. |
 
 ## Example Capability Sets
@@ -52,7 +52,7 @@ summary: Outline for SNNet-1c capability TLVs and downgrade detection.
     snnet.pqkem   required=1  → [ (0x01, "mlkem768"), (0x02, "mlkem1024") ]
     snnet.pqsig   required=1  → [ (0x01, "dilithium3"), (0x02, "ed25519") ]
     snnet.role    required=0  → [ client ]
-    snnet.padding_profile required=1 → [ 0x0400 ]
+    snnet.padding required=1 → [ 0x0400 ]
     GREASE entries         required=0 → [ 0x7F19:{random bytes}, 0x7F42:{random bytes} ]
   Relay echoes the same set with `snnet.role` = entry/middle/exit bits.
   ```
@@ -61,7 +61,7 @@ summary: Outline for SNNet-1c capability TLVs and downgrade detection.
   ```
   snnet.pqkem   required=0 → [ (0xFF01, "x25519") ]    // indicates classical-only
   snnet.pqsig   required=0 → [ (0x02, "ed25519") ]
-  snnet.descriptor_commit required=1 → hash
+  snnet.transcript_commit required=1 → hash
   ```
   Relays receiving this set MUST reject unless configured for audit mode, emitting a downgrade alarm.
 - **PQ-only (future readiness)**
@@ -69,7 +69,7 @@ summary: Outline for SNNet-1c capability TLVs and downgrade detection.
   ```
   snnet.pqkem required=1 → [ (0x02, "mlkem1024") ]
   snnet.pqsig required=1 → [ (0x01, "dilithium3") ]
-  snnet.padding_profile required=1 → [ 0x0400 ]
+  snnet.padding required=1 → [ 0x0400 ]
   ```
   Standard relays will respond with 768/1024; clients choose the intersection.
 

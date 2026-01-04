@@ -51,6 +51,6 @@ Common replacements:
   serde_json::json!(...)   -> norito::json::json!(...)
 
 Notes:
-  - Norito's `json` feature uses the native parser/writer exclusively; serde compatibility is no longer provided.
+  - Norito's `json` feature uses the native parser/writer exclusively; serde adapters are no longer provided.
   - Use `norito::json::to_json`/`from_json` for typed roundtrips and `norito::json::Parser` for streaming decode.
 SUG

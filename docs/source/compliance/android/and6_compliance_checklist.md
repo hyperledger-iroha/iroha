@@ -151,7 +151,7 @@ trigger, actions, and follow-ups).
 - `.github/workflows/android-and6.yml` now runs all AND6 gates (javac lint +
   dependency scan, Android test suite, StrongBox attestation verifier, and
   device-lab slot validation) on every PR/push touching the Android surface.
-- `ci/run_android_tests.sh` wraps `java/iroha_android/run_tests.sh` and emits
+- `ci/run_android_tests.sh` wraps `ci/run_android_tests.sh` and emits
   a deterministic summary at `artifacts/android/tests/test-summary.json` while
   persisting the console log to `artifacts/android/tests/test.log`. Attach both
   files to compliance packets when referencing CI runs.

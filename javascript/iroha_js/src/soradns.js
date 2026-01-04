@@ -70,23 +70,12 @@ export function deriveGatewayHosts(fqdn) {
   }
   const binding = requireSoradnsNativeBinding();
   const derived = binding.soradnsDeriveGatewayHosts(fqdn);
-  const normalizedName = String(
-    derived.normalized_name ?? derived.normalizedName ?? "",
-  );
-  const canonicalLabel = String(
-    derived.canonical_label ?? derived.canonicalLabel ?? "",
-  );
-  const canonicalHost = String(
-    derived.canonical_host ?? derived.canonicalHost ?? "",
-  );
-  const canonicalWildcard = String(
-    derived.canonical_wildcard ?? derived.canonicalWildcard ?? "",
-  );
-  const prettyHost = String(
-    derived.pretty_host ?? derived.prettyHost ?? "",
-  );
-  const hostPatternsSource =
-    derived.host_patterns ?? derived.hostPatterns ?? [];
+  const normalizedName = String(derived.normalized_name ?? "");
+  const canonicalLabel = String(derived.canonical_label ?? "");
+  const canonicalHost = String(derived.canonical_host ?? "");
+  const canonicalWildcard = String(derived.canonical_wildcard ?? "");
+  const prettyHost = String(derived.pretty_host ?? "");
+  const hostPatternsSource = derived.host_patterns ?? [];
   const hostPatterns = Array.isArray(hostPatternsSource)
     ? hostPatternsSource.map((pattern) => String(pattern))
     : [];

@@ -12,8 +12,8 @@ the full RFC is authored.
 - **Signatures:** Dual Dilithium3 (primary) and Ed25519 (witness) signatures are
   required on salt announcements, relay descriptors, and consensus bundles.
 - **Capability TLV registry:** Type codes finalised: `0x0101 snnet.pqkem`,
-  `0x0102 snnet.pqsig`, `0x0103 snnet.descriptor_commit`, `0x0201 snnet.role`,
-  `0x0202 snnet.padding_profile`. GREASE space `0x7F00–0x7FFF` reserved for
+  `0x0102 snnet.pqsig`, `0x0103 snnet.transcript_commit`, `0x0201 snnet.role`,
+  `0x0202 snnet.padding`. GREASE space `0x7F00–0x7FFF` reserved for
   ossification resistance.
 - **Salt governance:** Daily SaltAnnouncementV1 rotations signed by the Salt
   Council (3-of-5 Dilithium3 multisig plus Ed25519 witness). Emergency rotations
@@ -420,7 +420,7 @@ struct SaltAnnouncementV1 {
   the directory service to fetch intervening announcements.
 - Relays cache at least two epochs and reject circuits using stale salts.
 - Emergency rotations set `emergency_rotation=true`; clients must refresh
-  immediately and drop existing circuits when the new salt is incompatible.
+  immediately and drop existing circuits when the new salt no longer matches.
 
 ### Schema Versioning & Signed Test Vectors
 
@@ -520,6 +520,11 @@ automatically. Negotiation proceeds as follows:
 4. Abort the handshake when the TLV is missing or no overlap exists; the
    transcript hash still incorporates the advertised suite so mismatch
    manifests as a different key schedule.
+
+Relays MUST reject `ClientHello` frames whose `kem_id` or `sig_id` do not appear
+in the negotiated capability intersection. When a relay is configured with a
+certificate bundle it advertises the suite order from the certificate;
+otherwise it defaults to `[nk2.hybrid, nk3.pq_forward_secure]`.
 
 Supported suite identifiers are:
 

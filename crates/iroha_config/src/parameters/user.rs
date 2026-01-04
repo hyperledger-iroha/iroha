@@ -6882,7 +6882,12 @@ impl SoranetVpn {
             meter_family,
         } = self;
 
-        let cell_size_bytes = cell_size_bytes.max(defaults::soranet::vpn::CELL_SIZE_BYTES);
+        let default_cell_size = defaults::soranet::vpn::CELL_SIZE_BYTES;
+        let cell_size_bytes = match cell_size_bytes {
+            0 => default_cell_size,
+            value if value == default_cell_size => value,
+            _ => panic!("network.soranet_vpn.cell_size_bytes must equal {default_cell_size}"),
+        };
         VpnFlowLabelV1::max_value_for_bits(flow_label_bits)
             .expect("flow_label_bits must be between 1 and 24");
         let cover_to_data_per_mille = cover_to_data_per_mille.min(1_000);
@@ -6927,6 +6932,16 @@ mod soranet_vpn_tests {
     fn soranet_vpn_rejects_invalid_flow_label_bits() {
         let cfg = SoranetVpn {
             flow_label_bits: 0,
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "network.soranet_vpn.cell_size_bytes must equal")]
+    fn soranet_vpn_rejects_mismatched_cell_size_bytes() {
+        let cfg = SoranetVpn {
+            cell_size_bytes: defaults::soranet::vpn::CELL_SIZE_BYTES.saturating_add(1),
             ..SoranetVpn::default()
         };
         let _ = cfg.parse();
@@ -11047,6 +11062,11 @@ pub struct Torii {
     /// Capacity of the broadcast channel used for Torii events/SSE/webhooks.
     #[config(default = "default_events_buffer_capacity()")]
     pub events_buffer_capacity: NonZeroUsize,
+    /// WebSocket message timeout for Torii event/block streams (milliseconds).
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS))"
+    )]
+    pub ws_message_timeout_ms: DurationMs,
     /// Default page size for app-facing list/query endpoints.
     #[config(default = "defaults::torii::APP_API_DEFAULT_LIST_LIMIT")]
     pub app_api_default_list_limit: u32,
@@ -11473,6 +11493,7 @@ impl Torii {
             max_content_len: self.max_content_len,
             data_dir: self.data_dir,
             events_buffer_capacity: self.events_buffer_capacity,
+            ws_message_timeout: self.ws_message_timeout_ms.get(),
             query_rate_per_authority_per_sec: self
                 .query_rate_per_authority_per_sec
                 .or(super::defaults::torii::QUERY_RATE_PER_AUTHORITY_PER_SEC)

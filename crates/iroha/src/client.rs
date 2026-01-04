@@ -8474,8 +8474,9 @@ mod tx_hash_tests {
     #[test]
     fn tx_confirmation_error_wraps_timeout_report() {
         let err = eyre!("confirmation stream failed");
-        let wrapped =
-            err.wrap_err(super::Client::tx_confirmation_timeout_report(Duration::from_secs(1)));
+        let wrapped = err.wrap_err(super::Client::tx_confirmation_timeout_report(
+            Duration::from_secs(1),
+        ));
         let messages: Vec<String> = wrapped.chain().map(|cause| cause.to_string()).collect();
         assert!(
             messages
@@ -8769,9 +8770,8 @@ mod tx_confirmation_stream_tests {
         let rejection = TransactionRejectionReason::Validation(ValidationFail::InternalError(
             "rejected".to_string(),
         ));
-        let final_err = super::tx_confirmation_final_report(super::tx_rejection_to_report(
-            &rejection,
-        ));
+        let final_err =
+            super::tx_confirmation_final_report(super::tx_rejection_to_report(&rejection));
         assert!(!super::should_fallback_after_confirmation_error(&final_err));
 
         let transient = eyre!("transient");

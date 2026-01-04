@@ -91,7 +91,7 @@ following Prometheus metrics:
 
 Add the dashboard to your region’s Grafana folders and pin it to the SNNet
 operations board before Stage A rehearsals. The panel definitions rely on a
-templated Prometheus data source (`PROMETHEUS` UID) to stay compatible with the
+templated Prometheus data source (`PROMETHEUS` UID) to stay aligned with the
 existing observability stack.
 
 ## Additional Resources

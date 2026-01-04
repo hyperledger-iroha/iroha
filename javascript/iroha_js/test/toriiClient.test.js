@@ -868,7 +868,6 @@ test("getVerifyingKeyTyped decodes payload", async () => {
           metadata_uri_cid: null,
           vk_bytes_cid: null,
           activation_height: 5,
-          deprecation_height: 6,
           withdraw_height: 7,
           status: "Proposed",
           key: null,
@@ -903,7 +902,7 @@ test("registerVerifyingKey canonicalizes payload", async () => {
     public_inputs_schema_hash_hex: "0xfeed",
     gas_schedule_id: "halo2_default",
     vk_bytes: Buffer.from("abc"),
-    status: "deprecated",
+    status: "withdrawn",
     activation_height: 0,
   });
 
@@ -925,7 +924,7 @@ test("registerVerifyingKey canonicalizes payload", async () => {
   assert.equal(body.gas_schedule_id, "halo2_default");
   assert.equal(body.vk_bytes, Buffer.from("abc").toString("base64"));
   assert.equal(body.vk_len, 3);
-  assert.equal(body.status, "Deprecated");
+  assert.equal(body.status, "Withdrawn");
   assert.equal(body.activation_height, 0);
 });
 
@@ -950,19 +949,6 @@ test("verifying key endpoints reject unsupported option fields", async () => {
         { extra: 123 },
       ),
     /updateVerifyingKey options contains unsupported fields: extra/,
-  );
-  await assert.rejects(
-    () =>
-      client.deprecateVerifyingKey(
-        {
-          authority: registerPayload.authority,
-          private_key: registerPayload.private_key,
-          backend: registerPayload.backend,
-          name: registerPayload.name,
-        },
-        { extra: "noop" },
-      ),
-    /deprecateVerifyingKey options contains unsupported fields: extra/,
   );
 });
 
@@ -1488,7 +1474,7 @@ test("getSorafsPinManifest enforces alias proof policy", async (t) => {
     generatedAtUnix: now - 60,
     expiresAtUnix: now + 600,
   });
-  const proof = fixture.proof_b64 ?? fixture.proofB64;
+  const proof = fixture.proof_b64;
   const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
 
   let called = 0;
@@ -1526,7 +1512,7 @@ test("getSorafsPinManifest rejects stale alias proof", async (t) => {
     generatedAtUnix: now - 10_000,
     expiresAtUnix: now - 1,
   });
-  const proof = fixture.proof_b64 ?? fixture.proofB64;
+  const proof = fixture.proof_b64;
   const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
 
   const client = new ToriiClient(BASE_URL, {
@@ -1562,7 +1548,7 @@ test("getSorafsPinManifest invokes warning hook for refresh-window proofs", asyn
     generatedAtUnix: now - (refreshStart + 10),
     expiresAtUnix: now + 600,
   });
-  const proof = fixture.proof_b64 ?? fixture.proofB64;
+  const proof = fixture.proof_b64;
   const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
   assert.equal(evaluation.state, "refresh_window");
 
@@ -1750,7 +1736,7 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
     generatedAtUnix: now - 120,
     expiresAtUnix: now + 600,
   });
-  const proof = fixture.proof_b64 ?? fixture.proofB64;
+  const proof = fixture.proof_b64;
   const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
 
   const manifestHex = "e".repeat(64);
@@ -3492,7 +3478,7 @@ test("fetchDaPayloadViaGateway attaches proof summary when requested", async (t)
     },
   };
   const gatewayMock = t.mock.fn(() => gatewayResult);
-  const proofSummary = { blobHashHex: blobHashHex, proofs: [] };
+  const proofSummary = { blob_hash_hex: blobHashHex, proofs: [] };
   const proofMock = t.mock.fn(() => proofSummary);
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
@@ -3688,36 +3674,36 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
   const chunkPlan = [{ chunk_index: 0, offset: 0, length: 4, provider: "p1" }];
   const payload = Buffer.from("payload-bytes");
   const proofSummary = {
-    blobHashHex: "11".repeat(32),
-    chunkRootHex: "22".repeat(32),
-    porRootHex: "33".repeat(32),
-    leafCount: 1,
-    segmentCount: 1,
-    chunkCount: 1,
-    sampleCount: 1,
-    sampleSeed: 0,
-    proofCount: 1,
+    blob_hash_hex: "11".repeat(32),
+    chunk_root_hex: "22".repeat(32),
+    por_root_hex: "33".repeat(32),
+    leaf_count: 1,
+    segment_count: 1,
+    chunk_count: 1,
+    sample_count: 1,
+    sample_seed: 0,
+    proof_count: 1,
     proofs: [
       {
         origin: "sampled",
-        leafIndex: 0,
-        chunkIndex: 0,
-        segmentIndex: 0,
-        leafOffset: 0,
-        leafLength: 1,
-        segmentOffset: 0,
-        segmentLength: 1,
-        chunkOffset: 0,
-        chunkLength: 1,
-        payloadLength: payload.length,
-        chunkDigestHex: "aa".repeat(32),
-        chunkRootHex: "bb".repeat(32),
-        segmentDigestHex: "cc".repeat(32),
-        leafDigestHex: "dd".repeat(32),
-        leafBytes: Buffer.from([0]),
-        segmentLeavesHex: [],
-        chunkSegmentsHex: [],
-        chunkRootsHex: [],
+        leaf_index: 0,
+        chunk_index: 0,
+        segment_index: 0,
+        leaf_offset: 0,
+        leaf_length: 1,
+        segment_offset: 0,
+        segment_length: 1,
+        chunk_offset: 0,
+        chunk_length: 1,
+        payload_len: payload.length,
+        chunk_digest_hex: "aa".repeat(32),
+        chunk_root_hex: "bb".repeat(32),
+        segment_digest_hex: "cc".repeat(32),
+        leaf_digest_hex: "dd".repeat(32),
+        leaf_bytes_b64: Buffer.from([0]).toString("base64"),
+        segment_leaves_hex: [],
+        chunk_segments_hex: [],
+        chunk_roots_hex: [],
         verified: true,
       },
     ],
@@ -8257,8 +8243,8 @@ test("governanceDeriveCouncilVrf encodes candidate payload", async () => {
       {
         accountId: "validator@test",
         variant: "small",
-        pk: Buffer.alloc(48, 0xaa),
-        proof: Buffer.alloc(96, 0xbb),
+        pk_b64: Buffer.alloc(48, 0xaa),
+        proof_b64: Buffer.alloc(96, 0xbb),
       },
     ],
   });
@@ -8293,8 +8279,8 @@ test("governancePersistCouncil forwards credentials and validates pairing", asyn
       {
         accountId: "validator@test",
         variant: "Normal",
-        pkB64: Buffer.alloc(48).toString("base64"),
-        proofB64: Buffer.alloc(96).toString("base64"),
+        pk_b64: Buffer.alloc(48).toString("base64"),
+        proof_b64: Buffer.alloc(96).toString("base64"),
       },
     ],
     authority: "council@test",
@@ -8311,8 +8297,8 @@ test("governancePersistCouncil forwards credentials and validates pairing", asyn
           {
             accountId: "validator@test",
             variant: "Normal",
-            pkB64: Buffer.alloc(48).toString("base64"),
-            proofB64: Buffer.alloc(96).toString("base64"),
+            pk_b64: Buffer.alloc(48).toString("base64"),
+            proof_b64: Buffer.alloc(96).toString("base64"),
           },
         ],
         authority: "council@test",
@@ -10573,6 +10559,30 @@ test("listAccountAssets enforces canonical quantity strings", async () => {
   );
 });
 
+test("listAccountAssets rejects camelCase assetId fields", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          items: [
+            {
+              asset_id: "rose#wonderland#alice@wonderland",
+              assetId: "rose#wonderland#alice@wonderland",
+              quantity: "10",
+            },
+          ],
+          total: 1,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.listAccountAssets("alice@wonderland"),
+    /account asset list response\.items\[0]\.assetId is not supported/,
+  );
+});
+
 test("queryAccountAssets posts structured envelope", async () => {
   let capturedBody;
   const fetchImpl = async (_url, init) => {
@@ -10827,6 +10837,30 @@ test("listAccountTransactions validates boolean result fields", async () => {
   );
 });
 
+test("listAccountTransactions rejects camelCase entrypointHash fields", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          items: [
+            {
+              entrypoint_hash: "tx1",
+              entrypointHash: "tx1",
+              result_ok: true,
+            },
+          ],
+          total: 1,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.listAccountTransactions("alice@wonderland"),
+    /account transaction list response\.items\[0]\.entrypointHash is not supported/,
+  );
+});
+
 test("queryAccountTransactions posts structured envelope", async () => {
   let capturedBody;
   const fetchImpl = async (_url, init) => {
@@ -10974,6 +11008,30 @@ test("listAssetHolders validates holder identifiers", async () => {
   await assert.rejects(
     () => client.listAssetHolders("rose#wonderland"),
     /asset holder list response\.items\[0]\.account_id/,
+  );
+});
+
+test("listAssetHolders rejects camelCase accountId fields", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          items: [
+            {
+              account_id: "alice@wonderland",
+              accountId: "alice@wonderland",
+              quantity: "10",
+            },
+          ],
+          total: 1,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.listAssetHolders("rose#wonderland"),
+    /asset holder list response\.items\[0]\.accountId is not supported/,
   );
 });
 
@@ -12887,7 +12945,7 @@ test("registerContractCode posts manifest JSON", async () => {
   await client.registerContractCode({
     authority: "alice@wonderland",
     privateKey: "ed25519:deadbeef",
-    manifest: { codeHash: "a".repeat(64), compilerFingerprint: "rustc" },
+    manifest: { code_hash: "a".repeat(64), compiler_fingerprint: "rustc" },
     codeBytes: Buffer.from("hello"),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/code`);
@@ -12929,7 +12987,7 @@ test("deployContract submits base64 payload and returns response", async () => {
     authority: "alice@wonderland",
     privateKey: "ed25519:deadbeef",
     codeB64: Buffer.from("payload"),
-    manifest: { featuresBitmap: 1 },
+    manifest: { features_bitmap: 1 },
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/deploy`);
   const body = JSON.parse(captured.init.body);
@@ -12969,7 +13027,7 @@ test("deployContractInstance posts combined payload", async () => {
     namespace: "apps",
     contractId: "calc",
     codeB64: "YmFzZTY0",
-    manifest: { accessSetHints: { readKeys: ["account:alice@wonderland"] } },
+    manifest: { access_set_hints: { read_keys: ["account:alice@wonderland"] } },
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/instance`);
   const body = JSON.parse(captured.init.body);
@@ -13519,13 +13577,13 @@ test("registerTriggerTyped normalizes response payloads", async () => {
 
 test("deleteTriggerTyped returns null when Torii omits payloads", async () => {
   const fetchImpl = async (url, init) => {
-    const encoded = encodeURIComponent("apps::legacy");
+    const encoded = encodeURIComponent("apps::archived");
     assert.equal(url, `${BASE_URL}/v1/triggers/${encoded}`);
     assert.equal(init.method, "DELETE");
     return createResponse({ status: 204 });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.deleteTriggerTyped("apps::legacy");
+  const result = await client.deleteTriggerTyped("apps::archived");
   assert.equal(result, null);
 });
 
@@ -15064,7 +15122,7 @@ test("listPeersTyped normalizes address and public key", async () => {
   const payload = [
     {
       address: "  192.168.1.12:8080 ",
-      id: { publicKey: `0X${"AA".repeat(32)}` },
+      id: { public_key: `0X${"AA".repeat(32)}` },
     },
   ];
   const fetchImpl = async () =>

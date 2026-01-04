@@ -14,7 +14,7 @@ evidence bundle that governance reviews expect.
 
 - Publish both SDK artefacts—`org.hyperledger.iroha:iroha-android`
   (Android AAR) and `org.hyperledger.iroha:iroha-android-jvm` (JVM jar)—to a
-  Maven-compatible repository (local directory, test Nexus, or production
+Maven-style repository (local directory, test Nexus, or production
   repository).
 - Emit dependency manifest/SBOM snapshots per target that list the runtime
   classpath, cryptographic hashes, and the built SDK artefact for each release

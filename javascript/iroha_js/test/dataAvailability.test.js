@@ -112,14 +112,17 @@ test("generateDaProofSummary normalizes native output for JS callers", () => {
   });
 
   const proof = summary.proofs[0];
-  assert.equal(typeof summary.leafCount, "bigint");
-  assert.equal(summary.blobHashHex, rawSummary.blob_hash_hex);
-  assert.equal(proof.leafBytes.toString("utf8"), "leaf-bytes");
-  assert.equal(proof.leafBytesB64, rawSummary.proofs[0].leaf_bytes_b64);
-  assert.equal(typeof proof.payloadLength, "bigint");
-  assert.deepEqual(proof.segmentLeavesHex, rawSummary.proofs[0].segment_leaves_hex);
-  assert.deepEqual(proof.chunkSegmentsHex, rawSummary.proofs[0].chunk_segments_hex);
-  assert.deepEqual(proof.chunkRootsHex, rawSummary.proofs[0].chunk_roots_hex);
+  assert.equal(typeof summary.leaf_count, "bigint");
+  assert.equal(summary.blob_hash_hex, rawSummary.blob_hash_hex);
+  assert.equal(
+    Buffer.from(proof.leaf_bytes_b64, "base64").toString("utf8"),
+    "leaf-bytes",
+  );
+  assert.equal(proof.leaf_bytes_b64, rawSummary.proofs[0].leaf_bytes_b64);
+  assert.equal(typeof proof.payload_len, "bigint");
+  assert.deepEqual(proof.segment_leaves_hex, rawSummary.proofs[0].segment_leaves_hex);
+  assert.deepEqual(proof.chunk_segments_hex, rawSummary.proofs[0].chunk_segments_hex);
+  assert.deepEqual(proof.chunk_roots_hex, rawSummary.proofs[0].chunk_roots_hex);
   assert.equal(proof.verified, true);
 });
 

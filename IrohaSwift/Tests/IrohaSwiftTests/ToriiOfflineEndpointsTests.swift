@@ -134,8 +134,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             },
             "operator_signature": "AA",
             "metadata": {},
-            "verdict_id": null,
-            "attestation_nonce": null,
+            "verdict_id_hex": null,
+            "attestation_nonce_hex": null,
             "refresh_at_ms": null
           }
         }
@@ -161,8 +161,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             },
             "operator_signature": "BB",
             "metadata": {},
-            "verdict_id": null,
-            "attestation_nonce": null,
+            "verdict_id_hex": null,
+            "attestation_nonce_hex": null,
             "refresh_at_ms": null
           }
         }

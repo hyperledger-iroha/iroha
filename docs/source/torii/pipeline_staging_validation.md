@@ -52,7 +52,7 @@ curl -sS "$TORII_BASE/v1/pipeline/recovery/$HEIGHT" \
   -H "Authorization: Bearer $API_TOKEN" | jq .
 ```
 
-3. The response must advertise `format = "pipeline.recovery.v2"` as enforced by `handler_pipeline_recovery`. Missing heights must return `404` exactly as covered by `crates/iroha_torii/tests/pipeline_recovery_endpoint.rs`. Capture both the populated and missing responses in the evidence bundle.
+3. The response must advertise `format = "pipeline.recovery.v1"` as enforced by `handler_pipeline_recovery`. Missing heights must return `404` exactly as covered by `crates/iroha_torii/tests/pipeline_recovery_endpoint.rs`. Capture both the populated and missing responses in the evidence bundle.
 
 ## 3.3 SSE Bridge (`/v1/events/sse`)
 

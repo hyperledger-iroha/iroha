@@ -68,11 +68,9 @@ export function verifyLaneRelayEnvelopes(envelopes) {
   for (let i = 0; i < envelopes.length; i += 1) {
     const envelope = envelopes[i];
     verifyLaneRelayEnvelopeJson(envelope);
-    const laneId = Number(envelope?.lane_id ?? envelope?.laneId);
-    const dataspaceId = Number(
-      envelope?.dataspace_id ?? envelope?.dataspaceId,
-    );
-    const blockHeight = Number(envelope?.block_height ?? envelope?.blockHeight);
+    const laneId = Number(envelope?.lane_id);
+    const dataspaceId = Number(envelope?.dataspace_id);
+    const blockHeight = Number(envelope?.block_height);
     if (
       Number.isNaN(laneId) ||
       Number.isNaN(dataspaceId) ||

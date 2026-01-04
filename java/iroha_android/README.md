@@ -111,7 +111,6 @@ InstructionBox registerMultisig =
 
 ```
 java/iroha_android
-├── run_tests.sh          # Compatibility wrapper over the Gradle test harness
 ├── src
 │   ├── main/java
 │   │   └── org/hyperledger/iroha/android
@@ -211,9 +210,8 @@ make android-tests
 ANDROID_GRADLE_TASKS=":core:check :android:testDebugUnitTest" bash ci/run_android_tests.sh
 ```
 
-`run_tests.sh` remains as a compatibility wrapper and forwards to `ci/run_android_tests.sh`;
-`--tests` maps to `ANDROID_HARNESS_MAINS` (comma-separated class names) to filter the
-main-based harnesses, and `--tasks` overrides the Gradle task list.
+Use `ANDROID_HARNESS_MAINS` (comma-separated class names) to filter the main-based harnesses, and
+`ANDROID_GRADLE_TASKS` to override the Gradle task list.
 
 `gradle -p java/iroha_android :core:check` runs the shared JUnit/parameterised harnesses with
 assertions enabled, enforces the pinned Norito schema manifest (`verifyNoritoSchemas`), and calls
@@ -278,9 +276,8 @@ so the Gradle harness and `scripts/android_fixture_regen.sh` soak the alternate 
 the CI logs and record the soak decision in `artifacts/android/fixture_runs/` and `status.md` before
 promoting a new JDK.
 
-`run_tests.sh` also executes `scripts/check_android_fixtures.py` to ensure the
-checked-in Norito fixtures and manifest remain in sync with the canonical hash
-metadata. Verify schema pinning with:
+`scripts/check_android_fixtures.py` keeps the checked-in Norito fixtures and
+manifest in sync with the canonical hash metadata. Verify schema pinning with:
 
 ```bash
 gradle -p java/iroha_android :core:verifyNoritoSchemas
@@ -301,10 +298,10 @@ and the fixture parity gate, run:
 python3 scripts/android_test_report.py --run-tests --output artifacts/android/test_report.json
 ```
 
-The helper drives `run_tests.sh`, writes the per-step summaries under
-`artifacts/android/`, and exits non-zero if either the tests or fixture parity
-fail (set `--allow-failures` only when you need a report without failing the
-shell).
+The helper executes `ci/run_android_tests.sh`, writes the per-step summaries
+under `artifacts/android/`, and exits non-zero if either the tests or fixture
+parity fail (set `--allow-failures` only when you need a report without failing
+the shell).
 
 ### Deterministic export & recovery
 
@@ -316,17 +313,17 @@ shell).
   `KeyPassphraseProvider` (for example, `FileKeyExportStore` on Android/JVM, or
   `InMemoryKeyExportStore` in tests). The provider rehydrates keys from the store before generating
   new material, keeping software-backed accounts stable across app restarts.
-- Legacy v0/v1/v2 bundles stay decodable: call `KeyExportBundle.decode(Base64|bytes)` to inspect the
-  version/KDF metadata, import with the original passphrase, then re-export to v3 to rotate to the
-  memory-hard format. Treat salt/nonce errors as tampering and capture a fresh bundle rather than
-  reusing an old export between devices.
-- Regression coverage in `DeterministicKeyExporterTests` now includes wrong passphrases, tampered
-  salt/nonce/ciphertext, all-zero seed rejection, and legacy v0 decode/import. Clear passphrase
-  char arrays after use in application code.
+- `KeyExportBundle.decode(Base64|bytes)` accepts the v3 payload only. Treat
+  salt/nonce/ciphertext errors as tampering and capture a fresh bundle rather than reusing an old
+  export between devices.
+- Regression coverage in `DeterministicKeyExporterTests` includes wrong passphrases and tampered
+  salt/nonce/ciphertext, and all-zero seed rejection. Clear passphrase char arrays after use in
+  application code.
 - `KeystoreKeyProviderTests` exercises empty vs challenged attestation regeneration and the
-  `android.keystore.attestation.failure` telemetry path; run `./run_tests.sh --tests
-  org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` to spot-check cache and
-  challenge matrices without rebuilding the full suite.
+  `android.keystore.attestation.failure` telemetry path; run
+  `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests \
+  bash ci/run_android_tests.sh` to spot-check cache and challenge matrices without rebuilding the
+  full suite.
 
 ### Lint & dependency scanning (AND6 prototype)
 
@@ -338,7 +335,7 @@ make android-lint
 
 from the repository root to execute the AND6 static-analysis prototype
 (`ci/check_android_javac_lint.sh`). The script reuses the lightweight javac
-target used by `run_tests.sh`, enables `-Xlint:all` with warnings treated as
+target used by `ci/run_android_tests.sh`, enables `-Xlint:all` with warnings treated as
 errors, and then invokes `jdeps --summary` to ensure the Android surface only
 depends on the approved JDK modules (`java.base`, `java.net.http`,
 `jdk.httpserver`). Any new module dependency causes the lint run to fail so
@@ -799,9 +796,9 @@ bridge on CUDA-capable devices when `IROHA_CUDA_SELFTEST=1` is set.
 wrapped export bundle (v3) using per-export salt/nonce. The bundle records
 `kdf_kind` and work factor; v3 prefers Argon2id (64 MiB, 3 iterations,
 parallelism 2) and falls back to PBKDF2-HMAC-SHA256 when Argon2 is unavailable.
-A minimum 12 character passphrase is enforced for v3 exports/imports; legacy
-v0/v1 bundles remain decodable for recovery and can be re-exported to v3.
-Salt/nonce reuse is rejected and decode guards fail fast on tampered lengths.
+A minimum 12 character passphrase is enforced for v3 exports/imports, and only
+the v3 payload is accepted. Salt/nonce reuse is rejected and decode guards fail
+fast on tampered lengths.
 The companion `importDeterministic(...)` helper restores the key pair while
 validating the export's public key and authentication tag, ensuring passphrase
 mismatches or tampering are rejected.

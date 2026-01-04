@@ -156,10 +156,11 @@ Determinism:
 
 ## Recovery & Warning Events
 
-- Core persists per‑block pipeline recovery sidecars under the Kura store directory (`pipeline/block_<height>.json`). Each sidecar captures:
+- Core persists pipeline recovery sidecars under the Kura store directory (`pipeline/sidecars.norito` with `pipeline/sidecars.index`). Each entry captures:
   - The admission sets (canonical read/write keys) per transaction in the block
   - A stable DAG fingerprint (SHA‑256) computed over interned key IDs, per‑tx access vectors, and call hashes
-  - A block hash anchor (v2+) so fingerprints are only compared when the sidecar matches the exact block
+  - A block hash anchor (`pipeline.recovery.v1`) so fingerprints are only compared when the sidecar matches the exact block
+  - Sidecar payloads are flushed before index updates and the directory is synced so offsets are crash‑consistent (orphaned payload bytes are ignored)
 - During validation, if a sidecar for the same block hash is present and the recomputed fingerprint differs, Core:
   - Logs a warning (persisted vs recomputed)
   - Emits a pipeline warning event for subscribers: `PipelineEventBox::Warning { header, kind: "dag_fingerprint_mismatch", details }`

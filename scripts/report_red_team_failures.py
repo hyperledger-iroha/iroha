@@ -187,11 +187,6 @@ def main() -> int:
         action="store_true",
         help="Archive logs but skip the GitHub issue call",
     )
-    parser.add_argument(
-        "--skip-issue",
-        action="store_true",
-        help="Alias for --dry-run for compatibility",
-    )
     args = parser.parse_args()
 
     copied_logs = _copy_logs(args.logs, args.artifact_dir)
@@ -214,7 +209,7 @@ def main() -> int:
     )
 
     token = os.environ.get(args.token_env, "").strip()
-    if args.dry_run or args.skip_issue:
+    if args.dry_run:
         print("[report-red-team] dry run requested; skipping issue creation")
         print(body)
         return 0

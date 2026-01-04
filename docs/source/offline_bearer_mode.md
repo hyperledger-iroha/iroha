@@ -179,4 +179,4 @@ If operators choose to resume ledger-reconcilable mode:
       evidence bucket.
 - [ ] Treasury knows the outstanding allowance ceiling per merchant and records it daily.
 - [ ] Run `scripts/check_norito_bindings_sync.py` and `cargo test -p iroha_cli offline` when updating
-      wallet tooling so the CLI export + SDK helpers stay compatible with ledger enforcement.
+      wallet tooling so the CLI export + SDK helpers stay aligned with ledger enforcement.

@@ -8,7 +8,6 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/telemetry/run_schema_diff.sh <android_commit> <rust_commit>
   scripts/telemetry/run_schema_diff.sh --android-config <file> --rust-config <file> [--out <path>]
   scripts/telemetry/run_schema_diff.sh --android-commit <sha> --rust-commit <sha> [--out <path>]
   scripts/telemetry/run_schema_diff.sh --android-config <file> --rust-config <file> --policy-out <path>
@@ -145,16 +144,7 @@ while [[ $# -gt 0 ]]; do
   shift || true
 done
 
-# Backward-compatible positional mode: <android_commit> <rust_commit>
-if [[ -z "${ANDROID_COMMIT}" && -z "${ANDROID_CONFIG}" && ${#POSITIONAL[@]} -gt 0 ]]; then
-  if [[ ${#POSITIONAL[@]} -ne 2 ]]; then
-    echo "Expected exactly two positional arguments (<android_commit> <rust_commit>)" >&2
-    usage >&2
-    exit 1
-  fi
-  ANDROID_COMMIT="${POSITIONAL[0]}"
-  RUST_COMMIT="${POSITIONAL[1]}"
-elif [[ ${#POSITIONAL[@]} -gt 0 ]]; then
+if [[ ${#POSITIONAL[@]} -gt 0 ]]; then
   echo "Unexpected positional arguments: ${POSITIONAL[*]}" >&2
   usage >&2
   exit 1

@@ -117,7 +117,7 @@ Alert bundles:
   - The orchestrator uses `tracing` + `opentelemetry` to export spans for fetch attempts.
   - Embedded SoraFS nodes export spans for PoR challenges and storage operations. All components share a common trace ID propagated via `x-sorafs-trace`.
 - `SorafsFetchOtel` bridges orchestrator metrics into OTLP histograms while `telemetry::sorafs.fetch.*` events provide lightweight JSON payloads for log-centric backends.
-- Collectors: run OTEL collectors alongside Prometheus/Loki/Tempo (Tempo preferred). Jaeger-compatible exporters remain optional.
+- Collectors: run OTEL collectors alongside Prometheus/Loki/Tempo (Tempo preferred). Jaeger API exporters remain optional.
 - High-cardinality operations should be sampled (10 % for success paths, 100 % for failures).
 
 ## TLS Telemetry Coordination (SF-5b)

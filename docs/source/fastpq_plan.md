@@ -1006,7 +1006,7 @@ The hashing pipeline consumes columns in this deterministic order:
 3. Auxiliary scalars: `delta`, `running_asset_delta`, `metadata_hash`, `supply_counter`, `perm_hash`, `neighbour_leaf`, `dsid`, `slot`.
 4. Sparse Merkle witnesses for every level `ℓ ∈ [0, SMT_HEIGHT)`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`.
 
-`trace::column_hashes` walks the columns in exactly this order, so the placeholder backend and Stage 2 STARK implementation remain trace-compatible across releases.【crates/fastpq_prover/src/trace.rs:474】
+`trace::column_hashes` walks the columns in exactly this order, so the placeholder backend and Stage 2 STARK implementation remain trace-stable across releases.【crates/fastpq_prover/src/trace.rs:474】
 
 ### Transcript domain tags
 Stage 2 fixes the Fiat–Shamir catalog below to keep challenge generation deterministic:
@@ -1022,4 +1022,3 @@ Stage 2 fixes the Fiat–Shamir catalog below to keep challenge generation det
 | `fastpq:v1:fri_layer:<round>` | Commit the Merkle root for each FRI layer. |
 | `fastpq:v1:fri:final` | Record the final FRI layer before opening queries. |
 | `fastpq:v1:query_index:0` | Deterministically derive verifier query indices. |
-

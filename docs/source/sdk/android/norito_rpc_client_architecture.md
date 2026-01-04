@@ -122,7 +122,7 @@ level usage examples and the telemetry redaction plan
 - `NoritoRpcClientTests` spins up an embedded HTTP server (or `ToriiMockServer`
   when available) to exercise header propagation, method overrides, flow
   control, fallback semantics, and codec helpers. Run via `make android-tests`
-  or `java/iroha_android/run_tests.sh`.
+  or `ci/run_android_tests.sh`.
 - `ClientConfigNoritoRpcTests` validates that manifest-derived configs carry
   observers, flow controllers, and fallback handlers into the RPC helper.
 - Cross-SDK parity relies on the shared Torii mock harness documented in

@@ -374,8 +374,8 @@ En plus du certificat existant et de la clé de cache de guard, la v2 ajoute :
   dans l’en-tête `x-sorafs-cache-tag` lors de requêtes HTTP ou TCP afin que les
   sélections de guard en cache restent chiffrées au repos.
 
-Ces champs sont rétrocompatibles ; les clients plus anciens peuvent ignorer les
-nouvelles clés et continuer à s’appuyer sur le sous-ensemble v1.
+Ces champs s’ajoutent au manifest v2 ; les clients doivent consommer
+explicitement les clés qu’ils supportent et ignorer le reste.
 
 ## 2. Sémantique des échecs
 

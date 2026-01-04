@@ -26,7 +26,7 @@ test("normalizeAxtRejectContext preserves minima and ids", () => {
   const ctx = normalizeAxtRejectContext({
     reason: "era",
     dataspace: 7,
-    lane: 2,
+    target_lane: 2,
     snapshot_version: 55,
     detail: "stale handle",
     next_min_handle_era: 9,
@@ -41,22 +41,23 @@ test("normalizeAxtRejectContext preserves minima and ids", () => {
   assert.equal(ctx.next_min_sub_nonce, 4);
 });
 
-test("normalizeAxtRejectContext accepts camelCase fields", () => {
-  const ctx = normalizeAxtRejectContext({
-    reason: "sub_nonce",
-    dataspaceId: 11,
-    targetLane: 3,
-    snapshotVersion: 101,
-    detail: null,
-    nextMinHandleEra: 12,
-    nextMinSubNonce: 6,
-  });
-  assert.equal(ctx.dataspace, 11);
-  assert.equal(ctx.lane, 3);
-  assert.equal(ctx.snapshot_version, 101);
-  assert.equal(ctx.detail, "");
-  assert.equal(ctx.next_min_handle_era, 12);
-  assert.equal(ctx.next_min_sub_nonce, 6);
+test("normalizeAxtRejectContext rejects camelCase fields", () => {
+  assert.throws(
+    () =>
+      normalizeAxtRejectContext({
+        reason: "sub_nonce",
+        dataspaceId: 11,
+        targetLane: 3,
+        snapshotVersion: 101,
+        detail: null,
+        nextMinHandleEra: 12,
+        nextMinSubNonce: 6,
+      }),
+    {
+      name: "TypeError",
+      message: /dataspace/,
+    },
+  );
 });
 
 test("buildHandleRefreshRequest applies overrides", () => {

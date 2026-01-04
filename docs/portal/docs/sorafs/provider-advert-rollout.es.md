@@ -26,7 +26,7 @@ de chunks. Se centra en tres deliverables:
 - **Guia de operadores.** Acciones paso a paso que los storage providers deben
   completar antes de cada gate.
 - **Cobertura de telemetria.** Dashboards y alerts que Observabilidad y Ops usan
-  para confirmar que la red solo acepta adverts compatibles.
+  para confirmar que la red solo acepta adverts conformes.
   para que los equipos de SDK y tooling planifiquen sus releases.
 
 El rollout se alinea con los hitos SF-2b/2c del

@@ -13,7 +13,7 @@ public final class SignedTransactionHasherTests {
   public static void main(final String[] args) throws Exception {
     hashHexMatchesCanonicalBytes();
     hashIgnoresExportedKeyBundle();
-    hashFallsBackForInvalidPayload();
+    hashRejectsInvalidPayload();
     System.out.println("[IrohaAndroid] Signed transaction hasher tests passed.");
   }
 
@@ -44,17 +44,20 @@ public final class SignedTransactionHasherTests {
         : "Exported key bundles must not affect canonical signed transaction hash";
   }
 
-  private static void hashFallsBackForInvalidPayload() {
+  private static void hashRejectsInvalidPayload() {
     final SignedTransaction invalid =
         new SignedTransaction(
             new byte[] {0x01, 0x02, 0x03},
             new byte[64],
             new byte[32],
             "iroha.android.transaction.Payload.v1");
-    final String hash = SignedTransactionHasher.hashHex(invalid);
-    final String hashAgain = SignedTransactionHasher.hashHex(invalid);
-    assert hash.equals(hashAgain)
-        : "Invalid payloads should still hash deterministically via the fallback path";
+    try {
+      SignedTransactionHasher.hashHex(invalid);
+      throw new AssertionError("Expected invalid payload to fail Norito encoding");
+    } catch (IllegalStateException ex) {
+      assert ex.getMessage().contains("Failed to encode signed transaction")
+          : "Invalid payloads should surface encoding failures";
+    }
   }
 
   private static SignedTransaction newTransaction(final byte seed) throws NoritoException {

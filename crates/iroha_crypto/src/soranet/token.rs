@@ -358,6 +358,14 @@ impl AdmissionTokenVerifier {
             });
         }
 
+        verify_mldsa(
+            self.suite,
+            &self.public_key,
+            &token.body_bytes(),
+            token.signature(),
+        )
+        .map_err(VerifyError::Signature)?;
+
         if let Some(store) = &self.replay_store {
             let token_id = token.token_id();
             let expires_at = UNIX_EPOCH + Duration::from_secs(token.expires_at());
@@ -380,13 +388,7 @@ impl AdmissionTokenVerifier {
             }
         }
 
-        verify_mldsa(
-            self.suite,
-            &self.public_key,
-            &token.body_bytes(),
-            token.signature(),
-        )
-        .map_err(VerifyError::Signature)
+        Ok(())
     }
 }
 
@@ -997,7 +999,7 @@ mod tests {
 
     #[test]
     fn admission_token_reuse_is_currently_allowed() {
-        // Without a replay store attached, tokens remain reusable for compatibility.
+        // Without a replay store attached, tokens remain reusable.
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
         let fingerprint = compute_issuer_fingerprint(keypair.public_key());
@@ -1177,6 +1179,47 @@ mod tests {
             .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
             .expect_err("replay must be blocked");
         assert!(matches!(err, VerifyError::Replay(_)));
+    }
+
+    #[test]
+    fn invalid_signatures_do_not_poison_replay_store() {
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
+            .expect("ML-DSA keypair generation should succeed");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = issued + Duration::from_secs(300);
+        let mut rng = StdRng::seed_from_u64(77);
+        let mut token = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        token.signature[0] ^= 0xFF;
+
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
+        let store: Arc<Mutex<dyn TokenStore + Send>> =
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+        let verifier = AdmissionTokenVerifier::new(
+            MlDsaSuite::MlDsa44,
+            keypair.public_key().to_vec(),
+            Duration::from_secs(900),
+            Duration::from_secs(5),
+        )
+        .with_replay_store(store.clone());
+
+        let now = issued + Duration::from_secs(5);
+        let err = verifier
+            .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
+            .expect_err("invalid signature should be rejected");
+        assert!(matches!(err, VerifyError::Signature(_)));
+        assert_eq!(store.lock().expect("store lock").len(now), 0);
     }
 
     #[test]

@@ -5011,7 +5011,8 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-    let manifest_id_hex = hex_encode(manifest_digest.as_bytes());
+    let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
+    let manifest_cid_hex = hex_encode(&manifest.root_cid);
 
     let nonce = if let Some(encoded) = nonce_b64 {
         decode_nonce_b64(&encoded)?
@@ -5026,7 +5027,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     };
 
     let request = ProofStreamRequest {
-        manifest_digest_hex: manifest_id_hex.clone(),
+        manifest_digest_hex: manifest_digest_hex.clone(),
         provider_id_hex: Some(provider_id_hex.clone()),
         proof_kind,
         sample_count,
@@ -5142,12 +5143,12 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         Value::from(manifest_path.display().to_string()),
     );
     summary_map.insert(
-        "manifest_id_hex".into(),
-        Value::from(manifest_id_hex.clone()),
+        "manifest_digest_hex".into(),
+        Value::from(manifest_digest_hex.clone()),
     );
     summary_map.insert(
-        "manifest_digest_hex".into(),
-        Value::from(manifest_id_hex.clone()),
+        "manifest_cid_hex".into(),
+        Value::from(manifest_cid_hex.clone()),
     );
     summary_map.insert(
         "provider_id_hex".into(),
@@ -5219,7 +5220,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         write_proof_stream_evidence(
             &dir,
             &manifest_path,
-            &manifest_id_hex,
+            &manifest_digest_hex,
             &rendered,
             &torii_url,
         )?;

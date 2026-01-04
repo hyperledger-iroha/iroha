@@ -59,6 +59,9 @@ impl FromStr for ApiVersion {
             .unwrap_or("0")
             .parse::<u16>()
             .map_err(|_| "invalid minor")?;
+        if parts.next().is_some() {
+            return Err("invalid version");
+        }
         Ok(Self::new(major, minor))
     }
 }
@@ -262,15 +265,16 @@ pub fn negotiate(
     headers: &HeaderMap,
     policy: &ApiVersionPolicy,
 ) -> Result<NegotiatedVersion, ApiVersionError> {
-    let Some(raw) = headers
-        .get(HEADER_API_VERSION)
-        .and_then(|value| value.to_str().ok())
-    else {
+    let Some(value) = headers.get(HEADER_API_VERSION) else {
         return Ok(NegotiatedVersion {
             version: policy.default,
             inferred: true,
         });
     };
+    let raw = value.to_str().map_err(|_| ApiVersionError::InvalidHeader {
+        raw: "<non-utf8>".to_string(),
+        supported: policy.supported.clone(),
+    })?;
 
     let parsed = ApiVersion::from_str(raw).map_err(|_| ApiVersionError::InvalidHeader {
         raw: raw.to_string(),
@@ -326,6 +330,8 @@ fn supported_labels_from(policy: &[ApiVersion]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::{HeaderMap, HeaderValue};
+
     use super::*;
 
     #[test]
@@ -338,5 +344,24 @@ mod tests {
     fn supported_labels_join_in_order() {
         let versions = [ApiVersion::new(1, 1), ApiVersion::new(1, 3)];
         assert_eq!(supported_labels_from(&versions), "1.1, 1.3");
+    }
+
+    #[test]
+    fn from_str_accepts_major_minor_and_rejects_extra_segments() {
+        assert_eq!(ApiVersion::from_str("1").unwrap(), ApiVersion::new(1, 0));
+        assert_eq!(ApiVersion::from_str("v1.2").unwrap(), ApiVersion::new(1, 2));
+        assert!(ApiVersion::from_str("1.2.3").is_err());
+        assert!(ApiVersion::from_str("v1.2.3").is_err());
+    }
+
+    #[test]
+    fn negotiate_rejects_non_utf8_header_values() {
+        let mut headers = HeaderMap::new();
+        let value = HeaderValue::from_bytes(&[0x80]).expect("header value");
+        headers.insert(HEADER_API_VERSION, value);
+        let policy = ApiVersionPolicy::default();
+
+        let err = negotiate(&headers, &policy).expect_err("invalid header rejected");
+        assert!(matches!(err, ApiVersionError::InvalidHeader { .. }));
     }
 }

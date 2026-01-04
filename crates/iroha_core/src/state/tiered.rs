@@ -410,13 +410,16 @@ impl TieredStateBackend {
         self.hot_retained_keys = hot_retained_keys;
         self.cold_store_root = cold_store_root;
         self.max_snapshots = max_snapshots;
+        if cold_root_changed {
+            self.entries.clear();
+            self.snapshot_counter = 0;
+            self.snapshot_counter_seeded = false;
+            self.last_manifest = None;
+        }
         if !self.enabled {
             return;
         }
         if cold_root_changed {
-            self.snapshot_counter = 0;
-            self.snapshot_counter_seeded = false;
-            self.last_manifest = None;
             if let Err(err) = self.ensure_cold_root() {
                 iroha_logger::warn!(
                     ?err,
@@ -836,9 +839,39 @@ impl TieredStateBackend {
         let manifest_bytes = norito::json::to_vec_pretty(manifest)
             .wrap_err("failed to serialize tiered state manifest")?;
         let manifest_path = snapshot_dir.join("manifest.json");
-        fs::write(&manifest_path, manifest_bytes).wrap_err_with(|| {
+        let temp_path = snapshot_dir.join("manifest.json.tmp");
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temp_path)
+            .wrap_err_with(|| {
+                format!(
+                    "failed to open manifest temp file {path}",
+                    path = temp_path.display()
+                )
+            })?;
+        file.write_all(&manifest_bytes).wrap_err_with(|| {
             format!(
-                "failed to persist manifest {path}",
+                "failed to write manifest temp file {path}",
+                path = temp_path.display()
+            )
+        })?;
+        file.flush().wrap_err_with(|| {
+            format!(
+                "failed to flush manifest temp file {path}",
+                path = temp_path.display()
+            )
+        })?;
+        file.sync_data().wrap_err_with(|| {
+            format!(
+                "failed to sync manifest temp file {path}",
+                path = temp_path.display()
+            )
+        })?;
+        fs::rename(&temp_path, &manifest_path).wrap_err_with(|| {
+            format!(
+                "failed to promote manifest file {path}",
                 path = manifest_path.display()
             )
         })
@@ -1583,6 +1616,13 @@ mod tests {
         let snapshot_dir = temp
             .path()
             .join(format!("{index:020}", index = manifest.snapshot_index));
+        let manifest_path = snapshot_dir.join("manifest.json");
+        let manifest_tmp = snapshot_dir.join("manifest.json.tmp");
+        assert!(manifest_path.exists(), "manifest should be persisted");
+        assert!(
+            !manifest_tmp.exists(),
+            "manifest temp file should be removed after snapshot"
+        );
         let spill_path = cold_entry
             .spill_path
             .as_ref()
@@ -1632,6 +1672,27 @@ mod tests {
         assert_eq!(manifest.snapshot_index, 8);
         let new_dir = root.join(format!("{:020}", manifest.snapshot_index));
         assert!(new_dir.exists(), "expected seeded snapshot directory");
+    }
+
+    #[test]
+    fn reconfigure_clears_entries_on_cold_root_change() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend = TieredStateBackend::new(true, 1, Some(temp.path().to_path_buf()), 0);
+        let mut world = World::default();
+        let qc = dummy_qc(1);
+        world.exec_qcs.insert(qc.subject_block_hash, qc);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot recorded");
+        assert!(!backend.entries.is_empty());
+
+        let new_root = tempdir().expect("tmpdir");
+        backend.reconfigure(true, 1, Some(new_root.path().to_path_buf()), 0);
+
+        assert!(backend.entries.is_empty());
+        assert_eq!(backend.snapshot_counter, 0);
+        assert!(backend.last_manifest().is_none());
     }
 
     #[test]

@@ -19,10 +19,10 @@
   parity checks.
 - Revalidated parity after the Rust Norito panic payload copy cleanup; Java
   bindings required no implementation changes beyond rerunning the parity suite.
-- Recorded the Rust Norito compatibility cleanup (removed legacy length readers
-  and lenient instruction deframing; bundled-only streaming defaults). Java
-  bindings continue to use the canonical encoder/decoder paths with no API
-  changes, and parity was revalidated for the stricter framing.
+- Recorded the Rust Norito cleanup (removed old length readers and lenient
+  instruction deframing; bundled-only streaming defaults). Java bindings
+  continue to use the canonical encoder/decoder paths with no API changes, and
+  parity was revalidated for the stricter framing.
 - Added `NoritoCodec.fromBytesView`/`ArchiveView` to expose header flags and
   minor hints (v1 minor fixed to `0x00`), aligning with the Rust
   `ArchiveView::flags*` helpers and rejecting unsupported minor versions when

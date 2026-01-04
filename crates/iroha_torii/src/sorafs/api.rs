@@ -1472,8 +1472,8 @@ pub struct StoragePorSampleRequestDto {
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by the `/v1/sorafs/proof/stream` endpoint.
 pub struct ProofStreamRequestDto {
-    /// Hex-encoded manifest identifier (CID).
-    pub manifest_id_hex: String,
+    /// Hex-encoded manifest digest (32 bytes).
+    pub manifest_digest_hex: String,
     /// Hex-encoded provider identifier (32 bytes).
     pub provider_id_hex: String,
     /// Proof kind requested (`por`, `pdp`, `potr`).
@@ -4507,7 +4507,12 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
 
     let byte_range = match parse_range_header(range_str, total_length) {
         Ok(range) => range,
-        Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+        Err(RangeParseError::Invalid(message)) => {
+            return json_error(StatusCode::BAD_REQUEST, message);
+        }
+        Err(RangeParseError::Unsatisfiable(message)) => {
+            return range_not_satisfiable(total_length, message);
+        }
     };
 
     let length = byte_range.len();
@@ -5241,11 +5246,11 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
         return storage_disabled_response();
     }
 
-    let manifest_id_hex_request = req.manifest_id_hex.trim().to_ascii_lowercase();
-    if manifest_id_hex_request.is_empty() {
+    let manifest_digest_hex_request = req.manifest_digest_hex.trim().to_ascii_lowercase();
+    if manifest_digest_hex_request.is_empty() {
         return json_error(
             StatusCode::BAD_REQUEST,
-            "manifest_id_hex must be provided and non-empty",
+            "manifest_digest_hex must be provided and non-empty",
         );
     }
 
@@ -5294,14 +5299,11 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
         Err(err) => return json_error(StatusCode::BAD_REQUEST, &err),
     };
 
-    let manifest_digest_request = if manifest_id_hex_request.len() == 64 {
-        match parse_hex_fixed::<32>(&manifest_id_hex_request, "manifest_id_hex") {
-            Ok(digest) => Some(digest),
+    let manifest_digest =
+        match parse_hex_fixed::<32>(&manifest_digest_hex_request, "manifest_digest_hex") {
+            Ok(digest) => digest,
             Err(err) => return json_error(StatusCode::BAD_REQUEST, &err),
-        }
-    } else {
-        None
-    };
+        };
 
     let provider_id = match parse_hex_fixed::<32>(&provider_id_hex, "provider_id_hex") {
         Ok(id) => id,
@@ -5310,39 +5312,15 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
 
     let manifest = match state
         .sorafs_node
-        .manifest_metadata(&manifest_id_hex_request)
+        .manifest_metadata_by_digest(&manifest_digest)
     {
         Ok(manifest) => manifest,
-        Err(NodeStorageError::Storage(StorageBackendError::ManifestNotFound { .. })) => {
-            if let Some(digest) = manifest_digest_request {
-                match state.sorafs_node.manifest_metadata_by_digest(&digest) {
-                    Ok(manifest) => manifest,
-                    Err(err) => return node_storage_error_response(err),
-                }
-            } else {
-                return node_storage_error_response(NodeStorageError::Storage(
-                    StorageBackendError::ManifestNotFound {
-                        manifest_id: manifest_id_hex_request.clone(),
-                    },
-                ));
-            }
-        }
         Err(err) => return node_storage_error_response(err),
     };
 
     let manifest_digest = *manifest.manifest_digest();
-    if let Some(request_digest) = manifest_digest_request {
-        if request_digest != manifest_digest {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                "manifest_id_hex does not match stored manifest digest",
-            );
-        }
-    }
-
     let manifest_digest_hex = hex::encode(manifest_digest);
     let manifest_root_cid_hex = hex::encode(manifest.manifest_cid());
-    let manifest_id_hex = manifest_root_cid_hex.clone();
 
     let request = ProofStreamRequestV1 {
         manifest_digest,
@@ -5381,7 +5359,10 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
             });
 
             let start = Instant::now();
-            let samples = match state.sorafs_node.sample_por(&manifest_id_hex, count, seed) {
+            let samples = match state
+                .sorafs_node
+                .sample_por(&manifest_root_cid_hex, count, seed)
+            {
                 Ok(samples) => samples,
                 Err(err) => {
                     state.telemetry.with_metrics(|metrics| {
@@ -5417,7 +5398,6 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 .as_ref()
                 .map(|tier| tier.trim().to_ascii_lowercase());
             let telemetry = state.telemetry.clone();
-            let manifest_id_hex_stream = manifest_id_hex.clone();
             let manifest_digest_hex_stream = manifest_digest_hex.clone();
             let manifest_root_cid_hex_stream = manifest_root_cid_hex.clone();
             let provider_id_hex_stream = provider_id_hex.clone();
@@ -5429,10 +5409,6 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 let mut delivered: usize = 0;
                 for (flat_index, proof) in samples {
                     let mut map = sample_to_map(flat_index, &proof);
-                    map.insert(
-                        "manifest_id_hex".into(),
-                        Value::from(manifest_id_hex_stream.clone()),
-                    );
                     map.insert(
                         "manifest_digest_hex".into(),
                         Value::from(manifest_digest_hex_stream.clone()),
@@ -5516,7 +5492,6 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 .as_ref()
                 .map(|tier| tier.trim().to_ascii_lowercase());
             let telemetry = state.telemetry.clone();
-            let manifest_id_hex_stream = manifest_id_hex.clone();
             let manifest_digest_hex_stream = manifest_digest_hex.clone();
             let manifest_root_cid_hex_stream = manifest_root_cid_hex.clone();
             let provider_id_hex_stream = provider_id_hex.clone();
@@ -5547,10 +5522,6 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                     );
 
                     let mut map = Map::new();
-                    map.insert(
-                        "manifest_id_hex".into(),
-                        Value::from(manifest_id_hex_stream.clone()),
-                    );
                     map.insert(
                         "manifest_digest_hex".into(),
                         Value::from(manifest_digest_hex_stream.clone()),
@@ -5794,41 +5765,69 @@ fn decode_hex_32(value: &str) -> Result<[u8; 32], String> {
     Ok(array)
 }
 
-fn parse_range_header(value: &str, total_length: u64) -> Result<ByteRange, String> {
+#[derive(Debug)]
+enum RangeParseError {
+    Invalid(String),
+    Unsatisfiable(String),
+}
+
+impl RangeParseError {
+    fn invalid(message: impl Into<String>) -> Self {
+        Self::Invalid(message.into())
+    }
+
+    fn unsatisfiable(message: impl Into<String>) -> Self {
+        Self::Unsatisfiable(message.into())
+    }
+}
+
+fn parse_range_header(value: &str, total_length: u64) -> Result<ByteRange, RangeParseError> {
     let trimmed = value.trim();
     if !trimmed.starts_with("bytes=") {
-        return Err("Range header must use the 'bytes' unit".to_string());
+        return Err(RangeParseError::invalid(
+            "Range header must use the 'bytes' unit",
+        ));
     }
     let spec = trimmed.strip_prefix("bytes=").unwrap_or(trimmed);
     if spec.is_empty() {
-        return Err("Range header is missing start and end offsets".to_string());
+        return Err(RangeParseError::invalid(
+            "Range header is missing start and end offsets",
+        ));
     }
     if spec.contains(',') {
-        return Err("Multiple ranges are not supported".to_string());
+        return Err(RangeParseError::invalid(
+            "Multiple ranges are not supported",
+        ));
     }
     let (start_str, end_str) = spec
         .split_once('-')
-        .ok_or_else(|| "Range header must contain '-' separator".to_string())?;
+        .ok_or_else(|| RangeParseError::invalid("Range header must contain '-' separator"))?;
     if start_str.is_empty() {
-        return Err("Range start offset must be specified".to_string());
+        return Err(RangeParseError::invalid(
+            "Range start offset must be specified",
+        ));
     }
     let start = start_str
         .parse::<u64>()
-        .map_err(|_| "Range start offset is not a valid integer".to_string())?;
+        .map_err(|_| RangeParseError::invalid("Range start offset is not a valid integer"))?;
     let end = if end_str.is_empty() {
         total_length
             .checked_sub(1)
-            .ok_or_else(|| "Manifest payload is empty".to_string())?
+            .ok_or_else(|| RangeParseError::invalid("Manifest payload is empty"))?
     } else {
         end_str
             .parse::<u64>()
-            .map_err(|_| "Range end offset is not a valid integer".to_string())?
+            .map_err(|_| RangeParseError::invalid("Range end offset is not a valid integer"))?
     };
     if start > end {
-        return Err("Range start offset exceeds end offset".to_string());
+        return Err(RangeParseError::invalid(
+            "Range start offset exceeds end offset",
+        ));
     }
     if end >= total_length {
-        return Err("Requested range exceeds payload length".to_string());
+        return Err(RangeParseError::unsatisfiable(
+            "Requested range exceeds payload length",
+        ));
     }
     Ok(ByteRange {
         start,
@@ -5976,7 +5975,19 @@ mod app_api_tests {
     #[test]
     fn parse_range_header_rejects_multiple_ranges() {
         let err = parse_range_header("bytes=0-1,2-3", 10).expect_err("should reject multi-range");
-        assert!(err.contains("Multiple ranges"));
+        assert!(matches!(
+            err,
+            RangeParseError::Invalid(message) if message.contains("Multiple ranges")
+        ));
+    }
+
+    #[test]
+    fn parse_range_header_rejects_unsatisfiable_range() {
+        let err = parse_range_header("bytes=0-10", 5).expect_err("should reject overshoot");
+        assert!(matches!(
+            err,
+            RangeParseError::Unsatisfiable(message) if message.contains("exceeds payload length")
+        ));
     }
 
     #[test]
@@ -6764,7 +6775,7 @@ fn parse_tier(label: Option<&str>) -> Result<Option<ProofStreamTier>, String> {
 
 fn request_error_message(error: ProofStreamRequestError) -> &'static str {
     match error {
-        ProofStreamRequestError::InvalidManifestDigest => "manifest_id_hex must be non-zero",
+        ProofStreamRequestError::InvalidManifestDigest => "manifest_digest_hex must be non-zero",
         ProofStreamRequestError::InvalidProviderId => "provider_id_hex must be non-zero",
         ProofStreamRequestError::InvalidNonce => "nonce must be non-zero",
         ProofStreamRequestError::MissingSampleCount => {
@@ -7716,7 +7727,7 @@ mod advert_tests {
             .expect("record PoTR receipt");
 
         let request = ProofStreamRequestDto {
-            manifest_id_hex: manifest_id_hex.clone(),
+            manifest_digest_hex: manifest_digest_hex.clone(),
             provider_id_hex: provider_id_hex.clone(),
             proof_kind: "potr".to_string(),
             sample_count: None,
@@ -7768,8 +7779,14 @@ mod advert_tests {
             "success item should not include failure reason"
         );
         assert_eq!(
-            first.get("manifest_id_hex").and_then(json::Value::as_str),
-            Some(manifest_id_hex.as_str())
+            first
+                .get("manifest_digest_hex")
+                .and_then(json::Value::as_str),
+            Some(manifest_digest_hex.as_str())
+        );
+        assert_eq!(
+            first.get("manifest_cid_hex").and_then(json::Value::as_str),
+            Some(manifest_root_cid_hex.as_str())
         );
         assert_eq!(
             first
@@ -7799,8 +7816,14 @@ mod advert_tests {
             Some("missed_deadline")
         );
         assert_eq!(
-            second.get("manifest_id_hex").and_then(json::Value::as_str),
-            Some(manifest_id_hex.as_str())
+            second
+                .get("manifest_digest_hex")
+                .and_then(json::Value::as_str),
+            Some(manifest_digest_hex.as_str())
+        );
+        assert_eq!(
+            second.get("manifest_cid_hex").and_then(json::Value::as_str),
+            Some(manifest_root_cid_hex.as_str())
         );
         assert_eq!(
             second
@@ -9016,7 +9039,7 @@ mod advert_tests {
             ..Default::default()
         };
         pin_cfg.tokens.insert("secret-token".to_string());
-        pin_cfg.allow_cidrs = vec!["10.0.0.0/8".to_string()];
+        pin_cfg.allow_cidrs = vec!["10.0.0.0/8".to_string(), "127.0.0.0/8".to_string()];
         pin_cfg.rate_limit = GatewayRateLimitCfg {
             max_requests: Some(NonZeroU32::new(1).expect("non-zero max_requests")),
             window: Duration::from_secs(60),
@@ -11604,6 +11627,10 @@ mod advert_tests {
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_PROOF),
                 alias_proof_header("alias@capability"),
+            );
+            headers.insert(
+                header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
+                HeaderValue::from_static("dummy-envelope"),
             );
             headers
         };
