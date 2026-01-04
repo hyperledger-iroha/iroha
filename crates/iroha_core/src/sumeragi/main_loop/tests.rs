@@ -3284,6 +3284,49 @@ async fn quorum_reschedule_skips_requeue_when_precommit_votes_present() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn quorum_reschedule_skips_requeue_when_commit_votes_present() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    let block = block_with_txs(1, 0, None, vec![tx]);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let height = block.header().height().get();
+    let view = u64::from(block.header().view_change_index());
+    let pending = PendingBlock::new(block, payload_hash, height, view);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    assert_eq!(actor.queue.tx_len(), 0, "queue should start empty");
+    let epoch = actor.current_epoch();
+    assert!(
+        actor.emit_commit_vote(block_hash, height, view, epoch, &topology),
+        "commit vote should be recorded"
+    );
+    let (vote_count, _quorum_reached) =
+        actor.commit_vote_quorum_status_for_block(block_hash, height, view);
+
+    actor.reschedule_pending_quorum_block(
+        pending,
+        Duration::from_secs(5),
+        /*min_votes_for_commit*/ 3,
+        /*vote_count*/ vote_count,
+        /*quorum_timeout*/ Duration::from_secs(1),
+        /*reschedule_backoff*/ Duration::from_secs(1),
+        Instant::now(),
+    );
+
+    assert_eq!(
+        actor.queue.tx_len(),
+        0,
+        "requeue should be skipped when commit votes exist"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn quorum_reschedule_requeues_after_retry_with_precommit_votes() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

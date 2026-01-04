@@ -1978,7 +1978,6 @@ impl Iroha {
         .start(supervisor.shutdown_signal());
         supervisor.monitor(child);
 
-        let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_owned();
         let (block_sync, child) = BlockSynchronizer::from_config(
             &config.block_sync,
             sumeragi.clone(),
@@ -1986,7 +1985,7 @@ impl Iroha {
             config.common.peer.clone(),
             network.clone(),
             Arc::clone(&state),
-            mode_tag,
+            config.sumeragi.consensus_mode,
         )
         .start(supervisor.shutdown_signal());
         supervisor.monitor(child);
