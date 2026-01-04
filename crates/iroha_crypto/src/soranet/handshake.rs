@@ -4104,7 +4104,6 @@ impl Nk3HandshakeRequirements {
             HarnessError::Validation("NK3 handshake requires forward commitment".into())
         })?;
         Ok(Self {
-            client_static_public,
             forward_public,
             forward_commitment,
         })

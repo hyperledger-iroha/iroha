@@ -28,7 +28,7 @@ translator: manual
 
 ## 受理パイプライン
 
-- 検証時に IVM ヘッダーを解析し、`version_major == 2`、`abi_version == 1` を強制します。未対応バージョンは即拒否となりランタイムトグルは存在しません。
+- 検証時に IVM ヘッダーを解析し、`version_major == 1`、`abi_version == 1` を強制します。未対応バージョンは即拒否となりランタイムトグルは存在しません。
 - 既に `code_hash` のマニフェストがある場合、保存済みハッシュと提出プログラムから計算したハッシュが一致するか確認し、差異は `Manifest{Code,Abi}HashMismatch` を投げます。
 - 保護ネームスペース宛てトランザクションはメタデータ `gov_namespace` と `gov_contract_id` を含める必要があります。受理パスは施行済み `DeployContract` 提案と照合し、一致がなければ `NotPermitted` で拒否します。
 

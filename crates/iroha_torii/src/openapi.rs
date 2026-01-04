@@ -9641,6 +9641,7 @@ mod tests {
             PathCase {
                 label: "system",
                 builder: system_paths,
+                expected: "/status",
             },
             PathCase {
                 label: "operator_auth",

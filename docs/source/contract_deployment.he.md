@@ -30,7 +30,7 @@ translator: manual
 
 ## קבלת טרנזקציות
 
-- נבדק שה-header של IVM עומד ב-`version_major == 2` ו-`abi_version == 1`.
+- נבדק שה-header של IVM עומד ב-`version_major == 1` ו-`abi_version == 1`.
 - אם מניפסט כבר קיים, חייב להיות התאמה בין hashים מאוחסנים למחשוב מחדש.
 - ניימספייס מוגן מחייב מטא-דאטה `gov_namespace` ו-`gov_contract_id`; בהיעדר הצעת Deploy תואמת → `NotPermitted`.
 

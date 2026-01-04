@@ -91,7 +91,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     // Program header: magic + header + code (simple)
     let mut prog = Vec::new();
     prog.extend_from_slice(b"IVM\0");
-    prog.extend_from_slice(&[2, 0, 0, 4]); // version 2.0, mode=0x04 (no flags), abi=4?
+    prog.extend_from_slice(&[1, 0, 0, 4]); // version 1.0, mode=0, vector_length=4
     prog.extend_from_slice(&0u64.to_le_bytes()); // gas
     prog.push(1); // abi_version=1
     prog.push(0); // vector len

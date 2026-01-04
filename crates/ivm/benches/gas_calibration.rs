@@ -15,7 +15,7 @@ use ivm::{IVM, encoding, instruction};
 fn assemble(code: &[u8]) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(b"IVM\0");
-    v.extend_from_slice(&[2, 0, 0, 0]); // version_major=2, minor=0, mode=0, vector=0(auto)
+    v.extend_from_slice(&[1, 0, 0, 0]); // version_major=1, minor=0, mode=0, vector=0(auto)
     v.extend_from_slice(&0u64.to_le_bytes()); // max_cycles = 0 (unspecified)
     v.push(1); // abi_version = 1 (baseline)
     v.extend_from_slice(code);

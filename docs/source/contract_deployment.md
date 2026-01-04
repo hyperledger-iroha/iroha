@@ -35,7 +35,7 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 
 ## Admission pipeline
 
-- The validator parses the IVM header, enforces `version_major == 2`, and checks
+- The validator parses the IVM header, enforces `version_major == 1`, and checks
   `abi_version == 1`. Unknown versions reject immediately; there is no runtime
   toggle.
 - When a manifest is already present for `code_hash`, validation ensures the

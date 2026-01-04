@@ -1,80 +1,44 @@
 {
-  "artifacts": [
-    {
-      "artifact_sha256": "ffecbe01b61996d5111f287e4a820e62bd4511d34b11502fb7f2af3b7d565c80",
-      "file": "artifact_v2_0_mode00_vlen0_cycles0_abi0.to",
-      "meta": {
-        "abi_version": 0,
-        "max_cycles": 0,
-        "mode": 0,
-        "vector_length": 0,
-        "version_major": 2,
-        "version_minor": 0
-      }
-    },
-    {
-      "artifact_sha256": "f0c22cae3a17c9c49fe45011cc16346167757c85a372ce069e26767d9edf28d5",
-      "file": "artifact_v2_7_mode00_vlen0_cycles0_abi0.to",
-      "meta": {
-        "abi_version": 0,
-        "max_cycles": 0,
-        "mode": 0,
-        "vector_length": 0,
-        "version_major": 2,
-        "version_minor": 7
-      }
-    },
-    {
-      "artifact_sha256": "fbac0045e339765c417d7e3bf5ce7f0b7fc1fa7781e7ec6f557c36d26062831f",
-      "file": "artifact_v1_3_mode00_vlen0_cycles0_abi0.to",
-      "meta": {
-        "abi_version": 0,
-        "max_cycles": 0,
-        "mode": 0,
-        "vector_length": 0,
-        "version_major": 1,
-        "version_minor": 3
-      }
-    },
-    {
-      "artifact_sha256": "f4922cdb9ffab1a8654f5b7134fbd7762f6627f23f05f26f98cfd9c8a480fd8c",
-      "file": "artifact_v2_0_mode03_vlen8_cycles1000_abi1.to",
-      "meta": {
-        "abi_version": 1,
-        "max_cycles": 1000,
-        "mode": 3,
-        "vector_length": 8,
-        "version_major": 2,
-        "version_minor": 0
-      }
-    },
-    {
-      "artifact_sha256": "8b9609b7d7aecff905df62e518cc7c91e13aa6cdc49f4806a76d543dd507d762",
-      "file": "artifact_v2_0_mode04_vlen64_cycles1_abi2.to",
-      "meta": {
-        "abi_version": 2,
-        "max_cycles": 1,
-        "mode": 4,
-        "vector_length": 64,
-        "version_major": 2,
-        "version_minor": 0
-      }
-    },
-    {
-      "artifact_sha256": "6a41c44b90fb816fabd4d1f0e475c27c1f2ad377d20cc3d012d15df048a6706a",
-      "file": "artifact_v2_9_mode07_vlen255_cycles4294967295_abi255.to",
-      "meta": {
-        "abi_version": 255,
-        "max_cycles": 4294967295,
-        "mode": 7,
-        "vector_length": 255,
-        "version_major": 2,
-        "version_minor": 9
-      }
-    }
-  ],
-  "artifacts_dir": "artifacts",
+  "format": "ivm.predecoder.v1/index",
   "code_file": "code.bin",
   "decoded_file": "decoded.json",
-  "format": "ivm.predecoder.v1/index"
+  "artifacts_dir": "artifacts",
+  "artifacts": [
+    {
+      "file": "artifact_v1_0_mode00_vlen0_cycles0_abi1.to",
+      "meta": {
+        "version_major": 1,
+        "version_minor": 0,
+        "mode": 0,
+        "vector_length": 0,
+        "max_cycles": 0,
+        "abi_version": 1
+      },
+      "artifact_sha256": "b0e5edf251edd803b66fd6cead24ca6ae9d8873fc7d1a4a87b74f270b75cfaa9"
+    },
+    {
+      "file": "artifact_v1_7_mode00_vlen0_cycles0_abi1.to",
+      "meta": {
+        "version_major": 1,
+        "version_minor": 7,
+        "mode": 0,
+        "vector_length": 0,
+        "max_cycles": 0,
+        "abi_version": 1
+      },
+      "artifact_sha256": "5a769bdd76911e77c68946b56ed3f32f0db69a04cf25f4cef9a88f3f2f4c7dec"
+    },
+    {
+      "file": "artifact_v1_0_mode03_vlen8_cycles1000_abi1.to",
+      "meta": {
+        "version_major": 1,
+        "version_minor": 0,
+        "mode": 3,
+        "vector_length": 8,
+        "max_cycles": 1000,
+        "abi_version": 1
+      },
+      "artifact_sha256": "0febb29199de3cd2120f07a93879495397e19c7e577ba3d47771fdbbfac6edd5"
+    }
+  ]
 }

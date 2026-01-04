@@ -2791,7 +2791,7 @@ pub mod isi {
                     format!("invalid IVM program: {e}").into(),
                 )
             })?;
-            if parsed.metadata.version_major != 2 {
+            if parsed.metadata.version_major != 1 {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "unsupported IVM program version".into(),
                 ));

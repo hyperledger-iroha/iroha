@@ -1,6 +1,16 @@
 # Status
 
 ## Latest Updates
+- Standardized IVM header major to v1 across parser/admission paths, compiler outputs, fixtures, and shipped `.to` artifacts; refreshed header/docs references to drop v2.
+- Tests: not run (not requested).
+- Hardened IVM DIV_CEIL/GCD against i64::MIN overflow for deterministic behavior and added regression coverage for the edge cases.
+- Tests: `cargo test --workspace` (timed out after 10m during compile; warnings about unused imports/assignments in several crates).
+- Removed the stale `client_static_public` field from NK3 handshake requirement construction after the struct slimming.
+- Switched client/server version fetch to Torii `/api_version` (plain string), updated CLI output and the `get_server_version` integration test, and fixed the OpenAPI path-group test case for the system routes.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: not run (per request; full workspace tests skipped).
+- IVM metadata parsing now rejects non-v1 headers; predecoder fixtures trimmed to v1/ABI-1-only variants.
+- Tests: not run (not requested).
 - Removed legacy IVM header/padding parsing, required registration-height metadata for time triggers, and cleaned Torii contract + IVM alignment docs to drop legacy `code_bytes`/deprecated-alias notes.
 - Tests: not run (not requested).
 - Removed obsolete multisig derived-key helper test references so the multisig module compiles cleanly after the legacy cleanup.

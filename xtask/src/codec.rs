@@ -1052,5 +1052,4 @@ mod tests {
         write_artifact(&tampered, OutputFormat::Json, &tampered_path).expect("write tampered");
         assert!(verify_artifact(&tampered_path).is_err());
     }
-
 }

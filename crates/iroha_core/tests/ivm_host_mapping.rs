@@ -58,7 +58,7 @@ fn seeded_account_in(seed: u8, domain_name: &str) -> AccountId {
 fn make_header() -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(b"IVM\0");
-    v.extend_from_slice(&[2, 0, 0, 4]);
+    v.extend_from_slice(&[1, 0, 0, 4]);
     v.extend_from_slice(&0u64.to_le_bytes());
     v.push(1);
     v

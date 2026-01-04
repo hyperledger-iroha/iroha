@@ -35,7 +35,7 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
-use iroha_torii_shared::{Version, uri as torii_uri};
+use iroha_torii_shared::uri as torii_uri;
 use iroha_version::codec::EncodeVersioned;
 use norito::{
     codec::{Decode, DecodeAll, Encode},
@@ -5421,21 +5421,18 @@ impl Client {
         .headers(self.headers.clone())
     }
 
-    /// Get the server version
-    ///
-    /// # Errors
-    /// Fails if sending request or decoding fails
-    /// Fetch server version.
+    /// Fetch the active Torii API version (block header version string).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, response is non-OK, or decoding fails.
-    pub fn get_server_version(&self) -> Result<Version> {
+    ///
+    pub fn get_server_version(&self) -> Result<String> {
         let resp = self
             .default_request(
                 HttpMethod::GET,
-                join_torii_url(&self.torii_url, torii_uri::SERVER_VERSION),
+                join_torii_url(&self.torii_url, torii_uri::API_VERSION),
             )
-            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+            .header(http::header::ACCEPT, "text/plain")
             .build()?
             .send()?;
 
@@ -5446,7 +5443,13 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or(""),
             ));
         }
-        Ok(norito::json::from_slice(resp.body())?)
+        let body = std::str::from_utf8(resp.body())
+            .wrap_err("Server version response was not valid UTF-8")?
+            .trim();
+        if body.is_empty() {
+            return Err(eyre!("Server version response was empty"));
+        }
+        Ok(body.to_string())
     }
 
     /// Convenience: fetch recent shielded roots as JSON from the app API `/v1/zk/roots` endpoint.

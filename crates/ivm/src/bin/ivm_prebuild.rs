@@ -84,7 +84,7 @@ fn build_minimal_valid_program(tag: u8) -> Vec<u8> {
     // logic; they only need to be accepted by the VM and allow the executor
     // migration call to complete without error.
     let meta = ivm::ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: 0,
         // Encode a tiny discriminator in the metadata so the node can
@@ -134,7 +134,7 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
 
     let mut v = Vec::new();
     v.extend_from_slice(b"IVM\0");
-    v.extend_from_slice(&[2, 0, 0, 4]);
+    v.extend_from_slice(&[1, 0, 0, 4]);
     v.extend_from_slice(&default_max_cycles().to_le_bytes());
     v.push(1); // abi_version
     v.extend_from_slice(&code);
@@ -155,7 +155,7 @@ fn build_program_create_nft_for_authority() -> Vec<u8> {
 
     let mut v = Vec::new();
     v.extend_from_slice(b"IVM\0");
-    v.extend_from_slice(&[2, 0, 0, 4]);
+    v.extend_from_slice(&[1, 0, 0, 4]);
     v.extend_from_slice(&default_max_cycles().to_le_bytes());
     v.push(1);
     v.extend_from_slice(&code);
@@ -177,7 +177,7 @@ fn build_program_set_sc_exec_depth(depth: u8) -> Vec<u8> {
 
     let mut v = Vec::new();
     v.extend_from_slice(b"IVM\0");
-    v.extend_from_slice(&[2, 0, 0, 4]);
+    v.extend_from_slice(&[1, 0, 0, 4]);
     v.extend_from_slice(&default_max_cycles().to_le_bytes());
     v.push(1);
     v.extend_from_slice(&code);
@@ -204,7 +204,7 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
 
     let mut program = Vec::new();
     program.extend_from_slice(b"IVM\0");
-    program.extend_from_slice(&[2, 0, 0, 4]);
+    program.extend_from_slice(&[1, 0, 0, 4]);
     program.extend_from_slice(&default_max_cycles().to_le_bytes());
     program.push(1); // abi_version
     program.extend_from_slice(&code);

@@ -81,12 +81,12 @@ impl ProgramMetadata {
         let max_cycles = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
 
         // Validate header fields according to the current implementation policy.
-        // - Accept version 1.x and 2.x headers (cache tests rely on versioned keys).
+        // - Accept version 1.x headers (first-release layout).
         // - Mode must not contain unknown bits (only ZK, VECTOR, HTM).
         // - `vector_length` is advisory and may be set regardless of the VECTOR bit.
         // - ABI version is carried as-is; admission enforces allowed values.
         const KNOWN_MODE_BITS: u8 = mode::ZK | mode::VECTOR | mode::HTM;
-        if version_major != 1 && version_major != 2 {
+        if version_major != 1 {
             return Err(VMError::InvalidMetadata);
         }
         if mode & !KNOWN_MODE_BITS != 0 {
@@ -188,7 +188,7 @@ impl ProgramMetadata {
 impl Default for ProgramMetadata {
     fn default() -> Self {
         Self {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,

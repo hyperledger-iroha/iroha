@@ -196,15 +196,13 @@ fn filter_expr_from_value(val: Value) -> Result<FilterExpr, norito::json::Error>
                     }
                     _ => Err(filter_expr_error("or expects array args")),
                 },
-                "not" => {
-                    match args {
-                        Value::Array(mut values) if values.len() == 1 => {
-                            let inner = filter_expr_from_value(values.remove(0))?;
-                            Ok(FilterExpr::Not(Box::new(inner)))
-                        }
-                        _ => Err(filter_expr_error("not expects array args")),
+                "not" => match args {
+                    Value::Array(mut values) if values.len() == 1 => {
+                        let inner = filter_expr_from_value(values.remove(0))?;
+                        Ok(FilterExpr::Not(Box::new(inner)))
                     }
-                }
+                    _ => Err(filter_expr_error("not expects array args")),
+                },
                 "eq" => {
                     let (field, value) = parse_binop_args(args)?;
                     Ok(FilterExpr::Eq(field, value))

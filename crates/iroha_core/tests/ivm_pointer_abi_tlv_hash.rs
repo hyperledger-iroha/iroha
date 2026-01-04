@@ -18,7 +18,7 @@ fn build_program() -> Vec<u8> {
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
     let meta = ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: 0,
         vector_length: 0,
