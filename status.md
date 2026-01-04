@@ -38,8 +38,8 @@
 - Added multisig-derived telemetry counters to metrics registry/struct so derived-account tracking compiles cleanly.
 - Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core derived_multisig_helpers_match_expected_values -- --nocapture` (timed out after 300s during compile).
 - Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
-- Block sync now skips already-seen block prefixes when responding to `GetBlocksAfter`, reducing repeated `BlockSyncUpdate` storms that can stall consensus; added unit coverage.
-- Tests: `cargo test -p iroha_core block_sync::message::selection_tests -- --nocapture` (passed).
+- Block sync now keeps seen block hashes across stalled heights (clearing only on height regression) so `GetBlocksAfter` doesn't repeatedly refetch the same blocks; added unit coverage for pruning behavior.
+- Tests: `cargo test -p iroha_core block_sync::seen_blocks_tests -- --nocapture` (timed out after 120s while compiling `iroha_core`).
 - Switched event notification and SSE smoke integration tests to use at least four peers to avoid single-peer consensus deadlocks and SSE timeouts.
 - Tests: not run (not requested).
 - Parallelized RBC delivery checks in the seven-peer consistency integration test, dropped the full-telemetry override, extended the submitter client transaction timeout/TTL for slow networks, and made the mint submission blocking to ensure commit before convergence checks.
