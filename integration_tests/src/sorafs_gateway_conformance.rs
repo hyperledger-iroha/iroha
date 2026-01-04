@@ -1402,6 +1402,7 @@ impl From<CarVerifyError> for GatewayError {
             CarVerifyError::ChunkLengthMismatch { .. }
             | CarVerifyError::ChunkDigestMismatch { .. }
             | CarVerifyError::ChunkOffsetMismatch { .. }
+            | CarVerifyError::ChunkSizeExceeded { .. }
             | CarVerifyError::PlanChunkCountMismatch { .. }
             | CarVerifyError::PlanContentLengthMismatch { .. }
             | CarVerifyError::UnknownChunkDigest { .. }

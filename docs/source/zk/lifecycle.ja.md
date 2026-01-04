@@ -23,9 +23,7 @@ translator: manual
 ## 検証キー
 
 - レジストリエントリはワールドステートの `verifying_keys[(backend, name)]` に保存される。
-- 各レコードは `version`, `circuit_id`, `backend`, `curve`, `public_inputs_schema_hash`, `commitment`, `vk_len`, `max_proof_bytes`, `gas_schedule_id`、任意の URI (`metadata_uri_cid`, `vk_bytes_cid`)、ライフサイクル高 (`activation_height`, `deprecation_height`, `withdraw_height`) と `status` (Active / Deprecated) を保持する。インラインの検証鍵が付随する場合は監査用に保存される。
 - 新しい VK を登録する際は、コミットメントがトランザクションに同梱されたハッシュ済みペイロードやインラインバイト列と一致している必要がある。更新ではバージョンを単調に増やさなければならない。
-- 廃止 (`Deprecated`) された VK もクエリ可能だが、今後の更新は拒否される。
 
 ### 関連エンドポイント
 

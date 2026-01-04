@@ -16,17 +16,6 @@
   signature, `manifest.sign/verify` summaries, and the scoreboard snapshot so governance
   reviewers can trace artefacts without re-running the pipeline.
 
-## Compatibility
-- Breaking changes: **None.** All CLI additions are additive flags/subcommands; existing
-  invocations continue to work without modification.
-- Minimum gateway/node versions: Requires Torii `2.0.0-rc.2.0` (or newer) so the
-  chunk-range API, stream-token quotas, and capability headers exposed by
-  `crates/iroha_torii` are available. Storage nodes must run the SoraFS host stack from
-  commit `c6cc192ac3d83dadb0c80d04ea975ab1fd484113` (includes the new scoreboard inputs
-  and telemetry wiring).
-- Upstream dependencies: No third-party bumps beyond the workspace baseline; the release
-  reuses the pinned `blake3`, `reqwest`, and `sigstore` versions carried in `Cargo.lock`.
-
 ## Upgrade Steps
 1. Update the aligned crates in your workspace:
    ```bash

@@ -25,7 +25,7 @@ Esta nota amplia la hoja de ruta de la Fase A en tareas de ingenieria pequenas p
 1. DONE: Pruebas soak multi-nodo corrieron 72 h en los harnesses de telemetria y CI; los snapshots de Torii mostraron throughput estable del proposer y formacion de QC sin regresiones.
 2. DONE: La cobertura de pruebas de integracion ahora corre solo por el camino Vote/QC (`sumeragi_vote_qc_commit.rs`), asegurando que peers mixtos alcancen consenso sin los frames antiguos.
 3. DONE: La documentacion para operadores y la ayuda del CLI ya no mencionan el camino wire previo; la guia de troubleshooting ahora apunta a la telemetria Vote/QC.
-4. DONE: Se eliminaron variantes de mensajes, contadores de telemetria y caches de commit pendientes; la matriz de compatibilidad ahora refleja la superficie solo Vote/QC.
+4. DONE: Se eliminaron variantes de mensajes, contadores de telemetria y caches de commit pendientes; la matriz de superficie ahora refleja la superficie solo Vote/QC.
 
 ### A3 - Aplicacion del motor y pacemaker
 - DONE: Invariantes Lock/HighestQC aplicadas en `handle_message` (ver `block_created_header_sanity`).

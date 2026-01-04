@@ -7,7 +7,6 @@ members bond XOR to gain Sora citizen status, are randomly assigned to
 specialised panels, and cast on-chain votes that approve, reject, or roll back
 chunker fixture releases.
 
-This document records how the new Parliament workflow replaces the legacy
 offline process and how developers interact with it.
 
 ## Parliament Overview

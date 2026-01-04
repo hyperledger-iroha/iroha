@@ -6,7 +6,6 @@ description: Governance workflow for filing SoraFS capacity disputes, coordinati
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/dispute_revocation_runbook.md`. Keep both copies in sync until the legacy Sphinx documentation is retired.
 :::
 
 ## Purpose

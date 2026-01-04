@@ -338,7 +338,7 @@ node scripts/generate-dns-cutover-plan.mjs \
 - يحتوي `portal.gateway.headers.txt` على كتلة رؤوس HTTP كاملة (بما في ذلك `Sora-Name` و`Sora-Content-CID` و`Sora-Proof` وCSP وHSTS و`Sora-Route-Binding`) والتي يجب على بوابات الحافة لصقها في كل رد.
 - يسجل `portal.gateway.binding.json` المعلومات نفسها بشكل مقروء آليا حتى تتمكن تذاكر التغيير والاتمتة من مقارنة host/cid دون كشط مخرجات shell.
 
-يتم توليدها تلقائيا عبر `cargo xtask soradns-binding-template` (الذي استبدل مساعد Node القديم) وتلتقط alias وبصمة المانيفست وhostname الخاص بالبوابة الممرر الى `sorafs-pin-release.sh`. لاعادة التوليد او التخصيص:
+يتم توليدها تلقائيا عبر `cargo xtask soradns-binding-template` وتلتقط alias وبصمة المانيفست وhostname الخاص بالبوابة الممرر الى `sorafs-pin-release.sh`. لاعادة التوليد او التخصيص:
 
 ```bash
 cargo xtask soradns-binding-template \
@@ -354,7 +354,7 @@ cargo xtask soradns-binding-template \
 
 ارفق مقطع الرؤوس بطلب تغيير CDN وادفع وثيقة JSON الى خط الالة الخاص بالبوابة حتى تتطابق ترقية المضيف مع ادلة الاصدار.
 
-يستمر سكربت الاصدار في شحن سكربت Node للتوافق الخلفي، لكن مسار xtask هو الاساسي. يشغّل سكربت الاصدار مساعد التحقق تلقائيا حتى تحتوي تذاكر DG-3 على ادلة حديثة. اعد تشغيله يدويا عند تعديل JSON الربط:
+يشغّل سكربت الاصدار مساعد التحقق تلقائيا حتى تحتوي تذاكر DG-3 على ادلة حديثة. اعد تشغيله يدويا عند تعديل JSON الربط:
 
 ```bash
 cargo xtask soradns-verify-binding \

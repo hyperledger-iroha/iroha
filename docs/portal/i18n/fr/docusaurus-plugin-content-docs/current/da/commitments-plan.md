@@ -8,7 +8,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 :::note Source canonique
 Reflete `docs/source/da/commitments_plan.md`. Gardez les deux versions en sync
-jusqu'a la retraite des docs legacy.
 :::
 
 # Plan des engagements Data Availability Sora Nexus (DA-3)
@@ -99,7 +98,6 @@ pub struct DaCommitmentBundle {
 
 Le hash du bundle entre a la fois dans le hash de bloc et dans la metadata de
 `SignedBlockWire`. Quand un bloc ne transporte pas de donnees DA, le champ reste
-`None` pour que les lanes legacy evitent la surcharge.
 
 Note d'implementation: `BlockPayload` et le `BlockBuilder` transparent exposent
 maintenant des setters/getters `da_commitments` (voir

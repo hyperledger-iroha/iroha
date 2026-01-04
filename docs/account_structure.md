@@ -15,7 +15,6 @@ companion tooling. It provides:
   controller and offers deterministic interop-friendly textual forms.
 - Globally unique domain identifiers, backed by a registry that can be queried
   through Nexus for cross-chain routing.
-- Compatibility layers that keep the `alias@domain` routing aliases working
   while we migrate wallets, APIs, and contracts to the new format.
 
 ## Motivation
@@ -43,7 +42,6 @@ and a deterministic mapping from domain name to the authoritative chain.
   define its governance/registry process.
 - Describe how to introduce a global domain registry without breaking current
   deployments and specify normalization/anti-spoofing rules.
-- Document compatibility expectations, migration steps, and open questions.
 
 ## Non-goals
 
@@ -540,7 +538,6 @@ HTTP endpoints so auditors can replay the verification steps verbatim.
 | Type | Purpose | Required fields |
 |------|---------|-----------------|
 | `global_domain` | Declares that a domain is registered globally and should map to a chain discriminant and IH58 prefix. | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
-| `local_alias` | Tracks legacy selectors (`Local-12`) that still route locally. Adds the 12-byte digest plus optional `alias_label`. | `{ "domain": "<label>", "selector": { "kind": "local", "digest_hex": "<12-byte-hex>" }, "alias_label": "<optional>" }` |
 | `tombstone` | Retires an alias/selector permanently. Required when erasing Local‑8 digests or removing a domain. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
 `global_domain` entries may optionally include a `manifest_url` or `sorafs_cid`
@@ -574,10 +571,8 @@ the change so the audit trail is reconstructable offline.
    surfaces that domain via the `input_domain` field and `--append-domain`
    replays the converted encoding as `<ih58>@wonderland` for manifest updates.
    For newline-oriented exports use
-  `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`
   to mass-convert Local selectors into canonical IH58 (or compressed/hex/JSON) forms while skipping non-local rows. When auditors
   need spreadsheet-friendly evidence, run
-  `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
   to emit a CSV summary (`input,status,format,domain_kind,…`) that highlights Local selectors, canonical encodings, and parse
   failures in the same file.
 3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
@@ -608,7 +603,6 @@ their change tickets.
   require IH58 input end to end so custodians can rehearse compliance
   policies. The flag now defaults to `torii.strict_addresses = true`; only
   override it to `false` on dev/test clusters when diagnosing regressions.
-  When the flag is enabled (the default), any legacy alias (`alias@domain`) or
   raw public-key literal (e.g., `ed0120…@domain`) is rejected with
   `ERR_STRICT_ADDRESS_REQUIRED`.
 - **Error prevention:** Wallets parse IH58 and CAIP-10 prefixes.
@@ -626,27 +620,6 @@ their change tickets.
 - **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
 - **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading Base58 prefix digits and chunk the IH58 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“IH58 address for <alias> on chain 0x02F1”).
 - **Sora-only compressed usage:** Always label the `snx1…` compressed view as “Sora-only” and gate it behind an explicit confirmation before copying. SDKs and wallets must refuse to display compressed output when the chain discriminant is not the Sora Nexus value and should direct users back to IH58 for inter-network transfers to avoid misrouting funds.
-
-### 6. Compatibility strategy
-
-1. **Phase 0 – Preparation**
-   - Add encoding/decoding helpers and config discriminant without changing
-     default display. Update SDKs to opt-in.
-2. **Phase 1 – Canonical rollout**
-   - Torii accepts IH58 in requests and responds with the canonical form.
-   - Instrument API counters so operators can confirm IH58 adoption.
-3. **Phase 2 – Enforcement**
-   - CLI, wallets, SDKs emit IH58 exclusively. The `strict_addresses` flag
-     remains available for rehearsals but should stay `true` in staging and
-     production once dashboards show zero Local selectors.
-4. **Phase 3 – Default**
-   - Remove transitional aliases and require IH58 at every boundary. This
-     phase is now active: `torii.strict_addresses` defaults to `true` and only
-     transiently flips to `false` when operators need to diagnose regressions on
-     non-production clusters.
-
-Throughout, domain registrations remain local unless a chain opts into the
-global registry.
 
 ## Implementation Checklist
 
@@ -745,8 +718,6 @@ messages, plus recommended remediation guidance.
 | `ERR_UNEXPECTED_EXTENSION_FLAG` | Reserved extension bit was set. | Clear reserved bits; they remain gated until a future ABI introduces them. |
 | `ERR_UNKNOWN_CONTROLLER_TAG` | Controller payload tag not recognised. | Upgrade the decoder to recognise new controller types before parsing them. |
 | `ERR_UNEXPECTED_TRAILING_BYTES` | Canonical payload contained trailing bytes after decoding. | Regenerate the canonical payload; only the documented length should be present. |
-| `ERR_LOCAL8_DEPRECATED` | Local-domain selector digest shorter than the 12-byte Norm v1 requirement (legacy Local-8 alias). | Replace Local-8 strings with canonical IH58/compressed addresses via `iroha address convert` and reissue manifests using the 12-byte digest so Torii no longer sees legacy selectors. |
-| `ERR_STRICT_ADDRESS_REQUIRED` | Legacy alias or raw public-key literal supplied while `torii.strict_addresses` is enabled. | Re-submit the request using an IH58/compressed/canonical-hex address. Only set `torii.strict_addresses=false` on non-production networks when diagnosing regressions, and revert to the default (`true`) once telemetry is clean. |
 
 ### Controller Payload Validation
 
@@ -763,7 +734,6 @@ messages, plus recommended remediation guidance.
   than the Blake2b-derived IH58 checksum (`encode_ih58` truncates a 512-bit hash)
   and lacks explicit prefix semantics for 16-bit discriminants.
 - **Embedding chain name in the domain string (e.g., `finance@chain`).** Breaks
-  compatibility and still lacks checksum properties; harder to validate.
 - **Rely solely on Nexus routing without changing addresses.** Users would still
   copy/paste ambiguous strings; we want the address itself to carry context.
 - **Bech32m envelope.** QR-friendly and offers a human-readable prefix, but

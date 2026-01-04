@@ -166,4 +166,3 @@ curl -s http://127.0.0.1:8080/status \
 - מפת הטלמטריה של ה-scheduler ולוח ה-governance של lanes (`dashboards/grafana/nexus_lanes.json`) מצפים לשדות alias/slug מהקטלוג. אם אתם משנים alias, תגיות מחדש את תיקיות Kura המתאימות כדי שהמבקרים ישמרו על מסלולים דטרמיניסטיים (מעקב תחת NX-1).
 - אישורי הפרלמנט עבור default lanes צריכים לכלול תוכנית rollback. רשמו את hash ה-manifest והעדויות ל-governance לצד ה-quickstart הזה ב-runbook האופרטורי שלכם כדי שסבבים עתידיים לא ינחשו את המצב הנדרש.
 
-לאחר שהבדיקות האלו עוברות, ניתן להתייחס אל `nexus.routing_policy.default_lane` כמקור האמת לקונפיגורציית SDK ולהתחיל לבטל מסלולי קוד legacy של lane יחיד ברשת.

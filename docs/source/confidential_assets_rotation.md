@@ -9,7 +9,6 @@ ensuring wallets, Torii clients, and mempool guards remain deterministic.
 ## Lifecycle & Statuses
 
 Confidential parameter sets (`PoseidonParams`, `PedersenParams`, verifying keys)
-progress through `Proposed → Active → Deprecated → Withdrawn`. The status
 lattice and helper used to derive the effective status at a given height live in
 `crates/iroha_core/src/state.rs:7540`–`7561`. Runtime helpers sweep pending
 transitions as soon as the target height is reached and log failures for later

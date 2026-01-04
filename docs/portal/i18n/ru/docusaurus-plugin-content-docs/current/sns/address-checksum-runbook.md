@@ -57,7 +57,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ### Проблемы manifest или реестра
 
 - Следуйте `address_manifest_ops.md`, чтобы повторно проверить последний manifest bundle и убедиться, что селекторы Local-8 не вернулись.
-- Используйте `scripts/address_local_toolkit.sh audit ...`, когда в payloads появляются селекторы Local legacy.
 
 ### Злонамеренный или поврежденный трафик
 

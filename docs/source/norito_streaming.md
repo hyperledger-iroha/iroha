@@ -425,7 +425,6 @@ Bundled mode is available only when the binaries are built with
 `ENABLE_RANS_BUNDLES=1` (`norito::streaming::BUNDLED_RANS_BUILD_AVAILABLE` evaluates to
 `true`). Builds lacking the flag will reject streaming configs because bundled entropy
 is mandatory. The runtime defaults to `entropy_mode = "rans_bundled"` even if the stanza
-is omitted; legacy `entropy_mode = "rans"` has been removed, so all nodes must run the
 bundled profile with `bundle_width >= 2`.
 Binaries ship bundled rANS tables for widths 2 and 3; wider values are rejected
 at config-parse time to avoid running against unpinned tables.
@@ -454,7 +453,6 @@ not alter the emitted bitstream.
 
 The parser in `crates/iroha_config/src/parameters/user.rs` rejects invalid
 combinations—bundled mode clamps the width to `2..=4` and `bundle_accel` only accepts
-the documented keywords (turning SIMD/GPU paths on deterministically). Legacy entropy
 selections are rejected outright. `rans_tables_path` must point at the canonical
 `SignedRansTablesV1` artefact (`codec/rans/tables/rans_seed0.toml` by default); refresh
 the tables with `python3 tools/rans/gen_tables.py --bundle-width 4 --seed <seed> --output codec/rans/tables/rans_seed<seed>.toml --verify`
@@ -538,7 +536,6 @@ Operators enable bundled mode in four repeatable steps:
 1. **Pre-flight.** Build with `ENABLE_RANS_BUNDLES=1` (bundled builds now default to
    `entropy_mode = "rans_bundled"`), commit the shared `[streaming.codec]` stanza, and
    archive the `streaming-bundle-check` JSON (one artefact per config) under
-   `artifacts/streaming_bundle/`. If a bundled build must remain on the legacy profile,
    explicitly set `entropy_mode = "rans"`, `bundle_width = 1`, and `bundle_accel = "none"`
    before restarting the nodes.
 2. **Canary handshake.** Flip the config for a single publisher/viewer pair,
@@ -558,7 +555,6 @@ Operators enable bundled mode in four repeatable steps:
    `bundle_tables_checksum` metric and `streaming_encode_*` / `streaming_decode_*`
    counters for regressions. Update the operator runbook with the selected
    `bundle_accel` mode so future rollbacks know which capability mask to restore.
-4. **Rollback rehearsal.** Revert the canary to legacy mode
    (`entropy_mode = "rans"`, `bundle_width = 1`, `bundle_accel = "none"`),
    restart it, and confirm that manifests clear the bundled capability bit and
    omit `entropy_tables_checksum`. Capture a fresh handshake trace plus a

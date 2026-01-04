@@ -10,7 +10,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica
-Reflete `docs/source/soranet/privacy_metrics_pipeline.md`. Mantenha as duas copias sincronizadas ate a aposentadoria dos docs legados.
+Reflete `docs/source/soranet/privacy_metrics_pipeline.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 # Pipeline de metricas de privacidade da SoraNet

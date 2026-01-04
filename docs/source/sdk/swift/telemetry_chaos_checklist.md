@@ -13,7 +13,6 @@ Run the scenarios ahead of governance reviews and whenever telemetry changes lan
 
 - Latest Swift workspace with `scripts/swift_collect_redaction_status.py`,
   `scripts/swift_enrich_parity_feed.py`, and the telemetry override helper
-  (`python3 scripts/swift_status_export.py telemetry-override …` or the legacy
   `scripts/swift_telemetry_override.py`).
 - Access to the override ledger (`artifacts/swift_telemetry_overrides.json`) or a
   scratch copy for staging drills.
@@ -40,7 +39,6 @@ Run the scenarios ahead of governance reviews and whenever telemetry changes lan
 
 ## Related Tooling
 
-- `python3 scripts/swift_status_export.py telemetry-override {list,create,revoke}` (or the legacy `scripts/swift_telemetry_override.py`)
 - `scripts/swift_collect_redaction_status.py --salt-config … --overrides-store …`
 - `scripts/swift_enrich_parity_feed.py --input … --telemetry-json …`
 - `ci/swift_status_export.sh` (consumes the telemetry JSON via `SWIFT_TELEMETRY_*` env vars)

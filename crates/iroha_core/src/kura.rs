@@ -89,7 +89,7 @@ pub struct Kura {
     /// Channel for waking the writer thread when new blocks arrive or shutdown is signalled.
     block_notify_tx: mpsc::Sender<BlockNotify>,
     block_notify_rx: Mutex<Option<mpsc::Receiver<BlockNotify>>>,
-    /// Path to file for plain text blocks.
+    /// Path to newline-delimited JSON (JSONL) block dump.
     block_plain_text_path: Mutex<Option<PathBuf>>,
     /// Root directory where Kura stores lane segments.
     store_root: PathBuf,
@@ -437,7 +437,7 @@ impl Kura {
 
         let block_plain_text_path = config
             .debug_output_new_blocks
-            .then(|| blocks_root.join("blocks.json"));
+            .then(|| blocks_root.join("blocks.jsonl"));
 
         let (block_data, chain_validation) = Kura::init(&mut block_store, config.init_mode)?;
         let block_count = block_data.len();
@@ -1197,15 +1197,12 @@ impl Kura {
             drop(block_data);
 
             if let Some(path) = kura.block_plain_text_path.lock().clone() {
-                let mut plain_text_file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                    .expect("INTERNAL BUG: Couldn't create file for plain text blocks.");
-
-                for new_block in &blocks_to_be_written {
-                    norito::json::to_writer_pretty(&mut plain_text_file, new_block.as_ref())
-                        .expect("INTERNAL BUG: Failed to write to plain text file for blocks.");
+                if let Err(error) = Self::append_blocks_jsonl(&path, &blocks_to_be_written) {
+                    warn!(
+                        ?error,
+                        path = %path.display(),
+                        "Failed to append debug block dump"
+                    );
                 }
             }
 
@@ -1407,6 +1404,20 @@ impl Kura {
         }
 
         Ok(())
+    }
+
+    fn append_blocks_jsonl(path: &Path, blocks: &[Arc<SignedBlock>]) -> std::io::Result<()> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        let mut writer = BufWriter::new(file);
+        for block in blocks {
+            norito::json::to_writer(&mut writer, block.as_ref())
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+            writer.write_all(b"\n")?;
+        }
+        writer.flush()
     }
 
     /// Put a block in Kura's in-memory block store.
@@ -4808,7 +4819,10 @@ mod tests {
 
         Kura::drop_old_block(&mut block_data, 2, 2);
         assert_eq!(
-            block_data.iter().filter(|(_, block)| block.is_some()).count(),
+            block_data
+                .iter()
+                .filter(|(_, block)| block.is_some())
+                .count(),
             4,
             "no blocks should be dropped while within retention"
         );
@@ -4927,6 +4941,53 @@ mod tests {
             store_guard.data_mmap_len,
             "data mirror length should match recorded length"
         );
+    }
+
+    #[test]
+    fn debug_output_new_blocks_writes_jsonl() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let (kura, _) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: iroha_config::base::WithOrigin::inline(
+                    temp_dir.path().to_str().unwrap().into(),
+                ),
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: true,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let _handle = {
+            let _rt_guard = rt.enter();
+            Kura::start(kura.clone(), ShutdownSignal::new())
+        };
+
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = Arc::new(block);
+        kura.store_block(Arc::clone(&block)).expect("store block");
+        wait_for_block_hash(&kura, 1, block.hash());
+
+        let blocks_dir = RuntimeLaneConfig::default()
+            .primary()
+            .blocks_dir(temp_dir.path());
+        let dump_path = blocks_dir.join("blocks.jsonl");
+        let contents = fs::read_to_string(&dump_path).expect("read debug block dump");
+        let mut lines = contents.lines();
+        let first = lines.next().expect("first JSON line");
+        assert!(lines.next().is_none(), "expected one JSON line");
+        let _: norito::json::Value =
+            norito::json::from_slice(first.as_bytes()).expect("valid JSON line");
     }
 
     #[allow(clippy::too_many_lines)]

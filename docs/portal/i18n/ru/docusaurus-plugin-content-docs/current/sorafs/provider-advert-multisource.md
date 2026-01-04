@@ -76,7 +76,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
   в своих JSON artefacts, чтобы dashboards отслеживали внедрение функций.
 - Fixtures в `fixtures/sorafs_manifest/provider_admission/` теперь включают:
   - канонические мульти-источниковые adverts,
-  - legacy вариант без диапазона для downgrade тестов, и
   - `multi_fetch_plan.json`, чтобы SDK наборы могли воспроизводить детерминированный
     multi-peer fetch план.
 

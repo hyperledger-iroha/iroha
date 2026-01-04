@@ -175,7 +175,6 @@ Payloads guard directory используют компактную схему:
   двойные подписи Ed25519/ML-DSA-65.
 
 CLI проверяет каждый bundle против объявленных ключей issuer перед объединением
-directory с guard cache. Legacy JSON больше не принимается; требуются SRCv2
 snapshots.
 
 Вызывайте CLI с `--guard-directory`, чтобы объединить актуальный consensus с
@@ -201,7 +200,6 @@ Guard directories теперь могут содержать полный SRCv2 
 подписи Ed25519/ML-DSA и сохраняет разобранный сертификат вместе с guard cache.
 Когда сертификат присутствует, он становится каноническим источником PQ keys,
 настроек handshakes и весов; просроченные сертификаты отбрасываются, и selector
-возвращается к legacy descriptor полям. Сертификаты проходят в управление
 жизненным циклом circuit и доступны через `telemetry::sorafs.guard` и
 `telemetry::sorafs.circuit`, фиксируя окно валидности, handshake suites и
 наличие двойных подписей для каждого guard.

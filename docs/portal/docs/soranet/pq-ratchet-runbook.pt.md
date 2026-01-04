@@ -19,7 +19,7 @@ description: Passos de ensaio on-call para promover ou rebaixar a politica de an
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/soranet/pq_ratchet_runbook.md`. Mantenha as duas copias alinhadas ate que o conjunto legado de documentacao seja retirado.
+Esta pagina espelha `docs/source/soranet/pq_ratchet_runbook.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 ## Proposito

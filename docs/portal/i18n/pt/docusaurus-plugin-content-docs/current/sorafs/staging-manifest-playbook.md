@@ -10,7 +10,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Mantenha a copia Docusaurus e o Markdown legado alinhados ate que o set Sphinx seja totalmente retirado.
+Esta pagina espelha `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 ## Visao geral

@@ -28,7 +28,6 @@ receipts کیسے فراہم کرتا ہے۔
 
 ## اہداف
 
-1. **ایک ہی روٹر اسٹیک:** تمام lanes — legacy سنگل‑lane، Nexus کے public lanes اور AMX
    cross‑DS فلو — ایک ہی سیٹلمنٹ pipeline استعمال کریں تاکہ nightly reconciliation کے
    لیے صرف ایک ماڈل درکار ہو۔
 2. **ڈیٹرمنسٹک کنورژن:** XOR میں واجب الادا رقم، on‑chain پیرامیٹرز (TWAP، volatility
@@ -137,7 +136,6 @@ receipts کیسے فراہم کرتا ہے۔
 روٹر کو phases میں enable کرنے کی سفارش کی جاتی ہے:
 
 1. **Shadow mode:** روٹر کے حسابات + telemetry کو enable کریں، مگر
-   `settlement_debit=false` رکھیں؛ outputs کو legacy receipts سے compare کریں۔
 2. **Debit enablement:** `settlement_debit=true` کو کم خطرے والے lanes (پروفائل C) کے
    لیے فعال کریں اور reconciliation کو verify کریں۔
 3. **Conversions on:** جب telemetry سے buffers کا استحکام نظر آئے تو TWAMM slices +
@@ -145,7 +143,6 @@ receipts کیسے فراہم کرتا ہے۔
 4. **AMX انٹیگریشن:** اس بات کو یقینی بنائیں کہ AMX lanes receipts کو propagate کریں
    اور error کی صورت میں SDKs کے لیے `SETTLEMENT_ROUTER_UNAVAILABLE` surface کریں، تاکہ
    retries ممکن ہوں۔
-5. **GA:** legacy path کو ہٹا دیں، `status.md` اور release notes کو اپ ڈیٹ کریں اور
    مستقبل کے merges کو سیٹلمنٹ telemetry کے thresholds پر پابند کریں۔
 
 اس دستاویز پر عمل کرنے سے یقینی ہوتا ہے کہ NX‑3 روڈ میپ ٹاسک ڈیٹرمنسٹک رویہ، قابل

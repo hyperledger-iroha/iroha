@@ -51,7 +51,6 @@ description: צ'קליסט להצעת פרופילי chunker חדשים ו-fixtu
 
 - מזהי פרופיל הם מספרים שלמים חיוביים שעולים בצורה מונוטונית ללא חורים.
 - ה-handle הקנוני (`namespace.name@semver`) חייב להופיע ברשימת ה-aliases
-  וחייב להיות הערך הראשון. אחריו מופיעים aliases legacy (למשל `sorafs.sf1@1.0.0`).
 - אף alias לא יכול להתנגש עם handle קנוני אחר או להופיע יותר מפעם אחת.
 - aliases חייבים להיות לא ריקים ומקוצצים מרווחים.
 
@@ -77,7 +76,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 | `name` | תווית קריאה לבני אדם. | `sf1` |
 | `semver` | מחרוזת גרסה סמנטית לסט הפרמטרים. | `1.0.0` |
 | `profile_id` | מזהה מספרי מונוטוני שמוקצה כאשר הפרופיל נכנס. שמרו את ה-id הבא אך אל תשתמשו מחדש במספרים קיימים. | `1` |
-| `profile_aliases` | Handles נוספים אופציונליים (שמות legacy, קיצורים) הנחשפים ללקוחות בזמן משא ומתן. תמיד לכלול את ה-handle הקנוני כערך הראשון. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | אורך chunk מינימלי ב-bytes. | `65536` |
 | `profile.target_size` | אורך chunk יעד ב-bytes. | `262144` |
 | `profile.max_size` | אורך chunk מקסימלי ב-bytes. | `524288` |
@@ -162,50 +160,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
 `docs/source/sorafs/proposals/`. תבנית ה-JSON למטה מציגה את הצורה הצפויה
 (החליפו לערכים שלכם לפי הצורך):
 
-```json
-{
-  "ChunkerProfileProposalV1": {
-    "namespace": "sorafs",
-    "name": "sf2",
-    "semver": "1.0.0",
-    "reserved_profile_id": 2,
-    "profile": {
-      "min_size": 65536,
-      "target_size": 262144,
-      "max_size": 524288,
-      "break_mask": "0x0000ffff",
-      "polynomial": "0x3da3358b4dc173",
-      "gear_seed": "sorafs-v2-gear"
-    },
-    "chunk_multihash": {
-      "code": 31,
-      "digest": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
-    },
-    "profile_aliases": ["sorafs.sf2", "sorafs-sf2"],
-    "fixtures_root": "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/",
-    "por_seed": "0xfeedbeefcafebabe",
-    "compatibility": {
-      "supersedes": ["sorafs.sf1@1.0.0"],
-      "grace_epochs": 2,
-      "notes": "Carry envelopes for sf1 during dual-publish window."
-    },
-    "artifacts": {
-      "chunk_boundaries": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.json",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.ts",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.go"
-      ],
-      "fuzz_corpora": [
-        "fuzz/sorafs_chunker/sf2_backpressure.json"
-      ],
-      "por_witnesses": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/por_samples.json"
-      ]
-    },
-    "determinism_report": "docs/source/sorafs/reports/sf2_determinism.md"
-  }
-}
-```
 
 ספקו דוח Markdown תואם (`determinism_report`) המתעד את פלט הפקודות, digests של chunk וכל
 חריגה שנתקלה במהלך הוולידציה.
@@ -221,7 +175,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
    הפרופיל הנשמרת לצד fixtures.
 4. **פרסום הרישום.** ה-merge מעדכן את הרישום, docs ו-fixtures. ברירת המחדל של ה-CLI נשארת
    על הפרופיל הקודם עד שהממשל מצהיר שההגירה מוכנה.
-5. **מעקב דפרקציה.** לאחר חלון ההגירה, עדכנו את הרישום כדי לסמן פרופילים שהוחלפו כ-deprecated
    והודיעו למפעילים דרך migration ledger.
 
 ## טיפים לכתיבה

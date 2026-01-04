@@ -76,20 +76,6 @@ level usage examples and the telemetry redaction plan
   `android.torii.http.request`/`android.torii.http.retry` signals documented in
   `telemetry_redaction.md`.
 
-## 5. Fallback & Legacy Pipeline Interop
-
-- `NoritoRpcFallbackHandler` enables deterministic degradation: encode fallback
-  logic once (e.g., use `HttpClientTransport` to hit `/v1/pipeline`) and reuse
-  it for every RPC caller. The handler receives the immutable context so it can
-  re-issue the same payload, preserve trace headers, and honour the original
-  timeout.
-- Returning `null` instructs the client to rethrow the original
-  `NoritoRpcException`; returning bytes emits a synthetic response with status
-  `299` so observers/dashboards can differentiate fallback traffic.
-- `ClientConfig` builders accept the fallback handler directly, so manifest
-  driven deployments can toggle legacy fallback by editing
-  `torii.transport.norito_rpc` without touching app code.
-
 ## 6. Codec Integration & Typed Helpers
 
 - `NoritoRpcClient#callTransaction` bridges the RPC transport with

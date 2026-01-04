@@ -76,7 +76,6 @@ La couverture de regression se trouve dans
   ses artefacts JSON afin que les dashboards suivent l'adoption de la fonctionnalite.
 - Les fixtures sous `fixtures/sorafs_manifest/provider_admission/` incluent desormais:
   - des adverts multi-source canoniques,
-  - une variante legacy sans plage pour les tests de downgrade, et
   - `multi_fetch_plan.json` pour que les suites SDK puissent rejouer un plan de fetch
     multi-peer deterministe.
 

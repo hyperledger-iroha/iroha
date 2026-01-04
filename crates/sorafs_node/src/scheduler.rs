@@ -654,9 +654,18 @@ impl RateLimiter {
     }
 
     fn acquire(&self, amount: u64) {
-        if self.capacity_per_sec == 0 {
+        if self.capacity_per_sec == 0 || amount == 0 {
             return;
         }
+        let mut remaining = amount;
+        while remaining > 0 {
+            let chunk = remaining.min(self.capacity_per_sec);
+            self.acquire_chunk(chunk);
+            remaining = remaining.saturating_sub(chunk);
+        }
+    }
+
+    fn acquire_chunk(&self, amount: u64) {
         let mut state = self.state.lock().expect("rate limiter state poisoned");
         loop {
             state.refill(self.capacity_per_sec);
@@ -750,6 +759,7 @@ mod tests {
     use std::sync::{
         Arc, Barrier,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     };
 
     use super::*;
@@ -847,5 +857,18 @@ mod tests {
             "expected PoR limiter to block, got {elapsed:?}"
         );
         handle.join().expect("PoR worker thread panicked");
+    }
+
+    #[test]
+    fn fetch_rate_budget_handles_large_request() {
+        let limiter = RateLimiter::new(100);
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            limiter.acquire(150);
+            let _ = tx.send(());
+        });
+
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("large rate limit request should complete");
     }
 }

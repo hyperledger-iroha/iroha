@@ -413,9 +413,7 @@ Torii integration
 - `Torii::new` (when the `telemetry` feature is enabled) remains as a convenience wrapper; it now forwards to `new_with_handle` with an operator profile by default. Tests can use `routing::MaybeTelemetry::for_tests()` to obtain an in-process telemetry handle.
 
 - `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid IH58/compressed payloads, domain mismatches, etc.). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
-- Legacy Local‑8 counters were removed; monitor `torii_address_invalid_total{endpoint,reason}` alongside `torii_address_collision_total` to catch malformed selectors and Local‑12 collisions without relying on deprecated metrics.
 - `torii_address_collision_total{endpoint,kind="local12_digest"}` and `torii_address_collision_domain_total{endpoint,domain}` record Local‑12 selector collisions. Both feed the collision panel/alert in `dashboards/grafana/address_ingest.json` so operators can tie spikes to specific domains. Production should stay flat; any increment blocks manifest promotions until governance signs off on the fix.
-- `torii_address_domain_total{endpoint,domain_kind}` counts every accepted literal and labels it as `local12`, `global`, or `default`. The `AddressLocal8Resurgence`/`AddressInvalidRatioSlo` alerts in `dashboards/alerts/address_ingest_rules.yml` rely on this series to prove Local‑12 traffic stays at zero for 30 days before mainnet disables the legacy selectors. When verifying ADDR‑7 readiness, export the `domain_kind="local12"` slice via `address_ingest.json` and attach the PromQL output to the change ticket.
 
 Pipeline metrics
 - pipeline_stage_ms: Histogram of per-stage durations with label `stage` in {"access","overlays","dag","schedule","apply","layers_prep","layers_exec","layers_merge"}.
@@ -453,7 +451,6 @@ Sumeragi metrics
 - VRF emission: `sumeragi_vrf_commits_emitted_total`, `sumeragi_vrf_reveals_emitted_total`, and `sumeragi_vrf_reveals_late_total` count how many commit/reveal messages this validator broadcast (including late reveals accepted after the window). Pair with `sumeragi_vrf_non_reveal_*` counters to monitor participation health at epoch boundaries.
 - Collector fan-out: `sumeragi_redundant_sends_total` (aggregate), `sumeragi_redundant_sends_by_peer{peer="…"}`, and `sumeragi_redundant_sends_by_collector{idx="…"}` highlight redundant collector sends; investigate sustained spikes to locate congested collectors or unhealthy peers.
 - Collector targeting: `sumeragi_collectors_targeted_current` (gauge) tracks the in-flight collector count for the current block; `sumeragi_collectors_targeted_per_block` histogram (`*_bucket`) records how many collectors were targeted per committed block.
-- DA availability warnings: `sumeragi_rbc_da_reschedule_total` (and `/v1/sumeragi/status → da_reschedule_total`) is legacy and no longer increments; use `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` for missing availability evidence.
 - Channel pressure: `sumeragi_dropped_block_messages_total` and `sumeragi_dropped_control_messages_total` partition channel drops; `dropped_messages` remains the aggregate counter for existing dashboards.
 
 Sumeragi additions (new series)
@@ -784,7 +781,6 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
 
 1. **Capture live snapshots.** Start with `iroha_cli sumeragi telemetry --summary` (or `GET /v1/sumeragi/telemetry`) to inspect `rbc_backlog` and vote ingestion, then fetch `/v1/sumeragi/rbc` and `/v1/sumeragi/rbc/sessions` to list active payloads, chunk counts, and recovery flags.
 2. **Inspect backlog counters.** Watch `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`. Sustained non-zero values over five minutes (e.g., `max_over_time(sumeragi_rbc_backlog_chunks_max[5m]) > 0`) imply slow chunk delivery; correlate with `ready_count` vs `delivered` in the session snapshot.
-3. **Check DA availability warnings.** Alert on spikes in `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`; `sumeragi_rbc_da_reschedule_total` is legacy and should remain zero now that DA is advisory.
 4. **Evaluate pacemaker deferrals and queue saturation.** Use `increase(pacemaker_backpressure_deferrals_total[5m])`, `max_over_time(sumeragi_tx_queue_saturated[5m])`, and transaction queue depth gauges to confirm whether the pacemaker halted due to backpressure. Combine with `increase(gossip_fallback_total[5m])` and `increase(block_created_proposal_mismatch_total[5m])` to surface collectors retrying without progress.
 5. **Review logs and network health.** Filter consensus logs for `rbc` and `pacemaker_backpressure_deferral` to spot repeated retries, DA restarts, or queue pressure. Cross-check P2P metrics (`p2p_dropped_posts_total`, `p2p_dropped_broadcasts_total`) to identify network bottlenecks; adjust collector fan-out, queue capacity, or baseline load accordingly.
 6. **Correlate logs automatically.** Run `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>`
@@ -866,7 +862,6 @@ Pre-auth connection gating exposes two metrics:
 - `torii_pre_auth_reject_total{reason}` — counter of rejected connections. Reasons: `global_cap`, `ip_cap`, `rate`, `ban`.
 - `torii_operator_auth_total{action,result,reason}` — operator auth events; `action` is `gate|register_options|register_verify|login_options|login_verify`, `result` is `allowed|denied|rate_limited|locked`, and `reason` mirrors the auth error labels.
 - `torii_operator_auth_lockout_total{action,reason}` — operator auth lockouts per action and failure reason.
-- `torii_sorafs_admission_total{result,reason}` — SoraFS provider advert admission results; `result` is `accepted`/`rejected` (and `warn` once the SF-2 rollout adds legacy tracking), while `reason` surfaces the validator path (e.g., `stored`, `duplicate`, `unknown_capabilities`, `admission_missing`, `policy_violation`, `stale`).
 - `torii_contract_throttled_total{endpoint}` — contract API requests rejected by the deploy limiter (`endpoint` = `code`, `deploy`, `activate`).
 - `torii_contract_errors_total{endpoint}` — contract API requests that failed for other reasons (missing token, queue error, etc.).
 - `torii_active_connections_total{scheme}` — gauge tracking concurrent connections per scheme (`http`, `ws`).
@@ -1218,7 +1213,6 @@ the Nexus cut-over. All metrics back the Grafana board stored in
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | Slot-duration histogram derived from the end of every Sumeragi slot. | Keep p95 ≤ 1 000 ms (warning at 950 ms). Breaches must trigger the slot runbook and be recorded in the NX-18 drill log. |
 | `iroha_slot_duration_ms_latest` | Gauge of the most recent slot duration. | Capture alongside the histogram whenever filing incidents; sustained spikes > 1 100 ms indicate an unhealthy validator even if quantiles remain green. |
 | `iroha_da_quorum_ratio` | Rolling fraction of slots that satisfied the DA quorum window. | Target ≥ 0.95; combine with `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` to locate failing attesters or timeouts. |
-| `sumeragi_rbc_da_reschedule_total` | Legacy counter for DA-driven slot reschedules (no longer incremented). | Keep at zero; investigate missing-availability counters instead (see `ops/runbooks/da-quorum.md`). |
 | `iroha_oracle_price_local_per_xor` | Latest TWAP reported by the lane-specific oracle. | Watch for spikes when swap lines are thin; tie haircuts to treasury reports. |
 | `iroha_oracle_staleness_seconds` | Seconds since the last oracle refresh. | Alert at ≥ 75 s; fail the NX-18 gate at ≥ 90 s until the feed is restarted. |
 | `iroha_oracle_twap_window_seconds` | Effective TWAP window length. | Should remain at 60 s ± 5 s; deviations mean the oracle config drifted. |

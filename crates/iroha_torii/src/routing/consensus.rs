@@ -1020,13 +1020,11 @@ pub fn handle_post_sumeragi_evidence_submit(
 }
 
 fn decode_evidence_hex(value: &str) -> Result<ConsensusEvidence, Error> {
-    use norito::codec::DecodeAll as _;
-
-    let trimmed = value.trim();
-    let body = trimmed
+    let cleaned: String = value.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let body = cleaned
         .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .unwrap_or(trimmed);
+        .or_else(|| cleaned.strip_prefix("0X"))
+        .unwrap_or(cleaned.as_str());
     let bytes = hex::decode(body).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -1034,8 +1032,7 @@ fn decode_evidence_hex(value: &str) -> Result<ConsensusEvidence, Error> {
             )),
         ))
     })?;
-    let mut slice: &[u8] = &bytes;
-    ConsensusEvidence::decode_all(&mut slice).map_err(|err| {
+    norito::decode_from_bytes::<ConsensusEvidence>(&bytes).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
                 "evidence_hex decode: {err}"
@@ -1167,7 +1164,7 @@ mod evidence_submit_tests {
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let ev = sample_evidence(&chain_id, &keypair);
-        let encoded = norito::codec::Encode::encode(&ev);
+        let encoded = norito::to_bytes(&ev).expect("encode evidence");
         let plain = hex::encode(&encoded);
         let prefixed = format!("0x{plain}");
 
@@ -1191,7 +1188,12 @@ mod evidence_submit_tests {
 
     #[test]
     fn decode_evidence_hex_rejects_truncated_payload() {
-        let truncated = hex::encode([0x01u8, 0x02u8]);
+        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let ev = sample_evidence(&chain_id, &keypair);
+        let mut encoded = norito::to_bytes(&ev).expect("encode evidence");
+        encoded.pop();
+        let truncated = hex::encode(&encoded);
         let err = decode_evidence_hex(&truncated).expect_err("expect decode failure");
         assert!(matches!(
             err,
@@ -1199,6 +1201,29 @@ mod evidence_submit_tests {
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
             ))
         ));
+    }
+
+    #[test]
+    fn decode_evidence_hex_ignores_whitespace() {
+        let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let ev = sample_evidence(&chain_id, &keypair);
+        let encoded = norito::to_bytes(&ev).expect("encode evidence");
+        let hex = hex::encode(&encoded);
+        let mut spaced = String::from("0x");
+        for (idx, chunk) in hex.as_bytes().chunks(4).enumerate() {
+            if idx > 0 {
+                if idx % 2 == 0 {
+                    spaced.push('\n');
+                } else {
+                    spaced.push(' ');
+                }
+            }
+            spaced.push_str(std::str::from_utf8(chunk).expect("hex chunk"));
+        }
+
+        let decoded = decode_evidence_hex(&spaced).expect("decode spaced hex");
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
     }
 
     #[test]

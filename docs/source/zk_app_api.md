@@ -35,7 +35,6 @@ Endpoints:
 Details:
 - Deterministic id: Blake2b‑32 of the sanitized request body bytes (lower‑case hex).
 - Content‑Type: normalized to the sniffed type (magic‑byte inspection). The declared header is recorded in `provenance.declared_type`.
-- Sanitization: gzip/zstd payloads are expanded within `torii.attachments_max_expanded_bytes` and `torii.attachments_max_archive_depth`. Only allowlisted MIME types (`torii.attachments_allowed_mime_types`) are accepted. Sanitizer execution mode is controlled by `torii.attachments_sanitizer_mode` (default `subprocess`). Sanitizer metadata is recorded under `provenance`, and export responses re‑sanitize legacy records lacking provenance.
 - Provenance: responses include `provenance` with `{ declared_type, sniffed_type, hashes { blake2b_256, sha256 }, sanitizer { verdict, expanded_bytes, archive_depth, sandboxed } }`.
 - Rejections: unsupported types return `415 Unsupported Media Type`; expansion/sandbox failures return `413`/`400` with the rejection reason in the body.
 - Size cap: enforced per item via `torii.attachments_max_bytes` (default 4 MiB). Requests exceeding the cap receive `413 Payload Too Large`.
@@ -197,7 +196,6 @@ Endpoints:
 - `POST /v1/zk/vk/update` — Submit `UpdateVerifyingKey` (version must increase)
 - `POST /v1/zk/vk/deprecate` — Submit `DeprecateVerifyingKey`
 - `GET  /v1/zk/vk/{backend}/{name}` — Get a verifying key record as JSON
-- `GET  /v1/zk/vk` — List verifying keys with optional filters: `backend`, `status=Active|Deprecated`, `name_contains`, `limit`, `offset`, `order=asc|desc`, `ids_only=true`.
 
 `GET` responses normalise the data to:
 
@@ -228,7 +226,6 @@ Endpoints:
 When `ids_only=true`, the list endpoint returns objects containing just `{ "backend": "...", "name": "..." }`.
 
 DTOs (POST bodies, JSON):
-- Common fields: `authority` (AccountId), `private_key` (ExposedPrivateKey), `backend` (string), `name` (string), `version` (u32), `gas_schedule_id` (string), optionally `status` (`"Active"` or `"Deprecated"`), `max_proof_bytes` (u32), `metadata_uri_cid` (string), `vk_bytes_cid` (string), `activation_height` / `deprecation_height` / `withdraw_height` (u64). Exactly one of:
   - `vk_bytes` (base64) — full verifying key bytes; Torii computes the commitment and validates it against `commitment_hex` when present. `vk_len` is optional here but, when provided, must match the byte length.
   - `commitment_hex` (hex, 64) — commitment only; when bytes are omitted you must supply `vk_len` so the record captures verifier size metadata.
 
@@ -257,47 +254,21 @@ Example `vk_register.json`:
 
 Notes:
 - Commitments are domain‑separated hashes over `backend || bytes` and are verified on submit.
-- Deprecation semantics: `DeprecateVerifyingKey` marks the record status as `Deprecated` and clears inline key bytes for space efficiency. Nodes retain at most `zk.vk_deprecated_cap_per_backend` deprecated records per backend (0 = unlimited). When the cap is exceeded, the oldest entries are pruned deterministically. The commitment and version remain available for provenance.
 
 ### Subscribing to Verifying Key Registry Events
 
-You can subscribe to VK registry lifecycle events (Registered/Updated/Deprecated) via the data event stream using a `DataEventFilter` with the `VerifyingKey` variant. Provide the filter as JSON5 to the CLI.
 
 Examples (JSON5):
 
 1) Listen to all verifying key events for a specific id (backend + name):
 
-```
-{
-  VerifyingKey: {
-    id_matcher: { backend: "halo2/ipa", name: "vk_main" },
-    event_set: { Registered: true, Updated: true, Deprecated: true }
-  }
-}
-```
 
 2) Listen only for updates (version bumps) regardless of id:
 
-```
-{
-  VerifyingKey: {
-    id_matcher: null,
-    event_set: { Registered: false, Updated: true, Deprecated: false }
-  }
-}
-```
 
 CLI usage example:
 
-```
-iroha trigger register \
-  --id vk_watcher \
-  --filter data \
-  --data-filter '{ VerifyingKey: { id_matcher: { backend: "halo2/ipa", name: "vk_main" }, event_set: { Registered: true, Updated: true, Deprecated: true } } }' \
-  --path ./on_vk_update.ko
-```
 
-Event payloads are exposed as `VerifyingKeyEvent::{Registered{ id, record }, Updated{ id, record }, Deprecated{ id }}`.
 
 ### Subscribing to Proof Events
 

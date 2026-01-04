@@ -15091,7 +15091,6 @@ fn replay_roster_for_block(
 ///
 /// # Errors
 /// Returns an error if block retrieval or application fails.
-#[allow(clippy::too_many_lines)]
 pub fn replay_blocks_from_kura(
     kura: &std::sync::Arc<Kura>,
     state: &mut State,
@@ -15099,10 +15098,41 @@ pub fn replay_blocks_from_kura(
     block_count: usize,
     fallback_consensus_mode: iroha_config::parameters::actual::ConsensusMode,
 ) -> Result<()> {
+    replay_blocks_from_kura_range(
+        kura,
+        state,
+        topology,
+        1,
+        block_count,
+        fallback_consensus_mode,
+    )
+}
+
+/// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
+/// and continuing through `block_count` (inclusive). Use this to catch up from a snapshot.
+/// Uses the configured consensus mode as a fallback when resolving topology rotation.
+///
+/// # Errors
+/// Returns an error if block retrieval or application fails.
+#[allow(clippy::too_many_lines)]
+pub fn replay_blocks_from_kura_range(
+    kura: &std::sync::Arc<Kura>,
+    state: &mut State,
+    topology: &crate::sumeragi::network_topology::Topology,
+    start_height: usize,
+    block_count: usize,
+    fallback_consensus_mode: iroha_config::parameters::actual::ConsensusMode,
+) -> Result<()> {
     use iroha_config::parameters::actual::ConsensusMode;
     use std::num::NonZeroUsize;
 
     if block_count == 0 {
+        return Ok(());
+    }
+    if start_height == 0 {
+        return Err(eyre!("invalid start height during replay: {start_height}"));
+    }
+    if start_height > block_count {
         return Ok(());
     }
 
@@ -15119,7 +15149,7 @@ pub fn replay_blocks_from_kura(
     };
     let time_source = TimeSource::new_system();
 
-    for height in 1..=block_count {
+    for height in start_height..=block_count {
         let nz = NonZeroUsize::new(height)
             .ok_or_else(|| eyre!("invalid block height during replay: {height}"))?;
         let block_arc = kura
@@ -15248,7 +15278,7 @@ mod replay_validation_tests {
         prelude::{Account, Domain},
         transaction::TransactionBuilder,
     };
-    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+    use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 
     use super::*;
 
@@ -15292,6 +15322,96 @@ mod replay_validation_tests {
             result.is_err(),
             "corrupted genesis should be rejected during replay"
         );
+    }
+
+    #[test]
+    fn replay_from_height_catches_up_state() {
+        use std::borrow::Cow;
+
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::peer::PeerId;
+        use iroha_genesis::GENESIS_DOMAIN_ID;
+
+        let chain_id = ChainId::from("iroha:test:partial-replay");
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            leader.public_key().clone(),
+        )]);
+
+        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let genesis_block = SignedBlock::genesis(
+            vec![tx_genesis],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        );
+
+        let tx_block2 = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "block2".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let accepted_block2 =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
+        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
+            .chain(0, Some(&genesis_block))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let signed_block2: SignedBlock = block2.into();
+
+        let tx_block3 = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "block3".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let accepted_block3 =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block3));
+        let block3 = crate::block::BlockBuilder::new(vec![accepted_block3])
+            .chain(0, Some(&signed_block2))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let signed_block3: SignedBlock = block3.into();
+
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(Arc::new(genesis_block))
+            .expect("store genesis");
+        kura.store_block(Arc::new(signed_block2.clone()))
+            .expect("store block2");
+        kura.store_block(Arc::new(signed_block3.clone()))
+            .expect("store block3");
+
+        let world = World::with(
+            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+            [Account::new(genesis_id.clone()).build(&genesis_id)],
+            [],
+        );
+        let mut state = State::new_with_chain(
+            world,
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        {
+            let mut params_block = state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Permissioned)
+            .expect("replay first two blocks");
+        assert_eq!(state.view().height(), 2);
+
+        replay_blocks_from_kura_range(
+            &kura,
+            &mut state,
+            &topology,
+            3,
+            3,
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay remaining block");
+        let view = state.view();
+        assert_eq!(view.height(), 3);
+        assert_eq!(view.latest_block_hash(), Some(signed_block3.hash()));
     }
 
     #[test]
@@ -17937,6 +18057,7 @@ pub(crate) mod deserialize {
             };
             let world = parse_world(world_value, &ivm_seed)?;
 
+            let chain_id: ChainId = take_required(&mut map, "chain_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
                 take_required(&mut map, "block_hashes")?;
             let transactions: TransactionsStorage = take_required(&mut map, "transactions")?;
@@ -17945,7 +18066,7 @@ pub(crate) mod deserialize {
 
             drain_unknown(&map, "state");
 
-            Ok(build_state(BuildStateInputs {
+            let mut state = build_state(BuildStateInputs {
                 world,
                 block_hashes: BlockHashes::new(block_hashes_vec),
                 transactions,
@@ -17956,7 +18077,9 @@ pub(crate) mod deserialize {
                 query_handle: self.query_handle,
                 #[cfg(feature = "telemetry")]
                 telemetry: self.telemetry,
-            }))
+            });
+            state.chain_id = chain_id;
+            Ok(state)
         }
     }
 

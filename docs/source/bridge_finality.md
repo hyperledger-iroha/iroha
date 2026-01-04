@@ -103,5 +103,4 @@ range/insufficient signatures with deterministic errors.
   perform the same tuple check before signature verification and discard
   mismatched payloads.
 - Future work can add MMR/authority‑set commitment chains to reduce proof size
-  for very long histories. The format remains backward compatible by wrapping
   the commit certificate inside richer commitment envelopes.

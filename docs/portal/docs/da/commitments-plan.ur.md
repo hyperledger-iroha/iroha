@@ -10,7 +10,6 @@ translation_last_reviewed: 2026-01-01
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/da/commitments_plan.md` کی عکاسی کرتا ہے۔ legacy docs ریٹائر
 ہونے تک دونوں ورژنز کو sync رکھیں۔
 :::
 
@@ -100,7 +99,6 @@ pub struct DaCommitmentBundle {
 ```
 
 Bundle hash بلاک hash اور `SignedBlockWire` metadata دونوں میں شامل ہوتا ہے۔ جب
-بلاک میں DA data نہ ہو تو field `None` رہتا ہے تاکہ legacy lanes overhead سے
 بچیں۔
 
 Implementation note: `BlockPayload` اور transparent `BlockBuilder` اب

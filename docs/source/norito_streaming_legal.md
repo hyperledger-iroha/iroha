@@ -70,16 +70,6 @@ summary: Patent pools, licensing posture, and export considerations for rANS/CAB
 
 Runtime gates are exposed via `[streaming.codec]`:
 
-```toml
-[streaming.codec]
-cabac_mode = "disabled"        # allowed: disabled | adaptive | forced
-trellis_blocks = [16, 32]
-# trellis_blocks must remain empty until the claim-avoidance profile is published.
-rans_tables_path = "codec/rans/tables/rans_seed0.toml"
-entropy_mode = "rans"          # allowed: rans | rans_bundled
-bundle_width = 1               # 1 in legacy mode, 2-3 only when entropy_mode = "rans_bundled"
-bundle_accel = "none"          # allowed: none | cpu_simd | gpu
-```
 
 `entropy_mode = "rans_bundled"` only parses when the binary was compiled with
 `ENABLE_RANS_BUNDLES=1` (mirrors the CABAC gate); community builds leave the flag

@@ -50,7 +50,6 @@ CAR commitments even when byte-streaming the archive.
 - `ingest_node_id`: identifier for the ingest worker that sealed the segment.
 
 Additional metrics can extend the struct in future revisions without breaking
-binary compatibility. Tooling should treat missing values as “unknown”.
 
 ## Indices and Determinism
 

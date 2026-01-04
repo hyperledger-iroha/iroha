@@ -7,11 +7,9 @@ Canonical specification: `docs/source/torii/nrpc_spec.md`
 
 ### 1. Goals & Scope
 
-Norito-RPC is the binary RPC surface that Torii exposes alongside the legacy
 JSON `/v1/pipeline` routes. Every message is framed with the Norito header so
 clients get deterministic layouts, schema hashing, and CRC protection by
 default. This RFC specifies the wire contract, negotiated encodings, control
-channels, and compatibility rules that govern Norito-RPC so SDK teams can ship
 parity helpers without reverse-engineering Torii internals.
 
 The scope covers synchronous HTTP request/response exchanges. Streaming and
@@ -38,13 +36,15 @@ SoraNet handshake guide (`docs/source/soranet_handshake.md`).
 
 - **Requests** MUST set `Content-Type: application/x-norito`. Torii will attempt
   to decode invalid payloads as Norito first, falling back to Norito-backed JSON
-  only if no `Content-Type` is provided (`crates/iroha_torii/src/utils.rs:278`).
+  only if no `Content-Type` is provided (`crates/iroha_torii/src/utils.rs:576`).
 - **Responses** honour the `Accept` header via
-  `negotiate_response_format` (`crates/iroha_torii/src/utils.rs:36`):
+  `negotiate_response_format` (`crates/iroha_torii/src/utils.rs:63`):
   - If `application/x-norito` (optionally with parameters) is present with the
     highest quality factor, Torii replies with Norito bytes.
   - Otherwise Torii falls back to Norito JSON (`application/json`) so clients
     without binary support can interoperate.
+- Media type parameters are ignored during negotiation. JSON callers may send
+  `application/json`, `text/json`, or any `application/*+json` media type.
 - Unsupported media types yield `415 Unsupported Media Type` with a plain-text
   explanation.
 
@@ -89,11 +89,11 @@ Torii re-computes the checksum after decompression.
    - `Authorization: Bearer <token>` if the endpoint requires auth.
 3. Optional query parameters follow standard URL encoding. Torii decodes them
    into strongly typed Norito models using `NoritoQuery`
-   (`crates/iroha_torii/src/utils.rs:417`).
+  (`crates/iroha_torii/src/utils.rs:705`).
 4. Some routes accept versioned envelopes. When the route uses
    `NoritoVersioned<T>`, Torii first attempts to decode the incoming bytes using
    `iroha_version` framing before falling back to plain Norito
-   (`crates/iroha_torii/src/utils.rs:213`). Clients should prefer the versioned
+  (`crates/iroha_torii/src/utils.rs:380`). Clients should prefer the versioned
    framing when invoking versioned data-model types (e.g., transactions and
    blocks) so future schema upgrades can be negotiated.
 
@@ -120,12 +120,15 @@ curl \
 - Structured error payloads returned by handlers (e.g., business-logic failures)
   participate in the same negotiation as successful responses and are Norito
   encoded when permitted by `Accept`.
+- When a handler emits a dynamic JSON value (`NoritoJsonBody`), the
+  `application/x-norito` response wraps a UTF-8 JSON string in a Norito frame
+  (schema hash for `String`). Decode the Norito string, then parse JSON. The
+  `application/json` form remains a plain JSON object/array.
 
 ### 7. Message Catalogue
 
 | Group | Representative routes | Request types | Response shape | Notes |
 | --- | --- | --- | --- | --- |
-| Transactions | `POST /transaction` (aliased as `/v1/pipeline/transactions`) | `SignedTransaction` via `NoritoVersioned`[`crates/iroha_torii/src/lib.rs:5163`](/crates/iroha_torii/src/lib.rs#L5163) | Empty body (`204`) or Norito-encoded status envelope on soft failures | Routes are registered through `add_transaction_routes`[`crates/iroha_torii/src/lib.rs:6432`](/crates/iroha_torii/src/lib.rs#L6432); queue backpressure metadata is injected when admission fails. Legacy `/v1/transactions` paths remain active for prerelease clients. |
 | Signed queries | `POST /query` (aliased by the pipeline router) | `SignedQuery` via `NoritoVersioned`[`crates/iroha_torii/src/lib.rs:5387`](/crates/iroha_torii/src/lib.rs#L5387) | Norito or JSON `QueryResultBox` depending on `Accept` | The handler streams results through `handle_queries`/`handle_queries_with_opts`, honouring pagination and cursor overrides (`crates/iroha_torii/src/routing.rs:9472`). |
 | Contracts & verifying keys | `POST /v1/contracts/{code,deploy,instance,*}`; `POST /v1/zk/vk/{register,update,deprecate}` | `RegisterContractCodeDto`, `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`, `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`[`crates/iroha_torii/src/routing.rs:3307`](/crates/iroha_torii/src/routing.rs#L3307)[`crates/iroha_torii/src/routing.rs:4336`](/crates/iroha_torii/src/routing.rs#L4336) | Norito acknowledgement envelope mirroring `/v1/pipeline/transactions` status fields | Each DTO is decoded through `NoritoJson<T>` so callers may send Norito or Norito-backed JSON. Successful calls enqueue a signed transaction via `handle_transaction_with_metrics`. |
 | ZK proof orchestration | `POST /v1/zk/{roots,verify,submit-proof,vote/tally}`; `GET /v1/zk/proofs{,/count}` | `ZkRootsGetRequestDto`, `ZkVoteGetTallyRequestDto`, batch envelopes for proof submission[`crates/iroha_torii/src/routing.rs:2441`](/crates/iroha_torii/src/routing.rs#L2441)[`crates/iroha_torii/src/routing.rs:2497`](/crates/iroha_torii/src/routing.rs#L2497) | Norito structs (`ProofRootsResponse`, `ProofVoteTallyDto`, etc.) selected by `Accept` | NORITO requests reject malformed payloads before reaching business logic (`crates/iroha_torii/src/zk_prover.rs:985`), preserving deterministic proof verification. |
@@ -194,20 +197,9 @@ The catalogue above captures every handler that extracts or emits `NoritoJson`/`
   binary responses by setting the `Accept` header. Native Norito encoding helpers
   will land with NRPC-3.
 
-### 12. Compatibility Guarantees
-
-- Norito schema hashes provide forward detection: if Torii upgrades a response
-  schema, older clients receive a `schema mismatch` error instead of undefined
-  behaviour.
-- Payloads remain deterministic across hardware; the Norito header must be
-  preserved verbatim when relaying or caching responses.
-- Endpoints that rely on Norito TLV structures (e.g., ZK proof submission)
-  require Norito-RPC; JSON stubs exist only for test fixtures.
-
 ### 13. Future Work
 
 - Document streaming (`norito-stream`) and relay encapsulation (SNNet-11).
-- Define structured error envelopes so plain-text fallback can be deprecated.
 - Automate OpenAPI-to-Norito fixture generation (`cargo xtask openapi`) to keep
   the schema catalogue in sync with Torii releases.
 

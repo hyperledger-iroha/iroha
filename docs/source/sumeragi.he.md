@@ -68,7 +68,6 @@ translator: manual
 
 ### RBC / DA (זמינות נתונים)
 - RBC משתמש בקבוצת האספנים כדי להפיץ את גוף הבלוק. כותרת הבלוק מכילה מזהה סשן ומטא-נתונים.
-- `sumeragi.da_enabled = true` עוקב אחרי עדות זמינות (`AvailabilityQC`) אבל לא מעכב קומיט (ל־RBC `DELIVER` מקומי אין תנאי). כאשר עדות זמינות חסרה, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` גדל ו־`da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
 - תרחישים של ≥10 MiB נבחנים בסוויטת האינטגרציה ומודדים זמני RBC, קומיט, סף סינון תורים וזרימות P2P. הפרת SLO נכשלת במבחן ומפעילה התרעה.
 
 ### דוגמאות CLI לטופולוגיה ותפקידים

@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/chunker_registry_charter.md` کی عکاسی کرتا ہے۔ جب تک legacy Sphinx documentation set مکمل طور پر ریٹائر نہ ہو جائے دونوں نقول کو ہم آہنگ رکھیں۔
 :::
 
 # SoraFS chunker registry governance charter
@@ -33,7 +32,6 @@ SDKs). یہ alias اور handle invariants enforce کرتی ہے جنہیں
 
 - Profile IDs مثبت integers ہوتے ہیں جو monotonic طور پر بڑھتے ہیں۔
 - Canonical handle `namespace.name@semver` **لازم** ہے کہ `profile_aliases` میں پہلی
-  entry ہو۔ بعد میں legacy aliases آتے ہیں۔
 - Alias strings trim کی جاتی ہیں، unique ہوتی ہیں، اور دوسری entries کے canonical handles سے collide نہیں کرتیں۔
 
 ## Roles
@@ -82,7 +80,6 @@ SDKs). یہ alias اور handle invariants enforce کرتی ہے جنہیں
 5. **Deprecation / Sunset**
    - جو proposals موجودہ profile کو replace کرتی ہیں ان میں dual-publish window
      (grace periods) اور upgrade plan شامل ہونا چاہیے۔
-   - Grace window ختم ہونے کے بعد replaced profile کو registry میں deprecated mark کریں
      اور migration ledger کو update کریں۔
 
 6. **Emergency changes**

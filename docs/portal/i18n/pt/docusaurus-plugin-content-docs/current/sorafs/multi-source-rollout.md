@@ -11,7 +11,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Fonte canônica
-Esta página espelha `docs/source/sorafs/runbooks/multi_source_rollout.md`. Mantenha ambas as cópias sincronizadas até que o conjunto legado de documentação seja retirado.
+Esta página espelha `docs/source/sorafs/runbooks/multi_source_rollout.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 ## Objetivo

@@ -2185,7 +2185,7 @@ fn system_paths() -> Map {
         Value::Object(text_get_operation(
             "System",
             "Fetch the active API version.",
-            "Returns the block header version string.",
+            "Returns the block header version string. Responds with 503 if genesis is not committed.",
             None,
         )),
     );

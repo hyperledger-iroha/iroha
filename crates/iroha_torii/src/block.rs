@@ -1,4 +1,7 @@
-use std::{num::NonZeroU64, sync::Arc};
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+};
 
 use iroha_core::kura::Kura;
 use iroha_data_model::block::stream::{BlockMessageSend, BlockSubscriptionRequest};
@@ -11,6 +14,9 @@ pub enum Error {
     /// Error from provided stream/websocket
     #[error("Stream error: {0}")]
     Stream(#[source] stream::Error),
+    /// Invalid block subscription height: {0}
+    #[error("Invalid block subscription height: {0}")]
+    InvalidHeight(String),
 }
 
 impl From<stream::Error> for Error {
@@ -27,7 +33,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug)]
 pub struct Consumer<'ws> {
     pub stream: &'ws mut WebSocketNorito,
-    height: NonZeroU64,
+    height: NonZeroUsize,
     kura: Arc<Kura>,
 }
 
@@ -39,6 +45,7 @@ impl<'ws> Consumer<'ws> {
     #[iroha_futures::telemetry_future]
     pub async fn new(stream: &'ws mut WebSocketNorito, kura: Arc<Kura>) -> Result<Self> {
         let BlockSubscriptionRequest(height) = stream.recv().await?;
+        let height = request_height_to_kura(height)?;
         Ok(Consumer {
             stream,
             height,
@@ -52,17 +59,36 @@ impl<'ws> Consumer<'ws> {
     /// Can fail due to timeout. Also receiving might fail
     #[iroha_futures::telemetry_future]
     pub async fn consume(&mut self) -> Result<()> {
-        if let Some(block) = self.kura.get_block(
-            self.height
-                .try_into()
-                .expect("INTERNAL BUG: Number of blocks exceeds usize::MAX"),
-        ) {
+        if let Some(block) = self.kura.get_block(self.height) {
             self.stream.send(BlockMessageSend(block)).await?;
-            self.height = self
-                .height
-                .checked_add(1)
-                .expect("Maximum block height is achieved.");
+            self.height = self.height.checked_add(1).ok_or_else(|| {
+                Error::InvalidHeight("maximum block height is achieved".to_string())
+            })?;
         }
         Ok(())
+    }
+}
+
+fn request_height_to_kura(height: NonZeroU64) -> Result<NonZeroUsize> {
+    let raw = usize::try_from(height.get())
+        .map_err(|_| Error::InvalidHeight("height exceeds platform limits".to_string()))?;
+    NonZeroUsize::new(raw)
+        .ok_or_else(|| Error::InvalidHeight("height must be non-zero".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_height_to_kura_handles_bounds() {
+        let max = u64::try_from(usize::MAX).expect("usize fits in u64");
+        let ok = NonZeroU64::new(max).expect("non-zero");
+        assert!(request_height_to_kura(ok).is_ok());
+
+        if usize::BITS < 64 {
+            let too_large = NonZeroU64::new(max + 1).expect("non-zero");
+            assert!(request_height_to_kura(too_large).is_err());
+        }
     }
 }

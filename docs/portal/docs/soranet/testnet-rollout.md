@@ -6,7 +6,6 @@ description: Phased activation plan, onboarding kit, and telemetry gates for Sor
 ---
 
 :::note Canonical Source
-This page mirrors the SNNet-10 rollout plan in `docs/source/soranet/testnet_rollout_plan.md`. Keep both copies aligned until the legacy docs are retired.
 :::
 
 SNNet-10 coordinates the staged activation of the SoraNet anonymity overlay across the network. Use this plan to translate the roadmap bullet into concrete deliverables, runbooks, and telemetry gates so every operator understands the expectations before SoraNet becomes the default transport.

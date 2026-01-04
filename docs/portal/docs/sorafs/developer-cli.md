@@ -6,7 +6,6 @@ description: Task-focused walkthrough of the consolidated `sorafs_cli` surface.
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/developer/cli.md`. Keep both copies in sync until the legacy Sphinx set is retired.
 :::
 
 The consolidated `sorafs_cli` surface (provided by the `sorafs_car` crate with

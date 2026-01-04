@@ -68,7 +68,7 @@
 ## Consensus settings (Sumeragi)
 ## Participation role and collector settings for consensus.
 ## - role: "validator" (proposes, votes, commits) or "observer" (sync-only, no votes)
-## - allow_view0_slack: legacy/testing knob; Set B votes are accepted in view 0 regardless
+## - allow_view0_slack: testing knob; Set B votes are accepted in view 0 regardless
 ## - collectors_k: number of concurrent collectors per height (K). 1 preserves the original single proxy-tail collector.
 ## - collectors_redundant_send_r: redundant send fanout; upon local timeout in view 0, validators may send their vote to up to r collectors.
 ##
@@ -86,7 +86,7 @@
 # msg_channel_cap_rbc_chunks = 1024     # RBC chunk capacity
 # msg_channel_cap_blocks = 256          # block message capacity (block sync updates, params, etc.)
 # control_msg_channel_cap = 1024        # control/background/lane channel capacity
-# msg_channel_cap = 100                 # legacy fallback when per-queue caps are omitted
+# msg_channel_cap = 100                 # fallback when per-queue caps are omitted
 # commit_inflight_timeout_ms = 30000
 # missing_block_signer_fallback_attempts = 1 # fetch from QC signers before falling back to full topology
 # membership_mismatch_alert_threshold = 1    # consecutive mismatches before alert/fail-closed

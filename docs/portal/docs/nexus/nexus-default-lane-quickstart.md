@@ -104,7 +104,6 @@ description = "Route contract deployments to the zk lane for proof tracking"
 
 When you later add new lanes, update the catalog first, then extend the routing
 rules. The fallback lane should continue to point at the public lane that holds
-the majority of user traffic so legacy SDKs remain compatible.
 
 ## 3. Boot a node with the policy applied
 
@@ -203,5 +202,4 @@ lane-ingest dashboard.
   operator runbook so future rotations do not guess the required state.
 
 Once these checks pass you can treat `nexus.routing_policy.default_lane` as the
-source of truth for SDK configuration and begin disabling the legacy single-lane
 code paths on the network.

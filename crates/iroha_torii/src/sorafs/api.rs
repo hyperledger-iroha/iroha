@@ -6915,6 +6915,10 @@ fn car_verification_refusal(
             "chunk_length_mismatch",
             "chunk length mismatch detected in proof bundle",
         ),
+        CarVerifyError::ChunkSizeExceeded { .. } => (
+            "chunk_size_exceeds_limit",
+            "chunk size exceeds configured verification limit",
+        ),
         CarVerifyError::ChunkDigestMismatch { .. } => (
             "chunk_digest_mismatch",
             "chunk digest mismatch detected in proof bundle",
@@ -7022,11 +7026,29 @@ fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<ChunkProfile> 
         }
         Ok(descriptor.profile)
     } else {
+        let min_size = usize::try_from(manifest.chunking.min_size).map_err(|_| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                "manifest min_size exceeds supported range",
+            )
+        })?;
+        let target_size = usize::try_from(manifest.chunking.target_size).map_err(|_| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                "manifest target_size exceeds supported range",
+            )
+        })?;
+        let max_size = usize::try_from(manifest.chunking.max_size).map_err(|_| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                "manifest max_size exceeds supported range",
+            )
+        })?;
         let profile = ChunkProfile {
-            min_size: manifest.chunking.min_size as usize,
-            target_size: manifest.chunking.target_size as usize,
-            max_size: manifest.chunking.max_size as usize,
-            break_mask: manifest.chunking.break_mask as u64,
+            min_size,
+            target_size,
+            max_size,
+            break_mask: u64::from(manifest.chunking.break_mask),
         };
         if profile.min_size == 0
             || profile.target_size == 0
@@ -7039,7 +7061,49 @@ fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<ChunkProfile> 
             )
             .into());
         }
+        if profile.min_size > profile.target_size || profile.target_size > profile.max_size {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "manifest chunking profile sizes must satisfy min <= target <= max",
+            )
+            .into());
+        }
         Ok(profile)
+    }
+}
+
+#[cfg(test)]
+mod chunk_profile_tests {
+    use super::*;
+
+    use blake3;
+    use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
+
+    #[test]
+    fn chunk_profile_for_manifest_rejects_out_of_order_sizes() {
+        let payload = b"chunk-profile-fixture";
+        let content_length = payload.len() as u64;
+        let mut manifest = ManifestBuilder::new()
+            .root_cid(vec![0xAA; 16])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+        manifest.chunking.profile_id = sorafs_manifest::ProfileId(u32::MAX);
+        manifest.chunking.min_size = 1024;
+        manifest.chunking.target_size = 512;
+        manifest.chunking.max_size = 2048;
+        manifest.chunking.break_mask = 1;
+
+        let err = chunk_profile_for_manifest(&manifest).expect_err("invalid profile should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 }
 

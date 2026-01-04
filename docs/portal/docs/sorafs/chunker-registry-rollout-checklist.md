@@ -6,7 +6,6 @@ description: Step-by-step rollout plan for chunker registry updates.
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Keep both copies in sync until the legacy Sphinx documentation set is retired.
 :::
 
 # SoraFS Registry Rollout Checklist

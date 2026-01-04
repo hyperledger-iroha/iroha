@@ -298,7 +298,7 @@ pub struct PorProofV1 {
     pub samples: Vec<PorProofSampleV1>,
     /// Merkle authentication path covering the sampled leaves.
     pub auth_path: Vec<[u8; 32]>,
-    /// Provider signature over the canonical proof bytes.
+    /// Provider signature over the canonical proof digest (`proof_digest`).
     pub signature: AdvertSignature,
     /// Unix timestamp (seconds) when the proof was submitted.
     pub submitted_at: u64,

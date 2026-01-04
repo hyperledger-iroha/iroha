@@ -93,7 +93,6 @@ pub struct DaCommitmentBundle {
 ```
 
 bundle hash はブロック hash と `SignedBlockWire` のメタデータに反映されます。DA データが
-ないブロックではフィールドを `None` にし、legacy lane のオーバーヘッドを避けます。
 
 実装メモ: `BlockPayload` と透過的な `BlockBuilder` に `da_commitments` の setter/getter
 が追加されています (`BlockBuilder::set_da_commitments` と

@@ -10,7 +10,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/soranet/pq_ratchet_runbook.md`. Mantenha as duas copias alinhadas ate que o conjunto legado de documentacao seja retirado.
+Esta pagina espelha `docs/source/soranet/pq_ratchet_runbook.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 ## Proposito

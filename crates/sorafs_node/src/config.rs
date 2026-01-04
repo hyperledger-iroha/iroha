@@ -18,6 +18,7 @@ pub struct StorageConfig {
     alias: Option<String>,
     adverts: AdvertOverrides,
     metering_smoothing: MeteringSmoothingConfig,
+    stream_token_signing_key_path: Option<PathBuf>,
     governance_dir: Option<PathBuf>,
     penalty: PenaltySettings,
 }
@@ -83,6 +84,12 @@ impl StorageConfig {
         &self.metering_smoothing
     }
 
+    /// Optional filesystem path to the gateway signing key (Ed25519).
+    #[must_use]
+    pub fn stream_token_signing_key_path(&self) -> Option<&PathBuf> {
+        self.stream_token_signing_key_path.as_ref()
+    }
+
     /// Optional directory used to materialise governance artefacts.
     #[must_use]
     pub fn governance_dir(&self) -> Option<&PathBuf> {
@@ -132,6 +139,7 @@ impl StorageConfig {
             alias: storage.alias.clone(),
             adverts: AdvertOverrides::from(&storage.adverts),
             metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
+            stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
             governance_dir: storage.governance_dag_dir.clone(),
             penalty: PenaltySettings::from_policy(penalty),
         }
@@ -210,6 +218,13 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn adverts(mut self, adverts: AdvertOverrides) -> Self {
         self.inner.adverts = adverts;
+        self
+    }
+
+    /// Override the gateway signing key path used for stream tokens and PoR proofs.
+    #[must_use]
+    pub fn stream_token_signing_key_path(mut self, path: Option<PathBuf>) -> Self {
+        self.inner.stream_token_signing_key_path = path;
         self
     }
 

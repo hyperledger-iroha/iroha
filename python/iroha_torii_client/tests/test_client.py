@@ -1461,12 +1461,12 @@ def test_get_kaigi_relay_returns_detail_and_none_on_404() -> None:
             payload={
                 "relay": {
                     "relay_id": "relay-alpha",
-                    "domain_id": "kaigi.core",
+                    "domain": "kaigi.core",
                     "bandwidth_class": 3,
                     "hpke_fingerprint_hex": "cd" * 32,
                 },
                 "hpke_public_key_b64": "QUJDRA==",
-                "reported_call": {"domain": "kaigi.core", "call_name": "register"},
+                "reported_call": {"domain_id": "kaigi.core", "call_name": "register"},
                 "reported_by": "ops@example",
                 "notes": "Primary relay",
                 "metrics": {

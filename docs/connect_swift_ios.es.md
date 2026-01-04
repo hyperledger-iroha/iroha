@@ -92,7 +92,7 @@ sentido del frame.
 > helpers de cifrado (`ConnectCrypto.*`) requieren el bridge, así que enlaza el XCFramework
 > en apps de producción.
 
-## Referencia manual de CryptoKit (legado / fallback)
+## Referencia manual de CryptoKit (alternativo / fallback)
 
 Si el bridge Norito no está disponible o necesitas prototipar sin los helpers del SDK, la
 referencia siguiente muestra cómo cablear X25519 + ChaChaPoly de forma manual. Se ajusta a

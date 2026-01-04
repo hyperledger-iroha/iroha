@@ -99,7 +99,6 @@ IH58/کمپریسڈ چیک سم فیلیرز (`ERR_CHECKSUM_MISMATCH` / `Checksu
   [`address_manifest_ops.md`](../runbooks/address_manifest_ops.md)
   کے مطابق تازہ ترین manifest بنڈل کو جانچیں۔
 - `scripts/address_local_toolkit.sh audit --input <file>` (دستاویز:
-  `local_to_global_toolkit.md`) چلائیں تاکہ کوئی Legacy Local‑8 سلیکٹر دوبارہ
   شامل نہ ہو۔
 
 ### 4.4 بدنیتی پر مبنی یا خراب ٹریفک

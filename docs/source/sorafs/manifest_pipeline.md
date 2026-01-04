@@ -78,7 +78,6 @@ aggregated chunk plan SHA3-256 digest (offsets, lengths, and chunk BLAKE3
 digests), and the supplied council
 signatures. The envelope now records the chunker profile in canonical
 `namespace.name@semver` form; older `namespace-name` envelopes continue to verify
-for compatibility. Downstream automation can publish the envelope to governance logs
 or distribute it with the manifest and CAR artifacts. When you receive an envelope from an external signer, add `--manifest-signatures-in=<path>` to have the CLI confirm the digests and verify each Ed25519 signature against the freshly computed manifest digest.
 
 When multiple chunker profiles are registered you can select one explicitly
@@ -108,8 +107,6 @@ plan. Multi-source clients can feed the resulting JSON directly into the SoraFS
 fetch orchestrator without re-reading the source payload. The JSON report printed
 by the CLI also includes this array under `chunk_fetch_specs`.
 Both the `chunking` section and `manifest` object expose `profile_aliases`
-alongside the canonical `profile` handle so SDKs can migrate from the legacy
-`namespace-name` form without losing compatibility.
 
 When re-running the stub (for example in CI or a release pipeline) you can pass
 `--plan=chunk_fetch_specs.json` or `--plan=-` to import the previously generated
@@ -162,7 +159,6 @@ If you pass `--provider-advert=name=/path/to/advert.to`, the CLI now decodes the
 Norito envelope, verifies the Ed25519 signature, and enforces that the provider
 advertises the `chunk_range_fetch` capability. This keeps the multi-source fetch
 simulation aligned with the governance admission policy and prevents accidental
-use of legacy providers that cannot satisfy ranged chunk requests.
 
 The `#N` suffix increases the provider’s concurrency limit, while `@W` sets its
 scheduling weight (defaults to 1 when omitted). When adverts or gateway

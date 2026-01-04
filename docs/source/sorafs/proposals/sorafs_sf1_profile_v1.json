@@ -21,11 +21,6 @@
     },
     "fixtures_root": "fixtures/sorafs_chunker/",
     "por_seed": "0x0000000000dec0ded",
-    "compatibility": {
-      "supersedes": [],
-      "grace_epochs": 0,
-      "notes": "Initial canonical profile shipped with SF-1."
-    },
     "artifacts": {
       "chunk_boundaries": [
         "fixtures/sorafs_chunker/sf1_profile_v1.json",

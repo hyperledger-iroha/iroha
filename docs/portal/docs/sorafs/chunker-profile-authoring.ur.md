@@ -19,7 +19,6 @@ description: SoraFS chunker profiles اور fixtures تجویز کرنے کے ل
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/chunker_profile_authoring.md` کی عکاسی کرتا ہے۔ جب تک legacy Sphinx documentation set مکمل طور پر ریٹائر نہ ہو جائے دونوں نقول کو ہم آہنگ رکھیں۔
 :::
 
 # SoraFS chunker profile authoring guide
@@ -38,7 +37,6 @@ Canonical مثال کے لیے دیکھیں
 
 - deterministic CDC parameters اور multihash settings کو architectures کے درمیان یکساں طور پر advertise کرنا؛
 - replayable fixtures (Rust/Go/TS JSON + fuzz corpora + PoR witnesses) فراہم کرنا جنہیں downstream SDKs بغیر bespoke tooling کے verify کر سکیں؛
-- governance-ready metadata (namespace, name, semver) کے ساتھ migration guidance اور compatibility windows شامل کرنا؛ اور
 - council review سے پہلے deterministic diff suite پاس کرنا۔
 
 نیچے دی گئی checklist پر عمل کریں تاکہ ایک ایسا proposal تیار ہو جو ان قواعد پر پورا اترے۔
@@ -49,7 +47,6 @@ Proposal draft کرنے سے پہلے تصدیق کریں کہ یہ registry cha
 `sorafs_manifest::chunker_registry::ensure_charter_compliance()` enforce کرتا ہے:
 
 - Profile IDs مثبت integers ہوتے ہیں جو بغیر gaps کے monotonic طور پر بڑھتے ہیں۔
-- Canonical handle (`namespace.name@semver`) alias list میں ہونا چاہیے اور **لازم** ہے کہ پہلی entry ہو۔ اس کے بعد legacy aliases (مثلاً `sorafs.sf1@1.0.0`) آتے ہیں۔
 - کوئی alias کسی دوسرے canonical handle سے collide نہیں کر سکتا اور ایک سے زیادہ بار ظاہر نہیں ہو سکتا۔
 - Aliases non-empty ہوں اور whitespace سے trim ہوں۔
 
@@ -74,7 +71,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 | `name` | human-readable label۔ | `sf1` |
 | `semver` | parameter set کے لیے semantic version string۔ | `1.0.0` |
 | `profile_id` | Monotonic numeric identifier جو profile کے land ہونے پر assign ہوتا ہے۔ اگلا id reserve کریں مگر موجودہ نمبرز reuse نہ کریں۔ | `1` |
-| `profile_aliases` | اضافی handles (legacy names, shorthand) جو negotiation کے دوران clients کو expose ہوتے ہیں۔ canonical handle کو ہمیشہ پہلی entry کے طور پر شامل کریں۔ | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | chunk length کی minimum حد bytes میں۔ | `65536` |
 | `profile.target_size` | chunk length کی target حد bytes میں۔ | `262144` |
 | `profile.max_size` | chunk length کی maximum حد bytes میں۔ | `524288` |
@@ -145,50 +141,6 @@ Input file کو اپنے fixtures میں استعمال ہونے والے کسی
 
 Proposals کو `ChunkerProfileProposalV1` Norito records کے طور پر `docs/source/sorafs/proposals/` میں check in کیا جاتا ہے۔ نیچے JSON template expected شکل دکھاتا ہے (اپنی values سے replace کریں):
 
-```json
-{
-  "ChunkerProfileProposalV1": {
-    "namespace": "sorafs",
-    "name": "sf2",
-    "semver": "1.0.0",
-    "reserved_profile_id": 2,
-    "profile": {
-      "min_size": 65536,
-      "target_size": 262144,
-      "max_size": 524288,
-      "break_mask": "0x0000ffff",
-      "polynomial": "0x3da3358b4dc173",
-      "gear_seed": "sorafs-v2-gear"
-    },
-    "chunk_multihash": {
-      "code": 31,
-      "digest": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
-    },
-    "profile_aliases": ["sorafs.sf2", "sorafs-sf2"],
-    "fixtures_root": "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/",
-    "por_seed": "0xfeedbeefcafebabe",
-    "compatibility": {
-      "supersedes": ["sorafs.sf1@1.0.0"],
-      "grace_epochs": 2,
-      "notes": "Carry envelopes for sf1 during dual-publish window."
-    },
-    "artifacts": {
-      "chunk_boundaries": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.json",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.ts",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.go"
-      ],
-      "fuzz_corpora": [
-        "fuzz/sorafs_chunker/sf2_backpressure.json"
-      ],
-      "por_witnesses": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/por_samples.json"
-      ]
-    },
-    "determinism_report": "docs/source/sorafs/reports/sf2_determinism.md"
-  }
-}
-```
 
 Matching Markdown report (`determinism_report`) فراہم کریں جس میں command output، chunk digests اور validation کے دوران پائی گئی deviations شامل ہوں۔
 
@@ -198,12 +150,10 @@ Matching Markdown report (`determinism_report`) فراہم کریں جس میں 
 2. **Tooling WG review۔** Reviewers validation checklist دوبارہ چلاتے ہیں اور confirm کرتے ہیں کہ proposal registry rules کے مطابق ہے (id reuse نہیں، determinism satisfied)۔
 3. **Council envelope۔** Approve ہونے کے بعد council members proposal digest (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) پر sign کرتے ہیں اور signatures کو profile envelope میں append کرتے ہیں جو fixtures کے ساتھ رکھا جاتا ہے۔
 4. **Registry publish۔** Merge سے registry، docs اور fixtures update ہوتے ہیں۔ Default CLI پچھلے profile پر رہتا ہے جب تک governance migration کو ready قرار نہ دے۔
-5. **Deprecation tracking۔** Migration window کے بعد registry کو update کریں، superseded profiles کو deprecated mark کریں، اور operators کو migration ledger کے ذریعے notify کریں۔
 
 ## Authoring tips
 
 - Power-of-two کی even bounds ترجیح دیں تاکہ edge-case chunking behavior کم ہو۔
-- Multihash code تبدیل کرنے سے پہلے manifest اور gateway consumers کے ساتھ coordination کریں؛ ایسا کرتے وقت compatibility note شامل کریں۔
 - Gear table seeds کو human-readable مگر globally unique رکھیں تاکہ audit trails آسان ہوں۔
 - Benchmarking artifacts (مثلاً throughput comparisons) کو `docs/source/sorafs/reports/` میں محفوظ کریں تاکہ مستقبل میں reference ہو سکے۔
 

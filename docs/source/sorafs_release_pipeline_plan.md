@@ -63,7 +63,6 @@ summary: Outline for SF-6 release automation and QA.
 - **CLI (`sorafs-cli`)** — Semantic versioning (`MAJOR.MINOR.PATCH`). Any breaking CLI flag or output change bumps
   `MAJOR`. Additive features bump `MINOR`; bug fixes bump `PATCH`.
 - **Rust SDK (`sorafs_sdk`)** — Shares the CLI `MAJOR`/`MINOR` to keep docs aligned; may ship independent patch
-  updates. `Cargo.toml` `package.metadata.release` records the current compatibility matrix.
 - **TypeScript SDK (`@sora-org/sorafs-sdk`)** — Semantic versioning anchored to the CLI major version. Minor
   changes cover additional helpers; patch changes include bug fixes or dependency bumps.
 - **Go SDK** — Module-aware tagging (`sorafs-sdk-go/vX.Y.Z`); release workflow updates `go.mod` and pushes tags.

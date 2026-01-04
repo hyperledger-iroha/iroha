@@ -61,7 +61,7 @@ Antes de avanzar:
 2. **Inspecciona los motivos de elegibilidad.** Persiste los artefactos con
    `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Cada entrada
    incluye un bloque `eligibility` con la causa exacta del fallo. No sobreescribas
-   incompatibilidades de capacidades o anuncios expirados; corrige el payload upstream.
+   desajustes de capacidades o anuncios expirados; corrige el payload upstream.
 3. **Revisa los cambios de peso.** Compara el campo `normalised_weight` con el
    release anterior. Desplazamientos de peso >10 % deben correlacionarse con cambios
    deliberados en anuncios o telemetría y registrarse en el log de despliegue.

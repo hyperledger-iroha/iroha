@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/deal_engine.md` کی عکاسی کرتا ہے۔ جب تک legacy documentation فعال ہو دونوں مقامات کو ہم آہنگ رکھیں۔
 :::
 
 # SoraFS deal engine

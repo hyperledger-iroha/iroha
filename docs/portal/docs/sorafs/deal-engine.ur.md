@@ -19,7 +19,6 @@ description: SF-8 deal engine، Torii integration اور telemetry surfaces کا
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/deal_engine.md` کی عکاسی کرتا ہے۔ جب تک legacy documentation فعال ہو دونوں مقامات کو ہم آہنگ رکھیں۔
 :::
 
 # SoraFS deal engine

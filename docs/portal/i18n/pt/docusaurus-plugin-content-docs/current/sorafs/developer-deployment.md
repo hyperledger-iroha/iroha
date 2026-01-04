@@ -11,7 +11,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/deployment.md`. Mantenha ambas as versoes sincronizadas ate que os docs legados sejam retirados.
+Esta pagina espelha `docs/source/sorafs/developer/deployment.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 # Notas de deployment

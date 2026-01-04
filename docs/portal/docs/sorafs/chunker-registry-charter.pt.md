@@ -19,7 +19,7 @@ description: Carta de governanca para submissao e aprovacao de perfis de chunker
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/chunker_registry_charter.md`. Mantenha ambas as copias sincronizadas ate que o conjunto de documentacao Sphinx legado seja retirado.
+Esta pagina espelha `docs/source/sorafs/chunker_registry_charter.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 # Carta de governanca do registro de chunker da SoraFS
@@ -42,7 +42,7 @@ SDKs). Ela impoe os invariantes de alias e handle verificados por
 
 - IDs de perfil sao inteiros positivos que aumentam de forma monotona.
 - O handle canonico `namespace.name@semver` **deve** aparecer como a primeira
-  entrada em `profile_aliases`. Aliases legados vem em seguida.
+  entrada em `profile_aliases`. Aliases alternativos vem em seguida.
 - As strings de alias sao aparadas, unicas e nao colidem com handles canonicos
   de outras entradas.
 
@@ -98,7 +98,6 @@ SDKs). Ela impoe os invariantes de alias e handle verificados por
 5. **Deprecacao / Encerramento**
    - Propostas que substituem um perfil existente devem incluir uma janela de publicacao
      dupla (periodos de carencia) e um plano de upgrade.
-   - Apos o fim da janela de carencia, marque o perfil substituido como deprecated
      no registro e atualize o ledger de migracao.
 
 6. **Mudancas de emergencia**

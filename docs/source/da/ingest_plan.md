@@ -544,7 +544,6 @@ duplicate slashes from firing on the same incident.【crates/sorafs_node/src/lib
 - Stripe layout + per-chunk roles are now threaded through Torii’s storage pin endpoint
   (`stripe_layout` + `chunk_roles` fields) and persisted into the storage worker so
   auditors/repair tooling can plan row/column repairs without re-deriving layout from upstream
-  receipts. Legacy manifests continue to load with empty layout metadata.【crates/iroha_torii/src/sorafs/api.rs:2629】【crates/sorafs_node/src/store.rs:803】
 
 ### Placement + repair harness
 
@@ -553,7 +552,6 @@ computes a placement hash over `(index, role, stripe/column, offsets)` and perfo
 column RS(16) repair before reconstructing the payload:
 
 - Placement defaults to `total_stripes`/`shards_per_stripe` when present and falls back to chunk
-  counts for legacy manifests so layout is still derivable when older manifests lack metadata.
 - Missing/corrupted chunks are rebuilt with row parity first; remaining gaps are repaired with
   stripe (column) parity. Repaired chunks are written back to the chunk directory, and the JSON
   summary captures the placement hash plus row/column repair counters.

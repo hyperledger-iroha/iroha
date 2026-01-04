@@ -16,7 +16,6 @@ Ce document operationalise les directives de migration capturees dans
 `docs/source/sorafs_architecture_rfc.md`. Il developpe les livrables SF-1 en
 jalons prets a executer, criteres de passage et checklists des responsables afin
 que les equipes storage, governance, DevRel et SDK coordonnent la transition du
-hosting d'artefacts legacy vers une publication adossee a SoraFS.
 
 La feuille de route est volontairement deterministe: chaque jalon nomme les
 artefacts requis, les invocations de commandes et les etapes d'attestation pour
@@ -27,26 +26,13 @@ governance conserve une trace auditable.
 
 | Jalon | Fenetre | Objectifs principaux | Doit livrer | Owners |
 |-------|---------|----------------------|-------------|--------|
-| **M0 - Bootstrap** | Semaines 1-6 | Publier des fixtures de chunker deterministes et publier en double (legacy + SoraFS). | Fixtures `sorafs_chunker`, integration CLI `sorafs_manifest_stub`, entrees du registre de migration. | Docs, DevRel, Storage |
 | **M1 - Enforcement deterministe** | Semaines 7-12 | Exiger des fixtures signees et preparer les preuves d'alias pendant que les pipelines adoptent les expectation flags. | Verification nightly des fixtures, manifests signes par le conseil, entrees staging du registre d'alias. | Storage, Governance, SDKs |
-| **M2 - Registry d'abord** | Semaines 13-20 | Router les pins via le registry, geler les bundles legacy et exposer la telemetrie de parite. | Contrat Pin Registry + CLI (`sorafs pin propose/approve`), dashboards d'observabilite, runbooks operateurs. | Governance, Ops, Observability |
-| **M3 - Alias uniquement** | Semaine 21+ | Decommissionner le hosting legacy et exiger des preuves d'alias pour la recuperation. | Gateways alias-only, alertes de parite, defaults SDK mis a jour, avis de retrait legacy. | Ops, Networking, SDKs |
 
 Le statut des jalons est suivi dans `docs/source/sorafs/migration_ledger.md`. Toutes
 les modifications de cette feuille de route DOIVENT mettre a jour le registre afin
 que governance et release engineering restent synchronises.
 
 ## Pistes de travail
-
-### 1. Reconditionnement des donnees legacy
-
-| Etape | Jalon | Description | Owner(s) | Sortie |
-|-------|-------|-------------|----------|--------|
-| Inventaire et etiquetage | M0 | Exporter les digests SHA3-256 des bundles legacy et les consigner dans le registre de migration (append-only). | Docs, DevRel | Entrees du registre avec `source_path`, `sha3_digest`, `owner`, `planned_manifest_cid`. |
-| Reconstruction deterministe | M0-M1 | Invoquer `sorafs_manifest_stub` pour chaque artefact de release et persister CAR, manifest, envelope de signatures et plan de fetch dans `artifacts/<team>/<alias>/<timestamp>/`. | Docs, CI | Bundles CAR + manifest reproductibles par version. |
-| Boucle de validation | M1 | Rejouer `sorafs_fetch` contre les gateways de staging pour confirmer que les limites/digests de chunks correspondent aux fixtures. Noter pass/fail dans les commentaires du registre. | Governance QA | Rapport de verification staging + issue GitHub pour le drift. |
-| Cut-over registry | M2 | Basculer le statut du registre vers `Pinned` une fois le digest du manifest on-chain; le bundle legacy passe en lecture seule (servir mais ne pas modifier). | Governance, Ops | Hash de transaction registry, ticket read-only pour le stockage legacy. |
-| Decommission | M3 | Supprimer les entrees du CDN legacy apres 30 jours de grace, archiver les approvals de changement DNS, publier le post-mortem. | Ops | Checklist de decommission, enregistrement changement DNS, cloture de ticket incident. |
 
 ### 2. Adoption du pinning deterministe
 
@@ -80,9 +66,7 @@ recensees dans l'entree du registre de migration pour l'artefact.
 | Etape | Jalon | Description | Owner(s) | Sortie |
 |-------|-------|-------------|----------|--------|
 | Preuves d'alias en staging | M1 | Enregistrer les claims d'alias dans le Pin Registry staging et attacher des preuves Merkle aux manifests (`--alias`). | Governance, Docs | Bundle de preuves stocke a cote du manifest + commentaire du registre avec le nom d'alias. |
-| DNS double + notification | M1-M2 | Operer le DNS legacy et Torii/SoraDNS en parallele; publier des avis de migration aux operateurs et canaux SDK. | Networking, DevRel | Post d'annonce + ticket de changement DNS. |
 | Enforcement des preuves | M2 | Les gateways rejettent les manifests sans headers `Sora-Proof` recents; CI ajoute l'etape `sorafs alias verify` pour recuperer les preuves. | Networking | Patch de config gateway + sortie CI capturant la verification reussie. |
-| Rollout alias-only | M3 | Supprimer le DNS legacy, mettre a jour les defaults SDK pour s'appuyer sur Torii/SoraDNS + preuves d'alias, documenter la fenetre de rollback. | SDK Maintainers, Ops | Notes de release SDK, mise a jour du runbook ops, plan de rollback. |
 
 ### 4. Communication et audit
 
@@ -100,7 +84,6 @@ recensees dans l'entree du registre de migration pour l'artefact.
 |------------|--------|------------|
 | Disponibilite du contrat Pin Registry | Bloque le rollout M2 pin-first. | Preparer le contrat avant M2 avec des tests de replay; maintenir un fallback envelope jusqu'a stabilite. |
 | Cles de signature du conseil | Requises pour les envelopes de manifest et les approbations registry. | Ceremony de signature documentee dans `docs/source/sorafs/signing_ceremony.md`; rotation avec chevauchement et note dans le registre. |
-| Tooling de parite gateway | Necessaire pour imposer les preuves d'alias et la parite des chunks. | Livrer les mises a jour gateway en M1, garder le comportement legacy derriere un feature flag jusqu'aux criteres M2. |
 | Cadence de release SDK | Les clients doivent honorer les preuves d'alias avant M3. | Aligner les fenetres de release SDK sur les gates des jalons; ajouter des checklists de migration aux templates de release. |
 
 Les risques residuels et mitigations sont reprennent dans `docs/source/sorafs_architecture_rfc.md`
@@ -110,10 +93,7 @@ et doivent etre recoupes lors des ajustements.
 
 | Jalon | Criteres |
 |-------|----------|
-| M0 | - Tous les artefacts cibles reconstruits via `sorafs_manifest_stub` avec expectation flags. <br /> - Registre de migration renseigne pour chaque famille d'artefacts. <br /> - Publication double (legacy + SoraFS) active. |
 | M1 | - Job nightly des fixtures vert pendant sept jours consecutifs. <br /> - Preuves d'alias staging verifiees en CI. <br /> - Governance ratifie la politique d'expectation flags. |
-| M2 | - 100% des nouveaux manifests routes via Pin Registry. <br /> - Stockage legacy marque en lecture seule; playbook incident approuve. <br /> - Dashboards d'observabilite en ligne avec seuils d'alerte. |
-| M3 | - Gateways alias-only en production. <br /> - DNS legacy supprime et reflechi dans les tickets de changement. <br /> - Defaults SDK mis a jour et publies. <br /> - Statut final ajoute au registre de migration. |
 
 ## Gestion du changement
 

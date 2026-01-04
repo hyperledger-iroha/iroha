@@ -13,7 +13,7 @@ description: Guia operacional passo a passo para implantar, monitorar e reverter
 ---
 
 :::note Fonte canônica
-Esta página espelha `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Mantenha ambas as cópias sincronizadas até que o conjunto legado de documentação Sphinx esteja totalmente migrado.
+Esta página espelha `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 Este runbook orienta os SREs na preparação, no rollout e na operação do orquestrador de fetch multi-origem. Ele complementa o guia de desenvolvimento com procedimentos ajustados para rollouts em produção, incluindo habilitação em fases e bloqueio de peers.
@@ -101,7 +101,7 @@ Quando um fetch falha:
 
 Para reverter um rollout do orquestrador:
 
-1. Distribua uma configuração que defina `--max-peers=1` (desabilita efetivamente o agendamento multi-origem) ou retorne os clientes ao caminho de fetch legado de fonte única.
+1. Distribua uma configuração que defina `--max-peers=1` (desabilita efetivamente o agendamento multi-origem) ou retorne os clientes ao caminho de fetch de fonte única.
 2. Remova quaisquer overrides `--boost-provider` para que o scoreboard volte a uma ponderação neutra.
 3. Continue coletando as métricas do orquestrador por pelo menos um dia para confirmar que não há fetches residuais em andamento.
 

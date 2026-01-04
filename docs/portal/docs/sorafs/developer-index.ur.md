@@ -19,7 +19,6 @@ sidebar_label: Developer overview
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/developer/index.md` کی عکاسی کرتا ہے۔ جب تک legacy docs ریٹائر نہ ہوں دونوں ورژنز کو ہم آہنگ رکھیں۔
 :::
 
 # SoraFS developer guides

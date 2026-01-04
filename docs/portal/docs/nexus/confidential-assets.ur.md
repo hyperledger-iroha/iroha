@@ -21,7 +21,6 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Motivation
 - opt-in shielded asset flows فراہم کرنا تاکہ domains شفاف circulation بدلے بغیر transactional privacy برقرار رکھ سکیں۔
-- heterogeneous validator hardware پر deterministic execution برقرار رکھنا اور Norito/Kotodama ABI v1 compatibility محفوظ رکھنا۔
 - auditors اور operators کو circuits اور cryptographic parameters کے لئے lifecycle controls (activation، rotation، revocation) دینا۔
 
 ## Threat Model
@@ -54,7 +53,6 @@ Swift SDKs اب bespoke JSON glue کے بغیر shield instructions emit کر س
 - Governance مستقبل کے `activation_height` کے ساتھ `next_conf_features` پروگرام کر کے upgrades stage کر سکتی ہے؛ اس height تک block producers پچھلا digest emit کرتے رہتے ہیں۔
 - Validator nodes کو `confidential.enabled = true` اور `assume_valid = false` کے ساتھ operate کرنا MUST ہے۔ Startup checks validator set join کرنے سے انکار کرتے ہیں اگر کوئی شرط fail ہو یا local `conf_features` diverge ہو۔
 - P2P handshake metadata اب `{ enabled, assume_valid, conf_features }` شامل کرتا ہے۔ Incompatible features advertise کرنے والے peers `HandshakeConfidentialMismatch` کے ساتھ reject ہوتے ہیں اور consensus rotation میں داخل نہیں ہوتے۔
-- Validators، observers اور outdated peers کے درمیان compatibility outcomes handshake matrix میں [Node Capability Negotiation](#node-capability-negotiation) کے تحت capture ہوتے ہیں۔ Handshake failures `HandshakeConfidentialMismatch` surface کرتے ہیں اور peer کو consensus rotation سے باہر رکھتے ہیں جب تک digest match نہ ہو۔
 - Non-validator observers `assume_valid = true` سیٹ کر سکتے ہیں؛ وہ confidential deltas کو blindly apply کرتے ہیں مگر consensus safety پر اثر نہیں ڈالتے۔
 
 ## Asset Policies
@@ -124,7 +122,6 @@ Example response:
 
 ### Migration sequencing
 
-1. **Prepare registries:** target policy میں referenced تمام verifier اور parameter entries activate کریں۔ Nodes resulting `conf_features` advertise کرتے ہیں تاکہ peers compatibility verify کر سکیں۔
 2. **Stage the transition:** `policy_transition_delay_blocks` کو respect کرنے والے `effective_height` کے ساتھ `ScheduleConfidentialPolicyTransition` submit کریں۔ `ShieldedOnly` کی طرف جاتے وقت conversion window specify کریں (`window ≥ policy_transition_window_blocks`)۔
 3. **Publish operator guidance:** واپس ملنے والا `transition_id` record کریں اور on/off-ramp runbook circulate کریں۔ Wallets اور auditors `/v1/confidential/assets/{id}/transitions` subscribe کر کے window open height جانتے ہیں۔
 4. **Window enforcement:** window کھلتے ہی runtime policy کو `Convertible` پر switch کرتا ہے، `PolicyTransitionWindowOpened { transition_id }` emit کرتا ہے، اور conflicting governance requests reject کرنا شروع کرتا ہے۔
@@ -147,7 +144,6 @@ Confidentiality enabled کے ساتھ شروع ہونے والی نئی networks
 ## Verifier & Parameter Lifecycle
 ### ZK Registry
 - Ledger `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` اسٹور کرتا ہے جہاں `proving_system` فی الحال `Halo2` پر fixed ہے۔
-- Registry lifecycle `Proposed → Active → Deprecated → Withdrawn` follow کرتا ہے۔ صرف `Active` entries proofs validate کر سکتی ہیں؛ `Deprecated` entries `deprecation_height` تک قابل استعمال رہتی ہیں؛ `Withdrawn` entries deterministic طور پر proofs reject کرتی ہیں۔
 - `(circuit_id, version)` pairs globally unique ہیں؛ registry circuit metadata کے lookup کیلئے secondary index رکھتی ہے۔ Duplicate pair رجسٹر کرنے کی کوشش admission پر reject ہوتی ہے۔
 - `circuit_id` non-empty ہونا چاہئے اور `public_inputs_schema_hash` فراہم کرنا لازم ہے (عام طور پر verifier کے canonical public-input encoding کا Blake2b-32 hash)۔ Admission ان فیلڈز کے بغیر records reject کرتا ہے۔
 - Governance instructions میں شامل ہیں:
@@ -164,8 +160,6 @@ Confidentiality enabled کے ساتھ شروع ہونے والی نئی networks
 
 ### Pedersen & Poseidon Parameters
 - الگ registries (`PedersenParams`, `PoseidonParams`) verifier lifecycle controls mirror کرتی ہیں، ہر ایک میں `params_id`, generators/constants کے hashes، activation/deprecation/withdraw heights ہوتے ہیں۔
-- Commitments اور hashes `params_id` کے ذریعے domain-separate کرتے ہیں تاکہ parameter rotation deprecated sets کے bit patterns reuse نہ کرے؛ ID note commitments اور nullifier domain tags میں embed ہوتی ہے۔
-- Circuits verification time پر multi-parameter selection support کرتی ہیں؛ deprecated parameter sets `deprecation_height` تک spendable رہتے ہیں اور withdrawn sets بالکل `withdraw_height` پر reject ہوتے ہیں۔
 
 ## Deterministic Ordering & Nullifiers
 - ہر asset `CommitmentTree` رکھتا ہے جس میں `next_leaf_index` ہوتا ہے؛ blocks commitments کو deterministic order میں append کرتے ہیں: block order میں transactions iterate کریں؛ ہر transaction کے اندر serialized `output_idx` ascending میں shielded outputs iterate کریں۔
@@ -206,17 +200,6 @@ Confidentiality enabled کے ساتھ شروع ہونے والی نئی networks
 - Handshake `feature_bits.confidential` کے ساتھ `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` advertise کرتا ہے۔ Validator participation کیلئے `confidential.enabled=true`, `assume_valid=false`, identical verifier backend identifiers اور matching digests ضروری ہیں؛ mismatches `HandshakeConfidentialMismatch` کے ساتھ handshake fail کرتے ہیں۔
 - Config صرف observer nodes کیلئے `assume_valid` support کرتا ہے: disabled ہونے پر confidential instructions پر deterministic `UnsupportedInstruction` آتا ہے بغیر panic؛ enabled ہونے پر observers proofs verify کئے بغیر state deltas apply کرتے ہیں۔
 - Mempool confidential transactions reject کرتا ہے اگر local capability disabled ہو۔ Gossip filters incompatible peers کو shielded transactions بھیجنے سے گریز کرتے ہیں جبکہ unknown verifier IDs کو size limits کے اندر blind-forward کرتے ہیں۔
-
-### Handshake Compatibility Matrix
-
-| Remote advertisement | Outcome for validator nodes | Operator notes |
-|----------------------|-----------------------------|----------------|
-| `enabled=true`, `assume_valid=false`, backend matches, digest matches | Accepted | Peer `Ready` state تک پہنچتا ہے اور proposal, vote, RBC fan-out میں حصہ لیتا ہے۔ manual action درکار نہیں۔ |
-| `enabled=true`, `assume_valid=false`, backend matches, digest stale or missing | Rejected (`HandshakeConfidentialMismatch`) | Remote کو pending registry/parameter activations apply کرنا ہوگا یا scheduled `activation_height` کا انتظار۔ درست ہونے تک node discoverable رہتا ہے مگر consensus rotation میں داخل نہیں ہوتا۔ |
-| `enabled=true`, `assume_valid=true` | Rejected (`HandshakeConfidentialMismatch`) | Validators کو proof verification درکار ہے؛ remote کو Torii-only observer کے طور پر configure کریں یا full verification enable کرنے کے بعد `assume_valid=false` کریں۔ |
-| `enabled=false`, handshake fields omitted (out-of-date build), یا verifier backend مختلف | Rejected (`HandshakeConfidentialMismatch`) | Out-of-date یا partially upgraded peers consensus network میں join نہیں کر سکتے۔ انہیں current release پر upgrade کریں اور backend + digest match کریں۔ |
-
-Observers جو جان بوجھ کر proof verification skip کرتے ہیں انہیں capability gates والے validators کے خلاف consensus connections نہیں کھولنی چاہئیں۔ وہ Torii یا archival APIs کے ذریعے blocks ingest کر سکتے ہیں مگر consensus network انہیں reject کرے گی جب تک وہ compatible capabilities advertise نہ کریں۔
 
 ### Reveal Pruning & Nullifier Retention Policy
 
@@ -339,13 +322,6 @@ Local overrides کو operations runbook میں document کریں؛ retention win
 - State equivalence: validator/full/observer nodes canonical chain پر identical state roots produce کرتے ہیں۔
 - Negative fuzzing: malformed proofs، oversized payloads، اور nullifier collisions deterministic طور پر reject ہوتے ہیں۔
 
-## Migration & Compatibility
-- Feature-gated rollout: Phase C3 تک `enabled` default `false` ہے؛ nodes validator set join کرنے سے پہلے capabilities advertise کرتے ہیں۔
-- Transparent assets متاثر نہیں ہوتے؛ confidential instructions کیلئے registry entries اور capability negotiation ضروری ہے۔
-- Confidential support کے بغیر compile کئے گئے nodes متعلقہ blocks deterministic طور پر reject کرتے ہیں؛ وہ validator set join نہیں کر سکتے مگر `assume_valid=true` کے ساتھ observers کے طور پر operate کر سکتے ہیں۔
-- Genesis manifests initial registry entries، parameter sets، assets کیلئے confidential policies، اور optional auditor keys شامل کرتے ہیں۔
-- Operators registry rotation، policy transitions اور emergency withdrawal کیلئے published runbooks follow کرتے ہیں تاکہ deterministic upgrades برقرار رہیں۔
-
 ## Outstanding Work
 - Halo2 parameter sets (circuit size, lookup strategy) benchmark کریں اور نتائج calibration playbook میں ریکارڈ کریں تاکہ اگلی `confidential_assets_calibration.md` refresh کے ساتھ gas/timeout defaults update ہوں۔
 - Auditor disclosure policies اور متعلقہ selective-viewing APIs finalize کریں، اور governance draft sign-off کے بعد approved workflow کو Torii میں wire کریں۔
@@ -364,7 +340,6 @@ Local overrides کو operations runbook میں document کریں؛ retention win
      - ✅ Frontier checkpoints اب `reorg_depth_bound` respect کرتے ہیں، configured window سے پرانے checkpoints prune کرتے ہوئے deterministic snapshots برقرار رکھتے ہیں۔
    - `AssetConfidentialPolicy`, policy FSM، اور mint/transfer/reveal instructions کیلئے enforcement gates introduce کریں۔
    - Block headers میں `conf_features` commit کریں اور registry/parameter digests diverge ہونے پر validator participation refuse کریں۔
-   - Registry FSM (Proposed/Active/Deprecated/Withdrawn) activation/deprecation/withdraw heights اور emergency withdrawal handling کے ساتھ implement کریں۔
 2. **Phase M1 — Registries & Parameters**
    - `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` registries governance ops، genesis anchoring اور cache management کے ساتھ land کریں۔
    - Syscall کو registry lookups، gas schedule IDs، schema hashing، اور size checks require کرنے کیلئے wire کریں۔

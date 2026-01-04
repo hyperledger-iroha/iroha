@@ -139,7 +139,6 @@ The merge ring MUST enforce the following before accepting a lane commitment:
   `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, and
   `nexus_audit_outcome_total` already exist in `crates/iroha_telemetry/src/metrics.rs`. Operators
-  should alert on missing-availability spikes (reschedule counters are legacy and should remain
   zero), and `lane_relay_invalid_total` should stay at zero outside adversarial drills.
 - **Torii surfaces:**  
   `/v1/sumeragi/status` includes `lane_commitments`, `lane_settlement_commitments`, and dataspace snapshots. `/v1/nexus/lane-config` (planned) will publish the `LaneConfig` geometry so clients can match `lane_id` ↔ dataspace labels.

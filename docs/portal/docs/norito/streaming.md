@@ -52,7 +52,6 @@ operators and SDK authors need alongside the configuration touch points.
   bundled rANS requires `ENABLE_RANS_BUNDLES=1`. Enforce via
   `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` and optional
   `streaming.codec.rans_tables_path` when supplying custom tables. Bundled
-  `bundle_width` must be between 2 and 3 (inclusive); width 1 is legacy-only.
 - **SoraNet routes.** `streaming.soranet.*` controls anonymous transport:
   `exit_multiaddr` (default `/dns/torii/udp/9443/quic`), `padding_budget_ms`
   (default 25 ms), `access_kind` (`authenticated` vs `read-only`), optional

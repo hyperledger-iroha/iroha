@@ -11,7 +11,6 @@ translation_last_reviewed: 2026-01-01
 
 :::note Канонический источник
 Эта страница отражает `docs/source/da/replication_policy.md`. Держите обе версии
-синхронизированными до ухода legacy-доков.
 :::
 
 # Политика репликации Data Availability (DA-4)

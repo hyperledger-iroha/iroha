@@ -73,7 +73,6 @@ translation_last_reviewed: 2025-12-30
   artefacts JSON كي تتابع لوحات المراقبة تبني الميزة.
 - تشمل fixtures تحت `fixtures/sorafs_manifest/provider_admission/` الآن:
   - adverts متعددة المصادر قياسية،
-  - متغير legacy بلا نطاق لاختبارات downgrade، و
   - `multi_fetch_plan.json` لكي تعيد مجموعات SDK تشغيل خطة fetch متعددة الأقران بشكل حتمي.
 
 ## تكامل المُنسق وTorii

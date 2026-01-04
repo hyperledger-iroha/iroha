@@ -85,12 +85,10 @@ sections below:
   PBKDF2-HMAC-SHA256 with a 350 k iteration floor when Argon2id is unavailable on the device. Bundle
   AAD still binds to the alias; passphrases must be at least 12 characters for v3 exports and the
   importer rejects all-zero salt/nonce seeds.
-- Legacy v0/v1/v2 bundles remain decodable for recovery. Inspect version/kdf metadata via
   `KeyExportBundle.decode(Base64|bytes)`, import with the original passphrase, and re-export to v3 to
   move to the memory-hard format. The importer rejects all-zero or reused salt/nonce pairs; always
   rotate bundles instead of reusing old exports between devices.
 - Negative-path tests in `java/iroha_android/run_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests`
-  cover wrong passphrases, tampered salt/nonce/ciphertext, legacy v0 decode/import, and zero-seed
   rejection. Clear passphrase char arrays after use and capture both the bundle version and `kdf_kind`
   in incident notes when recovery fails.
 
@@ -747,7 +745,6 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
   misconfiguration or a policy change. Attach the generated `result.json`.
 - **Challenge regen:** Challenges are not cached. Each challenge request regenerates a fresh
   attestation and caches by `(alias, challenge)`; challenge-less calls reuse the cache. Unsupported
-  challenge APIs surface telemetry and errors so clients can fall back to legacy flows.
 - **CI sweep:** Execute `scripts/android_strongbox_attestation_ci.sh` so every
   stored bundle is revalidated; this guards against systemic issues introduced
   by new trust anchors.
@@ -775,14 +772,12 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
 ### 9.2a Deterministic Export Recovery
 
 - **Formats:** Current exports are v3 (per-export salt/nonce + Argon2id, recorded as
-  `kdf_kind`/`kdf_work_factor`). Legacy v0/v1 bundles remain decodable for recovery.
 - **Passphrase policy:** v3 enforces ≥12 character passphrases. If users supply shorter
   passphrases, instruct them to re-export with a compliant passphrase; v0/v1 imports are
   exempt but should be rewrapped as v3 immediately after import.
 - **Tamper/reuse guards:** Decoders reject zero/short salt or nonce lengths and repeated
   salt/nonce pairs surface as `salt/nonce reuse` errors. Regenerate the export to clear
   the guard; do not attempt to force reuse.
-- **Upgrade workflow:** When handed a legacy bundle, call
   `SoftwareKeyProvider.importDeterministic(...)` to rehydrate the key, then
   `exportDeterministic(...)` to emit a v3 bundle so desktop tooling records the new KDF
   parameters.

@@ -85,22 +85,21 @@ Todas las flags del CLI que escriben JSON (`--json-out`, `--por-json-out`, `--po
 crear un archivo. Esto facilita canalizar los datos a tooling mientras se mantiene el
 comportamiento por defecto de imprimir el reporte principal.
 
-### Matriz de compatibilidad y plan de rollout
+### Matriz de rollout y plan de despliegue
 
 
 La tabla siguiente captura el estado actual de soporte para `sorafs.sf1@1.0.0` en
-componentes principales. "Bridge" se refiere al carril de compatibilidad CARv1 + SHA-256
+componentes principales. "Bridge" se refiere al carril CARv1 + SHA-256
 que requiere negociación explícita del cliente (`Accept-Chunker` + `Accept-Digest`).
 
 | Componente | Estado | Notas |
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ Soportado | Valida el handle canónico + alias, transmite reportes vía `--json-out=-` y aplica la carta del registro con `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ Legado | Constructor de manifest heredado; usa `iroha sorafs toolkit pack` para empaquetado CAR/manifest y mantén `--plan=-` para revalidación determinista. |
-| `sorafs_provider_advert_stub` | ⚠️ Legado | Helper de validación offline únicamente; los provider adverts deben producirse por el pipeline de publicación y validarse vía `/v1/sorafs/providers`. |
+| `sorafs_manifest_stub` | ⚠️ Retirado | Constructor de manifest fuera de soporte; usa `iroha sorafs toolkit pack` para empaquetado CAR/manifest y mantén `--plan=-` para revalidación determinista. |
+| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validación offline únicamente; los provider adverts deben producirse por el pipeline de publicación y validarse vía `/v1/sorafs/providers`. |
 | `sorafs_fetch` (developer orchestrator) | ✅ Soportado | Lee `chunk_fetch_specs`, entiende payloads de capacidad `range` y ensambla salida CARv2. |
 | Fixtures de SDK (Rust/Go/TS) | ✅ Soportado | Regeneradas vía `export_vectors`; el handle canónico aparece primero en cada lista de alias y está firmado por sobres del consejo. |
 | Negociación de perfiles en gateway Torii | ✅ Soportado | Implementa la gramática completa de `Accept-Chunker`, incluye headers `Content-Chunker` y expone el bridge CARv1 solo en solicitudes de downgrade explícitas. |
-| Bridge CARv1 (`sha2-256`) | ⚠️ Transicional | Disponible para clientes heredados cuando la solicitud anuncia tanto el perfil canónico como `Accept-Digest: sha2-256`; las respuestas incluyen `Content-Chunker: ...;legacy=true`. |
 
 Despliegue de telemetría:
 
@@ -201,27 +200,22 @@ Al solicitar datos CAR, los clientes deben enviar un header `Accept-Chunker` que
 `(namespace, name, semver)` en orden de preferencia:
 
 ```
-Accept-Chunker: sorafs.sf1;version=1.0.0, legacy.fastcdc;version=0.9.0
-```
 
 Los gateways seleccionan un perfil soportado mutuamente (por defecto `sorafs.sf1@1.0.0`)
 y reflejan la decisión vía el header de respuesta `Content-Chunker`. Los manifests
 embeben el perfil elegido para que los nodos downstream puedan validar el layout de chunks
 sin depender de la negociación HTTP.
 
-### Compatibilidad CAR
+### Soporte CAR
 
-El envelope canónico del manifest usa raíces CIDv1 con `dag-cbor` (`0x71`). Para compatibilidad legacy
 retendremos una ruta de exportación CARv1+SHA-2:
 
 * **Ruta primaria** – CARv2, digest de payload BLAKE3 (`0x1f` multihash),
   `MultihashIndexSorted`, perfil de chunk registrado como arriba.
-* **Bridge legacy** – CARv1, digest de payload SHA-256 (`0x12` multihash). Los servidores
   PUEDEN exponer esta variante cuando el cliente omite `Accept-Chunker` o solicita
   `Accept-Digest: sha2-256`.
 
-Los manifests siempre anuncian el compromiso CARv2/BLAKE3. Los carriles legacy aportan headers
-adicionales para compatibilidad pero no deben reemplazar el digest canónico.
+adicionales para transición pero no deben reemplazar el digest canónico.
 
 ### Conformidad
 

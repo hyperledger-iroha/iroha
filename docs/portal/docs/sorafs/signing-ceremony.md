@@ -6,7 +6,6 @@ sidebar_label: Signing Ceremony
 ---
 
 > Roadmap: **SF-1b — Sora Parliament fixture approvals.**
-> The Parliament workflow supersedes the legacy offline “council signing ceremony”.
 
 The manual signing ritual used for SoraFS chunker fixtures is retired. All
 approvals now flow through the **Sora Parliament**, the sortition-based DAO that

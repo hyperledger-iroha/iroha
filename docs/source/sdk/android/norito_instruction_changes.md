@@ -38,7 +38,6 @@ Use the checklist below whenever a Norito instruction or discriminant changes:
    - A concise summary of the affected instructions (new variant, removed
      field, doc-only update, etc.).
    - Required Android follow-up (codegen run, Kotlin doc refresh, fixtures, CI
-     hooks). Note whether compatibility shims or staggered rollouts are needed.
    - Links to supporting evidence (parity summary, PR, roadmap status entry,
      Grafana snapshot).
 5. Reference the new entry from the pull request/commit description so reviewers
@@ -59,7 +58,6 @@ Use the checklist below whenever a Norito instruction or discriminant changes:
 
 | Date (UTC) | Manifest digest | `iroha_data_model` ref | Summary | Android follow-up | Evidence |
 |------------|----------------|------------------------|---------|-------------------|----------|
-| 2025-11-15 | `975d20b9aba10ac62307d0f67f8808fadc1c41abd903459057cebeb9fa2f9435` (`target-codex/android_codegen/instruction_manifest.json`) | `89e3cc95a8c540ab77b137945baaf91d069fd95e` | Baseline export covering 98 `InstructionBox` discriminants and builder metadata generated via `make android-codegen-docs`. | Use as the AND3 reference point; regenerate fixtures/docs for any new discriminant and keep CI parity alerts enabled. No compatibility shim required. | `docs/source/sdk/android/manifest_codegen_parity.md`, `target-codex/android_codegen/builder_index.json`, parity summary recorded via `scripts/check_android_fixtures.py`. |
 | 2025-11-22 | `1d14214994b2875e3942ca1218074dcac04f64f0788b62fe57f3a2b44fdf9182` (`target-codex/android_codegen/instruction_manifest.json`) | `bafab4c48460` | Refreshed the manifest/builder docs (104 discriminants) and updated the recorded digests ahead of turning on the Android codegen parity gate. | Regenerate docs via `make android-codegen-docs`, update `codegen_manifest_metadata.json`, and keep `make android-codegen-verify` wired into CI through the new `android-codegen-parity` workflow. | `docs/source/sdk/android/generated/codegen_manifest_metadata.json`, `.github/workflows/android-codegen-parity.yml`, `artifacts/android/codegen_parity_summary.json` |
 | 2026-03-05 | `20132f673b82484c5afb7a8c67a38fd5d47735c6e89c4b7e479a4c378ffa93ca` (`target-codex/android_codegen/instruction_manifest.json`) | `439295f10c916124eb8e1bbc7ba2e1894dc2ba84` | Regenerated manifest/builder docs to cover the new governance ballots, manifest fixtures, and trigger metadata exported by `norito_codegen_exporter` (104 discriminants total). | Refresh `docs/source/sdk/android/generated/` via `make android-codegen-docs`, update `codegen_manifest_metadata.json`, and enable the parity gate through `make android-codegen-verify`. | `docs/source/sdk/android/generated/codegen_manifest_metadata.json`, `scripts/check_android_codegen_parity.py`, `artifacts/android/codegen_parity_summary.json` (CI upload). |
 

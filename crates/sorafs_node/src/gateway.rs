@@ -6,6 +6,7 @@
 
 use std::{
     collections::{HashMap, hash_map::Entry},
+    fs,
     ops::RangeInclusive,
     sync::{
         Arc, Mutex,
@@ -30,6 +31,7 @@ use axum::{
 };
 use base64::Engine as _;
 use eyre::WrapErr;
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_logger::{info, warn};
 use iroha_telemetry::metrics::{SorafsGatewayOtel, global_sorafs_gateway_otel};
 use norito::json::{self, Value};
@@ -44,7 +46,7 @@ use sorafs_manifest::{
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::NodeHandle;
+use crate::{NodeHandle, config::StorageConfig};
 
 const HEADER_VERSION: &str = "x-sorafs-version";
 const HEADER_NONCE: &str = "x-sorafs-nonce";
@@ -76,9 +78,11 @@ pub struct GatewayDataset {
     manifest_id_hex: String,
     content_cid: String,
     chunker_alias: String,
+    provider_id: [u8; 32],
     car_bytes: Arc<Vec<u8>>,
     payload_bytes: Arc<Vec<u8>>,
     plan: CarBuildPlan,
+    por_tree: PorMerkleTree,
     proof: PorProofV1,
     proof_digest_hex: String,
     por_root_hex: String,
@@ -97,6 +101,23 @@ impl GatewayDataset {
     pub fn load_from_storage(
         node: &NodeHandle,
         manifest_digest_hex: &str,
+    ) -> Result<Self, eyre::Report> {
+        let provider_id = node.capacity_usage().provider_id.ok_or_else(|| {
+            eyre::eyre!("gateway provider_id missing; record a capacity declaration")
+        })?;
+        Self::load_from_storage_with_provider(node, manifest_digest_hex, provider_id)
+    }
+
+    /// Load a gateway dataset using an explicit provider identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the manifest digest is unknown, storage is disabled,
+    /// the signing key is unavailable, or the stored payload does not match its manifest metadata.
+    pub fn load_from_storage_with_provider(
+        node: &NodeHandle,
+        manifest_digest_hex: &str,
+        provider_id: [u8; 32],
     ) -> Result<Self, eyre::Report> {
         let digest_bytes =
             hex::decode(manifest_digest_hex).wrap_err("manifest digest must be hex")?;
@@ -142,9 +163,9 @@ impl GatewayDataset {
             .write_to(&mut car_bytes)
             .map_err(|err| eyre::eyre!(err.to_string()))?;
 
-        let provider_id = node.capacity_usage().provider_id.unwrap_or(digest);
         let por_tree = stored.por_tree();
-        let proof = build_por_proof(&por_tree, &payload_raw, digest, provider_id)?;
+        let signing_key = load_gateway_signing_key(node.config())?;
+        let proof = build_por_proof(&por_tree, &payload_raw, digest, provider_id, &signing_key)?;
         let proof_digest_hex = hex::encode(proof.proof_digest());
         let por_root_hex = hex::encode(por_tree.root());
 
@@ -155,9 +176,11 @@ impl GatewayDataset {
             manifest_id_hex,
             content_cid,
             chunker_alias,
+            provider_id,
             car_bytes: Arc::new(car_bytes),
             payload_bytes: Arc::new(payload_raw),
             plan,
+            por_tree,
             proof,
             proof_digest_hex,
             por_root_hex,
@@ -235,7 +258,7 @@ impl GatewayDataset {
     /// Provider identifier for the dataset encoded as lowercase hex.
     #[must_use]
     pub fn provider_id_hex(&self) -> String {
-        hex::encode(self.proof.provider_id)
+        hex::encode(self.provider_id)
     }
 
     fn proof(&self) -> &PorProofV1 {
@@ -243,6 +266,36 @@ impl GatewayDataset {
     }
 
     fn validate_proof(&self) -> Result<(), GatewayResponseError> {
+        let refusal = |reason: String, details: Option<Value>| {
+            GatewayResponseError::capability_refusal_with_details(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "proof_mismatch",
+                reason,
+                details,
+            )
+        };
+
+        if let Err(err) = self.proof.validate() {
+            let mut details = json::Map::new();
+            details.insert("error".into(), Value::from(err.to_string()));
+            return Err(refusal(
+                "proof payload failed validation".to_string(),
+                Some(Value::Object(details)),
+            ));
+        }
+
+        if self.proof.provider_id != self.provider_id {
+            let mut details = json::Map::new();
+            details.insert(
+                "provider_id".into(),
+                Value::from(hex::encode(self.proof.provider_id)),
+            );
+            return Err(refusal(
+                "proof provider id does not match gateway dataset".to_string(),
+                Some(Value::Object(details)),
+            ));
+        }
+
         let proof_manifest_hex = hex::encode(self.proof.manifest_digest);
         if !equal_hex(&proof_manifest_hex, self.manifest_id_hex()) {
             let mut details = json::Map::new();
@@ -250,29 +303,75 @@ impl GatewayDataset {
                 "manifest_digest".into(),
                 Value::from(proof_manifest_hex.to_string()),
             );
-            return Err(GatewayResponseError::capability_refusal_with_details(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "proof_mismatch",
-                "chunk digest mismatch detected in proof bundle",
+            return Err(refusal(
+                "proof manifest digest does not match gateway dataset".to_string(),
+                Some(Value::Object(details)),
+            ));
+        }
+
+        if self.por_tree.is_empty() {
+            return Err(refusal("gateway PoR tree is empty".to_string(), None));
+        }
+
+        let expected_roots: Vec<[u8; 32]> = self
+            .por_tree
+            .chunks()
+            .iter()
+            .map(|chunk| chunk.root)
+            .collect();
+        if self.proof.auth_path != expected_roots {
+            let mut details = json::Map::new();
+            details.insert(
+                "auth_path_len".into(),
+                Value::from(self.proof.auth_path.len() as u64),
+            );
+            details.insert(
+                "expected_len".into(),
+                Value::from(expected_roots.len() as u64),
+            );
+            return Err(refusal(
+                "proof authentication path does not match gateway tree".to_string(),
                 Some(Value::Object(details)),
             ));
         }
 
         for (index, sample) in self.proof.samples.iter().enumerate() {
-            let section = format!("proof.chunks[{index}]");
-            let mut details = json::Map::new();
-            details.insert("section".into(), Value::from(section.clone()));
+            let sample_index = usize::try_from(sample.sample_index).map_err(|_| {
+                refusal(
+                    "proof sample index exceeds supported range".to_string(),
+                    Some(Value::from(index as u64)),
+                )
+            })?;
 
-            if sample.chunk_digest.iter().all(|&byte| byte == 0xFF) {
-                return Err(GatewayResponseError::capability_refusal_with_details(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "proof_mismatch",
-                    "chunk digest mismatch detected in proof bundle",
+            let (chunk_idx, segment_idx, leaf_idx) =
+                self.por_tree.leaf_path(sample_index).ok_or_else(|| {
+                    refusal(
+                        "proof sample index does not map to a PoR leaf".to_string(),
+                        Some(Value::from(sample.sample_index)),
+                    )
+                })?;
+
+            let chunk = &self.por_tree.chunks()[chunk_idx];
+            let segment = &chunk.segments[segment_idx];
+            let leaf = &segment.leaves[leaf_idx];
+
+            if sample.chunk_offset != chunk.offset
+                || sample.chunk_size != chunk.length
+                || sample.chunk_digest != chunk.chunk_digest
+                || sample.leaf_digest != leaf.digest
+            {
+                let mut details = json::Map::new();
+                details.insert("sample_index".into(), Value::from(sample.sample_index));
+                details.insert("chunk_offset".into(), Value::from(sample.chunk_offset));
+                details.insert("chunk_size".into(), Value::from(sample.chunk_size));
+                return Err(refusal(
+                    "proof sample does not match gateway tree".to_string(),
                     Some(Value::Object(details)),
                 ));
             }
         }
 
+        verify_proof_signature(self.proof())?;
         Ok(())
     }
 
@@ -484,11 +583,17 @@ fn chunk_profile_for_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, eyr
         }
         Ok(descriptor.profile)
     } else {
+        let min_size = usize::try_from(manifest.chunking.min_size)
+            .map_err(|_| eyre::eyre!("manifest min_size exceeds supported range"))?;
+        let target_size = usize::try_from(manifest.chunking.target_size)
+            .map_err(|_| eyre::eyre!("manifest target_size exceeds supported range"))?;
+        let max_size = usize::try_from(manifest.chunking.max_size)
+            .map_err(|_| eyre::eyre!("manifest max_size exceeds supported range"))?;
         let profile = ChunkProfile {
-            min_size: manifest.chunking.min_size as usize,
-            target_size: manifest.chunking.target_size as usize,
-            max_size: manifest.chunking.max_size as usize,
-            break_mask: manifest.chunking.break_mask as u64,
+            min_size,
+            target_size,
+            max_size,
+            break_mask: u64::from(manifest.chunking.break_mask),
         };
         if profile.min_size == 0
             || profile.target_size == 0
@@ -497,6 +602,11 @@ fn chunk_profile_for_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, eyr
         {
             return Err(eyre::eyre!(
                 "manifest chunking profile parameters must be non-zero"
+            ));
+        }
+        if profile.min_size > profile.target_size || profile.target_size > profile.max_size {
+            return Err(eyre::eyre!(
+                "manifest chunking profile sizes must satisfy min <= target <= max"
             ));
         }
         Ok(profile)
@@ -508,6 +618,7 @@ fn build_por_proof(
     payload: &[u8],
     manifest_digest: [u8; 32],
     provider_id: [u8; 32],
+    signing_key: &PrivateKey,
 ) -> Result<PorProofV1, eyre::Report> {
     let (chunk_idx, segment_idx, leaf_idx) = por_tree
         .leaf_path(0)
@@ -522,31 +633,110 @@ fn build_por_proof(
         chunk_digest: proof.chunk_digest,
         leaf_digest: proof.leaf_digest,
     };
-    let auth_path = if proof.chunk_roots.is_empty() {
-        vec![*por_tree.root()]
-    } else {
-        proof.chunk_roots.clone()
-    };
-    // TODO: Replace placeholder proof signatures with provider-attested signatures.
-    let signature_hash = blake3::hash(&manifest_digest);
-    let mut signature_bytes = Vec::with_capacity(64);
-    signature_bytes.extend_from_slice(signature_hash.as_bytes());
-    signature_bytes.extend_from_slice(signature_hash.as_bytes());
-    let signature = AdvertSignature {
-        algorithm: SignatureAlgorithm::Ed25519,
-        public_key: provider_id.to_vec(),
-        signature: signature_bytes,
-    };
-
-    Ok(PorProofV1 {
+    let auth_path = proof.chunk_roots.clone();
+    let mut por_proof = PorProofV1 {
         version: POR_PROOF_VERSION_V1,
         challenge_id: manifest_digest,
         manifest_digest,
         provider_id,
         samples: vec![sample],
         auth_path,
-        signature,
+        signature: AdvertSignature {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: Vec::new(),
+            signature: Vec::new(),
+        },
         submitted_at: unix_now()?,
+    };
+
+    let proof_digest = por_proof.proof_digest();
+    let keypair = KeyPair::from_private_key(signing_key.clone())
+        .wrap_err("failed to derive gateway signing keypair")?;
+    let signature = Signature::new(signing_key, proof_digest.as_ref());
+    let (_, public_key) = keypair.public_key().to_bytes();
+    por_proof.signature = AdvertSignature {
+        algorithm: SignatureAlgorithm::Ed25519,
+        public_key: public_key.to_vec(),
+        signature: signature.payload().to_vec(),
+    };
+
+    Ok(por_proof)
+}
+
+fn load_gateway_signing_key(config: &StorageConfig) -> Result<PrivateKey, eyre::Report> {
+    let path = config
+        .stream_token_signing_key_path()
+        .ok_or_else(|| eyre::eyre!("gateway signing key path not configured"))?;
+    let raw = fs::read(path)
+        .wrap_err_with(|| format!("failed to read gateway signing key from {}", path.display()))?;
+
+    let trimmed = String::from_utf8_lossy(&raw).trim().to_owned();
+    let key_bytes = if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        hex::decode(trimmed).wrap_err("failed to decode hex signing key")?
+    } else {
+        raw
+    };
+
+    if key_bytes.len() != 32 {
+        return Err(eyre::eyre!(
+            "gateway signing key at {} must be 32 bytes, found {}",
+            path.display(),
+            key_bytes.len()
+        ));
+    }
+
+    let mut array = [0u8; 32];
+    array.copy_from_slice(&key_bytes);
+    PrivateKey::from_bytes(Algorithm::Ed25519, &array)
+        .wrap_err("failed to parse gateway signing key")
+}
+
+fn verify_proof_signature(proof: &PorProofV1) -> Result<(), GatewayResponseError> {
+    let refusal = |reason: String, details: Option<Value>| {
+        GatewayResponseError::capability_refusal_with_details(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "proof_mismatch",
+            reason,
+            details,
+        )
+    };
+
+    if proof.signature.algorithm != SignatureAlgorithm::Ed25519 {
+        let mut details = json::Map::new();
+        details.insert(
+            "algorithm".into(),
+            Value::from(format!("{:?}", proof.signature.algorithm)),
+        );
+        return Err(refusal(
+            "proof signature algorithm must be Ed25519".to_string(),
+            Some(Value::Object(details)),
+        ));
+    }
+
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &proof.signature.public_key)
+        .map_err(|_| {
+            let mut details = json::Map::new();
+            details.insert(
+                "public_key_len".into(),
+                Value::from(proof.signature.public_key.len() as u64),
+            );
+            refusal(
+                "proof signature public key is invalid".to_string(),
+                Some(Value::Object(details)),
+            )
+        })?;
+    let signature = Signature::from_bytes(&proof.signature.signature);
+    let digest = proof.proof_digest();
+    signature.verify(&public_key, digest.as_ref()).map_err(|_| {
+        let mut details = json::Map::new();
+        details.insert(
+            "signature_len".into(),
+            Value::from(proof.signature.signature.len() as u64),
+        );
+        refusal(
+            "proof signature does not verify".to_string(),
+            Some(Value::Object(details)),
+        )
     })
 }
 
@@ -2070,9 +2260,9 @@ fn populate_success_headers(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{fs, io::Write, path::PathBuf};
 
-    use tempfile::TempDir;
+    use tempfile::{NamedTempFile, TempDir};
 
     use super::*;
     use crate::config::StorageConfig;
@@ -2095,6 +2285,15 @@ mod tests {
         assert_eq!(err.error_code(), "required_headers_missing");
     }
 
+    fn write_signing_key_hex() -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("temp signing key");
+        let key_bytes = [0x11u8; 32];
+        let hex_key = hex::encode(key_bytes);
+        file.write_all(hex_key.as_bytes())
+            .expect("write signing key");
+        file
+    }
+
     fn fixture_dataset() -> GatewayDataset {
         let fixtures =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");
@@ -2107,9 +2306,11 @@ mod tests {
         let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("build plan");
 
         let temp_dir = TempDir::new().expect("temp storage");
+        let signing_key = write_signing_key_hex();
         let config = StorageConfig::builder()
             .enabled(true)
             .data_dir(temp_dir.path().join("storage"))
+            .stream_token_signing_key_path(Some(signing_key.path().to_path_buf()))
             .build();
         let node = NodeHandle::new(config);
         let mut reader = payload.as_slice();
@@ -2117,7 +2318,8 @@ mod tests {
             .expect("ingest manifest");
         let manifest_digest = manifest.digest().expect("manifest digest");
         let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-        GatewayDataset::load_from_storage(&node, &manifest_digest_hex)
+        let provider_id = [0xAB; 32];
+        GatewayDataset::load_from_storage_with_provider(&node, &manifest_digest_hex, provider_id)
             .expect("load storage-backed dataset")
     }
 
@@ -2194,6 +2396,114 @@ mod tests {
                 .to_str()
                 .unwrap(),
             DEFAULT_PERMISSIONS_TEMPLATE
+        );
+    }
+
+    #[test]
+    fn signing_key_loader_accepts_hex() {
+        let signing_key = write_signing_key_hex();
+        let config = StorageConfig::builder()
+            .stream_token_signing_key_path(Some(signing_key.path().to_path_buf()))
+            .build();
+        let key = load_gateway_signing_key(&config).expect("load signing key");
+        let keypair = KeyPair::from_private_key(key).expect("derive keypair");
+        let signature = Signature::new(keypair.private_key(), b"sorafs-proof");
+        signature
+            .verify(keypair.public_key(), b"sorafs-proof")
+            .expect("signature should verify");
+    }
+
+    #[test]
+    fn por_proof_signature_rejects_tampering() {
+        let fixtures =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");
+        let manifest_bytes =
+            fs::read(fixtures.join("manifest_v1.to")).expect("read manifest fixture");
+        let manifest: ManifestV1 =
+            norito::decode_from_bytes(&manifest_bytes).expect("decode manifest fixture");
+        let payload = fs::read(fixtures.join("payload.bin")).expect("read payload fixture");
+        let profile = chunk_profile_for_manifest(&manifest).expect("chunk profile");
+        let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("build plan");
+        let stored_chunks = plan
+            .chunks
+            .iter()
+            .map(|chunk| sorafs_car::StoredChunk {
+                offset: chunk.offset,
+                length: chunk.length,
+                blake3: chunk.digest,
+            })
+            .collect::<Vec<_>>();
+        let por_tree = PorMerkleTree::from_payload(&payload, &stored_chunks);
+        let manifest_digest = manifest.digest().expect("manifest digest");
+        let provider_id = [0xCD; 32];
+        let signing_key =
+            PrivateKey::from_bytes(Algorithm::Ed25519, &[0x22; 32]).expect("private key");
+
+        let mut proof = build_por_proof(
+            &por_tree,
+            &payload,
+            *manifest_digest.as_bytes(),
+            provider_id,
+            &signing_key,
+        )
+        .expect("build proof");
+        verify_proof_signature(&proof).expect("proof signature valid");
+        proof.signature.signature[0] ^= 0xFF;
+        let err = verify_proof_signature(&proof).expect_err("tampered proof should fail");
+        assert_eq!(err.error_code(), "proof_mismatch");
+    }
+
+    #[test]
+    fn chunk_profile_for_manifest_rejects_out_of_order_sizes() {
+        let fixtures =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");
+        let manifest_bytes =
+            fs::read(fixtures.join("manifest_v1.to")).expect("read manifest fixture");
+        let mut manifest: ManifestV1 =
+            norito::decode_from_bytes(&manifest_bytes).expect("decode manifest fixture");
+        manifest.chunking.profile_id = sorafs_manifest::ProfileId(u32::MAX);
+        manifest.chunking.min_size = 1024;
+        manifest.chunking.target_size = 512;
+        manifest.chunking.max_size = 2048;
+        manifest.chunking.break_mask = 1;
+        let err = chunk_profile_for_manifest(&manifest).expect_err("should reject profile");
+        assert!(
+            err.to_string().contains("min <= target <= max"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn load_from_storage_requires_provider_id() {
+        let fixtures =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");
+        let manifest_bytes =
+            fs::read(fixtures.join("manifest_v1.to")).expect("read manifest fixture");
+        let manifest: ManifestV1 =
+            norito::decode_from_bytes(&manifest_bytes).expect("decode manifest fixture");
+        let payload = fs::read(fixtures.join("payload.bin")).expect("read payload fixture");
+        let profile = chunk_profile_for_manifest(&manifest).expect("chunk profile");
+        let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("build plan");
+
+        let temp_dir = TempDir::new().expect("temp storage");
+        let signing_key = write_signing_key_hex();
+        let config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .stream_token_signing_key_path(Some(signing_key.path().to_path_buf()))
+            .build();
+        let node = NodeHandle::new(config);
+        let mut reader = payload.as_slice();
+        node.ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest manifest");
+        let manifest_digest = manifest.digest().expect("manifest digest");
+        let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
+
+        let err = GatewayDataset::load_from_storage(&node, &manifest_digest_hex)
+            .expect_err("provider id should be required");
+        assert!(
+            err.to_string().contains("provider_id missing"),
+            "unexpected error: {err}"
         );
     }
 }

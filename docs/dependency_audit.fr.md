@@ -100,14 +100,14 @@ Notes :
     historique.
   - Exposer un wrapper explicite pour la compression de clé publique en
     réutilisant `blstrs::G1Affine::to_compressed` et en ajoutant un contrôle
-    de compatibilité avec l’encodage w3f afin de garantir des bytes identiques
+    de cohérence avec l’encodage w3f afin de garantir des bytes identiques
     “sur le fil”.
   - Ajouter des fixtures de round‑trip dans
     `crates/iroha_crypto/tests/bls_backend_compat.rs` qui dérivent des clés
     une seule fois et comparent les backends sur `SecretKey`, `PublicKey` et
     l’agrégation de signatures.
   - Protéger le nouveau backend derrière la feature `bls-backend-blstrs` dans
-    la CI, tout en gardant les tests de compatibilité activés pour le backend
+    la CI, tout en gardant les tests de cohérence activés pour le backend
     par défaut, de sorte que les régressions soient détectées avant tout
     changement de backend.
 

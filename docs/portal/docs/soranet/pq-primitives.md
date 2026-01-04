@@ -6,7 +6,6 @@ description: Overview of the `soranet_pq` crate and how the SoraNet handshake co
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/soranet/pq_primitives.md`. Keep both copies in sync until the legacy documentation set is retired.
 :::
 
 The `soranet_pq` crate contains the post-quantum building blocks that every SoraNet

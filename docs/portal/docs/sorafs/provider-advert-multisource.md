@@ -63,7 +63,6 @@ Regression coverage lives in
   hints inside its JSON artefacts so dashboards track feature adoption.
 - Fixtures under `fixtures/sorafs_manifest/provider_admission/` now include:
   - canonical multi-source adverts,
-  - a legacy, range-less variant for downgrade testing, and
   - `multi_fetch_plan.json` so SDK suites can replay a deterministic multi-peer
     fetch plan.
 

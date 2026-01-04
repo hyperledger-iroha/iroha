@@ -20,7 +20,6 @@ chunks. Он фокусируется на трех deliverables:
   выполнить до включения каждого gate.
 - **Покрытие телеметрией.** Дашборды и alerts, которые Observability и Ops используют,
   чтобы подтвердить, что сеть принимает только совместимые adverts.
-- **График совместимости.** Явные даты отклонения legacy envelopes, чтобы команды
   SDK и tooling могли планировать релизы.
 
 Rollout согласован с вехами SF-2b/2c в
@@ -31,10 +30,6 @@ Rollout согласован с вехами SF-2b/2c в
 
 | Фаза | Окно (цель) | Поведение | Действия операторов | Фокус наблюдаемости |
 |-------|-----------------|-----------|------------------|-------------------|
-| **R0 – Базовое наблюдение** | До **2025-03-31** | Torii принимает как adverts, одобренные governance, так и legacy payloads до `ProviderAdvertV1`. Логи ingestion предупреждают, когда adverts не содержат `chunk_range_fetch` или канонические `profile_aliases`. | - Регенерировать adverts через pipeline публикации provider advert (ProviderAdvertV1 + governance envelope), убедившись в `profile_id=sorafs.sf1@1.0.0`, канонических `profile_aliases` и `signature_strict=true`. <br />- Запустить новые тесты `sorafs_fetch` локально; предупреждения о неизвестных capabilities нужно триажить. | Опубликовать временные панели Grafana (см. ниже) и установить пороги alert, но держать их в режиме предупреждений. |
-| **R1 – Gate предупреждений** | **2025-04-01 → 2025-05-15** | Torii продолжает принимать legacy adverts, но инкрементирует `torii_sorafs_admission_total{result="warn"}`, когда payload не содержит `chunk_range_fetch` или несет неизвестные capabilities без `allow_unknown_capabilities=true`. CLI tooling теперь падает при регенерации, если нет канонического handle. | - Повернуть adverts в staging и production, включив payloads `CapabilityType::ChunkRangeFetch` и, при GREASE testing, установить `allow_unknown_capabilities=true`. <br />- Обновить operations runbooks новыми запросами телеметрии. | Продвинуть dashboards в on-call ротацию; настроить предупреждения, когда события `warn` превышают 5% трафика за 15 минут. |
-| **R2 – Enforcement** | **2025-05-16 → 2025-06-30** | Torii отклоняет adverts без governance envelopes, канонического handle профиля или capability `chunk_range_fetch`. Legacy handles только `namespace-name` больше не парсятся. Неизвестные capabilities без GREASE opt-in теперь падают с `reason="unknown_capability"`. | - Подтвердить, что production envelopes лежат в `torii.sorafs.admission_envelopes_dir`, и заменить все оставшиеся legacy adverts. <br />- Проверить, что SDKs эмитят только канонические handles плюс опциональные aliases для обратной совместимости. | Включить pager alerts: `torii_sorafs_admission_total{result="reject"}` > 0 в течение 5 минут требует реакции оператора. Отслеживать ratio принятия и гистограммы причин допуска. |
-| **R3 – Отключение legacy** | **2025-07-01 и далее** | Discovery отключает поддержку бинарных adverts, которые не выставляют `signature_strict=true` или не содержат `profile_aliases`. Кэш discovery Torii очищает устаревшие записи, у которых прошел refresh deadline без продления. | - Запланировать финальное окно decommission для legacy provider stacks. <br />- Убедиться, что GREASE `--allow-unknown` выполняется только во время контролируемых drills и логируется. <br />- Обновить incident playbooks, чтобы предупреждения `sorafs_fetch` считались блокером перед релизами. | Ужесточить alerts: любой `warn` сигналит on-call. Добавить синтетические проверки, которые получают discovery JSON и валидируют списки capabilities providers. |
 
 ## Чеклист оператора
 
@@ -179,7 +174,6 @@ groups:
 | `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` присутствует, канонические aliases, `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
 | Нет capability `chunk_range_fetch` | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
 | TLV неизвестной capability без `allow_unknown_capabilities=true` | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| Legacy handle только (`profile_id = sorafs.sf1@1.0.0`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
 | Истекший `refresh_deadline` | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
 | `signature_strict=false` (diagnostic fixtures) | ✅ (только development) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
 
@@ -190,7 +184,6 @@ groups:
 > **Примечание по реализации:** R1 вводит серию `result="warn"` в
 > `torii_sorafs_admission_total`. Патч ingestion Torii, добавляющий новый label,
 > отслеживается вместе с задачами телеметрии SF-2; до его попадания используйте
-> лог-сэмплинг для мониторинга legacy adverts.
 
 ## Коммуникация и обработка инцидентов
 

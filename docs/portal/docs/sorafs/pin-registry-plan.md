@@ -6,7 +6,6 @@ description: SF-4 implementation plan covering registry state machine, Torii fac
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/pin_registry_plan.md`. Keep both locations aligned while the legacy documentation remains active.
 :::
 
 # SoraFS Pin Registry Implementation Plan (SF-4)

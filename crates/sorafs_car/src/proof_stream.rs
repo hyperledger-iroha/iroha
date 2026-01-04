@@ -115,8 +115,8 @@ impl VerificationStatus {
 /// Request payload for `/v1/sorafs/proof/stream`.
 #[derive(Clone, Debug)]
 pub struct ProofStreamRequest {
-    /// Manifest identifier encoded as lowercase hex.
-    pub manifest_id_hex: String,
+    /// Manifest digest (BLAKE3-256) encoded as lowercase hex.
+    pub manifest_digest_hex: String,
     /// Provider identifier encoded as lowercase hex (optional).
     pub provider_id_hex: Option<String>,
     /// Proof kind to request.
@@ -141,8 +141,8 @@ impl ProofStreamRequest {
     pub fn to_json(&self) -> Value {
         let mut map = Map::new();
         map.insert(
-            "manifest_id_hex".into(),
-            Value::from(self.manifest_id_hex.clone()),
+            "manifest_digest_hex".into(),
+            Value::from(self.manifest_digest_hex.clone()),
         );
         if let Some(provider) = &self.provider_id_hex {
             map.insert("provider_id_hex".into(), Value::from(provider.clone()));
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn request_serialises_to_expected_shape() {
         let request = ProofStreamRequest {
-            manifest_id_hex: "deadbeef".into(),
+            manifest_digest_hex: "deadbeef".into(),
             provider_id_hex: Some("abcd".into()),
             proof_kind: ProofKind::Por,
             sample_count: Some(8),
@@ -543,7 +543,7 @@ mod tests {
         let value = request.to_json();
         let obj = value.as_object().expect("json object");
         assert_eq!(
-            obj.get("manifest_id_hex").and_then(Value::as_str),
+            obj.get("manifest_digest_hex").and_then(Value::as_str),
             Some("deadbeef")
         );
         assert_eq!(

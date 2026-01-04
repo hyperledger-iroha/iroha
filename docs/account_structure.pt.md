@@ -27,7 +27,7 @@ contas para fornecer:
   formas textuais determinísticas, adequadas à interoperabilidade.
 - Identificadores de domínio globalmente exclusivos, respaldados por um
   registro que possa ser consultado via Nexus para roteamento entre cadeias.
-- Camadas de compatibilidade que mantenham os aliases de roteamento
+- Camadas de transicao que mantenham os aliases de roteamento
   `alias@domain` funcionando enquanto migramos wallets, APIs e contratos para
   o novo formato.
 
@@ -38,7 +38,7 @@ Hoje, wallets e ferramentas off‑chain dependem de aliases de roteamento brutos
 
 1. **Sem vínculo de rede.** A string não possui checksum nem prefixo de
    cadeia, o que permite que usuários colem um endereço de outra rede sem
-   feedback imediato. A transação acabará rejeitada (incompatibilidade de
+   feedback imediato. A transação acabará rejeitada (desajuste de
    `chain_id`) ou, pior, poderá ser aplicada em uma conta inesperada se o
    destino existir localmente.
 2. **Colisão de domínios.** Domínios são apenas namespaces e podem ser
@@ -58,7 +58,7 @@ uma cadeia autorizada.
   e definir seu processo de governança/registro.
 - Descrever como introduzir um registro global de domínios sem quebrar
   instalações existentes e especificar regras de normalização/anti‑spoofing.
-- Documentar expectativas de compatibilidade, etapas de migração e questões em
+- Documentar expectativas operacionais, etapas de migração e questões em
   aberto.
 
 ## Não‑objetivos
@@ -484,7 +484,7 @@ verificação literalmente.
 | Tipo           | Propósito | Campos obrigatórios |
 |----------------|-----------|---------------------|
 | `global_domain` | Declara que um domínio está registrado globalmente e deve ser mapeado para um discriminante de cadeia e prefixo IH58. | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
-| `local_alias`   | Acompanha selectors legados (`Local-12`) que ainda roteiam localmente. Adiciona o digest de 12 bytes e um `alias_label` opcional. | `{ "domain": "<label>", "selector": { "kind": "local", "digest_hex": "<12-byte-hex>" }, "alias_label": "<optional>" }` |
+| `local_alias`   | Acompanha selectors alternativos (`Local-12`) que ainda roteiam localmente. Adiciona o digest de 12 bytes e um `alias_label` opcional. | `{ "domain": "<label>", "selector": { "kind": "local", "digest_hex": "<12-byte-hex>" }, "alias_label": "<optional>" }` |
 | `tombstone`     | Retira permanentemente um alias/selector. Obrigatório ao remover digests Local‑8 ou eliminar um domínio. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
 Entradas `global_domain` podem opcionalmente incluir `manifest_url` ou
@@ -510,11 +510,9 @@ auditoria possa ser reconstruído offline.
    JSON expõe o domínio via `input_domain` e `--append-domain` reproduz a
    codificação convertida como `<ih58>@wonderland` para atualizações de
    manifest. Para exportações orientadas a linha, use
-   `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`
    para converter em massa selectors Local em formas IH58 canônicas (ou
    comprimidas/hex/JSON), ignorando linhas não locais. Quando auditores
    precisarem de evidência amigável a planilhas, rode
-   `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
    para emitir um CSV (`input,status,format,domain_kind,…`) que destaque
    selectors Local, codificações canônicas e falhas de parse em um único
    arquivo.

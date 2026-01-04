@@ -6,7 +6,6 @@ description: Checklist for promoting the SoraFS pipeline from CI to production.
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/developer/deployment.md`. Keep both versions in sync until the legacy docs are retired.
 :::
 
 # Deployment Notes

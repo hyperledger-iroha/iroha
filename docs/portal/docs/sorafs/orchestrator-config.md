@@ -6,7 +6,6 @@ description: Configure the multi-source fetch orchestrator, interpret failures, 
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/developer/orchestrator.md`. Keep both versions in sync until the legacy docs are retired.
 :::
 
 # Multi-Source Fetch Orchestrator Guide
@@ -159,7 +158,6 @@ The `--guard-directory` flag now expects a Norito-encoded
   signatures.
 
 The CLI verifies every bundle against the declared issuer keys before merging the directory with
-the guard cache. Legacy JSON sketches are no longer accepted; SRCv2 snapshots are required.
 
 Invoke the CLI with `--guard-directory` to merge the latest consensus with the
 existing cache. The selector preserves pinned guards that are still within the
@@ -186,7 +184,6 @@ Guard directories may now embed a complete SRCv2 bundle via
 Ed25519/ML-DSA signatures, and retains the parsed certificate alongside the
 guard cache. When a certificate is present it becomes the canonical source for
 PQ keys, handshake suite preferences, and weighting; expired certificates are
-discarded and the selector falls back to legacy descriptor fields. Certificates
 propagate through circuit lifecycle management and are surfaced via
 `telemetry::sorafs.guard` and `telemetry::sorafs.circuit`, which record the
 validity window, handshake suites, and whether dual signatures were observed for
@@ -343,7 +340,6 @@ certificate and guard cache key, v2 adds:
   the `x-sorafs-cache-tag` header when issuing HTTP or TCP requests so cached
   guard selections remain encrypted at rest.
 
-These fields are backward compatible—older clients can ignore the new keys and
 continue to rely on the v1 subset.
 
 ## 2. Failure Semantics
@@ -566,7 +562,6 @@ When incidents, PQ deficits, or regulatory requests force a rollback, follow
 this deterministic sequence:
 
 1. **Switch transport policy.** Apply `transport_policy=direct-only` (and, if
-   applicable, `write_mode=legacy`) via the configuration overrides. This
    immediately halts new SoraNet circuit construction.
 2. **Flush guard state.** Delete or archive the guard cache file referenced by
    `--guard-cache` so subsequent runs do not attempt to reuse pinned relays.

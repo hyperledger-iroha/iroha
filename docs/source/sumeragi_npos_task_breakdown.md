@@ -21,7 +21,6 @@ remaining Sumeragi/NPoS work incrementally. Status annotations follow the conven
 1. ✅ Multi-node soak tests ran for 72 h on both telemetry and CI harnesses; captured Torii snapshots showed stable proposer throughput and QC formation with no regressions.
 2. ✅ Integration test coverage now runs purely on the Vote/QC path (`sumeragi_vote_qc_commit.rs`), ensuring mixed peers reach consensus without the old frames.
 3. ✅ Operator documentation and CLI help no longer mention the previous wire path; troubleshooting guidance now points at the Vote/QC telemetry.
-4. ✅ Former message variants, telemetry counters, and pending commit caches were deleted; the compatibility matrix now reflects the Vote/QC-only surface.
 
 ### A3 — Engine & Pacemaker Enforcement
 - ✅ Lock/HighestQC invariants enforced in `handle_message` (see `block_created_header_sanity`).

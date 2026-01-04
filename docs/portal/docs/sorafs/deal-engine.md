@@ -6,7 +6,6 @@ description: Overview of the SF-8 deal engine, Torii integration, and telemetry 
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/deal_engine.md`. Keep both locations aligned while the legacy documentation remains active.
 :::
 
 # SoraFS Deal Engine

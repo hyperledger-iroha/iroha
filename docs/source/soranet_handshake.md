@@ -165,7 +165,6 @@ population.
 
 ### Argon2 Puzzle Service (SNNet-6a)
 
-SNNet-6a introduced a memory-hard alternative to the legacy hashcash gate. As of
 SNNet-16D the Argon2 path ships enabled-by-default; deployments only fall back to
 hashcash if they explicitly disable the puzzle (`pow.puzzle.enabled = false`). The
 relay verifies the incoming ticket by hashing the client solution against the
@@ -176,7 +175,6 @@ of which policy a relay enforces.
 - **Parameters.** Operators control the Argon2 cost factors via
   `pow.puzzle.memory_kib` (RAM in KiB), `pow.puzzle.time_cost` (iterations), and
   `pow.puzzle.lanes` (parallelism). The adaptive difficulty controller drives the
-  leading-zero predicate exactly as in the legacy PoW path, so difficulty ratchets
   continue to operate without special cases.
 - **TTL enforcement.** Puzzle tickets reuse the existing `pow` `min_ticket_ttl_secs`
   and `max_future_skew_secs` bounds. Verification rejects expired tickets, TTLs that
@@ -186,9 +184,7 @@ of which policy a relay enforces.
   ticket minting. Config responses surface the active difficulty and TTL bounds, while
   mint requests accept an optional `ttl_secs` override and return a base64-encoded ticket
   with expiry metadata. A `/healthz` endpoint publishes readiness for relay supervisors.
-- **Compatibility.** Relays emit the same compliance log entries and hand the result
   to the adaptive pipeline, so brownout telemetry and quota throttles require no
-  additional wiring. Legacy hashcash validation is now considered a downgrade path
   and is only executed when the puzzle gate is explicitly disabled for brownout or
   debugging scenarios.
 - **Telemetry.** The relay exports Prometheus counters for negotiated handshakes
@@ -264,7 +260,6 @@ tokens whose revocation digest appears in either inline configuration or the
 external revocation list loaded from disk.
 
 - **Minting.** The `soranet-admission-token` binary (new in SNNet-16D) replaces the
-  legacy `iroha sorafs handshake` helpers. Example:
 
   ```bash
   cargo run -p soranet-relay --bin soranet_admission_token -- mint \
@@ -443,7 +438,6 @@ struct SaltAnnouncementV1 {
   `docs/assets/soranet/salt_vectors/v1/`. Each vector includes: Norito binary
   (`.to`), JSON projection, Dilithium3 signature, Ed25519 witness signature, and
   a README describing the validation procedure. CI jobs use these artefacts to
-  assert decoder compatibility and signature verification.
 - **Validation tooling.** `tools/soranet-handshake-harness` exposes a
   `salt-verify --vector <path>` command that deserialises the payload, enforces
   the version policy above, and checks both signatures against the manifest.

@@ -38,7 +38,6 @@
 
 ### Feature Set & Gating Summary
 - **All builds:** Bundled rANS is compiled in and required; `entropy_mode` only accepts `rans_bundled`, trellis scans remain disabled, and SIMD features stay optional (`codec-simd-avx2`, `codec-simd-neon`). CABAC is still optional and compiles out unless explicitly enabled.
-- **Enterprise builds:** CABAC compiled by setting `ENABLE_CABAC=1` (which adds the `norito_enable_cabac` cfg). Operators tune runtime behaviour via `[streaming.codec]` (`cabac_mode`, `bundle_width`, `bundle_accel`, and `rans_tables_path`); legacy entropy rollbacks are no longer available.
 - **Operator guidance:** Captured in `docs/source/norito_streaming.md` (§19) and `docs/source/soranet/nsc-42-legal.md`; mirrors the jurisdictional matrix posted in `docs/source/norito_streaming_legal.md`.
 - **Testing:** CI matrix adds a CABAC-enabled job (`ENABLE_CABAC=1 cargo test`) plus SIMD benches to ensure fallback remains deterministic when CABAC is disabled.
 

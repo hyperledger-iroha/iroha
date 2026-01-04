@@ -29,7 +29,6 @@ Norito Streaming define o formato on-wire, os frames de controle e o codec de re
 ## Configuracao de runtime
 
 - **Material de chave.** Forneca chaves dedicadas com `streaming.identity_public_key`/`streaming.identity_private_key` (multihash Ed25519) e material Kyber opcional via `streaming.kyber_public_key`/`streaming.kyber_secret_key`. Os quatro devem estar presentes ao sobrescrever os padroes; `streaming.kyber_suite` aceita `mlkem512|mlkem768|mlkem1024` (aliases `kyber512/768/1024`, padrao `mlkem768`).
-- **Guardrails do codec.** CABAC permanece desabilitado a menos que o build o habilite; rANS empacotado requer `ENABLE_RANS_BUNDLES=1`. Enforce via `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` e o opcional `streaming.codec.rans_tables_path` quando fornecer tabelas customizadas. O `bundle_width` empacotado deve ficar entre 2 e 3 (inclusive); largura 1 e legacy-only.
 - **Rotas SoraNet.** `streaming.soranet.*` controla transporte anonimo: `exit_multiaddr` (padrao `/dns/torii/udp/9443/quic`), `padding_budget_ms` (padrao 25 ms), `access_kind` (`authenticated` vs `read-only`), `channel_salt` opcional e `provision_spool_dir` (padrao `./storage/streaming/soranet_routes`).
 - **Gate de sincronizacao.** `streaming.sync` alterna a aplicacao de drift para streams audiovisuais: `enabled`, `observe_only`, `ewma_threshold_ms` e `hard_cap_ms` governam quando segmentos sao rejeitados por drift de timing.
 

@@ -161,7 +161,6 @@ When cloning these fixtures, update:
 Existing SDK integrations that referenced per-domain account IDs must migrate to
 the UAID-centric surfaces described above. Use this checklist during upgrades:
 
-- **Model updates:** Ensure your SDK structs surface `uaid` alongside legacy
   account ids. For Rust/JS/Swift/Android this means upgrading to the latest
   workspace crates or regenerating Norito bindings.
 - **API calls:** Replace domain-scoped portfolio queries with

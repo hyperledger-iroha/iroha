@@ -1724,8 +1724,7 @@ pub mod message {
             ];
             let seen = BTreeSet::from([block1.hash(), block2.hash()]);
 
-            let selected =
-                Message::select_blocks_for_share(blocks.iter().cloned(), &seen, 10);
+            let selected = Message::select_blocks_for_share(blocks.iter().cloned(), &seen, 10);
             let heights: Vec<_> = selected
                 .iter()
                 .map(|block| block.header().height().get())
@@ -1748,8 +1747,7 @@ pub mod message {
             ];
             let seen = BTreeSet::from([block3.hash()]);
 
-            let selected =
-                Message::select_blocks_for_share(blocks.iter().cloned(), &seen, 10);
+            let selected = Message::select_blocks_for_share(blocks.iter().cloned(), &seen, 10);
             let heights: Vec<_> = selected
                 .iter()
                 .map(|block| block.header().height().get())

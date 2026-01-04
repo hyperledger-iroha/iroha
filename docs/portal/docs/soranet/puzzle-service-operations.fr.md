@@ -19,7 +19,6 @@ description: Exploitation du daemon `soranet-puzzle-service` pour les tickets d'
 ---
 
 :::note Source canonique
-Reflete `docs/source/soranet/puzzle_service_operations.md`. Gardez les deux versions synchronisees jusqu'a la retraite des docs legacy.
 :::
 
 # Guide d'operations du service de puzzles

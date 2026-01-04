@@ -93,7 +93,6 @@ instruction = "smartcontract::deploy"
 description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
-Когда позже добавляете новые lanes, сначала обновляйте каталог, затем расширяйте правила маршрутизации. Fallback lane должна продолжать указывать на public lane, где находится основная часть пользовательского трафика, чтобы совместимость с legacy SDK сохранялась.
 
 ## 3. Запустить ноду с примененной политикой
 

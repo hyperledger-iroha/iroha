@@ -766,7 +766,7 @@ class SorafsPorIngestionProviderStatus:
     def from_payload(cls, payload: Mapping[str, Any]) -> "SorafsPorIngestionProviderStatus":
         if not isinstance(payload, Mapping):
             raise TypeError("por ingestion provider entry must be an object")
-        provider_literal = _first_present(payload, ("provider_id_hex", "providerIdHex"))
+        provider_literal = payload.get("provider_id_hex")
         if not isinstance(provider_literal, str) or not provider_literal:
             raise TypeError("por ingestion provider entry missing string `provider_id_hex` field")
         provider_id_hex = _normalize_hex_string(
@@ -775,41 +775,41 @@ class SorafsPorIngestionProviderStatus:
             expected_length=64,
         )
         pending = _coerce_int(
-            _first_present(payload, ("pending_challenges", "pendingChallenges")),
+            payload.get("pending_challenges"),
             "por ingestion provider pending_challenges",
             allow_zero=True,
         )
         if pending is None:
             raise TypeError("por ingestion provider entry missing numeric `pending_challenges` field")
         oldest_epoch = _coerce_int(
-            _first_present(payload, ("oldest_epoch_id", "oldestEpochId")),
+            payload.get("oldest_epoch_id"),
             "por ingestion provider oldest_epoch_id",
             allow_zero=True,
         )
         oldest_deadline = _coerce_int(
-            _first_present(payload, ("oldest_response_deadline_unix", "oldestResponseDeadlineUnix")),
+            payload.get("oldest_response_deadline_unix"),
             "por ingestion provider oldest_response_deadline_unix",
             allow_zero=True,
         )
         last_success = _coerce_int(
-            _first_present(payload, ("last_success_unix", "lastSuccessUnix")),
+            payload.get("last_success_unix"),
             "por ingestion provider last_success_unix",
             allow_zero=True,
         )
         last_failure = _coerce_int(
-            _first_present(payload, ("last_failure_unix", "lastFailureUnix")),
+            payload.get("last_failure_unix"),
             "por ingestion provider last_failure_unix",
             allow_zero=True,
         )
         failures_total = _coerce_int(
-            _first_present(payload, ("failures_total", "failuresTotal")),
+            payload.get("failures_total"),
             "por ingestion provider failures_total",
             allow_zero=True,
         )
         if failures_total is None:
             raise TypeError("por ingestion provider entry missing numeric `failures_total` field")
         consecutive_failures = _coerce_int(
-            _first_present(payload, ("consecutive_failures", "consecutiveFailures")),
+            payload.get("consecutive_failures"),
             "por ingestion provider consecutive_failures",
             allow_zero=True,
         )
@@ -838,7 +838,7 @@ class SorafsPorIngestionStatus:
     def from_payload(cls, payload: Mapping[str, Any]) -> "SorafsPorIngestionStatus":
         if not isinstance(payload, Mapping):
             raise TypeError("por ingestion response must be an object")
-        manifest_literal = payload.get("manifest_digest_hex") or payload.get("manifestDigestHex")
+        manifest_literal = payload.get("manifest_digest_hex")
         if not isinstance(manifest_literal, str) or not manifest_literal:
             raise TypeError("por ingestion response missing string `manifest_digest_hex` field")
         manifest_digest_hex = _normalize_hex_string(
@@ -878,13 +878,13 @@ class ExplorerMetricsSnapshot:
         if not isinstance(payload, Mapping):
             raise TypeError("explorer metrics payload must be an object")
 
-        def _resolve_int(keys: Sequence[str], label: str) -> int:
-            raw = _first_present(payload, keys)
+        def _resolve_int(key: str, label: str) -> int:
+            raw = payload.get(key)
             parsed = _coerce_int(raw, label, allow_zero=True)
             return 0 if parsed is None else parsed
 
-        def _resolve_optional_string(keys: Sequence[str], label: str) -> Optional[str]:
-            raw = _first_present(payload, keys)
+        def _resolve_optional_string(key: str, label: str) -> Optional[str]:
+            raw = payload.get(key)
             if raw is None:
                 return None
             if not isinstance(raw, str):
@@ -893,43 +893,43 @@ class ExplorerMetricsSnapshot:
             return trimmed or None
 
         def _resolve_optional_duration(
-            keys: Sequence[str],
+            key: str,
             label: str,
         ) -> Optional[int]:
-            raw = _first_present(payload, keys)
+            raw = payload.get(key)
             return _parse_optional_duration_ms_field(raw, label)
 
         return cls(
-            peers=_resolve_int(("peers",), "explorer_metrics.peers"),
-            domains=_resolve_int(("domains",), "explorer_metrics.domains"),
-            accounts=_resolve_int(("accounts",), "explorer_metrics.accounts"),
-            assets=_resolve_int(("assets",), "explorer_metrics.assets"),
+            peers=_resolve_int("peers", "explorer_metrics.peers"),
+            domains=_resolve_int("domains", "explorer_metrics.domains"),
+            accounts=_resolve_int("accounts", "explorer_metrics.accounts"),
+            assets=_resolve_int("assets", "explorer_metrics.assets"),
             transactions_accepted=_resolve_int(
-                ("transactions_accepted", "transactionsAccepted"),
+                "transactions_accepted",
                 "explorer_metrics.transactions_accepted",
             ),
             transactions_rejected=_resolve_int(
-                ("transactions_rejected", "transactionsRejected"),
+                "transactions_rejected",
                 "explorer_metrics.transactions_rejected",
             ),
             block_height=_resolve_int(
-                ("block", "block_height"),
-                "explorer_metrics.block_height",
+                "block",
+                "explorer_metrics.block",
             ),
             block_created_at=_resolve_optional_string(
-                ("block_created_at", "blockCreatedAt"),
+                "block_created_at",
                 "explorer_metrics.block_created_at",
             ),
             finalized_block_height=_resolve_int(
-                ("finalized_block", "finalizedBlock"),
+                "finalized_block",
                 "explorer_metrics.finalized_block",
             ),
             average_commit_time_ms=_resolve_optional_duration(
-                ("avg_commit_time", "avgCommitTime"),
+                "avg_commit_time",
                 "explorer_metrics.avg_commit_time",
             ),
             average_block_time_ms=_resolve_optional_duration(
-                ("avg_block_time", "avgBlockTime"),
+                "avg_block_time",
                 "explorer_metrics.avg_block_time",
             ),
         )
@@ -953,40 +953,40 @@ class ExplorerAccountQrSnapshot:
         if not isinstance(payload, Mapping):
             raise TypeError("explorer account qr payload must be an object")
 
-        def _require_string(keys: Sequence[str], label: str) -> str:
-            raw = _first_present(payload, keys)
+        def _require_string(key: str, label: str) -> str:
+            raw = payload.get(key)
             if not isinstance(raw, str) or not raw.strip():
                 raise TypeError(f"{label} must be a non-empty string")
             return raw.strip()
 
-        def _require_positive_int(keys: Sequence[str], label: str) -> int:
-            value = _coerce_int(_first_present(payload, keys), label, allow_zero=False)
+        def _require_positive_int(key: str, label: str) -> int:
+            value = _coerce_int(payload.get(key), label, allow_zero=False)
             if value is None:
                 raise TypeError(f"{label} must be provided")
             return value
 
         canonical_id = _require_string(
-            ("canonical_id", "canonicalId"),
+            "canonical_id",
             "explorer_account_qr.canonical_id",
         )
-        literal = _require_string(("literal",), "explorer_account_qr.literal")
+        literal = _require_string("literal", "explorer_account_qr.literal")
         error_correction = _require_string(
-            ("error_correction", "errorCorrection"),
+            "error_correction",
             "explorer_account_qr.error_correction",
         )
-        svg = _require_string(("svg",), "explorer_account_qr.svg")
+        svg = _require_string("svg", "explorer_account_qr.svg")
 
         network_prefix = _require_positive_int(
-            ("network_prefix", "networkPrefix"),
+            "network_prefix",
             "explorer_account_qr.network_prefix",
         )
-        modules = _require_positive_int(("modules",), "explorer_account_qr.modules")
+        modules = _require_positive_int("modules", "explorer_account_qr.modules")
         qr_version = _require_positive_int(
-            ("qr_version", "qrVersion"),
+            "qr_version",
             "explorer_account_qr.qr_version",
         )
 
-        address_raw = _first_present(payload, ("address_format", "addressFormat"))
+        address_raw = payload.get("address_format")
         if address_raw is None:
             address_format = "ih58"
         else:
@@ -1146,15 +1146,12 @@ class KaigiRelaySummary:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelaySummary":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay summary payload must be an object")
-        relay_literal = _first_present(payload, ("relay_id", "relayId"))
-        domain_literal = _first_present(payload, ("domain", "domain_id", "domainId"))
-        bandwidth_literal = _first_present(payload, ("bandwidth_class", "bandwidthClass"))
-        fingerprint_literal = _first_present(
-            payload,
-            ("hpke_fingerprint_hex", "hpkeFingerprintHex"),
-        )
+        relay_literal = payload.get("relay_id")
+        domain_literal = payload.get("domain")
+        bandwidth_literal = payload.get("bandwidth_class")
+        fingerprint_literal = payload.get("hpke_fingerprint_hex")
         status_literal = payload.get("status")
-        reported_literal = _first_present(payload, ("reported_at_ms", "reportedAtMs"))
+        reported_literal = payload.get("reported_at_ms")
 
         relay_id = _require_non_empty_string(relay_literal, "kaigi_relay_summary.relay_id")
         domain = _require_non_empty_string(domain_literal, "kaigi_relay_summary.domain")
@@ -1244,8 +1241,8 @@ class KaigiRelayReportedCall:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelayReportedCall":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay call payload must be an object")
-        domain_literal = _first_present(payload, ("domain_id", "domain", "domainId"))
-        name_literal = _first_present(payload, ("call_name", "name", "callName"))
+        domain_literal = payload.get("domain_id")
+        name_literal = payload.get("call_name")
         return cls(
             domain_id=_require_non_empty_string(
                 domain_literal,
@@ -1272,7 +1269,7 @@ class KaigiRelayDomainMetrics:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelayDomainMetrics":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay domain metrics payload must be an object")
-        domain_literal = _first_present(payload, ("domain", "domain_id", "domainId"))
+        domain_literal = payload.get("domain")
 
         def _resolve_counter(name: str) -> int:
             value = _coerce_int(payload.get(name), f"kaigi_relay_domain_metrics.{name}", allow_zero=True)
@@ -1305,10 +1302,10 @@ class KaigiRelayDetail:
         relay_payload = payload.get("relay")
         if not isinstance(relay_payload, Mapping):
             raise TypeError("kaigi relay detail payload missing object `relay` field")
-        hpke_literal = _first_present(payload, ("hpke_public_key_b64", "hpkePublicKeyB64"))
+        hpke_literal = payload.get("hpke_public_key_b64")
         reported_call_payload = payload.get("reported_call")
         metrics_payload = payload.get("metrics")
-        reported_by_literal = _first_present(payload, ("reported_by", "reportedBy"))
+        reported_by_literal = payload.get("reported_by")
         notes_literal = payload.get("notes")
 
         reported_by: Optional[str] = None
@@ -1899,30 +1896,30 @@ class PeerTelemetryConfig:
     def from_payload(cls, payload: Mapping[str, Any]) -> "PeerTelemetryConfig":
         if not isinstance(payload, Mapping):
             raise TypeError("telemetry peer config must be an object")
-        public_key = payload.get("public_key") or payload.get("publicKey")
+        public_key = payload.get("public_key")
         if not isinstance(public_key, str) or not public_key:
             raise TypeError("telemetry peer config missing string `public_key` field")
         queue_capacity = _coerce_int(
-            _first_present(payload, ("queue_capacity", "queueCapacity")),
+            payload.get("queue_capacity"),
             "telemetry peer config queue_capacity",
             allow_zero=True,
         )
         block_size = _coerce_int(
-            _first_present(payload, ("network_block_gossip_size", "networkBlockGossipSize")),
+            payload.get("network_block_gossip_size"),
             "telemetry peer config network_block_gossip_size",
             allow_zero=True,
         )
         tx_size = _coerce_int(
-            _first_present(payload, ("network_tx_gossip_size", "networkTxGossipSize")),
+            payload.get("network_tx_gossip_size"),
             "telemetry peer config network_tx_gossip_size",
             allow_zero=True,
         )
         block_period = _parse_optional_duration_ms_field(
-            _first_present(payload, ("network_block_gossip_period", "networkBlockGossipPeriod")),
+            payload.get("network_block_gossip_period"),
             "telemetry peer config network_block_gossip_period",
         )
         tx_period = _parse_optional_duration_ms_field(
-            _first_present(payload, ("network_tx_gossip_period", "networkTxGossipPeriod")),
+            payload.get("network_tx_gossip_period"),
             "telemetry peer config network_tx_gossip_period",
         )
         return cls(
@@ -1978,10 +1975,7 @@ class PeerTelemetryInfo:
         if not isinstance(url, str) or not url:
             raise TypeError("telemetry peer payload missing string `url` field")
         connected = _coerce_bool_flag(payload.get("connected"), "telemetry peer connected")
-        telemetry_flag = _first_present(
-            payload,
-            ("telemetry_unsupported", "telemetryUnsupported"),
-        )
+        telemetry_flag = payload.get("telemetry_unsupported")
         telemetry_unsupported = _coerce_bool_flag(
             telemetry_flag if telemetry_flag is not None else False,
             "telemetry peer telemetry_unsupported",
@@ -1993,8 +1987,6 @@ class PeerTelemetryInfo:
         if location_payload is not None and not isinstance(location_payload, Mapping):
             raise TypeError("telemetry peer location must be an object when provided")
         peers_value = payload.get("connected_peers")
-        if peers_value is None:
-            peers_value = payload.get("connectedPeers")
         connected_peers = None
         if peers_value is not None:
             if not isinstance(peers_value, list):
@@ -2657,8 +2649,8 @@ class UaidPortfolioAsset:
     def from_payload(cls, payload: Mapping[str, Any]) -> "UaidPortfolioAsset":
         if not isinstance(payload, Mapping):
             raise TypeError("portfolio asset must be an object")
-        asset_id = payload.get("asset_id") or payload.get("assetId")
-        definition_id = payload.get("asset_definition_id") or payload.get("assetDefinitionId")
+        asset_id = payload.get("asset_id")
+        definition_id = payload.get("asset_definition_id")
         quantity = payload.get("quantity")
         if not isinstance(asset_id, str) or not asset_id:
             raise TypeError("portfolio asset missing `asset_id` string")
@@ -2683,7 +2675,7 @@ class UaidPortfolioAccount:
     def from_payload(cls, payload: Mapping[str, Any]) -> "UaidPortfolioAccount":
         if not isinstance(payload, Mapping):
             raise TypeError("portfolio account must be an object")
-        account_id = payload.get("account_id") or payload.get("accountId")
+        account_id = payload.get("account_id")
         label = payload.get("label")
         if not isinstance(account_id, str) or not account_id:
             raise TypeError("portfolio account missing `account_id` string")
@@ -2709,7 +2701,7 @@ class UaidPortfolioDataspace:
         dataspace_id = _coerce_int(payload.get("dataspace_id"), "dataspace_id", allow_zero=True)
         if dataspace_id is None:
             raise TypeError("portfolio dataspace missing `dataspace_id` integer")
-        alias = payload.get("dataspace_alias") or payload.get("dataspaceAlias")
+        alias = payload.get("dataspace_alias")
         if alias is not None and not isinstance(alias, str):
             raise TypeError("portfolio dataspace `dataspace_alias` must be a string when present")
         accounts_payload = payload.get("accounts", [])
@@ -2765,7 +2757,7 @@ class UaidBindingsSlice:
         dataspace_id = _coerce_int(payload.get("dataspace_id"), "dataspace_id", allow_zero=True)
         if dataspace_id is None:
             raise TypeError("bindings slice missing `dataspace_id` integer")
-        alias = payload.get("dataspace_alias") or payload.get("dataspaceAlias")
+        alias = payload.get("dataspace_alias")
         if alias is not None and not isinstance(alias, str):
             raise TypeError("bindings slice `dataspace_alias` must be a string when present")
         accounts_value = payload.get("accounts", [])
@@ -2847,10 +2839,10 @@ class SpaceDirectoryManifestRecord:
         dataspace_id = _coerce_int(payload.get("dataspace_id"), "dataspace_id", allow_zero=True)
         if dataspace_id is None:
             raise TypeError("manifest record missing `dataspace_id` integer")
-        alias = payload.get("dataspace_alias") or payload.get("dataspaceAlias")
+        alias = payload.get("dataspace_alias")
         if alias is not None and not isinstance(alias, str):
             raise TypeError("manifest record `dataspace_alias` must be a string when present")
-        manifest_hash = payload.get("manifest_hash") or payload.get("manifestHash")
+        manifest_hash = payload.get("manifest_hash")
         if not isinstance(manifest_hash, str) or not manifest_hash:
             raise TypeError("manifest record missing `manifest_hash` string")
         status = payload.get("status")
@@ -2983,8 +2975,6 @@ class TriggerMutationResponse:
             raise TypeError("trigger mutation response missing boolean `ok` field")
         trigger_id_field = payload.get("trigger_id")
         if trigger_id_field is None:
-            trigger_id_field = payload.get("triggerId")
-        if trigger_id_field is None:
             trigger_id: Optional[str] = None
         else:
             trigger_id = _require_non_empty_string(
@@ -2992,16 +2982,12 @@ class TriggerMutationResponse:
             )
         proposal_field = payload.get("proposal_id")
         if proposal_field is None:
-            proposal_field = payload.get("proposalId")
-        if proposal_field is None:
             proposal_id: Optional[str] = None
         else:
             proposal_id = _require_non_empty_string(
                 proposal_field, "trigger mutation response `proposal_id`"
             )
         instructions_payload = payload.get("tx_instructions")
-        if instructions_payload is None:
-            instructions_payload = payload.get("txInstructions")
         if instructions_payload is None:
             instructions_payload = []
         if not isinstance(instructions_payload, list):

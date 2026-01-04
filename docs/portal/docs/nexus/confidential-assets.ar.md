@@ -147,7 +147,6 @@ SPDX-License-Identifier: Apache-2.0
 ## دورة حياة verifier والمعلمات
 ### ZK Registry
 - يخزن ledger `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` حيث `proving_system` حاليا ثابت على `Halo2`.
-- تتبع دورة حياة السجل `Proposed → Active → Deprecated → Withdrawn`. فقط ادخالات `Active` يمكنها التحقق من proofs؛ ادخالات `Deprecated` تبقى صالحة حتى `deprecation_height`؛ ادخالات `Withdrawn` ترفض proofs بشكل حتمي.
 - ازواج `(circuit_id, version)` فريدة عالميا؛ يحافظ السجل على فهرس ثانوي للبحث حسب metadata الدائرة. محاولات تسجيل زوج مكرر ترفض عند admission.
 - يجب ان يكون `circuit_id` غير فارغ ويجب توفير `public_inputs_schema_hash` (عادة hash Blake2b-32 لترميز الادخال العام القانوني للـ verifier). ترفض admission السجلات التي تهمل هذه الحقول.
 - تعليمات الحوكمة تشمل:
@@ -165,7 +164,6 @@ SPDX-License-Identifier: Apache-2.0
 ### Pedersen & Poseidon Parameters
 - سجلات منفصلة (`PedersenParams`, `PoseidonParams`) تعكس ضوابط دورة حياة verifier، ولكل منها `params_id`، هاشات المولدات/الثوابت، وارتفاعات التفعيل/الاستبدال/السحب.
 - تفصل commitments والهاشات المجال عبر `params_id` حتى لا تعيد تدوير المعلمات استخدام انماط بت من مجموعات قديمة؛ يدمج الـ ID في commitments notes وعلامات مجال nullifier.
-- تدعم الدوائر اختيار عدة معلمات عند التحقق؛ تبقى مجموعات deprecated قابلة للصرف حتى `deprecation_height`، وتُرفض مجموعات withdrawn عند `withdraw_height` بالضبط.
 
 ## الترتيب الحتمي و nullifiers
 - يحافظ كل اصل على `CommitmentTree` مع `next_leaf_index`; تضيف الكتل commitments بترتيب حتمي: تمر المعاملات بترتيب الكتلة؛ داخل كل معاملة تمر مخرجات shielded تصاعديا حسب `output_idx` المتسلسل.
@@ -364,7 +362,6 @@ SPDX-License-Identifier: Apache-2.0
      - ✅ احترام `reorg_depth_bound` وقص checkpoints الاقدم من النافذة مع الحفاظ على snapshots حتمية.
    - تقديم `AssetConfidentialPolicy` وpolicy FSM وبوابات enforcement لتعليمات mint/transfer/reveal.
    - الالتزام بـ `conf_features` في رؤوس الكتل ورفض مشاركة المدققين عند اختلاف digestات registry/parameter.
-   - تنفيذ registry FSM (Proposed/Active/Deprecated/Withdrawn) مع ارتفاعات التفعيل/الاستبدال/السحب ومعالجة السحب الطارئ.
 2. **Phase M1 — Registries & Parameters**
    - شحن سجلات `ZkVerifierEntry` و`PedersenParams` و`PoseidonParams` مع عمليات حوكمة ومرساة genesis وادارة الكاش.
    - توصيل syscall لفرض registry lookups وgas schedule IDs وschema hashing وفحوصات الحجم.

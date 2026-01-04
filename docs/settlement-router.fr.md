@@ -26,7 +26,6 @@ lane.
 
 ## Objectifs
 
-1. **Pile de routeur unique :** Tous les lanes—legacy mono‑lane, lanes publics Nexus et
    flux AMX cross‑DS—utilisent le même pipeline de règlement, de sorte que les
    rapprochements nocturnes n’ont besoin que d’un seul modèle.
 2. **Conversion déterministe :** Les montants dus en XOR sont dérivés de paramètres
@@ -139,14 +138,12 @@ Dashboards et alertes :
 Il est recommandé d’activer le routeur par étapes :
 
 1. **Shadow mode :** activer les calculs du routeur + la télémétrie, mais garder
-   `settlement_debit=false` ; comparer aux reçus legacy.
 2. **Activation des débits :** passer `settlement_debit=true` pour les lanes à faible
    risque (profil C) et vérifier les rapprochements.
 3. **Conversions actives :** activer les tranches TWAMM + swaps AMM quand la télémétrie
    montre des buffers stables ; maintenir le RFQ de repli prêt.
 4. **Intégration AMX :** s’assurer que les lanes AMX propagent les reçus et exposent
    `SETTLEMENT_ROUTER_UNAVAILABLE` aux SDK pour autoriser les retries.
-5. **GA :** supprimer le chemin legacy, mettre à jour `status.md` et les release notes, et
    conditionner les merges futurs au respect des seuils de télémétrie de règlement.
 
 Suivre ce document garantit que la tâche NX‑3 du roadmap fournit un comportement

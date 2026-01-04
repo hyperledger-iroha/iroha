@@ -327,8 +327,20 @@ impl StreamingCarVerifier {
 
                             let digest = info.digest;
                             let payload_len = *len - cid_len;
-                            if payload_len > self.config.max_chunk_size {
-                                // We could error here if strictly enforcing chunk size limits
+                            if info.codec == RAW_CODEC && payload_len > self.config.max_chunk_size {
+                                let section_index = self.section_index;
+                                let len = payload_len as u64;
+                                let max = self.config.max_chunk_size as u64;
+                                self.transition(State::Error(CarVerifyError::ChunkSizeExceeded {
+                                    section_index,
+                                    len,
+                                    max,
+                                }));
+                                return Err(CarVerifyError::ChunkSizeExceeded {
+                                    section_index,
+                                    len,
+                                    max,
+                                });
                             }
 
                             self.buffer.clear();

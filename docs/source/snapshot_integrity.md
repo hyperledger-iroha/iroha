@@ -22,13 +22,14 @@ under `snapshot.store_dir`:
 
 - `irohad` now fails startup if any sidecar is missing or mismatched. Restore
   verifies the digest, the signature over the digest, the Merkle root over the
-  chunked payload, chunk size/length parity, and metadata self-consistency
-  before deserializing the world state. Only the `NotFound` case falls back to a
-  fresh genesis state.
+  chunked payload, chunk size/length parity, and metadata self-consistency,
+  then confirms the snapshot `chain_id` matches the configured chain before
+  deserializing the world state. Only the `NotFound` case falls back to a fresh
+  genesis state.
 - Error surfaces map to dedicated `TryReadError` variants (`ChecksumMissing`,
   `SignatureMissing`, `MerkleMissing`, `MerkleMismatch`,
-  `MerkleChunkSizeMismatch`, `MerkleLengthMismatch`, `MerkleProofInvalid`),
-  keeping CI/startup logs explicit about the failure mode.
+  `MerkleChunkSizeMismatch`, `MerkleLengthMismatch`, `MerkleProofInvalid`,
+  `ChainIdMismatch`), keeping CI/startup logs explicit about the failure mode.
 
 ## Chunk proofs and provenance
 

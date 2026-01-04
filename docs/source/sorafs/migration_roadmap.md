@@ -7,7 +7,6 @@ title: "SoraFS Migration Roadmap"
 This document operationalises the migration guidance captured in
 `docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
 execution-ready milestones, gating criteria, and owner checklists so storage,
-governance, DevRel, and SDK teams can coordinate the transition from legacy
 artifact hosting to SoraFS-backed publication.
 
 The roadmap is intentionally deterministic: every milestone names the required
@@ -18,26 +17,13 @@ produce identical outputs and governance retains an auditable trail.
 
 | Milestone | Window | Primary Goals | Must Ship | Owners |
 |-----------|--------|---------------|-----------|--------|
-| **M0 – Bootstrap** | Weeks 1–6 | Publish deterministic chunker fixtures and dual-publish artifacts (legacy + SoraFS). | `sorafs_chunker` fixtures, `sorafs_manifest_stub` CLI integration, migration ledger entries. | Docs, DevRel, Storage |
 | **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and stage alias proofs while pipelines adopt expectation flags. | Nightly fixture verification, council-signed manifests, alias registry staging entries. | Storage, Governance, SDKs |
-| **M2 – Registry First** | Weeks 13–20 | Route pins through the registry, freeze legacy bundles, and expose parity telemetry. | Pin Registry contract + CLI (`sorafs pin propose/approve`), observability dashboards, operator runbooks. | Governance, Ops, Observability |
-| **M3 – Alias Only** | Week 21+ | Decommission legacy hosting and require alias proofs for retrieval. | Alias-only gateways, parity alerts, SDK defaults updated, legacy teardown notice. | Ops, Networking, SDKs |
 
 Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
 changes to this roadmap MUST update the ledger to keep governance and release
 engineering in sync.
 
 ## Workstreams
-
-### 1. Legacy Data Rewrap
-
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Inventory & tagging | M0 | Export SHA3-256 digests of legacy bundles and log them in the migration ledger (append-only). | Docs, DevRel | Ledger entries with `source_path`, `sha3_digest`, `owner`, `planned_manifest_cid`. |
-| Deterministic rebuild | M0–M1 | Invoke `sorafs_manifest_stub` for every release artifact and persist CAR, manifest, signature envelope, and fetch plan in `artifacts/<team>/<alias>/<timestamp>/`. | Docs, CI | Reproducible CAR + manifest bundles per release stamp. |
-| Validation loop | M1 | Replay `sorafs_fetch` against staging gateways to confirm chunk boundaries/digests match fixtures. Record pass/fail in ledger comments. | Governance QA | Staging verification report + GitHub issue for drift. |
-| Registry cut-over | M2 | Flip ledger entry status to `Pinned` once manifest digest exists on-chain; legacy bundle switches to read-only (serve but do not modify). | Governance, Ops | Registry transaction hash, read-only ticket for legacy storage. |
-| Decommission | M3 | Remove legacy CDN entries after 30-day grace period, archive DNS change approvals, and publish post-mortem. | Ops | Decommission checklist, DNS change record, incident ticket closure. |
 
 ### 2. Deterministic Pinning Adoption
 
@@ -71,9 +57,7 @@ the migration ledger entry for the artifact.
 | Step | Milestone | Description | Owner(s) | Output |
 |------|-----------|-------------|----------|--------|
 | Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`). | Governance, Docs | Proof bundle stored next to manifest + ledger comment with alias name. |
-| Dual DNS + notification | M1–M2 | Operate legacy DNS and Torii/SoraDNS in parallel; publish migration notices to operators and SDK channels. | Networking, DevRel | Announcement post + DNS change ticket. |
 | Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
-| Alias-only rollout | M3 | Remove legacy DNS, update SDK defaults to rely on Torii/SoraDNS + alias proofs, document rollback window. | SDK Maintainers, Ops | SDK release notes, ops runbook update, rollback plan. |
 
 ### 4. Communication & Audit
 
@@ -91,7 +75,6 @@ the migration ledger entry for the artifact.
 |------------|--------|------------|
 | Pin Registry contract availability | Blocks M2 pin-first rollout. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
 | Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
-| Gateway parity tooling | Needed to enforce alias proofs and chunk parity. | Ship gateway updates in M1, keep legacy behaviour behind feature flag until M2 success criteria met. |
 | SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
 
 Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
@@ -101,10 +84,7 @@ and should be cross-referenced when adjustments are made.
 
 | Milestone | Criteria |
 |-----------|----------|
-| M0 | - All targeted artifacts rebuilt via `sorafs_manifest_stub` with expectation flags. <br> - Migration ledger populated for each artifact family. <br> - Dual publication (legacy + SoraFS) live. |
 | M1 | - Nightly fixture job green for seven consecutive days. <br> - Staging alias proofs verified in CI. <br> - Governance ratifies expectation flag policy. |
-| M2 | - 100% of new manifests routed through Pin Registry. <br> - Legacy storage marked read-only; incident playbook approved. <br> - Observability dashboards online with alert thresholds. |
-| M3 | - Alias-only gateways in production. <br> - Legacy DNS removed and reflected in change tickets. <br> - SDK defaults updated and released. <br> - Final status appended to migration ledger. |
 
 ## Change Management
 

@@ -6,7 +6,6 @@ description: Checklist for enabling the Parliament-ratified chunker profile on s
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Keep the Docusaurus copy and the legacy Markdown aligned until the Sphinx set is fully retired.
 :::
 
 ## Overview

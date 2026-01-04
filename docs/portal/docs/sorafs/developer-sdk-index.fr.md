@@ -19,7 +19,6 @@ description: Extraits par langage pour intégrer les artefacts SoraFS.
 ---
 
 :::note Source canonique
-Cette page reflète `docs/source/sorafs/developer/sdk/index.md`. Gardez les deux copies synchronisées jusqu'à la retraite du set Sphinx legacy.
 :::
 
 Utilisez ce hub pour suivre les helpers par langage livrés avec la toolchain SoraFS.

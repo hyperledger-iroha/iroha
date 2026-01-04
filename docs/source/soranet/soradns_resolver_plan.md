@@ -193,7 +193,6 @@ operator evidence bundle.
 
 ## Compliance & Testing Harness
 
-1. **EDNS compatibility:** reuse the existing `dnsperf` harness plus new scripts
    (`python scripts/soradns_validation.py edns-matrix`) to exercise OPT codes,
    buffer sizes, and TC bit behaviour. Capture results under
    `artifacts/soradns/edns/<date>/matrix.json` with the chosen resolver,

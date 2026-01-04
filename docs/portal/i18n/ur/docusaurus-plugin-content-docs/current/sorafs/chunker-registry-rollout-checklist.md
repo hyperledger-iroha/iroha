@@ -10,7 +10,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ
-`docs/source/sorafs/chunker_registry_rollout_checklist.md` کی عکاسی کرتا ہے۔ جب تک legacy Sphinx documentation set مکمل طور پر ریٹائر نہ ہو جائے دونوں نقول کو ہم آہنگ رکھیں۔
 :::
 
 # SoraFS registry rollout چیک لسٹ

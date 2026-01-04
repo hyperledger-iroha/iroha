@@ -232,7 +232,6 @@ These keys are also used to build the ABI fingerprint.
 
 The canonical oracle ABI manifest is pinned through
 `OracleAbiManifest::v1()` with a stable hash exposed via `oracle_abi_hash()`
-so nodes and clients can assert schema compatibility before accepting
 observations or reports. For the current schema the ABI hash is
 `25d675ad1e61609f0b5951743ecac11ae06ba3df9e4aaecdf10db61c2dd9507b`.
 

@@ -8,7 +8,6 @@
 This charter defines the process and roles for evolving the SoraFS chunker
 registry. It complements the authoring guide
 (`docs/source/sorafs/chunker_profile_authoring.md`) by describing how new
-profiles are proposed, reviewed, ratified, and eventually deprecated.
 
 ## Scope
 
@@ -19,7 +18,6 @@ SDKs). It enforces the alias and handle invariants checked by
 
 - Profile IDs are positive integers that increase monotonically.
 - The canonical handle `namespace.name@semver` **must** appear as the first
-  entry in `profile_aliases`. Legacy aliases follow.
 - Alias strings are trimmed, unique, and do not collide with canonical handles
   of other entries.
 
@@ -76,7 +74,6 @@ SDKs). It enforces the alias and handle invariants checked by
 5. **Deprecation / Sunset**
    - Proposals that supersede an existing profile must include a dual-publish
      window (grace periods) and upgrade plan.
-   - After the grace window expires, mark the superseded profile as deprecated
      in the registry and update the migration ledger.
 
 6. **Emergency Changes**

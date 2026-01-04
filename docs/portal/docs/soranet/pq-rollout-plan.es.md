@@ -19,7 +19,7 @@ description: Guia operativa para promover el handshake hibrido X25519+ML-KEM de 
 ---
 
 :::note Fuente canonica
-Esta pagina refleja `docs/source/soranet/pq_rollout_plan.md`. Mantengan ambas copias alineadas hasta que el conjunto legado de documentacion se retire.
+Esta pagina refleja `docs/source/soranet/pq_rollout_plan.md`. Manten ambas copias sincronizadas.
 :::
 
 SNNet-16G completa el despliegue poscuantico para el transporte de SoraNet. Los controles `rollout_phase` permiten a los operadores coordinar una promocion determinista desde el requisito actual de guard de Stage A hasta la cobertura mayoritaria de Stage B y la postura PQ estricta de Stage C sin editar JSON/TOML en crudo para cada superficie.
