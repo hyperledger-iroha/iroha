@@ -41,7 +41,7 @@ individual files directly from Torii.
   be required before reads. DA stripe layout defaults come from
   `content.stripe_layout` and are echoed in receipts/manifest hashes.
 - **Receipts & DA evidence**: successful responses attach
-  `sora-content-receipt` (base64 Norito `ContentDaReceipt`) carrying
+  `sora-content-receipt` (base64 Norito-framed `ContentDaReceipt` bytes) carrying
   `bundle_id`, `path`, `file_hash`, `served_bytes`, the served byte range,
   `chunk_root` / `stripe_layout`, optional PDP commitment, and a timestamp so
   clients can pin what was fetched without re-reading the body.

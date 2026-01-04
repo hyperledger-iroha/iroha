@@ -1372,10 +1372,6 @@ fn derive_struct_serialize(
             }
             Fields::Unit => {}
         }
-        #[cfg(debug_assertions)]
-        if ident == "DeployContractProposal" {
-            eprintln!("norito_derive::packed needs for {ident} -> {needs:?}");
-        }
         let mut bytes: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
         let mut cur: u8 = 0;
         let mut bit: u8 = 0;

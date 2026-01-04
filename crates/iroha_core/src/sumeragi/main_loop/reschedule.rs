@@ -279,7 +279,7 @@ impl Actor {
             return;
         }
 
-        let raw_vote_count = self
+        let precommit_vote_count = self
             .vote_log
             .values()
             .filter(|vote| {
@@ -289,18 +289,21 @@ impl Actor {
                     && vote.view == view
             })
             .count();
-        let has_precommit_votes = raw_vote_count > 0;
+        let commit_vote_count = vote_count;
+        let reschedule_vote_count = precommit_vote_count.max(commit_vote_count);
+        let has_reschedule_votes = reschedule_vote_count > 0;
         let already_rescheduled = pending.last_quorum_reschedule.is_some();
         let last_reschedule_ms = pending
             .last_quorum_reschedule
             .map(|ts| now.saturating_duration_since(ts).as_millis());
         let has_availability_qc = pending.availability_qc_view.is_some();
-        let drop_pending =
-            has_availability_qc && already_rescheduled && raw_vote_count < min_votes_for_commit;
+        let drop_pending = has_availability_qc
+            && already_rescheduled
+            && reschedule_vote_count < min_votes_for_commit;
         let (requeued, failures, _duplicate_failures, _gossip_hashes) =
-            if !has_precommit_votes || drop_pending {
-                // Avoid conflicting proposals once precommit votes exist, unless we've already
-                // retried with availability evidence and need to unblock proposal assembly.
+            if !has_reschedule_votes || drop_pending {
+                // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
+                // already retried with availability evidence and need to unblock proposal assembly.
                 let txs: Vec<SignedTransaction> = pending.block.transactions_vec().clone();
                 requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs)
             } else {
@@ -348,7 +351,8 @@ impl Actor {
             rebroadcasted_block_sync = rebroadcast.block_sync,
             rebroadcasted_hint = rebroadcast.hint,
             drop_pending,
-            raw_votes = raw_vote_count,
+            precommit_votes = precommit_vote_count,
+            commit_votes = commit_vote_count,
             reschedule_backoff_ms = reschedule_backoff.as_millis(),
             last_reschedule_ms = last_reschedule_ms,
             "commit quorum missing past timeout; rescheduling block for reassembly"
