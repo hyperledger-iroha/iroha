@@ -1449,6 +1449,27 @@ pub mod message {
             (filtered, dropped)
         }
 
+        fn select_blocks_for_share(
+            blocks: impl Iterator<Item = Arc<SignedBlock>>,
+            seen_blocks: &BTreeSet<HashOf<BlockHeader>>,
+            max: usize,
+        ) -> Vec<SignedBlock> {
+            let mut selected = Vec::new();
+            let mut skipping_seen_prefix = true;
+            for block in blocks {
+                let hash = block.hash();
+                if skipping_seen_prefix && seen_blocks.contains(&hash) {
+                    continue;
+                }
+                skipping_seen_prefix = false;
+                selected.push((*block).clone());
+                if selected.len() >= max {
+                    break;
+                }
+            }
+            selected
+        }
+
         /// Handles the incoming message.
         #[iroha_futures::telemetry_future]
         pub(super) async fn handle_message(&self, block_sync: &mut BlockSynchronizer) {
@@ -1457,7 +1478,7 @@ pub mod message {
                     peer_id,
                     prev_hash,
                     latest_hash,
-                    ..
+                    seen_blocks,
                 }) => {
                     let local_latest_block_hash = block_sync.state.view().latest_block_hash();
 
@@ -1487,14 +1508,17 @@ pub mod message {
                         nonzero_ext::nonzero!(1_usize)
                     };
 
-                    let blocks = block_sync
-                        .state
-                        .view()
-                        .all_blocks(start_height)
-                        .skip_while(|block| Some(block.hash()) == *latest_hash)
-                        .take(block_sync.gossip_size.get() as usize)
-                        .map(|block| (*block).clone())
-                        .collect::<Vec<_>>();
+                    let blocks = {
+                        let state_view = block_sync.state.view();
+                        let blocks_iter = state_view
+                            .all_blocks(start_height)
+                            .skip_while(|block| Some(block.hash()) == *latest_hash);
+                        Self::select_blocks_for_share(
+                            blocks_iter,
+                            seen_blocks,
+                            block_sync.gossip_size.get() as usize,
+                        )
+                    };
 
                     if !blocks.is_empty() {
                         trace!(hash=?prev_hash, "Sharing blocks after hash");
@@ -1617,6 +1641,77 @@ pub mod message {
                 peer_id: peer.clone(),
                 priority: iroha_p2p::Priority::Low,
             });
+        }
+    }
+
+    #[cfg(test)]
+    mod selection_tests {
+        use std::{collections::BTreeSet, num::NonZeroU64, sync::Arc};
+
+        use iroha_crypto::{KeyPair, PrivateKey};
+
+        use super::*;
+        use crate::block::ValidBlock;
+
+        fn make_block(
+            leader_private_key: &PrivateKey,
+            height: u64,
+            prev_hash: Option<HashOf<BlockHeader>>,
+        ) -> SignedBlock {
+            let block = ValidBlock::new_dummy_and_modify_header(leader_private_key, |header| {
+                let height = NonZeroU64::new(height).expect("height must be non-zero");
+                header.set_height(height);
+                header.set_prev_block_hash(prev_hash);
+            });
+            block.into()
+        }
+
+        #[test]
+        fn select_blocks_skips_seen_prefix() {
+            let keypair = KeyPair::random();
+            let block1 = make_block(keypair.private_key(), 1, None);
+            let block2 = make_block(keypair.private_key(), 2, Some(block1.hash()));
+            let block3 = make_block(keypair.private_key(), 3, Some(block2.hash()));
+            let block4 = make_block(keypair.private_key(), 4, Some(block3.hash()));
+            let blocks = vec![
+                Arc::new(block1.clone()),
+                Arc::new(block2.clone()),
+                Arc::new(block3.clone()),
+                Arc::new(block4.clone()),
+            ];
+            let seen = BTreeSet::from([block1.hash(), block2.hash()]);
+
+            let selected =
+                Message::select_blocks_for_share(blocks.iter().cloned(), &seen, 10);
+            let heights: Vec<_> = selected
+                .iter()
+                .map(|block| block.header().height().get())
+                .collect();
+            assert_eq!(heights, vec![3, 4]);
+        }
+
+        #[test]
+        fn select_blocks_keeps_contiguous_after_first_unseen() {
+            let keypair = KeyPair::random();
+            let block1 = make_block(keypair.private_key(), 1, None);
+            let block2 = make_block(keypair.private_key(), 2, Some(block1.hash()));
+            let block3 = make_block(keypair.private_key(), 3, Some(block2.hash()));
+            let block4 = make_block(keypair.private_key(), 4, Some(block3.hash()));
+            let blocks = vec![
+                Arc::new(block1.clone()),
+                Arc::new(block2.clone()),
+                Arc::new(block3.clone()),
+                Arc::new(block4.clone()),
+            ];
+            let seen = BTreeSet::from([block3.hash()]);
+
+            let selected =
+                Message::select_blocks_for_share(blocks.iter().cloned(), &seen, 10);
+            let heights: Vec<_> = selected
+                .iter()
+                .map(|block| block.header().height().get())
+                .collect();
+            assert_eq!(heights, vec![1, 2, 3, 4]);
         }
     }
 
